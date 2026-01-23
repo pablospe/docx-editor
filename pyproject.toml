@@ -29,7 +29,6 @@ dev = [
     "pytest>=9.0.2",
     "pre-commit>=4.5.1",
     "tox-uv>=1.29.0",
-    "deptry>=0.24.0",
     "ty>=0.0.8",
     "pytest-cov>=7.0.0",
     "ruff>=0.14.10",

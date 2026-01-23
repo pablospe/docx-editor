@@ -6,68 +6,45 @@
 [![Commit activity](https://img.shields.io/github/commit-activity/m/pablospe/docx-edit)](https://img.shields.io/github/commit-activity/m/pablospe/docx-edit)
 [![License](https://img.shields.io/github/license/pablospe/docx-edit)](https://img.shields.io/github/license/pablospe/docx-edit)
 
-Edit docx with python
+Pure Python library for Word document track changes and comments, without requiring Microsoft Word.
 
 - **Github repository**: <https://github.com/pablospe/docx-edit/>
-- **Documentation** <https://pablospe.github.io/docx-edit/>
+- **Documentation**: <https://pablospe.github.io/docx-edit/>
 
-## Getting started with your project
+## Features
 
-### 1. Create a New Repository
+- **Track Changes**: Replace, delete, and insert text with revision tracking
+- **Comments**: Add, reply, resolve, and delete comments
+- **Revision Management**: List, accept, and reject tracked changes
+- **Cross-Platform**: Works on Linux, macOS, and Windows
+- **No Dependencies**: Only requires `defusedxml` for secure XML parsing
 
-First, create a repository on GitHub with the same name as this project, and then run the following commands:
-
-```bash
-git init -b main
-git add .
-git commit -m "init commit"
-git remote add origin git@github.com:pablospe/docx-edit.git
-git push -u origin main
-```
-
-### 2. Set Up Your Development Environment
-
-Then, install the environment and the pre-commit hooks with
+## Installation
 
 ```bash
-make install
+pip install docx-edit
 ```
 
-This will also generate your `uv.lock` file
+## Quick Start
 
-### 3. Run the pre-commit hooks
+```python
+from docx_edit import Document
 
-Initially, the CI/CD pipeline might be failing due to formatting issues. To resolve those run:
+with Document.open("contract.docx") as doc:
+    # Track changes
+    doc.replace("30 days", "60 days")
+    doc.insert_after("Section 5", "New clause")
+    doc.delete("obsolete text")
 
-```bash
-uv run pre-commit run -a
+    # Comments
+    doc.add_comment("Section 5", "Please review")
+
+    # Revision management
+    revisions = doc.list_revisions()
+    doc.accept_revision(revision_id=1)
+
+    doc.save()
 ```
-
-### 4. Commit the changes
-
-Lastly, commit the changes made by the two steps above to your repository.
-
-```bash
-git add .
-git commit -m 'Fix formatting issues'
-git push origin main
-```
-
-You are now ready to start development on your project!
-The CI/CD pipeline will be triggered when you open a pull request, merge to main, or when you create a new release.
-
-To finalize the set-up for publishing to PyPI, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/publishing/#set-up-for-pypi).
-For activating the automatic documentation with MkDocs, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/mkdocs/#enabling-the-documentation-on-github).
-To enable the code coverage reports, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/codecov/).
-
-## Releasing a new version
-
-- Create an API Token on [PyPI](https://pypi.org/).
-- Add the API Token to your projects secrets with the name `PYPI_TOKEN` by visiting [this page](https://github.com/pablospe/docx-edit/settings/secrets/actions/new).
-- Create a [new release](https://github.com/pablospe/docx-edit/releases/new) on Github.
-- Create a new tag in the form `*.*.*`.
-
-For more details, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/cicd/#how-to-trigger-a-release).
 
 ---
 
