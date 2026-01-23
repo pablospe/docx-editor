@@ -13,7 +13,7 @@ class TestAddComment:
         doc = Document.open(clean_workspace)
 
         try:
-            comment_id = doc.add_comment("the", "This is a test comment")
+            comment_id = doc.add_comment("fox", "This is a test comment")
             assert isinstance(comment_id, int)
             assert comment_id >= 0
         except TextNotFoundError:
@@ -35,8 +35,8 @@ class TestAddComment:
         doc = Document.open(clean_workspace)
 
         try:
-            id1 = doc.add_comment("the", "First comment")
-            id2 = doc.add_comment("a", "Second comment")
+            id1 = doc.add_comment("fox", "First comment")
+            id2 = doc.add_comment("lazy", "Second comment")
             assert id1 != id2
             assert id2 == id1 + 1
         except TextNotFoundError:
@@ -53,7 +53,7 @@ class TestReplyToComment:
         doc = Document.open(clean_workspace)
 
         try:
-            comment_id = doc.add_comment("the", "Original comment")
+            comment_id = doc.add_comment("fox", "Original comment")
             reply_id = doc.reply_to_comment(comment_id, "This is a reply")
             assert reply_id == comment_id + 1
         except TextNotFoundError:
@@ -89,7 +89,7 @@ class TestListComments:
         doc = Document.open(clean_workspace)
 
         try:
-            doc.add_comment("the", "Test comment")
+            doc.add_comment("fox", "Test comment")
         except TextNotFoundError:
             pytest.skip("Anchor text not found in document")
 
@@ -110,7 +110,7 @@ class TestListComments:
         doc = Document.open(clean_workspace)
 
         try:
-            parent_id = doc.add_comment("the", "Parent comment")
+            parent_id = doc.add_comment("fox", "Parent comment")
             doc.reply_to_comment(parent_id, "Reply 1")
             doc.reply_to_comment(parent_id, "Reply 2")
         except TextNotFoundError:
@@ -130,7 +130,7 @@ class TestListComments:
         doc = Document.open(clean_workspace, author="TestAuthor")
 
         try:
-            doc.add_comment("the", "Test comment")
+            doc.add_comment("fox", "Test comment")
         except TextNotFoundError:
             pytest.skip("Anchor text not found in document")
 
@@ -149,7 +149,7 @@ class TestResolveComment:
         doc = Document.open(clean_workspace)
 
         try:
-            comment_id = doc.add_comment("the", "Test comment")
+            comment_id = doc.add_comment("fox", "Test comment")
         except TextNotFoundError:
             pytest.skip("Anchor text not found in document")
 
@@ -182,7 +182,7 @@ class TestDeleteComment:
         doc = Document.open(clean_workspace)
 
         try:
-            comment_id = doc.add_comment("the", "Test comment")
+            comment_id = doc.add_comment("fox", "Test comment")
         except TextNotFoundError:
             pytest.skip("Anchor text not found in document")
 

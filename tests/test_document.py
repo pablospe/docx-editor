@@ -128,7 +128,7 @@ class TestDocumentRoundTrip:
         # First edit
         doc1 = Document.open(clean_workspace)
         try:
-            doc1.add_comment("the", "Test comment")
+            doc1.add_comment("fox", "Test comment")
         except Exception:
             pytest.skip("Could not add comment")
         doc1.save()
