@@ -1,0 +1,52 @@
+site_name: docx-edit
+repo_url: https://github.com/pablospe/docx-edit
+site_url: https://pablospe.github.io/docx-edit
+site_description: Edit docx with python
+site_author: Pablo Speciale
+edit_uri: edit/main/docs/
+repo_name: pablospe/docx-edit
+copyright: Maintained by <a href="https://pablospe.com">pablospe</a>.
+
+nav:
+  - Home: index.md
+  - Modules: modules.md
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["docx_edit"]
+theme:
+  name: material
+  feature:
+    tabs: true
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: white
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/pablospe/docx-edit
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/docx-edit
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
