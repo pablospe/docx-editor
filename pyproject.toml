@@ -6,6 +6,7 @@ authors = [{ name = "Pablo Speciale", email = "pablospe@users.noreply.github.com
 readme = "README.md"
 keywords = ['python']
 requires-python = ">=3.10,<4.0"
+dependencies = ["defusedxml>=0.7.1"]
 classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python",
@@ -52,52 +53,18 @@ python-version = "3.10"
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py39"
 line-length = 120
-fix = true
+target-version = "py310"
 
 [tool.ruff.lint]
-select = [
-    # flake8-2020
-    "YTT",
-    # flake8-bandit
-    "S",
-    # flake8-bugbear
-    "B",
-    # flake8-builtins
-    "A",
-    # flake8-comprehensions
-    "C4",
-    # flake8-debugger
-    "T10",
-    # flake8-simplify
-    "SIM",
-    # isort
-    "I",
-    # mccabe
-    "C90",
-    # pycodestyle
-    "E", "W",
-    # pyflakes
-    "F",
-    # pygrep-hooks
-    "PGH",
-    # pyupgrade
-    "UP",
-    # ruff
-    "RUF",
-    # tryceratops
-    "TRY",
-]
-ignore = [
-    # LineTooLong
-    "E501",
-    # DoNotAssignLambda
-    "E731",
-]
+select = ["E", "F", "B", "I", "Q", "UP", "W", "TID"]
+ignore = ["B008", "TID252"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["docx_edit"]
 
 [tool.ruff.format]
 preview = true

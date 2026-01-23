@@ -9,7 +9,8 @@ copyright: Maintained by <a href="https://pablospe.com">pablospe</a>.
 
 nav:
   - Home: index.md
-  - Modules: modules.md
+  - Quick Start: quickstart.md
+  - API Reference: api.md
 plugins:
   - search
   - mkdocstrings:
