@@ -144,13 +144,31 @@ Use the **docx_edit** Python library for all editing operations. It handles trac
 pip install docx-edit
 ```
 
+### Author Name for Track Changes
+
+**IMPORTANT**: Never use "Claude" or any AI name as the author. Use one of these approaches:
+
+1. **Get system username** (recommended):
+   ```python
+   import os
+   author = os.environ.get("USER") or os.environ.get("USERNAME") or "Reviewer"
+   ```
+
+2. **Ask the user** if you need a specific reviewer name
+
+3. **Use "Reviewer"** as a generic fallback
+
 ### Basic Usage
 
 ```python
 from docx_edit import Document
+import os
+
+# Get author from system username
+author = os.environ.get("USER") or os.environ.get("USERNAME") or "Reviewer"
 
 # Open document with author name for tracked changes
-doc = Document.open("contract.docx", author="Reviewer Name")
+doc = Document.open("contract.docx", author=author)
 
 # Make changes (automatically tracked)
 doc.replace("old text", "new text")  # Tracked replacement
@@ -167,8 +185,10 @@ doc.close()
 
 ```python
 from docx_edit import Document
+import os
 
-doc = Document.open("document.docx", author="Editor")
+author = os.environ.get("USER") or "Reviewer"
+doc = Document.open("document.docx", author=author)
 
 # Replace text (creates tracked deletion + insertion)
 doc.replace("30 days", "60 days")
@@ -187,8 +207,10 @@ doc.close()
 
 ```python
 from docx_edit import Document
+import os
 
-doc = Document.open("document.docx", author="Reviewer")
+author = os.environ.get("USER") or "Reviewer"
+doc = Document.open("document.docx", author=author)
 
 # Add a comment anchored to text
 doc.add_comment("ambiguous term", "Please clarify this term")
@@ -213,8 +235,10 @@ doc.close()
 
 ```python
 from docx_edit import Document
+import os
 
-doc = Document.open("reviewed.docx", author="Editor")
+author = os.environ.get("USER") or "Reviewer"
+doc = Document.open("reviewed.docx", author=author)
 
 # List all tracked revisions
 revisions = doc.list_revisions()
@@ -259,8 +283,10 @@ Organize changes by section or type:
 
 ```python
 from docx_edit import Document
+import os
 
-doc = Document.open("contract.docx", author="Legal Reviewer")
+author = os.environ.get("USER") or "Reviewer"
+doc = Document.open("contract.docx", author=author)
 
 # Section 2 changes
 doc.replace("30 days", "60 days")
