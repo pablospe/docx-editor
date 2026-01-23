@@ -52,7 +52,7 @@ with Document.open("contract.docx") as doc:
 
 This repo includes a skill for [Claude Code](https://claude.ai/claude-code) that enables AI-assisted Word document editing.
 
-This skill extends the [original Anthropic docx skill](https://github.com/anthropics/claude-code/tree/main/.claude/skills/docx) which requires Claude to manually manipulate OOXML. Instead, this skill provides an interface (`docx-editor`) that handles all the complexity—Claude just calls simple Python methods like `doc.replace()` or `doc.add_comment()`, making document editing significantly faster and less error-prone.
+This skill extends the [original Anthropic docx skill](https://github.com/anthropics/skills/tree/main/skills/docx) which requires Claude to manually manipulate OOXML. Instead, this skill provides an interface (`docx-editor`) that handles all the complexity—Claude just calls simple Python methods like `doc.replace()` or `doc.add_comment()`, making document editing significantly faster and less error-prone.
 
 ### Install the skill
 
@@ -68,7 +68,3 @@ rm -rf /tmp/docx-editor
 ```
 
 Once installed, Claude Code can help you edit Word documents with track changes, comments, and revisions.
-
----
-
-Repository initiated with [fpgmaas/cookiecutter-uv](https://github.com/fpgmaas/cookiecutter-uv).
