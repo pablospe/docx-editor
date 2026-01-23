@@ -1,4 +1,4 @@
-"""Comment management for docx_edit.
+"""Comment management for docx_editor.
 
 Provides CommentManager for creating and managing document comments.
 """

@@ -25,7 +25,7 @@ What do you need to do?
 |   Or docx-js for complex formatting (see "Creating with docx-js")
 |
 +-- Edit Existing Document
-    Use docx_edit Python library (see "Editing an existing Word document")
+    Use docx_editor Python library (see "Editing an existing Word document")
     - Tracked changes (redlining)
     - Comments (add, reply, resolve)
     - Accept/reject revisions
@@ -136,7 +136,7 @@ For advanced formatting needs (precise spacing, complex table styling, detailed 
 
 ## Editing an existing Word document
 
-Use the **docx_edit** Python library for all editing operations. It handles tracked changes, comments, and revisions with a simple API.
+Use the **docx_editor** Python library for all editing operations. It handles tracked changes, comments, and revisions with a simple API.
 
 ### Installation
 
@@ -161,7 +161,7 @@ pip install docx-editor
 ### Basic Usage
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 import os
 
 # Get author from system username
@@ -184,7 +184,7 @@ doc.close()
 ### Track Changes API
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 import os
 
 author = os.environ.get("USER") or "Reviewer"
@@ -213,7 +213,7 @@ doc.close()
 ### Comments API
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 import os
 
 author = os.environ.get("USER") or "Reviewer"
@@ -241,7 +241,7 @@ doc.close()
 ### Revision Management API
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 import os
 
 author = os.environ.get("USER") or "Reviewer"
@@ -289,7 +289,7 @@ Organize changes by section or type:
 ### Step 3: Implement changes
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 import os
 
 author = os.environ.get("USER") or "Reviewer"
@@ -322,7 +322,7 @@ Check that all changes appear correctly in the output.
 
 ### Targeting Specific Text
 
-docx_edit replaces the **first occurrence** of text found. To target specific locations, use unique surrounding context:
+docx_editor replaces the **first occurrence** of text found. To target specific locations, use unique surrounding context:
 
 ```python
 # BAD - ambiguous, might match wrong location
@@ -338,7 +338,7 @@ Since you may not read the entire document, your "unique" text might not actuall
 
 **Step 1: Count occurrences BEFORE editing**
 ```python
-from docx_edit import Document
+from docx_editor import Document
 import os
 
 author = os.environ.get("USER") or "Reviewer"
@@ -384,7 +384,7 @@ If the edit appears in an unexpected location, reject it and retry with more con
 
 3. **Add surrounding context** if multiple matches exist
 
-4. **Edit with docx_edit** using that unique context
+4. **Edit with docx_editor** using that unique context
 
 5. **Verify the edit** was made in the correct location
 
@@ -394,8 +394,8 @@ If the edit appears in an unexpected location, reject it and retry with more con
 | ----------------------- | ----------------------------------------------- |
 | Read/navigate structure | python-docx                                     |
 | Create new documents    | python-docx (or docx-js for complex formatting) |
-| Edit with track changes | docx_edit                                       |
-| Comments & revisions    | docx_edit                                       |
+| Edit with track changes | docx_editor                                       |
+| Comments & revisions    | docx_editor                                       |
 | Text extraction         | pandoc                                          |
 
 ### Parallel Processing with Subagents
@@ -439,7 +439,7 @@ Benefits:
 
 If unsure, ask the user: "Should I use Opus (best), Sonnet (recommended) or Haiku (faster/cheaper) for this task?"
 
-**Editing in parallel**: NOT safe for the same document. docx_edit uses a shared workspace - concurrent edits will overwrite each other. Edit documents sequentially, or use different files.
+**Editing in parallel**: NOT safe for the same document. docx_editor uses a shared workspace - concurrent edits will overwrite each other. Edit documents sequentially, or use different files.
 
 ### Limitations
 
@@ -479,7 +479,7 @@ When generating code for DOCX operations:
 Required dependencies (install if not available):
 
 - **python-docx**: `pip install python-docx` (for reading structure and creating documents)
-- **docx_edit**: `pip install docx-editor` (for track changes, comments, revisions)
+- **docx_editor**: `pip install docx-editor` (for track changes, comments, revisions)
 - **pandoc**: `sudo apt-get install pandoc` (for text extraction to markdown)
 - **docx** (npm): `npm install -g docx` (optional, for complex document formatting)
 - **LibreOffice**: `sudo apt-get install libreoffice` (for PDF conversion)

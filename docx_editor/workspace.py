@@ -1,4 +1,4 @@
-"""Workspace management for docx_edit.
+"""Workspace management for docx_editor.
 
 Manages the .docx/ workspace folder that contains unpacked document contents.
 """

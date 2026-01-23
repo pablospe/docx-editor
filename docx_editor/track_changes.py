@@ -1,4 +1,4 @@
-"""Track changes management for docx_edit.
+"""Track changes management for docx_editor.
 
 Provides RevisionManager for creating and managing tracked changes (insertions/deletions).
 """

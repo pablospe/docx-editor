@@ -2,7 +2,7 @@
 
 import pytest
 
-from docx_edit import CommentError, Document, TextNotFoundError
+from docx_editor import CommentError, Document, TextNotFoundError
 
 
 class TestAddComment:

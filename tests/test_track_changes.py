@@ -2,7 +2,7 @@
 
 import pytest
 
-from docx_edit import Document, TextNotFoundError
+from docx_editor import Document, TextNotFoundError
 
 
 class TestTrackedReplace:

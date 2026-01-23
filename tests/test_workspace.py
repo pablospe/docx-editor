@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from docx_edit.exceptions import (
+from docx_editor.exceptions import (
     DocumentNotFoundError,
     InvalidDocumentError,
     WorkspaceSyncError,
 )
-from docx_edit.workspace import Workspace
+from docx_editor.workspace import Workspace
 
 
 class TestWorkspaceCreation:

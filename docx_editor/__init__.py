@@ -1,10 +1,10 @@
-"""docx_edit - Pure Python Track Changes Library for Word Documents.
+"""docx_editor - Pure Python Track Changes Library for Word Documents.
 
 A standalone library for Word document track changes and comments,
 without requiring Microsoft Word installed.
 
 Example:
-    from docx_edit import Document
+    from docx_editor import Document
 
     # Open and edit
     doc = Document.open("contract.docx")

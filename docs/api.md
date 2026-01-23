@@ -5,7 +5,7 @@
 The main entry point for docx-editor. Provides methods for opening documents, making tracked changes, managing comments, and handling revisions.
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 ```
 
 ### Opening Documents
@@ -335,7 +335,7 @@ doc.close(cleanup=False)  # Keep workspace for inspection
 Represents a document comment.
 
 ```python
-from docx_edit import Comment
+from docx_editor import Comment
 ```
 
 ### Attributes
@@ -369,7 +369,7 @@ for comment in comments:
 Represents a tracked change (insertion or deletion).
 
 ```python
-from docx_edit import Revision
+from docx_editor import Revision
 ```
 
 ### Attributes
@@ -400,7 +400,7 @@ for rev in revisions:
 Raised when the specified text is not found in the document.
 
 ```python
-from docx_edit.exceptions import TextNotFoundError
+from docx_editor.exceptions import TextNotFoundError
 
 try:
     doc.replace("nonexistent text", "new text")
@@ -413,7 +413,7 @@ except TextNotFoundError as e:
 Raised when a comment operation fails.
 
 ```python
-from docx_edit.exceptions import CommentError
+from docx_editor.exceptions import CommentError
 
 try:
     doc.reply_to_comment(999, "reply")
@@ -426,7 +426,7 @@ except CommentError as e:
 Raised when a revision operation fails.
 
 ```python
-from docx_edit.exceptions import RevisionError
+from docx_editor.exceptions import RevisionError
 ```
 
 ### `WorkspaceExistsError`
@@ -434,7 +434,7 @@ from docx_edit.exceptions import RevisionError
 Raised when attempting to create a workspace that already exists.
 
 ```python
-from docx_edit.exceptions import WorkspaceExistsError
+from docx_editor.exceptions import WorkspaceExistsError
 ```
 
 ### `WorkspaceSyncError`
@@ -442,5 +442,5 @@ from docx_edit.exceptions import WorkspaceExistsError
 Raised when the workspace is out of sync with the source document.
 
 ```python
-from docx_edit.exceptions import WorkspaceSyncError
+from docx_editor.exceptions import WorkspaceSyncError
 ```

@@ -1,8 +1,8 @@
-"""Custom exceptions for docx_edit library."""
+"""Custom exceptions for docx_editor library."""
 
 
 class DocxEditError(Exception):
-    """Base exception for all docx_edit errors."""
+    """Base exception for all docx_editor errors."""
 
     pass
 

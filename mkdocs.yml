@@ -16,7 +16,7 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-          paths: ["docx_edit"]
+          paths: ["docx_editor"]
 theme:
   name: material
   feature:

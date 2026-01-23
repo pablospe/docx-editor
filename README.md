@@ -30,7 +30,7 @@ pip install docx-editor
 ## Quick Start
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 
 with Document.open("contract.docx") as doc:
     # Track changes

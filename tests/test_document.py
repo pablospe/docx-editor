@@ -2,8 +2,8 @@
 
 import pytest
 
-from docx_edit import Document
-from docx_edit.workspace import Workspace
+from docx_editor import Document
+from docx_editor.workspace import Workspace
 
 
 class TestDocumentOpen:

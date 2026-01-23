@@ -1,4 +1,4 @@
-"""Main Document class for docx_edit.
+"""Main Document class for docx_editor.
 
 Provides the primary user-facing API for editing Word documents with track changes
 and comments.
@@ -18,14 +18,14 @@ from .xml_editor import DocxXMLEditor
 class Document:
     """Word document with track changes and comment support.
 
-    This is the main entry point for docx_edit. It provides methods for:
+    This is the main entry point for docx_editor. It provides methods for:
     - Opening and saving documents
     - Making tracked changes (replace, delete, insert)
     - Managing comments (add, reply, resolve, delete)
     - Managing revisions (list, accept, reject)
 
     Example:
-        from docx_edit import Document
+        from docx_editor import Document
 
         doc = Document.open("contract.docx")
         doc.replace("30 days", "60 days")

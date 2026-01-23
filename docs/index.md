@@ -21,7 +21,7 @@ pip install docx-editor
 ## Quick Start
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 
 # Open and edit
 doc = Document.open("contract.docx")
@@ -46,7 +46,7 @@ doc.close()
 ## Context Manager
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 
 with Document.open("contract.docx") as doc:
     doc.replace("old term", "new term")

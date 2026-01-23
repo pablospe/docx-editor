@@ -7,7 +7,7 @@ This guide covers the essential usage patterns for docx-editor.
 ### Basic Open
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 
 doc = Document.open("contract.docx")
 # ... make changes ...
@@ -36,7 +36,7 @@ doc = Document.open("contract.docx", force_recreate=True)
 The recommended approach for automatic cleanup:
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 
 with Document.open("contract.docx") as doc:
     doc.replace("old term", "new term")
@@ -221,7 +221,7 @@ doc.close()  # cleanup=True is the default
 ## Complete Example
 
 ```python
-from docx_edit import Document
+from docx_editor import Document
 
 # Open document with custom author
 with Document.open("contract.docx", author="Legal Review") as doc:

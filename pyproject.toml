@@ -42,7 +42,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["docx_edit"]
+packages = ["docx_editor"]
 
 [tool.ty.environment]
 python = "./.venv"
@@ -63,7 +63,7 @@ ignore = ["B008", "TID252"]
 "tests/*" = ["S101"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["docx_edit"]
+known-first-party = ["docx_editor"]
 
 [tool.ruff.format]
 preview = true
@@ -73,4 +73,4 @@ skip_empty = true
 
 [tool.coverage.run]
 branch = true
-source = ["docx_edit"]
+source = ["docx_editor"]

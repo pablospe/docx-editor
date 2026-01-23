@@ -1,4 +1,4 @@
-"""Pytest fixtures for docx_edit tests."""
+"""Pytest fixtures for docx_editor tests."""
 
 import shutil
 import tempfile
@@ -22,7 +22,7 @@ def simple_docx(test_data_dir) -> Path:
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for test outputs."""
-    temp = tempfile.mkdtemp(prefix="docx_edit_test_")
+    temp = tempfile.mkdtemp(prefix="docx_editor_test_")
     yield Path(temp)
     shutil.rmtree(temp, ignore_errors=True)
 
