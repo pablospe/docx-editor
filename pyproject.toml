@@ -1,5 +1,5 @@
 [project]
-name = "docx-edit"
+name = "docx-editor"
 version = "0.0.1"
 description = "Edit docx with python"
 authors = [{ name = "Pablo Speciale", email = "pablospe@users.noreply.github.com" }]
