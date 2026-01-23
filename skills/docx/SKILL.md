@@ -141,8 +141,11 @@ Use the **docx_editor** Python library for all editing operations. It handles tr
 ### Installation
 
 ```bash
-pip install docx-editor
+pip install docx-editor python-docx
 ```
+
+- **docx-editor**: Track changes, comments, and revisions ([PyPI](https://pypi.org/project/docx-editor/))
+- **python-docx**: Reading document structure and creating new documents
 
 ### Author Name for Track Changes
 
@@ -478,8 +481,8 @@ When generating code for DOCX operations:
 
 Required dependencies (install if not available):
 
-- **python-docx**: `pip install python-docx` (for reading structure and creating documents)
 - **docx_editor**: `pip install docx-editor` (for track changes, comments, revisions)
+- **python-docx**: `pip install python-docx` (for reading structure and creating documents)
 - **pandoc**: `sudo apt-get install pandoc` (for text extraction to markdown)
 - **docx** (npm): `npm install -g docx` (optional, for complex document formatting)
 - **LibreOffice**: `sudo apt-get install libreoffice` (for PDF conversion)
