@@ -7,6 +7,7 @@ import getpass
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .exceptions import (
     DocumentNotFoundError,
@@ -32,6 +33,8 @@ class Workspace:
 
     WORKSPACE_DIR = ".docx"
     META_FILE = "meta.json"
+
+    meta: dict[str, Any]
 
     def __init__(
         self,
@@ -88,9 +91,10 @@ class Workspace:
             # Load existing workspace
             if not self.workspace_path.exists():
                 raise WorkspaceError(f"Workspace not found: {self.workspace_path}")
-            self.meta = self._load_meta()
-            if not self.meta:
+            loaded_meta = self._load_meta()
+            if not loaded_meta:
                 raise WorkspaceError(f"Invalid workspace (no meta.json): {self.workspace_path}")
+            self.meta = loaded_meta
 
     @property
     def author(self) -> str:
@@ -100,12 +104,12 @@ class Workspace:
     @property
     def rsid(self) -> str:
         """Get the RSID for this editing session."""
-        return self.meta.get("rsid", "")
+        return str(self.meta.get("rsid", ""))
 
     @property
     def initials(self) -> str:
         """Get author initials."""
-        return self.meta.get("initials", self._author[0].upper() if self._author else "")
+        return str(self.meta.get("initials", self._author[0].upper() if self._author else ""))
 
     @property
     def word_path(self) -> Path:
@@ -143,14 +147,15 @@ class Workspace:
 
         self._save_meta()
 
-    def _load_meta(self) -> dict | None:
+    def _load_meta(self) -> dict[str, Any] | None:
         """Load metadata from meta.json."""
         meta_path = self.workspace_path / self.META_FILE
         if not meta_path.exists():
             return None
         try:
             with open(meta_path, encoding="utf-8") as f:
-                return json.load(f)
+                result: dict[str, Any] = json.load(f)
+                return result
         except (json.JSONDecodeError, OSError):
             return None
 
