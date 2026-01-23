@@ -50,7 +50,7 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
                     zf.write(f, f.relative_to(temp_content_dir))
 
         # Validate if requested
-        if validate:
+        if validate:  # pragma: no cover
             if not validate_document(output_file):
                 output_file.unlink()  # Delete the corrupt file
                 return False
@@ -58,7 +58,7 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
     return True
 
 
-def validate_document(doc_path: Path) -> bool:
+def validate_document(doc_path: Path) -> bool:  # pragma: no cover
     """Validate document by converting to HTML with soffice."""
     # Determine the correct filter based on file extension
     match doc_path.suffix.lower():

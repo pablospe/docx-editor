@@ -180,3 +180,190 @@ class TestWorkspaceSaveClose:
         """Test deleting nonexistent workspace returns False."""
         result = Workspace.delete(clean_workspace)
         assert result is False
+
+
+class TestWorkspaceEdgeCases:
+    """Tests for edge cases and error handling."""
+
+    def test_workspace_exists_no_meta_json(self, clean_workspace, temp_dir):
+        """Test error when workspace exists but has no meta.json."""
+        from docx_editor.exceptions import WorkspaceExistsError
+
+        # Create workspace directory without meta.json
+        workspace_dir = clean_workspace.parent / ".docx" / clean_workspace.stem
+        workspace_dir.mkdir(parents=True)
+
+        with pytest.raises(WorkspaceExistsError):
+            Workspace(clean_workspace)
+
+        # Cleanup
+        import shutil
+
+        shutil.rmtree(clean_workspace.parent / ".docx")
+
+    def test_workspace_create_false_not_found(self, clean_workspace):
+        """Test error when workspace not found with create=False."""
+        from docx_editor.exceptions import WorkspaceError
+
+        with pytest.raises(WorkspaceError, match="Workspace not found"):
+            Workspace(clean_workspace, create=False)
+
+    def test_workspace_create_false_no_meta(self, clean_workspace):
+        """Test error when workspace exists but no meta.json with create=False."""
+        from docx_editor.exceptions import WorkspaceError
+
+        # Create workspace directory without meta.json
+        workspace_dir = clean_workspace.parent / ".docx" / clean_workspace.stem
+        workspace_dir.mkdir(parents=True)
+
+        with pytest.raises(WorkspaceError, match="Invalid workspace"):
+            Workspace(clean_workspace, create=False)
+
+        # Cleanup
+        import shutil
+
+        shutil.rmtree(clean_workspace.parent / ".docx")
+
+    def test_load_meta_corrupt_json(self, clean_workspace):
+        """Test that corrupt meta.json returns None in _load_meta."""
+        workspace = Workspace(clean_workspace)
+        workspace.close(cleanup=False)
+
+        # Corrupt the meta.json
+        meta_path = workspace.workspace_path / "meta.json"
+        meta_path.write_text("not valid json {{{")
+
+        # Try to load - should raise WorkspaceExistsError because meta is None
+        from docx_editor.exceptions import WorkspaceExistsError
+
+        with pytest.raises(WorkspaceExistsError):
+            Workspace(clean_workspace)
+
+        # Cleanup
+        Workspace.delete(clean_workspace)
+
+    def test_get_xml_path(self, clean_workspace):
+        """Test get_xml_path returns correct path."""
+        workspace = Workspace(clean_workspace)
+
+        xml_path = workspace.get_xml_path("word/document.xml")
+        assert xml_path == workspace.workspace_path / "word/document.xml"
+
+        workspace.close()
+
+    def test_sync_check_in_sync(self, clean_workspace):
+        """Test sync_check returns True when document is in sync."""
+        workspace = Workspace(clean_workspace)
+
+        assert workspace.sync_check() is True
+
+        workspace.close()
+
+    def test_sync_check_source_deleted(self, clean_workspace, temp_dir):
+        """Test sync_check returns False when source is deleted."""
+        workspace = Workspace(clean_workspace)
+
+        # Delete the source file
+        clean_workspace.unlink()
+
+        assert workspace.sync_check() is False
+
+        workspace.close(cleanup=True)
+
+    def test_sync_check_source_modified(self, clean_workspace):
+        """Test sync_check returns False when source is modified."""
+        import time
+
+        workspace = Workspace(clean_workspace)
+        workspace.close(cleanup=False)
+
+        # Modify the source
+        time.sleep(0.1)
+        clean_workspace.write_bytes(clean_workspace.read_bytes() + b"\x00")
+
+        # Reopen without creating new workspace
+        workspace2 = Workspace.__new__(Workspace)
+        workspace2.source_path = clean_workspace.resolve()
+        workspace2._author = "test"
+        workspace_dir = clean_workspace.parent / ".docx"
+        workspace2.workspace_path = workspace_dir / clean_workspace.stem
+        workspace2.meta = workspace2._load_meta()
+
+        assert workspace2.sync_check() is False
+
+        # Cleanup
+        Workspace.delete(clean_workspace)
+
+    def test_close_removes_empty_parent_dir(self, clean_workspace):
+        """Test that close removes empty .docx parent directory."""
+        workspace = Workspace(clean_workspace)
+        parent_dir = workspace.workspace_path.parent
+
+        workspace.close(cleanup=True)
+
+        # Parent .docx dir should be removed if empty
+        assert not parent_dir.exists()
+
+    def test_delete_removes_empty_parent_dir(self, clean_workspace):
+        """Test that delete removes empty .docx parent directory."""
+        workspace = Workspace(clean_workspace)
+        parent_dir = workspace.workspace_path.parent
+        workspace.close(cleanup=False)
+
+        Workspace.delete(clean_workspace)
+
+        # Parent .docx dir should be removed if empty
+        assert not parent_dir.exists()
+
+    def test_load_meta_returns_existing(self, clean_workspace):
+        """Test that existing valid meta.json is returned by _load_meta.
+
+        This tests line 97 implicitly - the early return when workspace is valid.
+        """
+        # Create workspace
+        workspace1 = Workspace(clean_workspace)
+        rsid1 = workspace1.rsid
+        workspace1.close(cleanup=False)
+
+        # Reopen - meta should be loaded and workspace reused
+        workspace2 = Workspace(clean_workspace)
+        assert workspace2.rsid == rsid1
+        assert workspace2.meta is not None
+        assert workspace2.meta.get("rsid") == rsid1
+
+        workspace2.close()
+
+    def test_save_fails_pack_document(self, clean_workspace):
+        """Test that save raises WorkspaceError when pack_document fails.
+
+        This tests line 191.
+        """
+        from unittest.mock import patch
+
+        from docx_editor.exceptions import WorkspaceError
+
+        workspace = Workspace(clean_workspace)
+
+        # Mock pack_document to return False (failure)
+        with patch("docx_editor.workspace.pack_document", return_value=False):
+            with pytest.raises(WorkspaceError, match="Failed to pack document"):
+                workspace.save()
+
+        workspace.close()
+
+    def test_workspace_create_false_with_valid_meta(self, clean_workspace):
+        """Test loading existing workspace with create=False.
+
+        This tests line 97.
+        """
+        # First create a workspace
+        workspace1 = Workspace(clean_workspace)
+        rsid1 = workspace1.rsid
+        workspace1.close(cleanup=False)
+
+        # Now load it with create=False
+        workspace2 = Workspace(clean_workspace, create=False)
+        assert workspace2.rsid == rsid1
+        assert workspace2.meta is not None
+
+        workspace2.close()
