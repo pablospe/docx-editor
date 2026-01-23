@@ -117,7 +117,27 @@ class Document:
 
     # ==================== Track Changes API ====================
 
-    def replace(self, find: str, replace_with: str) -> int:
+    def count_matches(self, text: str) -> int:
+        """Count how many times a text string appears in the document.
+
+        Use this before editing to verify your search text is unique,
+        or to determine which occurrence to target.
+
+        Args:
+            text: Text to search for
+
+        Returns:
+            Number of occurrences found
+
+        Example:
+            count = doc.count_matches("Section 5")
+            if count > 1:
+                print(f"Warning: {count} matches found, specify occurrence")
+        """
+        self._ensure_open()
+        return self._revision_manager.count_matches(text)
+
+    def replace(self, find: str, replace_with: str, occurrence: int = 0) -> int:
         """Replace text with tracked changes.
 
         Creates a tracked deletion of the old text and insertion of the new text.
@@ -125,62 +145,70 @@ class Document:
         Args:
             find: Text to find and replace
             replace_with: Replacement text
+            occurrence: Which occurrence to replace (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the insertion
 
         Example:
-            doc.replace("30 days", "60 days")
+            doc.replace("30 days", "60 days")  # Replace first occurrence
+            doc.replace("30 days", "60 days", occurrence=2)  # Replace third occurrence
         """
         self._ensure_open()
-        return self._revision_manager.replace_text(find, replace_with)
+        return self._revision_manager.replace_text(find, replace_with, occurrence=occurrence)
 
-    def delete(self, text: str) -> int:
+    def delete(self, text: str, occurrence: int = 0) -> int:
         """Mark text as deleted with tracked changes.
 
         Args:
             text: Text to mark as deleted
+            occurrence: Which occurrence to delete (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the deletion
 
         Example:
             doc.delete("obsolete clause")
+            doc.delete("obsolete clause", occurrence=1)  # Delete second occurrence
         """
         self._ensure_open()
-        return self._revision_manager.suggest_deletion(text)
+        return self._revision_manager.suggest_deletion(text, occurrence=occurrence)
 
-    def insert_after(self, anchor: str, text: str) -> int:
+    def insert_after(self, anchor: str, text: str, occurrence: int = 0) -> int:
         """Insert text after anchor with tracked changes.
 
         Args:
             anchor: Text to find as insertion point
             text: Text to insert after the anchor
+            occurrence: Which occurrence of anchor to use (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the insertion
 
         Example:
             doc.insert_after("Section 5", " (as amended)")
+            doc.insert_after("Section 5", " (revised)", occurrence=1)  # After second match
         """
         self._ensure_open()
-        return self._revision_manager.insert_text_after(anchor, text)
+        return self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence)
 
-    def insert_before(self, anchor: str, text: str) -> int:
+    def insert_before(self, anchor: str, text: str, occurrence: int = 0) -> int:
         """Insert text before anchor with tracked changes.
 
         Args:
             anchor: Text to find as insertion point
             text: Text to insert before the anchor
+            occurrence: Which occurrence of anchor to use (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the insertion
 
         Example:
             doc.insert_before("Section 6", "New clause: ")
+            doc.insert_before("Section 6", "Note: ", occurrence=1)  # Before second match
         """
         self._ensure_open()
-        return self._revision_manager.insert_text_before(anchor, text)
+        return self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence)
 
     # ==================== Comments API ====================
 

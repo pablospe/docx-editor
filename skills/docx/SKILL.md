@@ -190,14 +190,21 @@ import os
 author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("document.docx", author=author)
 
+# Count occurrences before editing (verify uniqueness)
+count = doc.count_matches("30 days")
+print(f"Found {count} occurrences")
+
 # Replace text (creates tracked deletion + insertion)
-doc.replace("30 days", "60 days")
+doc.replace("30 days", "60 days")  # Replaces first occurrence
+doc.replace("30 days", "90 days", occurrence=1)  # Replaces second occurrence
 
 # Delete text (creates tracked deletion)
 doc.delete("unnecessary clause")
+doc.delete("duplicate text", occurrence=2)  # Delete third occurrence
 
 # Insert after anchor text (creates tracked insertion)
 doc.insert_after("Section 3.", " Additional terms apply.")
+doc.insert_after("Section 3.", " (revised)", occurrence=1)  # After second match
 
 doc.save("edited.docx")
 doc.close()
@@ -325,6 +332,43 @@ doc.replace("the", "a")
 doc.replace("the meeting was productive", "the conference was productive")
 ```
 
+### Verifying Edits (Critical for Large Documents)
+
+Since you may not read the entire document, your "unique" text might not actually be unique. **Always verify edits**:
+
+**Step 1: Count occurrences BEFORE editing**
+```python
+from docx_edit import Document
+import os
+
+author = os.environ.get("USER") or "Reviewer"
+doc = Document.open('file.docx', author=author)
+count = doc.count_matches("the meeting was productive")
+print(f"Found {count} occurrences")
+```
+
+**Step 2: If multiple matches, either add more context OR use occurrence parameter**
+```python
+# Option A: Use more surrounding context for uniqueness
+doc.replace("In Q3, the meeting was productive and resulted",
+            "In Q3, the conference was productive and resulted")
+
+# Option B: Target specific occurrence (0-indexed)
+doc.replace("the meeting was productive",
+            "the conference was productive",
+            occurrence=2)  # Replace the 3rd match
+```
+
+**Step 3: Verify AFTER editing**
+```python
+# Check the revision was created in the expected location
+revisions = doc.list_revisions()
+for r in revisions:
+    print(f"{r.type}: '{r.text[:50]}...'")
+```
+
+If the edit appears in an unexpected location, reject it and retry with more context or different occurrence.
+
 ### Workflow for Large Documents
 
 1. **Explore structure first** with python-docx:
@@ -336,9 +380,13 @@ doc.replace("the meeting was productive", "the conference was productive")
            print(f"{i}: {p.text[:80]}...")
    ```
 
-2. **Find unique text** surrounding your target
+2. **Count occurrences** of your target text to ensure uniqueness
 
-3. **Edit with docx_edit** using that unique context
+3. **Add surrounding context** if multiple matches exist
+
+4. **Edit with docx_edit** using that unique context
+
+5. **Verify the edit** was made in the correct location
 
 ### Complementary Tools
 

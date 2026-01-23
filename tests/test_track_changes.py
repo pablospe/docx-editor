@@ -235,3 +235,119 @@ class TestRevisionAcceptReject:
         assert len(doc.list_revisions()) == initial_count - rejected
 
         doc.close()
+
+
+class TestCountMatches:
+    """Tests for count_matches functionality."""
+
+    def test_count_matches_returns_int(self, clean_workspace):
+        """Test that count_matches returns an integer."""
+        doc = Document.open(clean_workspace)
+
+        count = doc.count_matches("the")
+        assert isinstance(count, int)
+        assert count >= 0
+
+        doc.close()
+
+    def test_count_matches_nonexistent_returns_zero(self, clean_workspace):
+        """Test that count_matches returns 0 for nonexistent text."""
+        doc = Document.open(clean_workspace)
+
+        count = doc.count_matches("xyz123nonexistent789")
+        assert count == 0
+
+        doc.close()
+
+
+class TestOccurrenceParameter:
+    """Tests for occurrence parameter in editing methods."""
+
+    def test_replace_with_occurrence(self, clean_workspace):
+        """Test replace with specific occurrence."""
+        doc = Document.open(clean_workspace)
+
+        count = doc.count_matches("the")
+        if count < 2:
+            doc.close()
+            pytest.skip("Need at least 2 occurrences for this test")
+
+        # Replace second occurrence
+        change_id = doc.replace("the", "THE", occurrence=1)
+        assert isinstance(change_id, int)
+        assert change_id >= 0
+
+        doc.close()
+
+    def test_replace_occurrence_out_of_range(self, clean_workspace):
+        """Test replace with occurrence beyond available matches."""
+        doc = Document.open(clean_workspace)
+
+        # First find text that exists
+        count = doc.count_matches("the")
+        if count == 0:
+            # Try another common word
+            count = doc.count_matches("a")
+            search_text = "a"
+        else:
+            search_text = "the"
+
+        if count == 0:
+            doc.close()
+            pytest.skip("No suitable text found in document")
+
+        # Request an occurrence that doesn't exist
+        with pytest.raises(TextNotFoundError) as exc_info:
+            doc.replace(search_text, "REPLACEMENT", occurrence=count + 100)
+
+        assert "occurrence" in str(exc_info.value).lower()
+
+        doc.close()
+
+    def test_delete_with_occurrence(self, clean_workspace):
+        """Test delete with specific occurrence."""
+        doc = Document.open(clean_workspace)
+
+        count = doc.count_matches("the")
+        if count < 2:
+            doc.close()
+            pytest.skip("Need at least 2 occurrences for this test")
+
+        # Delete second occurrence
+        change_id = doc.delete("the", occurrence=1)
+        assert isinstance(change_id, int)
+        assert change_id >= 0
+
+        doc.close()
+
+    def test_insert_after_with_occurrence(self, clean_workspace):
+        """Test insert_after with specific occurrence."""
+        doc = Document.open(clean_workspace)
+
+        count = doc.count_matches("the")
+        if count < 2:
+            doc.close()
+            pytest.skip("Need at least 2 occurrences for this test")
+
+        # Insert after second occurrence
+        change_id = doc.insert_after("the", " INSERTED", occurrence=1)
+        assert isinstance(change_id, int)
+        assert change_id >= 0
+
+        doc.close()
+
+    def test_insert_before_with_occurrence(self, clean_workspace):
+        """Test insert_before with specific occurrence."""
+        doc = Document.open(clean_workspace)
+
+        count = doc.count_matches("the")
+        if count < 2:
+            doc.close()
+            pytest.skip("Need at least 2 occurrences for this test")
+
+        # Insert before second occurrence
+        change_id = doc.insert_before("the", "INSERTED ", occurrence=1)
+        assert isinstance(change_id, int)
+        assert change_id >= 0
+
+        doc.close()

@@ -41,27 +41,63 @@ class RevisionManager:
         """
         self.editor = editor
 
-    def replace_text(self, find: str, replace_with: str) -> int:
+    def count_matches(self, text: str) -> int:
+        """Count how many times a text string appears in the document.
+
+        Args:
+            text: Text to search for
+
+        Returns:
+            Number of occurrences found
+        """
+        matches = self.editor.find_all_nodes(tag="w:t", contains=text)
+        return len(matches)
+
+    def _get_nth_match(self, text: str, occurrence: int):
+        """Get the nth occurrence of text (0-indexed).
+
+        Args:
+            text: Text to search for
+            occurrence: Which occurrence to get (0 = first, 1 = second, etc.)
+
+        Returns:
+            The matching w:t element
+
+        Raises:
+            TextNotFoundError: If not enough occurrences exist
+        """
+        matches = self.editor.find_all_nodes(tag="w:t", contains=text)
+        if not matches:
+            raise TextNotFoundError(f"Text not found: '{text}'")
+        if occurrence >= len(matches):
+            raise TextNotFoundError(
+                f"Only {len(matches)} occurrence(s) of '{text}' found, "
+                f"but occurrence={occurrence} requested (0-indexed)"
+            )
+        return matches[occurrence]
+
+    def replace_text(self, find: str, replace_with: str, occurrence: int = 0) -> int:
         """Replace text with tracked changes (deletion + insertion).
 
-        Finds the first occurrence of `find` text and replaces it with `replace_with`,
+        Finds the specified occurrence of `find` text and replaces it with `replace_with`,
         creating a tracked deletion for the old text and insertion for the new text.
 
         Args:
             find: Text to find and replace
             replace_with: Replacement text
+            occurrence: Which occurrence to replace (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the insertion
 
         Raises:
-            TextNotFoundError: If the text is not found
+            TextNotFoundError: If the text is not found or occurrence doesn't exist
         """
         # Find the text element containing the search text
         try:
-            elem = self.editor.get_node(tag="w:t", contains=find)
-        except Exception:
-            raise TextNotFoundError(f"Text not found: '{find}'") from None
+            elem = self._get_nth_match(find, occurrence)
+        except TextNotFoundError:
+            raise
 
         # Get the parent run
         run = elem.parentNode
@@ -116,23 +152,24 @@ class RevisionManager:
 
         return -1
 
-    def suggest_deletion(self, text: str) -> int:
+    def suggest_deletion(self, text: str, occurrence: int = 0) -> int:
         """Mark text as deleted with tracked changes.
 
         Args:
             text: Text to mark as deleted
+            occurrence: Which occurrence to delete (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the deletion
 
         Raises:
-            TextNotFoundError: If the text is not found
+            TextNotFoundError: If the text is not found or occurrence doesn't exist
         """
         # Find the text element containing the search text
         try:
-            elem = self.editor.get_node(tag="w:t", contains=text)
-        except Exception:
-            raise TextNotFoundError(f"Text not found: '{text}'") from None
+            elem = self._get_nth_match(text, occurrence)
+        except TextNotFoundError:
+            raise
 
         # Get the parent run
         run = elem.parentNode
@@ -183,42 +220,44 @@ class RevisionManager:
 
         return -1
 
-    def insert_text_after(self, anchor: str, text: str) -> int:
+    def insert_text_after(self, anchor: str, text: str, occurrence: int = 0) -> int:
         """Insert text after anchor with tracked changes.
 
         Args:
             anchor: Text to find as the anchor point
             text: Text to insert after the anchor
+            occurrence: Which occurrence of anchor to use (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the insertion
 
         Raises:
-            TextNotFoundError: If the anchor text is not found
+            TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
         """
-        return self._insert_text(anchor, text, position="after")
+        return self._insert_text(anchor, text, position="after", occurrence=occurrence)
 
-    def insert_text_before(self, anchor: str, text: str) -> int:
+    def insert_text_before(self, anchor: str, text: str, occurrence: int = 0) -> int:
         """Insert text before anchor with tracked changes.
 
         Args:
             anchor: Text to find as the anchor point
             text: Text to insert before the anchor
+            occurrence: Which occurrence of anchor to use (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the insertion
 
         Raises:
-            TextNotFoundError: If the anchor text is not found
+            TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
         """
-        return self._insert_text(anchor, text, position="before")
+        return self._insert_text(anchor, text, position="before", occurrence=occurrence)
 
-    def _insert_text(self, anchor: str, text: str, position: Literal["before", "after"]) -> int:
+    def _insert_text(self, anchor: str, text: str, position: Literal["before", "after"], occurrence: int = 0) -> int:
         """Insert text before or after anchor with tracked changes."""
         # Find the text element containing the anchor text
         try:
-            elem = self.editor.get_node(tag="w:t", contains=anchor)
-        except Exception:
+            elem = self._get_nth_match(anchor, occurrence)
+        except TextNotFoundError:
             raise TextNotFoundError(f"Anchor text not found: '{anchor}'") from None
 
         # Get the parent run

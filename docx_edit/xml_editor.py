@@ -141,6 +141,42 @@ class XMLEditor:
             )
         return matches[0]
 
+    def find_all_nodes(
+        self,
+        tag: str,
+        attrs: dict[str, str] | None = None,
+        contains: str | None = None,
+    ) -> list:
+        """Find all DOM elements matching the given criteria.
+
+        Unlike get_node(), this returns all matches instead of requiring exactly one.
+
+        Args:
+            tag: The XML tag name (e.g., "w:t", "w:p")
+            attrs: Dictionary of attribute name-value pairs to match
+            contains: Text string that must appear in any text node within the element
+
+        Returns:
+            List of matching DOM elements (may be empty)
+        """
+        matches = []
+        for elem in self.dom.getElementsByTagName(tag):
+            # Check attrs filter
+            if attrs is not None:
+                if not all(elem.getAttribute(attr_name) == attr_value for attr_name, attr_value in attrs.items()):
+                    continue
+
+            # Check contains filter
+            if contains is not None:
+                elem_text = self._get_element_text(elem)
+                normalized_contains = html.unescape(contains)
+                if normalized_contains not in elem_text:
+                    continue
+
+            matches.append(elem)
+
+        return matches
+
     def _get_element_text(self, elem) -> str:
         """Recursively extract all text content from an element.
 
