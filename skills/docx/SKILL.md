@@ -141,7 +141,7 @@ Use the **docx_edit** Python library for all editing operations. It handles trac
 ### Installation
 
 ```bash
-pip install docx-edit
+pip install docx-editor
 ```
 
 ### Author Name for Track Changes
@@ -479,7 +479,7 @@ When generating code for DOCX operations:
 Required dependencies (install if not available):
 
 - **python-docx**: `pip install python-docx` (for reading structure and creating documents)
-- **docx_edit**: `pip install docx-edit` (for track changes, comments, revisions)
+- **docx_edit**: `pip install docx-editor` (for track changes, comments, revisions)
 - **pandoc**: `sudo apt-get install pandoc` (for text extraction to markdown)
 - **docx** (npm): `npm install -g docx` (optional, for complex document formatting)
 - **LibreOffice**: `sudo apt-get install libreoffice` (for PDF conversion)

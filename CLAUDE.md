@@ -1,4 +1,4 @@
-# Claude Instructions for docx-edit
+# Claude Instructions for docx-editor
 
 ## Quick Reference
 

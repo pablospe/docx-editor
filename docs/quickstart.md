@@ -1,6 +1,6 @@
 # Quick Start
 
-This guide covers the essential usage patterns for docx-edit.
+This guide covers the essential usage patterns for docx-editor.
 
 ## Opening Documents
 

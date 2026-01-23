@@ -2,7 +2,7 @@
 
 ## Document
 
-The main entry point for docx-edit. Provides methods for opening documents, making tracked changes, managing comments, and handling revisions.
+The main entry point for docx-editor. Provides methods for opening documents, making tracked changes, managing comments, and handling revisions.
 
 ```python
 from docx_edit import Document

@@ -1,4 +1,4 @@
-site_name: docx-edit
+site_name: docx-editor
 repo_url: https://github.com/pablospe/docx-edit
 site_url: https://pablospe.github.io/docx-edit
 site_description: Edit docx with python
@@ -44,7 +44,7 @@ extra:
     - icon: fontawesome/brands/github
       link: https://github.com/pablospe/docx-edit
     - icon: fontawesome/brands/python
-      link: https://pypi.org/project/docx-edit
+      link: https://pypi.org/project/docx-editor
 
 markdown_extensions:
   - toc:

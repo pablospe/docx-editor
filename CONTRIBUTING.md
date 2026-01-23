@@ -1,4 +1,4 @@
-# Contributing to `docx-edit`
+# Contributing to `docx-editor`
 
 Contributions are welcome, and they are greatly appreciated!
 Every little bit helps, and credit will always be given.
@@ -29,7 +29,7 @@ Anything tagged with "enhancement" and "help wanted" is open to whoever wants to
 
 ## Write Documentation
 
-docx-edit could always use more documentation, whether as part of the official docs, in docstrings, or even on the web in blog posts, articles, and such.
+docx-editor could always use more documentation, whether as part of the official docs, in docstrings, or even on the web in blog posts, articles, and such.
 
 ## Submit Feedback
 
@@ -44,10 +44,10 @@ If you are proposing a new feature:
 
 # Get Started!
 
-Ready to contribute? Here's how to set up `docx-edit` for local development.
+Ready to contribute? Here's how to set up `docx-editor` for local development.
 Please note this documentation assumes you already have `uv` and `Git` installed and ready to go.
 
-1. Fork the `docx-edit` repo on GitHub.
+1. Fork the `docx-editor` repo on GitHub.
 
 2. Clone your fork locally:
 

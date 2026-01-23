@@ -1,4 +1,4 @@
-# docx-edit
+# docx-editor
 
 [![Release](https://img.shields.io/github/v/release/pablospe/docx-edit)](https://img.shields.io/github/v/release/pablospe/docx-edit)
 [![Build status](https://img.shields.io/github/actions/workflow/status/pablospe/docx-edit/main.yml?branch=main)](https://github.com/pablospe/docx-edit/actions/workflows/main.yml?query=branch%3Amain)
@@ -7,6 +7,8 @@
 [![License](https://img.shields.io/github/license/pablospe/docx-edit)](https://img.shields.io/github/license/pablospe/docx-edit)
 
 Pure Python library for Word document track changes and comments, without requiring Microsoft Word.
+
+> **Note:** The PyPI package is named `docx-editor` because `docx-edit` was too similar to an existing package.
 
 - **Github repository**: <https://github.com/pablospe/docx-edit/>
 - **Documentation**: <https://pablospe.github.io/docx-edit/>
@@ -22,7 +24,7 @@ Pure Python library for Word document track changes and comments, without requir
 ## Installation
 
 ```bash
-pip install docx-edit
+pip install docx-editor
 ```
 
 ## Quick Start

@@ -294,7 +294,7 @@ wheels = [
 ]
 
 [[package]]
-name = "docx-edit"
+name = "docx-editor"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
