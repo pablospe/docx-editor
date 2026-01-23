@@ -1,17 +1,17 @@
 # docx-editor
 
-[![Release](https://img.shields.io/github/v/release/pablospe/docx-edit)](https://img.shields.io/github/v/release/pablospe/docx-edit)
-[![Build status](https://img.shields.io/github/actions/workflow/status/pablospe/docx-edit/main.yml?branch=main)](https://github.com/pablospe/docx-edit/actions/workflows/main.yml?query=branch%3Amain)
-[![codecov](https://codecov.io/gh/pablospe/docx-edit/branch/main/graph/badge.svg)](https://codecov.io/gh/pablospe/docx-edit)
-[![Commit activity](https://img.shields.io/github/commit-activity/m/pablospe/docx-edit)](https://img.shields.io/github/commit-activity/m/pablospe/docx-edit)
-[![License](https://img.shields.io/github/license/pablospe/docx-edit)](https://img.shields.io/github/license/pablospe/docx-edit)
+[![Release](https://img.shields.io/github/v/release/pablospe/docx-editor)](https://img.shields.io/github/v/release/pablospe/docx-editor)
+[![Build status](https://img.shields.io/github/actions/workflow/status/pablospe/docx-editor/main.yml?branch=main)](https://github.com/pablospe/docx-editor/actions/workflows/main.yml?query=branch%3Amain)
+[![codecov](https://codecov.io/gh/pablospe/docx-editor/branch/main/graph/badge.svg)](https://codecov.io/gh/pablospe/docx-editor)
+[![Commit activity](https://img.shields.io/github/commit-activity/m/pablospe/docx-editor)](https://img.shields.io/github/commit-activity/m/pablospe/docx-editor)
+[![License](https://img.shields.io/github/license/pablospe/docx-editor)](https://img.shields.io/github/license/pablospe/docx-editor)
 
 Pure Python library for Word document track changes and comments, without requiring Microsoft Word.
 
 > **Note:** The PyPI package is named `docx-editor` because `docx-edit` was too similar to an existing package.
 
-- **Github repository**: <https://github.com/pablospe/docx-edit/>
-- **Documentation**: <https://pablospe.github.io/docx-edit/>
+- **Github repository**: <https://github.com/pablospe/docx-editor/>
+- **Documentation**: <https://pablospe.github.io/docx-editor/>
 
 ## Features
 

@@ -20,9 +20,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://pablospe.github.io/docx-edit/"
-Repository = "https://github.com/pablospe/docx-edit"
-Documentation = "https://pablospe.github.io/docx-edit/"
+Homepage = "https://pablospe.github.io/docx-editor/"
+Repository = "https://github.com/pablospe/docx-editor"
+Documentation = "https://pablospe.github.io/docx-editor/"
 
 [dependency-groups]
 dev = [
