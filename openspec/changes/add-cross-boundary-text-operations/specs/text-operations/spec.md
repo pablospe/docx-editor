@@ -67,20 +67,32 @@ The system SHALL replace text that spans multiple `<w:t>` elements within the sa
 - **AND** the original text is wrapped in `<w:del>`
 - **AND** the new text is wrapped in `<w:ins>`
 
-### Requirement: Revision Boundary Error
+### Requirement: Mixed-State Editing
 
-The system SHALL raise `RevisionBoundaryError` when a text operation would span existing tracked changes, rather than silently failing or implicitly accepting changes.
+The system SHALL replace text that spans revision boundaries by decomposing the operation into per-segment atomic actions, one for each revision context (regular text, inside `<w:ins>`, inside `<w:del>`).
 
-#### Scenario: Replace spanning insertion raises error
+#### Scenario: Replace spanning regular text and insertion
 
-- **GIVEN** a paragraph with "Hello " as regular text and "world" inside `<w:ins>`
-- **WHEN** `replace_text("Hello world", "Hi there")` is called
-- **THEN** a `RevisionBoundaryError` is raised
-- **AND** the error message indicates the text spans existing tracked changes
-- **AND** the document is not modified
+- **GIVEN** a paragraph with "Exploratory Aim: " as regular text and "To examine" inside `<w:ins>`
+- **WHEN** `replace_text("Aim: To", "Goal: To")` is called
+- **THEN** the replacement succeeds
+- **AND** "Aim: " is wrapped in `<w:del>` (standard deletion of regular text)
+- **AND** "To" is removed from the `<w:ins>` element (undoing partial insertion)
+- **AND** "Goal: To" is inserted as a new `<w:ins>` element
+- **AND** the remaining " examine" stays inside the original `<w:ins>`
 
-#### Scenario: Replace within insertion succeeds
+#### Scenario: Replace fully within insertion
 
 - **GIVEN** a paragraph with "Hello beautiful world" entirely inside `<w:ins>`
 - **WHEN** `replace_text("beautiful", "wonderful")` is called
-- **THEN** the replacement succeeds (text is within single revision context)
+- **THEN** the replacement succeeds
+- **AND** "beautiful" is removed from the insertion (undoing partial insertion)
+- **AND** "wonderful" is inserted as a new `<w:ins>` element
+
+#### Scenario: Insertion node is split when partially matched
+
+- **GIVEN** a paragraph with `<w:ins>To examine whether</w:ins>`
+- **WHEN** a delete operation targets "To" (the first 2 characters)
+- **THEN** the `<w:ins>` is split into two parts
+- **AND** the `<w:ins>To</w:ins>` portion is removed
+- **AND** `<w:ins> examine whether</w:ins>` remains intact

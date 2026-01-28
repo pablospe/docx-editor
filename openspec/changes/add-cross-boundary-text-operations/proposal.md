@@ -11,7 +11,7 @@ Users cannot find or edit text that spans tracked change boundaries. When a docu
 1. **Add Virtual Text Map** - Build flattened text view that maps character positions back to source XML nodes
 2. **Add cross-boundary search** - Find text across `<w:t>`, `<w:ins>`, and `<w:del>` boundaries
 3. **Add boundary-aware replace** - Replace text spanning multiple elements with proper node splitting
-4. **Add explicit boundary errors** - Raise `RevisionBoundaryError` when operations span existing tracked changes (explicit > implicit)
+4. **Add mixed-state editing** - Handle replacements spanning revision boundaries using atomic decomposition (split operations per segment type)
 5. **Add `get_visible_text()` API** - Let users access flattened text for analysis
 
 ## Impact
@@ -21,5 +21,4 @@ Users cannot find or edit text that spans tracked change boundaries. When a docu
   - `docx_editor/xml_editor.py` - Add `build_text_map()` method
   - `docx_editor/track_changes.py` - Update `_get_nth_match()` and `replace_text()`
   - `docx_editor/document.py` - Add `get_visible_text()` public API
-  - `docx_editor/exceptions.py` - Add `RevisionBoundaryError`
 - **Breaking changes:** None (new functionality, existing behavior preserved)
