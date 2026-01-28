@@ -106,6 +106,18 @@ Given a replace of "Aim: To" where "Aim: " is regular text and "To" is inside `<
 | Breaking existing behavior | New methods; existing API unchanged until validated |
 | Edge cases in deeply nested revisions | Start with single-level nesting; document unsupported cases |
 
+## Design Constraints
+
+### Run Property Preservation
+
+When splitting runs during cross-boundary operations, each new `<w:r>` fragment MUST carry the `<w:rPr>` from its source run. The current single-element `replace_text` already does this (`track_changes.py:122-142`). The cross-boundary version must apply the same pattern per-segment — each segment uses its own source run's `w:rPr`.
+
+When a match spans runs with different formatting (e.g., bold + italic), each split fragment preserves its original formatting. The new inserted text inherits `w:rPr` from the first run in the match range.
+
+### Word Compatibility
+
+Every test that produces a modified `.docx` MUST include a round-trip validation: reopen the output file and verify it parses without errors. This catches malformed XML, missing namespaces, and invalid nesting that would cause Word to show a repair dialog.
+
 ## Testing Strategy
 
 **Tests-first (TDD) approach:** Write failing tests before implementing each phase. Tests serve as the specification and guide the implementation.

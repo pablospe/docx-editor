@@ -34,11 +34,12 @@
 - [ ] 5.2 Add tests for replace spanning `<w:ins>` + regular text boundary
 - [ ] 5.3 Add tests for replace fully within `<w:ins>` (regression)
 - [ ] 5.4 Add tests for `<w:ins>` node splitting (partial match within insertion)
-- [ ] 5.5 Add tests for output validity — verify Word can open resulting documents
-- [ ] 5.6 Implement segment decomposition — classify match ranges by revision context (regular, inside `<w:ins>`, inside `<w:del>`)
-- [ ] 5.7 Implement `<w:ins>` node splitting — isolate target text from remaining insertion
-- [ ] 5.8 Implement per-segment delete strategies (wrap in `<w:del>` for regular text, remove node for inserted text)
-- [ ] 5.9 Integrate atomic decomposition into `replace_text()` flow
+- [ ] 5.5 Add tests for `w:rPr` preservation across split runs with different formatting
+- [ ] 5.6 Add tests for output validity — round-trip reopen modified `.docx` to verify well-formed XML
+- [ ] 5.7 Implement segment decomposition — classify match ranges by revision context (regular, inside `<w:ins>`, inside `<w:del>`)
+- [ ] 5.8 Implement `<w:ins>` node splitting — isolate target text from remaining insertion
+- [ ] 5.9 Implement per-segment delete strategies (wrap in `<w:del>` for regular text, remove node for inserted text)
+- [ ] 5.10 Integrate atomic decomposition into `replace_text()` flow
 
 ## 6. Documentation
 
