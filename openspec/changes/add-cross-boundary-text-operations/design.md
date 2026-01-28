@@ -106,6 +106,12 @@ Given a replace of "Aim: To" where "Aim: " is regular text and "To" is inside `<
 | Breaking existing behavior | New methods; existing API unchanged until validated |
 | Edge cases in deeply nested revisions | Start with single-level nesting; document unsupported cases |
 
+## Testing Strategy
+
+**Tests-first (TDD) approach:** Write failing tests before implementing each phase. Tests serve as the specification and guide the implementation.
+
+Each phase begins by writing unit tests that cover the expected behavior described in the spec scenarios. Implementation follows to make the tests pass.
+
 ## Migration Plan
 
 1. **Phase 1:** Add `get_visible_text()` (read-only, no risk)
