@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Literal
 
 from .exceptions import RevisionError, TextNotFoundError
-from .xml_editor import DocxXMLEditor, TextMapMatch, build_text_map
+from .xml_editor import DocxXMLEditor, TextMapMatch, build_text_map, find_in_text_map
 
 
 @dataclass
@@ -85,28 +85,15 @@ class RevisionManager:
         current_occurrence = 0
         for paragraph in self.editor.dom.getElementsByTagName("w:p"):
             text_map = build_text_map(paragraph)
-            start = 0
+            local_occ = 0
             while True:
-                idx = text_map.find(text, start)
-                if idx == -1:
+                match = find_in_text_map(text_map, text, local_occ)
+                if match is None:
                     break
                 if current_occurrence == occurrence:
-                    end = idx + len(text)
-                    positions = text_map.get_nodes_for_range(idx, end)
-                    if positions:
-                        first_ins = positions[0].is_inside_ins
-                        spans = any(p.is_inside_ins != first_ins for p in positions)
-                    else:
-                        spans = False
-                    return TextMapMatch(
-                        start=idx,
-                        end=end,
-                        text=text,
-                        positions=positions,
-                        spans_boundary=spans,
-                    )
+                    return match
                 current_occurrence += 1
-                start = idx + 1
+                local_occ += 1
         return None
 
     def replace_text(self, find: str, replace_with: str, occurrence: int = 0) -> int:
@@ -283,22 +270,22 @@ class RevisionManager:
         return text
 
     def _build_cross_boundary_parts(self, match: TextMapMatch):
-        """Build per-run data for a cross-boundary match.
+        """Build per-node data for a cross-boundary match.
 
         Returns list of (run, rPr_xml, before_text, matched_part, after_text) tuples,
-        one per unique run involved in the match. Runs are in document order.
+        one per unique w:t node involved in the match. Nodes are in document order.
         """
         from collections import OrderedDict
 
-        # Group positions by their w:t node, then by parent run
-        run_data = OrderedDict()  # id(run) -> (run, rPr, first_offset, last_offset, node)
+        # Group positions by their w:t node (not run — a run can have multiple w:t nodes)
+        node_data = OrderedDict()
         for pos in match.positions:
             run, rPr_xml = self._get_run_info(pos.node)
             if run is None:
                 continue
-            rid = id(run)
-            if rid not in run_data:
-                run_data[rid] = {
+            nid = id(pos.node)
+            if nid not in node_data:
+                node_data[nid] = {
                     "run": run,
                     "rPr_xml": rPr_xml,
                     "node": pos.node,
@@ -306,10 +293,10 @@ class RevisionManager:
                     "last_offset": pos.offset_in_node,
                 }
             else:
-                run_data[rid]["last_offset"] = pos.offset_in_node
+                node_data[nid]["last_offset"] = pos.offset_in_node
 
         result = []
-        for info in run_data.values():
+        for info in node_data.values():
             node_text = self._get_node_text(info["node"])
             first = info["first_offset"]
             last = info["last_offset"]
@@ -446,71 +433,148 @@ class RevisionManager:
     def _remove_from_insertion(self, positions: list) -> None:
         """Remove matched text from inside a <w:ins> element.
 
-        Modifies the <w:t> text node in-place. If the entire text is matched,
-        removes the <w:ins> element. If partial, truncates or splits.
+        Handles segments spanning multiple w:t nodes within the insertion.
+        If the entire insertion text is matched, removes the <w:ins> element.
+        If partial, truncates or splits.
         """
-        node = positions[0].node
-        first_offset = positions[0].offset_in_node
-        last_offset = positions[-1].offset_in_node
+        # Group positions by w:t node to handle multi-node segments
+        from collections import OrderedDict
 
-        node_text = self._get_node_text(node)
-        before = node_text[:first_offset]
-        after = node_text[last_offset + 1 :]
+        node_groups = OrderedDict()
+        for pos in positions:
+            nid = id(pos.node)
+            if nid not in node_groups:
+                node_groups[nid] = {"node": pos.node, "first": pos.offset_in_node, "last": pos.offset_in_node}
+            else:
+                node_groups[nid]["last"] = pos.offset_in_node
 
-        ins_elem = self._find_ancestor(node, "w:ins")
+        groups = list(node_groups.values())
+        first_group = groups[0]
+        last_group = groups[-1]
 
-        if not before and not after:
-            # Entire node matched -- remove the <w:ins> element
+        first_node = first_group["node"]
+        last_node = last_group["node"]
+        first_offset = first_group["first"]
+        last_offset = last_group["last"]
+
+        before = self._get_node_text(first_node)[:first_offset]
+        after = self._get_node_text(last_node)[last_offset + 1 :]
+
+        ins_elem = self._find_ancestor(first_node, "w:ins")
+
+        if not before and not after and len(groups) == len(self._get_wt_nodes_in_ancestor(ins_elem)):
+            # Entire insertion matched -- remove the <w:ins> element
             if ins_elem and ins_elem.parentNode:
                 ins_elem.parentNode.removeChild(ins_elem)
-        elif not before:
-            # Matched at start -- truncate to after portion
-            node.firstChild.data = after
-        elif not after:
-            # Matched at end -- truncate to before portion
-            node.firstChild.data = before
+        elif len(groups) == 1 and first_node is last_node:
+            # Single node — use simple truncate/split logic
+            node_text = self._get_node_text(first_node)
+            before_text = node_text[:first_offset]
+            after_text = node_text[last_offset + 1 :]
+
+            if not before_text and not after_text:
+                # Entire single node matched — remove ins
+                if ins_elem and ins_elem.parentNode:
+                    ins_elem.parentNode.removeChild(ins_elem)
+            elif not before_text:
+                first_node.firstChild.data = after_text
+            elif not after_text:
+                first_node.firstChild.data = before_text
+            else:
+                # Middle split
+                first_node.firstChild.data = before_text
+                run = self._find_ancestor(first_node, "w:r")
+                if ins_elem and run:
+                    rPr_xml = ""
+                    rPr_elems = run.getElementsByTagName("w:rPr")
+                    if rPr_elems:
+                        rPr_xml = rPr_elems[0].toxml()
+                    after_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r></w:ins>"
+                    self.editor.insert_after(ins_elem, after_xml)
         else:
-            # Matched in middle -- keep "before" in current node, create new ins for "after"
-            node.firstChild.data = before
+            # Multi-node: truncate first node to before, last node to after,
+            # remove intermediate nodes entirely
+            if before:
+                first_node.firstChild.data = before
+            else:
+                # Remove the entire run containing this node
+                run = self._find_ancestor(first_node, "w:r")
+                if run and run.parentNode:
+                    run.parentNode.removeChild(run)
 
-            run = self._find_ancestor(node, "w:r")
-            if ins_elem and run:
-                rPr_xml = ""
-                rPr_elems = run.getElementsByTagName("w:rPr")
-                if rPr_elems:
-                    rPr_xml = rPr_elems[0].toxml()
+            if after:
+                last_node.firstChild.data = after
+            else:
+                run = self._find_ancestor(last_node, "w:r")
+                if run and run.parentNode:
+                    run.parentNode.removeChild(run)
 
-                after_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r></w:ins>"
-                self.editor.insert_after(ins_elem, after_xml)
+            # Remove intermediate nodes
+            for group in groups[1:-1]:
+                run = self._find_ancestor(group["node"], "w:r")
+                if run and run.parentNode:
+                    run.parentNode.removeChild(run)
 
-    def _delete_regular_segment(self, positions: list) -> None:
+    def _get_wt_nodes_in_ancestor(self, ancestor) -> list:
+        """Get all w:t nodes inside an ancestor element."""
+        if ancestor is None:
+            return []
+        return ancestor.getElementsByTagName("w:t")
+
+    def _delete_regular_segment(self, positions: list) -> int:
         """Delete regular (non-insertion) text by wrapping in <w:del>.
 
-        Splits the run if needed to isolate the matched portion.
+        Handles segments spanning multiple w:t nodes within the same run(s).
+        Returns the w:id of the first <w:del> element created, or -1.
         """
-        node = positions[0].node
-        first_offset = positions[0].offset_in_node
-        last_offset = positions[-1].offset_in_node
+        from collections import OrderedDict
 
-        run, rPr_xml = self._get_run_info(node)
-        if not run:
-            return
+        node_groups = OrderedDict()
+        for pos in positions:
+            nid = id(pos.node)
+            if nid not in node_groups:
+                node_groups[nid] = {"node": pos.node, "first": pos.offset_in_node, "last": pos.offset_in_node}
+            else:
+                node_groups[nid]["last"] = pos.offset_in_node
 
-        node_text = self._get_node_text(node)
-        before = node_text[:first_offset]
-        matched = node_text[first_offset : last_offset + 1]
-        after = node_text[last_offset + 1 :]
+        groups = list(node_groups.values())
+        first_del_id = -1
 
-        xml_parts = []
-        if before:
-            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
-        xml_parts.append(f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
-        if after:
-            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+        for i, group in enumerate(groups):
+            node = group["node"]
+            run, rPr_xml = self._get_run_info(node)
+            if not run:
+                continue
 
-        new_xml = "".join(xml_parts)
-        self.editor.insert_before(run, new_xml)
-        run.parentNode.removeChild(run)
+            node_text = self._get_node_text(node)
+            first_offset = group["first"]
+            last_offset = group["last"]
+            before = node_text[:first_offset] if i == 0 else ""
+            matched = node_text[first_offset : last_offset + 1]
+            after = node_text[last_offset + 1 :] if i == len(groups) - 1 else ""
+
+            # For intermediate nodes, the entire node text is matched
+            if i > 0 and i < len(groups) - 1:
+                matched = node_text
+
+            xml_parts = []
+            if before:
+                xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+            xml_parts.append(f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
+            if after:
+                xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+
+            new_xml = "".join(xml_parts)
+            nodes = self.editor.insert_before(run, new_xml)
+            run.parentNode.removeChild(run)
+
+            if first_del_id == -1:
+                for n in nodes:
+                    if n.nodeType == n.ELEMENT_NODE and n.tagName == "w:del":
+                        first_del_id = int(n.getAttribute("w:id"))
+                        break
+
+        return first_del_id
 
     def _delete_across_nodes(self, match: TextMapMatch) -> int:
         """Delete text spanning multiple w:t elements."""
@@ -563,35 +627,9 @@ class RevisionManager:
             if is_inside_ins:
                 self._remove_from_insertion(positions)
             else:
-                node = positions[0].node
-                first_offset = positions[0].offset_in_node
-                last_offset = positions[-1].offset_in_node
-
-                run, rPr_xml = self._get_run_info(node)
-                if not run:
-                    continue
-
-                node_text = self._get_node_text(node)
-                before = node_text[:first_offset]
-                matched = node_text[first_offset : last_offset + 1]
-                after = node_text[last_offset + 1 :]
-
-                xml_parts = []
-                if before:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
-                xml_parts.append(f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
-                if after:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
-
-                new_xml = "".join(xml_parts)
-                nodes = self.editor.insert_before(run, new_xml)
-                run.parentNode.removeChild(run)
-
+                del_id = self._delete_regular_segment(positions)
                 if first_del_id == -1:
-                    for n in nodes:
-                        if n.nodeType == n.ELEMENT_NODE and n.tagName == "w:del":
-                            first_del_id = int(n.getAttribute("w:id"))
-                            break
+                    first_del_id = del_id
 
         return first_del_id
 

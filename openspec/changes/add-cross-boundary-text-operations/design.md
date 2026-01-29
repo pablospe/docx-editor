@@ -133,9 +133,9 @@ Each phase begins by writing unit tests that cover the expected behavior describ
 
 Rollback: Revert to per-element search if issues found.
 
-## Open Questions
+## Resolved Questions
 
-1. Should `get_visible_text()` return paragraph boundaries (e.g., `\n`)?
-2. Performance target for text map building? (Need benchmarks)
-3. Should we expose `find_all_text()` for multiple matches?
-4. When deleting text inside `<w:ins>`, should we remove the node or wrap in `<w:del>` inside `<w:ins>`? (Word supports both; removing is simpler and preserves cleaner history)
+1. **`get_visible_text()` paragraph boundaries:** Yes, paragraphs are joined with `\n`. Implemented in `document.py`.
+2. **Performance target:** Deferred. Lazy per-paragraph map building keeps memory bounded. Benchmarks can be added when real-world usage reveals bottlenecks.
+3. **`find_all_text()`:** Deferred. The `occurrence` parameter on `find_text()` covers the common case. A dedicated `find_all_text()` can be added later if needed.
+4. **Deleting text inside `<w:ins>`:** Remove the node (undo the insertion). This produces cleaner history and avoids invalid `<w:del>` nesting inside `<w:ins>`. Implemented in `_remove_from_insertion()`.
