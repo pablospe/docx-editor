@@ -486,12 +486,10 @@ class TestDocumentFindText:
     def test_find_text_after_insertion(self, clean_workspace):
         """Find text that spans an insertion boundary."""
         doc = Document.open(clean_workspace)
-        # insert_after inserts after the run containing "fox", so the inserted
-        # text appears after the full run text. Search for text spanning the
-        # boundary between original run and inserted text.
+        # insert_after splits the run at the anchor and inserts inline after it
         doc.insert_after("fox", " INSERTED")
-        # Find text that spans the original run end and the inserted text
-        match = doc.find_text("dog. INSERTED")
+        # "fox INSERTED" spans original run + insertion
+        match = doc.find_text("fox INSERTED")
         assert match is not None
         assert match.spans_boundary
         doc.close()

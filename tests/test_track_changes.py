@@ -996,16 +996,17 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_intermediate
+        mock_elem.firstChild.data = "anchor"
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
-        # Mock insert_after to return a node with w:ins
+        # Mock replace_node to return a node with w:ins
         mock_ins_node = MagicMock()
         mock_ins_node.nodeType = mock_ins_node.ELEMENT_NODE
         mock_ins_node.tagName = "w:ins"
         mock_ins_node.getAttribute.return_value = "44"
 
-        mock_editor.insert_after.return_value = [mock_ins_node]
+        mock_editor.replace_node.return_value = [mock_ins_node]
 
         manager = RevisionManager(mock_editor)
         result = manager.insert_text_after("anchor", "new text")
@@ -1100,6 +1101,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
+        mock_elem.firstChild.data = "anchor"
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1108,14 +1110,14 @@ class TestMockedEdgeCases:
         mock_ins_node.tagName = "w:ins"
         mock_ins_node.getAttribute.return_value = "47"
 
-        mock_editor.insert_after.return_value = [mock_ins_node]
+        mock_editor.replace_node.return_value = [mock_ins_node]
 
         manager = RevisionManager(mock_editor)
         result = manager.insert_text_after("anchor", "new text")
 
         assert result == 47
         # Verify rPr was included in the XML
-        call_args = mock_editor.insert_after.call_args[0][1]
+        call_args = mock_editor.replace_node.call_args[0][1]
         assert "<w:rPr>" in call_args
 
     def test_replace_text_returns_minus_one_when_no_ins_found(self):

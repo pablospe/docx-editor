@@ -649,14 +649,36 @@ class RevisionManager:
         if rPr_elems:
             rPr_xml = rPr_elems[0].toxml()
 
-        # Create insertion XML
+        # Split the run at the anchor boundary so insertion goes inline
+        full_text = elem.firstChild.data if elem.firstChild else ""
+        anchor_idx = full_text.find(anchor)
+
+        if anchor_idx == -1:
+            raise TextNotFoundError(f"Anchor text not found: '{anchor}'")
+
+        before_text = full_text[:anchor_idx]
+        after_text = full_text[anchor_idx + len(anchor) :]
+
+        # Build split runs + insertion
+        xml_parts = []
+        if before_text:
+            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before_text)}</w:t></w:r>")
+
         ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
 
-        # Insert before or after the run
-        if position == "after":
-            nodes = self.editor.insert_after(run, ins_xml)
+        if position == "before":
+            xml_parts.append(ins_xml)
+            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(anchor)}</w:t></w:r>")
         else:
-            nodes = self.editor.insert_before(run, ins_xml)
+            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(anchor)}</w:t></w:r>")
+            xml_parts.append(ins_xml)
+
+        if after_text:
+            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r>")
+
+        # Replace the original run with the split + insertion
+        new_xml = "".join(xml_parts)
+        nodes = self.editor.replace_node(run, new_xml)
 
         # Find the insertion node to get its ID
         for node in nodes:
