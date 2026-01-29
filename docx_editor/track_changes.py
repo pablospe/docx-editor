@@ -633,7 +633,11 @@ class RevisionManager:
         try:
             elem = self._get_nth_match(anchor, occurrence)
         except TextNotFoundError:
-            raise TextNotFoundError(f"Anchor text not found: '{anchor}'") from None
+            # Fall back to cross-boundary search
+            match = self._find_across_boundaries(anchor, occurrence)
+            if match is None:
+                raise TextNotFoundError(f"Anchor text not found: '{anchor}'") from None
+            return self._insert_near_match(match, text, position)
 
         # Get the parent run
         run = elem.parentNode
@@ -685,6 +689,32 @@ class RevisionManager:
             if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
                 return int(node.getAttribute("w:id"))
 
+        return -1
+
+    def _insert_near_match(self, match: TextMapMatch, text: str, position: str) -> int:
+        """Insert text before/after a cross-boundary match."""
+        positions = match.positions
+        if not positions:
+            return -1
+
+        # Get rPr from first run
+        first_run, rPr_xml = self._get_run_info(positions[0].node)
+
+        ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
+
+        if position == "after":
+            last_run, _ = self._get_run_info(positions[-1].node)
+            if not last_run:
+                return -1
+            nodes = self.editor.insert_after(last_run, ins_xml)
+        else:
+            if not first_run:
+                return -1
+            nodes = self.editor.insert_before(first_run, ins_xml)
+
+        for node in nodes:
+            if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
+                return int(node.getAttribute("w:id"))
         return -1
 
     def list_revisions(self, author: str | None = None) -> list[Revision]:
