@@ -99,4 +99,3 @@ The system SHALL replace text that spans revision boundaries by decomposing the 
 - **THEN** the `<w:ins>` is split into two parts
 - **AND** the `<w:ins>To</w:ins>` portion is removed
 - **AND** `<w:ins> examine whether</w:ins>` remains intact
-

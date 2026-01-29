@@ -20,7 +20,7 @@ NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 
 def _parse_body(xml: str):
     """Parse XML and return the w:body element."""
-    full = f'<w:body {NS}>{xml}</w:body>'
+    full = f"<w:body {NS}>{xml}</w:body>"
     doc = defusedxml.minidom.parseString(full)
     return doc.getElementsByTagName("w:body")[0]
 
@@ -30,11 +30,7 @@ class TestMultiWtTextMap:
 
     def test_two_wt_in_one_run(self):
         """A run with two w:t nodes produces correct positions."""
-        body = _parse_body(
-            "<w:p>"
-            "<w:r><w:t>Hello </w:t><w:t>world</w:t></w:r>"
-            "</w:p>"
-        )
+        body = _parse_body("<w:p><w:r><w:t>Hello </w:t><w:t>world</w:t></w:r></w:p>")
         p = body.getElementsByTagName("w:p")[0]
         tm = build_text_map(p)
         assert tm.text == "Hello world"
@@ -48,11 +44,7 @@ class TestMultiWtTextMap:
 
     def test_find_spanning_two_wt_in_same_run(self):
         """Finding text that spans two w:t nodes in the same run."""
-        body = _parse_body(
-            "<w:p>"
-            "<w:r><w:t>Hello </w:t><w:t>world</w:t></w:r>"
-            "</w:p>"
-        )
+        body = _parse_body("<w:p><w:r><w:t>Hello </w:t><w:t>world</w:t></w:r></w:p>")
         p = body.getElementsByTagName("w:p")[0]
         tm = build_text_map(p)
         match = find_in_text_map(tm, "o w")
@@ -96,7 +88,7 @@ class TestMultiWtCrossBoundary:
             p.removeChild(p.firstChild)
 
         # Inject a run with two w:t elements
-        xml = '<w:r><w:t>Hello </w:t><w:t>beautiful world</w:t></w:r>'
+        xml = "<w:r><w:t>Hello </w:t><w:t>beautiful world</w:t></w:r>"
         ns = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
         fragment = defusedxml.minidom.parseString(f"<root {ns}>{xml}</root>")
         for child in fragment.documentElement.childNodes:
@@ -175,11 +167,11 @@ class TestMultiWtCrossBoundary:
 
         # Regular text + insertion with two w:t nodes
         xml = (
-            '<w:r><w:t>Before </w:t></w:r>'
+            "<w:r><w:t>Before </w:t></w:r>"
             '<w:ins w:id="99" w:author="Test" w:date="2024-01-01T00:00:00Z">'
-            '<w:r><w:t>hello </w:t><w:t>world</w:t></w:r>'
-            '</w:ins>'
-            '<w:r><w:t> after</w:t></w:r>'
+            "<w:r><w:t>hello </w:t><w:t>world</w:t></w:r>"
+            "</w:ins>"
+            "<w:r><w:t> after</w:t></w:r>"
         )
         ns = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
         fragment = defusedxml.minidom.parseString(f"<root {ns}>{xml}</root>")
