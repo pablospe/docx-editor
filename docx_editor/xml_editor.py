@@ -6,6 +6,7 @@ line-number-based node finding and DOM manipulation.
 
 import html
 import random
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +14,124 @@ import defusedxml.minidom
 import defusedxml.sax
 
 from .exceptions import MultipleNodesFoundError, NodeNotFoundError
+
+
+@dataclass
+class TextPosition:
+    """A single character's position in the source XML."""
+
+    node: object  # The <w:t> element
+    offset_in_node: int  # Character offset within the node's text
+    is_inside_ins: bool  # Inside <w:ins>?
+    is_inside_del: bool  # Inside <w:del>?
+
+
+@dataclass
+class TextMap:
+    """Maps visible text to source XML nodes."""
+
+    text: str  # Concatenated visible text
+    positions: list[TextPosition]  # One per character in `text`
+
+    def find(self, search: str, start: int = 0) -> int:
+        """Find text in the visible text string. Returns index or -1."""
+        return self.text.find(search, start)
+
+    def get_nodes_for_range(self, start: int, end: int) -> list[TextPosition]:
+        """Get TextPosition entries for a character range."""
+        return self.positions[start:end]
+
+
+@dataclass
+class TextMapMatch:
+    """A match found in the text map."""
+
+    start: int  # Start index in visible text
+    end: int  # End index in visible text
+    text: str  # The matched text
+    positions: list[TextPosition]  # TextPosition entries for the match
+    spans_boundary: bool  # True if match spans different revision contexts
+
+
+def find_in_text_map(text_map: TextMap, search: str, occurrence: int = 0) -> TextMapMatch | None:
+    """Find the nth occurrence of text in a text map.
+
+    Returns TextMapMatch or None if not found.
+    """
+    start = 0
+    for i in range(occurrence + 1):
+        idx = text_map.find(search, start)
+        if idx == -1:
+            return None
+        if i < occurrence:
+            start = idx + 1
+
+    end = idx + len(search)
+    positions = text_map.get_nodes_for_range(idx, end)
+
+    # Check if match spans different revision contexts
+    if positions:
+        first_ins = positions[0].is_inside_ins
+        spans = any(p.is_inside_ins != first_ins for p in positions)
+    else:
+        spans = False
+
+    return TextMapMatch(
+        start=idx,
+        end=end,
+        text=search,
+        positions=positions,
+        spans_boundary=spans,
+    )
+
+
+def _is_inside_element(node, tag_name: str) -> bool:
+    """Check if a node is inside an element with the given tag."""
+    parent = node.parentNode
+    while parent:
+        if parent.nodeType == parent.ELEMENT_NODE and parent.tagName == tag_name:
+            return True
+        parent = parent.parentNode
+    return False
+
+
+def build_text_map(paragraph) -> TextMap:
+    """Build a text map for a paragraph element.
+
+    Walks all <w:t> elements in the paragraph, concatenating visible text
+    (excluding <w:delText>) and recording the source node and offset for
+    each character position.
+
+    Text inside <w:ins> is included (it's visible) with is_inside_ins=True.
+    Text inside <w:del>/<w:delText> is excluded from visible text.
+    """
+    text_chars: list[str] = []
+    positions: list[TextPosition] = []
+
+    for node in paragraph.getElementsByTagName("w:t"):
+        # Skip w:t inside w:del (deleted text uses w:delText, but be safe)
+        if _is_inside_element(node, "w:del"):
+            continue
+
+        inside_ins = _is_inside_element(node, "w:ins")
+        # Get text content from the text node
+        node_text = ""
+        for child in node.childNodes:
+            if child.nodeType == child.TEXT_NODE:
+                node_text += child.data
+
+        for i, char in enumerate(node_text):
+            text_chars.append(char)
+            positions.append(
+                TextPosition(
+                    node=node,
+                    offset_in_node=i,
+                    is_inside_ins=inside_ins,
+                    is_inside_del=False,
+                )
+            )
+
+    return TextMap(text="".join(text_chars), positions=positions)
 
 
 class XMLEditor:

@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Literal
 
 from .exceptions import RevisionError, TextNotFoundError
-from .xml_editor import DocxXMLEditor
+from .xml_editor import DocxXMLEditor, TextMapMatch, build_text_map
 
 
 @dataclass
@@ -76,6 +76,39 @@ class RevisionManager:
             )
         return matches[occurrence]
 
+    def _find_across_boundaries(self, text: str, occurrence: int = 0) -> TextMapMatch | None:
+        """Find the nth occurrence of text across element boundaries.
+
+        Searches across all paragraphs using text maps.
+        Returns TextMapMatch or None.
+        """
+        current_occurrence = 0
+        for paragraph in self.editor.dom.getElementsByTagName("w:p"):
+            text_map = build_text_map(paragraph)
+            start = 0
+            while True:
+                idx = text_map.find(text, start)
+                if idx == -1:
+                    break
+                if current_occurrence == occurrence:
+                    end = idx + len(text)
+                    positions = text_map.get_nodes_for_range(idx, end)
+                    if positions:
+                        first_ins = positions[0].is_inside_ins
+                        spans = any(p.is_inside_ins != first_ins for p in positions)
+                    else:
+                        spans = False
+                    return TextMapMatch(
+                        start=idx,
+                        end=end,
+                        text=text,
+                        positions=positions,
+                        spans_boundary=spans,
+                    )
+                current_occurrence += 1
+                start = idx + 1
+        return None
+
     def replace_text(self, find: str, replace_with: str, occurrence: int = 0) -> int:
         """Replace text with tracked changes (deletion + insertion).
 
@@ -97,7 +130,11 @@ class RevisionManager:
         try:
             elem = self._get_nth_match(find, occurrence)
         except TextNotFoundError:
-            raise
+            # Fall back to cross-boundary search
+            match = self._find_across_boundaries(find, occurrence)
+            if match is None:
+                raise
+            return self._replace_across_nodes(match, replace_with)
 
         # Get the parent run
         run = elem.parentNode
@@ -169,7 +206,11 @@ class RevisionManager:
         try:
             elem = self._get_nth_match(text, occurrence)
         except TextNotFoundError:
-            raise
+            # Fall back to cross-boundary search
+            match = self._find_across_boundaries(text, occurrence)
+            if match is None:
+                raise
+            return self._delete_across_nodes(match)
 
         # Get the parent run
         run = elem.parentNode
@@ -219,6 +260,340 @@ class RevisionManager:
                 return int(node.getAttribute("w:id"))
 
         return -1
+
+    def _get_run_info(self, node):
+        """Get the parent w:r element and its rPr XML for a w:t node."""
+        run = node.parentNode
+        while run and run.nodeName != "w:r":
+            run = run.parentNode
+        if not run:
+            return None, ""
+        rPr_xml = ""
+        rPr_elems = run.getElementsByTagName("w:rPr")
+        if rPr_elems:
+            rPr_xml = rPr_elems[0].toxml()
+        return run, rPr_xml
+
+    def _get_node_text(self, node) -> str:
+        """Get text content of a w:t node."""
+        text = ""
+        for child in node.childNodes:
+            if child.nodeType == child.TEXT_NODE:
+                text += child.data
+        return text
+
+    def _build_cross_boundary_parts(self, match: TextMapMatch):
+        """Build per-run data for a cross-boundary match.
+
+        Returns list of (run, rPr_xml, before_text, matched_part, after_text) tuples,
+        one per unique run involved in the match. Runs are in document order.
+        """
+        from collections import OrderedDict
+
+        # Group positions by their w:t node, then by parent run
+        run_data = OrderedDict()  # id(run) -> (run, rPr, first_offset, last_offset, node)
+        for pos in match.positions:
+            run, rPr_xml = self._get_run_info(pos.node)
+            if run is None:
+                continue
+            rid = id(run)
+            if rid not in run_data:
+                run_data[rid] = {
+                    "run": run,
+                    "rPr_xml": rPr_xml,
+                    "node": pos.node,
+                    "first_offset": pos.offset_in_node,
+                    "last_offset": pos.offset_in_node,
+                }
+            else:
+                run_data[rid]["last_offset"] = pos.offset_in_node
+
+        result = []
+        for info in run_data.values():
+            node_text = self._get_node_text(info["node"])
+            first = info["first_offset"]
+            last = info["last_offset"]
+            before = node_text[:first]
+            matched = node_text[first : last + 1]
+            after = node_text[last + 1 :]
+            result.append((info["run"], info["rPr_xml"], before, matched, after))
+        return result
+
+    def _classify_segments(self, match: TextMapMatch):
+        """Group match positions into contiguous segments by revision context.
+
+        Returns list of (is_inside_ins, positions_list) tuples.
+        """
+        segments = []
+        current_ins = None
+        current_positions = []
+        for pos in match.positions:
+            if pos.is_inside_ins != current_ins:
+                if current_positions:
+                    segments.append((current_ins, current_positions))
+                current_ins = pos.is_inside_ins
+                current_positions = [pos]
+            else:
+                current_positions.append(pos)
+        if current_positions:
+            segments.append((current_ins, current_positions))
+        return segments
+
+    def _replace_across_nodes(self, match: TextMapMatch, replace_with: str) -> int:
+        """Replace text spanning multiple w:t elements, handling mixed revision contexts."""
+        if match.spans_boundary:
+            return self._replace_mixed_state(match, replace_with)
+        return self._replace_same_context(match, replace_with)
+
+    def _replace_same_context(self, match: TextMapMatch, replace_with: str) -> int:
+        """Replace text spanning multiple runs in the same revision context.
+
+        Groups the match by parent run, then for each run:
+        - Keeps text before the match as an unchanged run
+        - Puts matched text into w:del
+        - Keeps text after the match as an unchanged run
+        - Inserts w:ins with replacement text after the last deletion
+        """
+        parts = self._build_cross_boundary_parts(match)
+        if not parts:
+            return -1
+
+        # Use first run's rPr for the insertion
+        first_rPr = parts[0][1]
+
+        xml_parts = []
+        for idx, (_run, rPr_xml, before, matched, after) in enumerate(parts):
+            if before:
+                xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+
+            xml_parts.append(f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
+
+            # Insert replacement after the last deletion
+            if idx == len(parts) - 1:
+                xml_parts.append(f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>")
+
+            if after:
+                xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+
+        # Replace all affected runs: insert new XML before first run, remove all runs
+        first_run = parts[0][0]
+        new_xml = "".join(xml_parts)
+        nodes = self.editor.insert_before(first_run, new_xml)
+
+        for run, _, _, _, _ in parts:
+            parent = run.parentNode
+            if parent:
+                parent.removeChild(run)
+
+        # Find insertion node ID
+        for node in nodes:
+            if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
+                return int(node.getAttribute("w:id"))
+
+        return -1
+
+    def _replace_mixed_state(self, match: TextMapMatch, replace_with: str) -> int:
+        """Replace text spanning revision boundaries via atomic decomposition.
+
+        For each segment:
+        - Regular text: wrap in <w:del> (standard deletion)
+        - Inside <w:ins>: remove the matched portion (undo partial insertion)
+
+        Then insert new text as <w:ins>.
+        """
+        segments = self._classify_segments(match)
+
+        # Get rPr from first position's run for the new insertion
+        first_run, first_rPr = self._get_run_info(match.positions[0].node)
+
+        # Find the first affected element to use as insertion reference point.
+        # For regular text, it's the run; for ins text, it's the w:ins element.
+        first_pos = match.positions[0]
+        if first_pos.is_inside_ins:
+            ref_node = self._find_ancestor(first_pos.node, "w:ins")
+        else:
+            ref_node = first_run
+
+        if ref_node is None:
+            return -1
+
+        # Insert the new text before the first affected element
+        ins_xml = f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>"
+        new_nodes = self.editor.insert_before(ref_node, ins_xml)
+
+        # Process each segment to delete/remove the matched text
+        for is_inside_ins, positions in segments:
+            if is_inside_ins:
+                self._remove_from_insertion(positions)
+            else:
+                self._delete_regular_segment(positions)
+
+        # Return the change ID of the new insertion
+        for node in new_nodes:
+            if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
+                return int(node.getAttribute("w:id"))
+        return -1
+
+    def _find_ancestor(self, node, tag_name: str):
+        """Find the nearest ancestor with the given tag name."""
+        parent = node.parentNode
+        while parent:
+            if parent.nodeType == parent.ELEMENT_NODE and parent.tagName == tag_name:
+                return parent
+            parent = parent.parentNode
+        return None
+
+    def _remove_from_insertion(self, positions: list) -> None:
+        """Remove matched text from inside a <w:ins> element.
+
+        Modifies the <w:t> text node in-place. If the entire text is matched,
+        removes the <w:ins> element. If partial, truncates or splits.
+        """
+        node = positions[0].node
+        first_offset = positions[0].offset_in_node
+        last_offset = positions[-1].offset_in_node
+
+        node_text = self._get_node_text(node)
+        before = node_text[:first_offset]
+        after = node_text[last_offset + 1 :]
+
+        ins_elem = self._find_ancestor(node, "w:ins")
+
+        if not before and not after:
+            # Entire node matched -- remove the <w:ins> element
+            if ins_elem and ins_elem.parentNode:
+                ins_elem.parentNode.removeChild(ins_elem)
+        elif not before:
+            # Matched at start -- truncate to after portion
+            node.firstChild.data = after
+        elif not after:
+            # Matched at end -- truncate to before portion
+            node.firstChild.data = before
+        else:
+            # Matched in middle -- keep "before" in current node, create new ins for "after"
+            node.firstChild.data = before
+
+            run = self._find_ancestor(node, "w:r")
+            if ins_elem and run:
+                rPr_xml = ""
+                rPr_elems = run.getElementsByTagName("w:rPr")
+                if rPr_elems:
+                    rPr_xml = rPr_elems[0].toxml()
+
+                after_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r></w:ins>"
+                self.editor.insert_after(ins_elem, after_xml)
+
+    def _delete_regular_segment(self, positions: list) -> None:
+        """Delete regular (non-insertion) text by wrapping in <w:del>.
+
+        Splits the run if needed to isolate the matched portion.
+        """
+        node = positions[0].node
+        first_offset = positions[0].offset_in_node
+        last_offset = positions[-1].offset_in_node
+
+        run, rPr_xml = self._get_run_info(node)
+        if not run:
+            return
+
+        node_text = self._get_node_text(node)
+        before = node_text[:first_offset]
+        matched = node_text[first_offset : last_offset + 1]
+        after = node_text[last_offset + 1 :]
+
+        xml_parts = []
+        if before:
+            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+        xml_parts.append(f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
+        if after:
+            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+
+        new_xml = "".join(xml_parts)
+        self.editor.insert_before(run, new_xml)
+        run.parentNode.removeChild(run)
+
+    def _delete_across_nodes(self, match: TextMapMatch) -> int:
+        """Delete text spanning multiple w:t elements."""
+        if match.spans_boundary:
+            return self._delete_mixed_state(match)
+        return self._delete_same_context(match)
+
+    def _delete_same_context(self, match: TextMapMatch) -> int:
+        """Delete text spanning multiple runs in the same revision context."""
+        parts = self._build_cross_boundary_parts(match)
+        if not parts:
+            return -1
+
+        xml_parts = []
+        for _run, rPr_xml, before, matched, after in parts:
+            if before:
+                xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+
+            xml_parts.append(f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
+
+            if after:
+                xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+
+        first_run = parts[0][0]
+        new_xml = "".join(xml_parts)
+        nodes = self.editor.insert_before(first_run, new_xml)
+
+        for run, _, _, _, _ in parts:
+            parent = run.parentNode
+            if parent:
+                parent.removeChild(run)
+
+        # Find deletion node ID
+        for node in nodes:
+            if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:del":
+                return int(node.getAttribute("w:id"))
+
+        return -1
+
+    def _delete_mixed_state(self, match: TextMapMatch) -> int:
+        """Delete text spanning revision boundaries.
+
+        Regular text segments are wrapped in <w:del>.
+        Insertion text segments are removed (undoing partial insertion).
+        """
+        segments = self._classify_segments(match)
+
+        first_del_id = -1
+        for is_inside_ins, positions in segments:
+            if is_inside_ins:
+                self._remove_from_insertion(positions)
+            else:
+                node = positions[0].node
+                first_offset = positions[0].offset_in_node
+                last_offset = positions[-1].offset_in_node
+
+                run, rPr_xml = self._get_run_info(node)
+                if not run:
+                    continue
+
+                node_text = self._get_node_text(node)
+                before = node_text[:first_offset]
+                matched = node_text[first_offset : last_offset + 1]
+                after = node_text[last_offset + 1 :]
+
+                xml_parts = []
+                if before:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                xml_parts.append(f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
+                if after:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+
+                new_xml = "".join(xml_parts)
+                nodes = self.editor.insert_before(run, new_xml)
+                run.parentNode.removeChild(run)
+
+                if first_del_id == -1:
+                    for n in nodes:
+                        if n.nodeType == n.ELEMENT_NODE and n.tagName == "w:del":
+                            first_del_id = int(n.getAttribute("w:id"))
+                            break
+
+        return first_del_id
 
     def insert_text_after(self, anchor: str, text: str, occurrence: int = 0) -> int:
         """Insert text after anchor with tracked changes.
