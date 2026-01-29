@@ -5,32 +5,31 @@ import pytest
 
 from docx_editor import Document
 from docx_editor.xml_editor import (
-    TextMap,
     TextMapMatch,
     TextPosition,
     build_text_map,
-    find_in_text_map,
 )
 
 NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 
 
 def _parse_paragraph(xml: str):
-    doc = defusedxml.minidom.parseString(f'<root {NS}>{xml}</root>')
+    doc = defusedxml.minidom.parseString(f"<root {NS}>{xml}</root>")
     return doc.getElementsByTagName("w:p")[0]
 
 
 # -- build_text_map edge cases --
 
+
 class TestBuildTextMapEdgeCases:
     def test_paragraph_with_only_deleted_text(self):
         """Paragraph containing only w:delText returns empty text map."""
         p = _parse_paragraph(
-            '<w:p>'
+            "<w:p>"
             '<w:del w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
-            '<w:r><w:delText>deleted stuff</w:delText></w:r>'
-            '</w:del>'
-            '</w:p>'
+            "<w:r><w:delText>deleted stuff</w:delText></w:r>"
+            "</w:del>"
+            "</w:p>"
         )
         tm = build_text_map(p)
         assert tm.text == ""
@@ -39,55 +38,52 @@ class TestBuildTextMapEdgeCases:
     def test_wt_inside_wdel_is_skipped(self):
         """w:t inside w:del is skipped (even though normally w:delText is used)."""
         p = _parse_paragraph(
-            '<w:p>'
+            "<w:p>"
             '<w:del w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
-            '<w:r><w:t>should be skipped</w:t></w:r>'
-            '</w:del>'
-            '<w:r><w:t>visible</w:t></w:r>'
-            '</w:p>'
+            "<w:r><w:t>should be skipped</w:t></w:r>"
+            "</w:del>"
+            "<w:r><w:t>visible</w:t></w:r>"
+            "</w:p>"
         )
         tm = build_text_map(p)
         assert tm.text == "visible"
 
     def test_unicode_and_special_chars(self):
         """Text map handles unicode and special characters."""
-        p = _parse_paragraph(
-            '<w:p><w:r><w:t>café résumé naïve</w:t></w:r></w:p>'
-        )
+        p = _parse_paragraph("<w:p><w:r><w:t>café résumé naïve</w:t></w:r></w:p>")
         tm = build_text_map(p)
         assert tm.text == "café résumé naïve"
         assert len(tm.positions) == len("café résumé naïve")
 
     def test_xml_entities_in_text(self):
         """Text map handles XML entities correctly."""
-        p = _parse_paragraph(
-            '<w:p><w:r><w:t>A &amp; B &lt; C</w:t></w:r></w:p>'
-        )
+        p = _parse_paragraph("<w:p><w:r><w:t>A &amp; B &lt; C</w:t></w:r></w:p>")
         tm = build_text_map(p)
         assert tm.text == "A & B < C"
 
 
 # -- TextMap edge cases --
 
+
 class TestTextMapEdgeCases:
     def test_find_empty_search(self):
-        p = _parse_paragraph('<w:p><w:r><w:t>Hello</w:t></w:r></w:p>')
+        p = _parse_paragraph("<w:p><w:r><w:t>Hello</w:t></w:r></w:p>")
         tm = build_text_map(p)
         # Python str.find("") returns 0
         assert tm.find("") == 0
 
     def test_find_longer_than_text(self):
-        p = _parse_paragraph('<w:p><w:r><w:t>Hi</w:t></w:r></w:p>')
+        p = _parse_paragraph("<w:p><w:r><w:t>Hi</w:t></w:r></w:p>")
         tm = build_text_map(p)
         assert tm.find("Hello world") == -1
 
     def test_get_nodes_for_range_empty(self):
-        p = _parse_paragraph('<w:p><w:r><w:t>Hello</w:t></w:r></w:p>')
+        p = _parse_paragraph("<w:p><w:r><w:t>Hello</w:t></w:r></w:p>")
         tm = build_text_map(p)
         assert tm.get_nodes_for_range(2, 2) == []
 
     def test_get_nodes_for_range_full(self):
-        p = _parse_paragraph('<w:p><w:r><w:t>Hello</w:t></w:r></w:p>')
+        p = _parse_paragraph("<w:p><w:r><w:t>Hello</w:t></w:r></w:p>")
         tm = build_text_map(p)
         positions = tm.get_nodes_for_range(0, 5)
         assert len(positions) == 5
@@ -95,17 +91,21 @@ class TestTextMapEdgeCases:
 
 # -- _classify_segments direct tests --
 
+
 class TestClassifySegments:
     """Direct tests for _classify_segments logic."""
 
     def test_single_regular_segment(self):
         """All positions regular -> one segment."""
-        from docx_editor.track_changes import RevisionManager
         from unittest.mock import MagicMock
+
+        from docx_editor.track_changes import RevisionManager
 
         manager = RevisionManager(MagicMock())
         match = TextMapMatch(
-            start=0, end=3, text="abc",
+            start=0,
+            end=3,
+            text="abc",
             positions=[
                 TextPosition(node=None, offset_in_node=0, is_inside_ins=False, is_inside_del=False),
                 TextPosition(node=None, offset_in_node=1, is_inside_ins=False, is_inside_del=False),
@@ -120,12 +120,15 @@ class TestClassifySegments:
 
     def test_two_segments_regular_then_ins(self):
         """Regular + insertion -> two segments."""
-        from docx_editor.track_changes import RevisionManager
         from unittest.mock import MagicMock
+
+        from docx_editor.track_changes import RevisionManager
 
         manager = RevisionManager(MagicMock())
         match = TextMapMatch(
-            start=0, end=4, text="abcd",
+            start=0,
+            end=4,
+            text="abcd",
             positions=[
                 TextPosition(node=None, offset_in_node=0, is_inside_ins=False, is_inside_del=False),
                 TextPosition(node=None, offset_in_node=1, is_inside_ins=False, is_inside_del=False),
@@ -143,12 +146,15 @@ class TestClassifySegments:
 
     def test_three_alternating_segments(self):
         """Regular + insertion + regular -> three segments."""
-        from docx_editor.track_changes import RevisionManager
         from unittest.mock import MagicMock
+
+        from docx_editor.track_changes import RevisionManager
 
         manager = RevisionManager(MagicMock())
         match = TextMapMatch(
-            start=0, end=3, text="abc",
+            start=0,
+            end=3,
+            text="abc",
             positions=[
                 TextPosition(node=None, offset_in_node=0, is_inside_ins=False, is_inside_del=False),
                 TextPosition(node=None, offset_in_node=0, is_inside_ins=True, is_inside_del=False),
@@ -161,12 +167,15 @@ class TestClassifySegments:
 
     def test_empty_positions(self):
         """Empty positions -> empty segments."""
-        from docx_editor.track_changes import RevisionManager
         from unittest.mock import MagicMock
+
+        from docx_editor.track_changes import RevisionManager
 
         manager = RevisionManager(MagicMock())
         match = TextMapMatch(
-            start=0, end=0, text="",
+            start=0,
+            end=0,
+            text="",
             positions=[],
             spans_boundary=False,
         )
@@ -175,6 +184,7 @@ class TestClassifySegments:
 
 
 # -- Mixed-state deletion --
+
 
 class TestMixedStateDeletion:
     """Tests for deleting text spanning revision boundaries."""
@@ -253,6 +263,7 @@ class TestMixedStateDeletion:
 
 # -- _remove_from_insertion all branches --
 
+
 class TestRemoveFromInsertionBranches:
     """Test all 4 branches of _remove_from_insertion."""
 
@@ -320,6 +331,7 @@ class TestRemoveFromInsertionBranches:
 
 # -- XML special characters --
 
+
 class TestXmlSpecialCharacters:
     """Tests for XML special characters through cross-boundary paths."""
 
@@ -363,6 +375,7 @@ class TestXmlSpecialCharacters:
 
 # -- occurrence parameter for cross-boundary --
 
+
 class TestOccurrenceParameter:
     """Tests for occurrence > 0 in cross-boundary operations."""
 
@@ -397,6 +410,7 @@ class TestOccurrenceParameter:
 
 # -- find_text edge cases --
 
+
 class TestFindTextEdgeCases:
     """Edge cases for Document.find_text."""
 
@@ -418,6 +432,7 @@ class TestFindTextEdgeCases:
 
 
 # -- insert_after/before with cross-boundary anchor --
+
 
 class TestInsertWithCrossBoundaryAnchor:
     """Tests for insert when anchor text spans element boundaries."""
