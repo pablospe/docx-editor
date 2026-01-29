@@ -204,9 +204,9 @@ class TestFindInTextMap:
         m1 = find_in_text_map(tm, "hello", 1)
         m2 = find_in_text_map(tm, "hello", 2)
         m3 = find_in_text_map(tm, "hello", 3)
-        assert m0.start == 0
-        assert m1.start == 6
-        assert m2.start == 12
+        assert m0 is not None and m0.start == 0
+        assert m1 is not None and m1.start == 6
+        assert m2 is not None and m2.start == 12
         assert m3 is None
 
     def test_find_across_runs(self):
