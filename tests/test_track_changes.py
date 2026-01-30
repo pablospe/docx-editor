@@ -1103,7 +1103,15 @@ class TestMockedEdgeCases:
         # Mock rPr element
         mock_rPr = MagicMock()
         mock_rPr.toxml.return_value = "<w:rPr><w:u/></w:rPr>"
-        mock_run.getElementsByTagName.return_value = [mock_rPr]
+
+        def _get_by_tag(tag):
+            if tag == "w:rPr":
+                return [mock_rPr]
+            if tag == "w:t":
+                return [mock_elem]
+            return []
+
+        mock_run.getElementsByTagName.side_effect = _get_by_tag
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run

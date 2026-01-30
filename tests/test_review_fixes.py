@@ -137,3 +137,80 @@ class TestReplaceSameContextPreservesMultiWt:
         assert "NEW" in text
         assert "MATCH1" not in text
         assert "MATCH2" not in text
+
+
+class TestOccurrenceIndexDrift:
+    """Multi-w:t fallback must target the same match, not re-count with a different method."""
+
+    def test_replace_second_occurrence_in_multi_wt_run(self, temp_xml):
+        # Two paragraphs: first has "cat" in a single w:t, second has "cat" in a
+        # multi-w:t run (so the fallback triggers). We ask for occurrence=1 (second).
+        # Bug: _find_across_boundaries with occurrence=1 could return a different
+        # match than what _get_nth_match found, because the two methods count differently.
+        xml_path = temp_xml("<w:p><w:r><w:t>cat</w:t></w:r></w:p><w:p><w:r><w:t>cat</w:t><w:t> dog</w:t></w:r></w:p>")
+        mgr = _make_manager(xml_path)
+        mgr.replace_text("cat", "tiger", occurrence=1)
+        text = _get_text_content(mgr)
+        # First "cat" should be untouched, second replaced
+        assert text.startswith("cat")
+        assert "tiger" in text
+        assert "dog" in text  # sibling preserved
+
+    def test_delete_second_occurrence_in_multi_wt_run(self, temp_xml):
+        xml_path = temp_xml("<w:p><w:r><w:t>cat</w:t></w:r></w:p><w:p><w:r><w:t>cat</w:t><w:t> dog</w:t></w:r></w:p>")
+        mgr = _make_manager(xml_path)
+        mgr.suggest_deletion("cat", occurrence=1)
+        text = _get_text_content(mgr)
+        # First "cat" untouched, second deleted, "dog" preserved
+        assert text.startswith("cat")
+        assert "dog" in text
+        # Only one "cat" should remain (the first, untouched)
+        assert text.count("cat") == 1
+
+    def test_insert_after_second_occurrence_in_multi_wt_run(self, temp_xml):
+        xml_path = temp_xml("<w:p><w:r><w:t>cat</w:t></w:r></w:p><w:p><w:r><w:t>cat</w:t><w:t> dog</w:t></w:r></w:p>")
+        mgr = _make_manager(xml_path)
+        mgr.insert_text_after("cat", "XX", occurrence=1)
+        text = _get_text_content(mgr)
+        # "XX" should appear right after second "cat", not at end
+        assert "catXX" in text
+        assert "dog" in text
+
+
+class TestSiteDAttributeInjection:
+    """Site D raw DOM insertion must go through editor helpers for attribute injection."""
+
+    def test_replace_inside_ins_injects_rsid(self, temp_xml):
+        # When replacing text across runs inside <w:ins>, the new run should get
+        # w:rsidR injected by DocxXMLEditor's attribute injection.
+        xml_path = temp_xml(
+            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>AB</w:t></w:r><w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        mgr.replace_text("ABCD", "NEW")
+        # Find the new w:r containing "NEW"
+        for wt in mgr.editor.dom.getElementsByTagName("w:t"):
+            if wt.firstChild and wt.firstChild.data == "NEW":
+                run = wt.parentNode
+                assert run.hasAttribute("w:rsidR"), "New run should have w:rsidR from attribute injection"
+                break
+        else:
+            pytest.fail("Could not find w:t with 'NEW'")
+
+    def test_replace_inside_ins_partially_remaining_injects_rsid(self, temp_xml):
+        # When ins_elem stays in DOM (partial removal), the inserted run should
+        # also get attribute injection.
+        xml_path = temp_xml(
+            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>xxAB</w:t></w:r><w:r><w:t>CDyy</w:t></w:r></w:ins></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        mgr.replace_text("ABCD", "NEW")
+        for wt in mgr.editor.dom.getElementsByTagName("w:t"):
+            if wt.firstChild and wt.firstChild.data == "NEW":
+                run = wt.parentNode
+                assert run.hasAttribute("w:rsidR"), "New run should have w:rsidR from attribute injection"
+                break
+        else:
+            pytest.fail("Could not find w:t with 'NEW'")

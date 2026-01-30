@@ -86,6 +86,25 @@ class RevisionManager:
             )
         return matches[occurrence]
 
+    def _find_match_containing_node(self, text: str, elem) -> TextMapMatch | None:
+        """Find the TextMapMatch for `text` whose positions include `elem`.
+
+        Searches through all paragraphs to find the match that involves the
+        specific w:t node, avoiding occurrence-index drift between search methods.
+        """
+        elem_id = id(elem)
+        for paragraph in self.editor.dom.getElementsByTagName("w:p"):
+            text_map = build_text_map(paragraph)
+            local_occ = 0
+            while True:
+                match = find_in_text_map(text_map, text, local_occ)
+                if match is None:
+                    break
+                if any(id(pos.node) == elem_id for pos in match.positions):
+                    return match
+                local_occ += 1
+        return None
+
     def _find_across_boundaries(self, text: str, occurrence: int = 0) -> TextMapMatch | None:
         """Find the nth occurrence of text across element boundaries.
 
@@ -151,7 +170,7 @@ class RevisionManager:
         # If run has multiple w:t children, delegate to cross-boundary path
         # to avoid losing sibling w:t nodes when replacing the whole run.
         if len(run.getElementsByTagName("w:t")) > 1:
-            match = self._find_across_boundaries(find, occurrence)
+            match = self._find_match_containing_node(find, elem)
             if match is not None:
                 return self._replace_across_nodes(match, replace_with)
 
@@ -239,7 +258,7 @@ class RevisionManager:
 
         # If run has multiple w:t children, delegate to cross-boundary path
         if len(run.getElementsByTagName("w:t")) > 1:
-            match = self._find_across_boundaries(text, occurrence)
+            match = self._find_match_containing_node(text, elem)
             if match is not None:
                 return self._delete_across_nodes(match)
 
@@ -409,20 +428,18 @@ class RevisionManager:
 
             if ins_elem and ins_elem.parentNode:
                 # ins_elem still in DOM — insert replacement inside it
-                nodes = self.editor._parse_fragment(new_run_xml)
                 first_child = ins_elem.firstChild
                 if first_child:
-                    for node in nodes:
-                        ins_elem.insertBefore(node, first_child)
+                    self.editor.insert_before(first_child, new_run_xml)
                 else:
-                    for node in nodes:
-                        ins_elem.appendChild(node)
+                    self.editor.append_to(ins_elem, new_run_xml)
             elif ins_parent:
                 # ins_elem was fully removed — wrap replacement in a new <w:ins>
                 ins_wrapper_xml = f"<w:ins>{new_run_xml}</w:ins>"
-                nodes = self.editor._parse_fragment(ins_wrapper_xml)
-                for node in nodes:
-                    ins_parent.insertBefore(node, ins_next)  # type: ignore[arg-type]
+                if ins_next:
+                    self.editor.insert_before(ins_next, ins_wrapper_xml)
+                else:
+                    self.editor.append_to(ins_parent, ins_wrapper_xml)
             return -1
 
         # Use first run's rPr for the insertion
@@ -941,31 +958,28 @@ class RevisionManager:
             _set_xml_space_preserve(elem)
             return -1
 
-        # If run has multiple w:t children, delegate to cross-boundary path
-        # to avoid losing sibling w:t nodes when replacing the whole run.
-        if len(run.getElementsByTagName("w:t")) > 1:
-            match = self._find_across_boundaries(anchor, occurrence)
-            if match is not None:
-                return self._insert_near_match(match, text, position)
-
-        # Build split runs + insertion
-        xml_parts = []
-        if before_text:
-            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before_text)}</w:t></w:r>")
-
+        # Build split runs + insertion, preserving sibling w:t nodes
         ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
+        xml_parts = []
+        for wt in run.getElementsByTagName("w:t"):
+            if wt is elem:
+                # Split this w:t around the anchor
+                if before_text:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before_text)}</w:t></w:r>")
+                if position == "before":
+                    xml_parts.append(ins_xml)
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(anchor)}</w:t></w:r>")
+                else:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(anchor)}</w:t></w:r>")
+                    xml_parts.append(ins_xml)
+                if after_text:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r>")
+            else:
+                # Preserve unmatched sibling w:t
+                wt_text = self._get_node_text(wt)
+                if wt_text:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
 
-        if position == "before":
-            xml_parts.append(ins_xml)
-            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(anchor)}</w:t></w:r>")
-        else:
-            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(anchor)}</w:t></w:r>")
-            xml_parts.append(ins_xml)
-
-        if after_text:
-            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r>")
-
-        # Replace the original run with the split + insertion
         new_xml = "".join(xml_parts)
         nodes = self.editor.replace_node(run, new_xml)
 
