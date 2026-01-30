@@ -320,10 +320,10 @@ class RevisionManager:
                 text += child.data
         return text
 
-    def _build_cross_boundary_parts(self, match: TextMapMatch) -> list[tuple[Element, str, str, str, str]]:
+    def _build_cross_boundary_parts(self, match: TextMapMatch) -> list[tuple[Element, str, str, str, str, int]]:
         """Build per-node data for a cross-boundary match.
 
-        Returns list of (run, rPr_xml, before_text, matched_part, after_text) tuples,
+        Returns list of (run, rPr_xml, before_text, matched_part, after_text, node_id) tuples,
         one per unique w:t node involved in the match. Nodes are in document order.
         """
         # Group positions by their w:t node (not run — a run can have multiple w:t nodes)
@@ -345,14 +345,14 @@ class RevisionManager:
                 node_data[nid]["last_offset"] = pos.offset_in_node
 
         result = []
-        for info in node_data.values():
+        for nid, info in node_data.items():
             node_text = self._get_node_text(info["node"])
             first = info["first_offset"]
             last = info["last_offset"]
             before = node_text[:first]
             matched = node_text[first : last + 1]
             after = node_text[last + 1 :]
-            result.append((info["run"], info["rPr_xml"], before, matched, after))
+            result.append((info["run"], info["rPr_xml"], before, matched, after, nid))
         return result
 
     def _classify_segments(self, match: TextMapMatch) -> list[tuple[bool | None, list[TextPosition]]]:
@@ -428,18 +428,15 @@ class RevisionManager:
         # Use first run's rPr for the insertion
         first_rPr = parts[0][1]
 
-        # Collect matched node ids from match positions
-        matched_node_ids = {id(pos.node) for pos in match.positions}
-
         # Group parts by run for multi-w:t preservation
         run_order: list[int] = []
         run_map: dict[int, dict] = {}
-        for run, rPr_xml, before, matched, after in parts:
+        for run, rPr_xml, before, matched, after, nid in parts:
             rid = id(run)
             if rid not in run_map:
                 run_order.append(rid)
                 run_map[rid] = {"run": run, "rPr_xml": rPr_xml, "parts": []}
-            run_map[rid]["parts"].append((before, matched, after))
+            run_map[rid]["parts"].append((before, matched, after, nid))
 
         xml_parts = []
         part_idx = 0
@@ -449,13 +446,16 @@ class RevisionManager:
             run = info["run"]
             rPr_xml = info["rPr_xml"]
 
+            # Build deterministic node-to-part mapping using node ids from parts
+            node_to_part = {nid: (before, matched, after) for before, matched, after, nid in info["parts"]}
+
             # Iterate all w:t in document order, emitting unmatched as preserved
             all_wt = list(run.getElementsByTagName("w:t"))
-            part_sub_idx = 0
+            parts_emitted = 0
             for wt in all_wt:
-                if id(wt) in matched_node_ids and part_sub_idx < len(info["parts"]):
-                    before, matched, after = info["parts"][part_sub_idx]
-                    part_sub_idx += 1
+                if id(wt) in node_to_part:
+                    before, matched, after = node_to_part[id(wt)]
+                    parts_emitted += 1
 
                     if before:
                         xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
@@ -464,7 +464,7 @@ class RevisionManager:
                     )
 
                     # Insert replacement after the last deletion
-                    if part_idx + part_sub_idx == total_parts:
+                    if part_idx + parts_emitted == total_parts:
                         xml_parts.append(f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>")
 
                     if after:
@@ -475,7 +475,7 @@ class RevisionManager:
                     if wt_text:
                         xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
 
-            part_idx += len(info["parts"])
+            part_idx += len(node_to_part)
 
         # Replace all affected runs: insert new XML before first run, remove all runs
         first_run = parts[0][0]
@@ -483,7 +483,7 @@ class RevisionManager:
         nodes = self.editor.insert_before(first_run, new_xml)
 
         seen = set()
-        for run, _, _, _, _ in parts:
+        for run, _, _, _, _, _ in parts:
             if id(run) in seen:
                 continue
             seen.add(id(run))
@@ -525,7 +525,7 @@ class RevisionManager:
 
         # Place a marker before ref_node so we can find the insertion point
         # after deletion processing (which may remove ref_node).
-        marker = self.editor.dom.createElement("w:_marker")
+        marker = self.editor.dom.createComment("replace-marker")
         ref_node.parentNode.insertBefore(marker, ref_node)  # type: ignore[union-attr]
 
         # Process each segment to delete/remove the matched text
@@ -793,46 +793,34 @@ class RevisionManager:
             self._remove_from_insertion(match.positions)
             return -1
 
-        # Group parts by run to handle multi-w:t runs
-        matched_nodes = set()
+        # Group parts by run, using node ids from _build_cross_boundary_parts
+        matched_node_ids = {nid for _, _, _, _, _, nid in parts}
         run_parts: OrderedDict[int, list] = OrderedDict()
         for part in parts:
-            run = part[0]
-            rid = id(run)
+            rid = id(part[0])
             if rid not in run_parts:
                 run_parts[rid] = []
             run_parts[rid].append(part)
-            # Track which w:t nodes are matched (from _build_cross_boundary_parts,
-            # the node is identified by before/matched/after text)
-
-        # Collect matched node ids from match positions
-        for pos in match.positions:
-            matched_nodes.add(id(pos.node))
 
         xml_parts = []
         for _rid, rparts in run_parts.items():
             run = rparts[0][0]
             rPr_xml = rparts[0][1]
 
-            # Emit unmatched w:t siblings before and matched parts in document order
-            all_wt = list(run.getElementsByTagName("w:t"))
-            matched_parts_by_node = {}
-            for rp in rparts:
-                # Find which w:t node this part corresponds to
-                for wt in all_wt:
-                    if id(wt) in matched_nodes and id(wt) not in matched_parts_by_node:
-                        matched_parts_by_node[id(wt)] = rp
-                        break
+            # Build deterministic node-to-part mapping using node ids from parts
+            node_to_part = {nid: (rp_xml, before, matched, after) for _, rp_xml, before, matched, after, nid in rparts}
 
+            # Emit w:t nodes in document order, matched as <w:del>, unmatched preserved
+            all_wt = list(run.getElementsByTagName("w:t"))
             for wt in all_wt:
-                if id(wt) in matched_parts_by_node:
-                    _, rp_xml, before, matched, after = matched_parts_by_node[id(wt)]
+                if id(wt) in node_to_part:
+                    rp_xml, before, matched, after = node_to_part[id(wt)]
                     if before:
                         xml_parts.append(f"<w:r>{rp_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
                     xml_parts.append(f"<w:del><w:r>{rp_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
                     if after:
                         xml_parts.append(f"<w:r>{rp_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
-                elif id(wt) not in matched_nodes:
+                elif id(wt) not in matched_node_ids:
                     # Unmatched sibling — preserve
                     wt_text = self._get_node_text(wt)
                     if wt_text:
@@ -843,7 +831,7 @@ class RevisionManager:
         nodes = self.editor.insert_before(first_run, new_xml)
 
         seen = set()
-        for run, _, _, _, _ in parts:
+        for run, _, _, _, _, _ in parts:
             if id(run) in seen:
                 continue
             seen.add(id(run))
