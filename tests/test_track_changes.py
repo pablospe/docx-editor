@@ -919,6 +919,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
         mock_run.getElementsByTagName.return_value = []  # No rPr
 
         mock_intermediate.nodeName = "other"
@@ -954,6 +955,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
         mock_run.getElementsByTagName.return_value = []  # No rPr
 
         mock_intermediate.nodeName = "other"
@@ -989,6 +991,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
         mock_run.getElementsByTagName.return_value = []  # No rPr
 
         mock_intermediate.nodeName = "other"
@@ -1021,6 +1024,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
 
         # Mock rPr element
         mock_rPr = MagicMock()
@@ -1057,6 +1061,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
 
         # Mock rPr element
         mock_rPr = MagicMock()
@@ -1093,6 +1098,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
 
         # Mock rPr element
         mock_rPr = MagicMock()
@@ -1128,6 +1134,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
         mock_run.getElementsByTagName.return_value = []
 
         mock_elem.nodeName = "w:t"
@@ -1157,6 +1164,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
         mock_run.getElementsByTagName.return_value = []
 
         mock_elem.nodeName = "w:t"
@@ -1186,6 +1194,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
         mock_run.getElementsByTagName.return_value = []
 
         mock_elem.nodeName = "w:t"
@@ -1213,6 +1222,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
         mock_run.getElementsByTagName.return_value = []
 
         mock_elem.nodeName = "w:t"
@@ -1236,6 +1246,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
         mock_run.getElementsByTagName.return_value = []
 
         mock_elem.nodeName = "w:t"
@@ -1259,6 +1270,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
         mock_run.getElementsByTagName.return_value = []
 
         mock_elem.nodeName = "w:t"
@@ -1291,6 +1303,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
         mock_run.getElementsByTagName.return_value = []
 
         mock_elem.nodeName = "w:t"
@@ -1323,6 +1336,7 @@ class TestMockedEdgeCases:
         mock_run = MagicMock()
 
         mock_run.nodeName = "w:r"
+        mock_run.parentNode = None
         mock_run.getElementsByTagName.return_value = []
 
         mock_elem.nodeName = "w:t"

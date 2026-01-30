@@ -803,8 +803,8 @@ class RevisionManager:
                 return -1
             ref_run = first_run
 
-        inside_ins = self._find_ancestor(ref_run, "w:ins")
-        if inside_ins:
+        all_inside_ins = all(p.is_inside_ins for p in positions)
+        if all_inside_ins and self._find_ancestor(ref_run, "w:ins"):
             bare_xml = f"<w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r>"
             if position == "after":
                 self.editor.insert_after(ref_run, bare_xml)
