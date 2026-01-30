@@ -1,7 +1,7 @@
 # text-operations Specification
 
 ## Purpose
-TBD - created by archiving change add-cross-boundary-text-operations. Update Purpose after archive.
+Enable text search, replacement, and deletion across `<w:t>` element boundaries within a paragraph, including mixed revision contexts (regular text and tracked insertions).
 ## Requirements
 ### Requirement: Virtual Text Map
 

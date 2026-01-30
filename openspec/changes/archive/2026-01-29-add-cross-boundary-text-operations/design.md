@@ -16,13 +16,13 @@ Users expect to search for "Aim: To" and find it.
 
 ## Goals / Non-Goals
 
-**Goals:**
+### Goals
 - Enable searching across element boundaries
 - Enable replacing text spanning multiple `<w:t>` elements
 - Handle mixed-state editing (text spanning revision boundaries) via atomic decomposition
 - Provide read-only flattened text view for analysis
 
-**Non-Goals:**
+### Non-Goals
 - Cross-paragraph operations (too complex for v1)
 - Field codes, bookmarks, or non-text content
 

@@ -387,7 +387,7 @@ class TestOccurrenceParameter:
         if match0 is None or match1 is None:
             doc.close()
             pytest.skip("Not enough occurrences of 'the'")
-        assert match0.start != match1.start or match0.text != match1.text
+        assert match0.positions[0].node is not match1.positions[0].node
         doc.close()
 
     def test_replace_second_occurrence_cross_boundary(self, clean_workspace):
