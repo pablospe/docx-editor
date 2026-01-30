@@ -386,18 +386,20 @@ class RevisionManager:
 
         # Site D: If all positions inside <w:ins>, edit in-place
         if all(p.is_inside_ins for p in match.positions):
-            self._remove_from_insertion(match.positions)
-            # Insert replacement text into the first node's remaining text
             first_node = match.positions[0].node
             ins_elem = self._find_ancestor(first_node, "w:ins")
+            # Save parent/next sibling before removal may detach ins_elem
+            ins_parent = ins_elem.parentNode if ins_elem else None
+            ins_next = ins_elem.nextSibling if ins_elem else None
+
+            self._remove_from_insertion(match.positions)
+
+            first_rPr = parts[0][1]
+            new_run_xml = f"<w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r>"
+
             if ins_elem and ins_elem.parentNode:
-                # Add replacement run inside the existing <w:ins>
-                first_rPr = parts[0][1]
-                new_run_xml = f"<w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r>"
-                # Find insertion point: after current content or at first_offset position
-                # Insert new run as a child of the ins element
+                # ins_elem still in DOM — insert replacement inside it
                 nodes = self.editor._parse_fragment(new_run_xml)
-                # Insert before the first remaining child or append
                 first_child = ins_elem.firstChild
                 if first_child:
                     for node in nodes:
@@ -405,6 +407,11 @@ class RevisionManager:
                 else:
                     for node in nodes:
                         ins_elem.appendChild(node)
+            elif ins_parent:
+                # ins_elem was fully removed — insert bare run at its former position
+                nodes = self.editor._parse_fragment(new_run_xml)
+                for node in nodes:
+                    ins_parent.insertBefore(node, ins_next)
             return -1
 
         # Use first run's rPr for the insertion
