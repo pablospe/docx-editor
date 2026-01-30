@@ -116,7 +116,6 @@ class TestReplaceSameContextAllInsideIns:
         assert "NEW" in text
 
 
-
 class TestReplaceMixedStateNoDelFound:
     """Line 499: _replace_mixed_state inserts after marker when no w:del siblings."""
 
@@ -135,7 +134,6 @@ class TestReplaceMixedStateNoDelFound:
         mgr.replace_text("Hello w", "NEW W")
         text = _get_text_content(mgr)
         assert "NEW W" in text
-
 
 
 class TestRemoveFromInsertionMiddleSplit:
@@ -277,7 +275,6 @@ class TestDeleteSameContextReturnMinusOne:
         assert result == -1
 
 
-
 class TestInsertNearMatchInsideInsBeforePosition:
     """Line 955: _insert_near_match with position='before' inside w:ins."""
 
@@ -291,7 +288,6 @@ class TestInsertNearMatchInsideInsBeforePosition:
         mgr.insert_text_before("lo wor", "XX")
         text = _get_text_content(mgr)
         assert "XX" in text
-
 
 
 class TestSuggestDeletionMultiWtDelegates:

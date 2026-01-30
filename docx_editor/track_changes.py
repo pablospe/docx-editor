@@ -3,6 +3,7 @@
 Provides RevisionManager for creating and managing tracked changes (insertions/deletions).
 """
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -44,14 +45,22 @@ class RevisionManager:
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.
 
+        Uses text maps for accurate counting across element boundaries.
+
         Args:
             text: Text to search for
 
         Returns:
             Number of occurrences found
         """
-        matches = self.editor.find_all_nodes(tag="w:t", contains=text)
-        return len(matches)
+        count = 0
+        for paragraph in self.editor.dom.getElementsByTagName("w:p"):
+            text_map = build_text_map(paragraph)
+            local_occ = 0
+            while find_in_text_map(text_map, text, local_occ) is not None:
+                count += 1
+                local_occ += 1
+        return count
 
     def _get_nth_match(self, text: str, occurrence: int):
         """Get the nth occurrence of text (0-indexed).
@@ -152,6 +161,7 @@ class RevisionManager:
         # Site A: If inside <w:ins>, edit text in-place (no del/ins wrappers)
         if self._find_ancestor(run, "w:ins"):
             elem.firstChild.data = before_text + replace_with + after_text
+            _set_xml_space_preserve(elem)
             return -1
 
         # Preserve run properties if present
@@ -247,6 +257,7 @@ class RevisionManager:
             remaining = before_text + after_text
             if remaining:
                 elem.firstChild.data = remaining
+                _set_xml_space_preserve(elem)
             else:
                 # Entire w:t text removed — check if other w:t nodes exist
                 if len(self._get_wt_nodes_in_ancestor(ins_ancestor)) == 1:
@@ -314,8 +325,6 @@ class RevisionManager:
         Returns list of (run, rPr_xml, before_text, matched_part, after_text) tuples,
         one per unique w:t node involved in the match. Nodes are in document order.
         """
-        from collections import OrderedDict
-
         # Group positions by their w:t node (not run — a run can have multiple w:t nodes)
         node_data = OrderedDict()
         for pos in match.positions:
@@ -495,8 +504,12 @@ class RevisionManager:
         last_del = None
         sibling = marker.nextSibling
         while sibling:
-            if sibling.nodeType == sibling.ELEMENT_NODE and sibling.tagName == "w:del":
-                last_del = sibling
+            if sibling.nodeType == sibling.ELEMENT_NODE:
+                if sibling.tagName == "w:del":
+                    last_del = sibling
+                elif last_del is not None:
+                    # Stop at first non-del element after we found a del
+                    break
             sibling = sibling.nextSibling
 
         if last_del:
@@ -532,8 +545,6 @@ class RevisionManager:
         If partial, truncates or splits.
         """
         # Group positions by w:t node to handle multi-node segments
-        from collections import OrderedDict
-
         node_groups = OrderedDict()
         for pos in positions:
             nid = id(pos.node)
@@ -634,8 +645,6 @@ class RevisionManager:
 
         Returns the w:id of the first <w:del> element created, or -1.
         """
-        from collections import OrderedDict
-
         # Group positions by run, then by node within each run
         run_groups: OrderedDict[int, dict] = OrderedDict()
         for pos in positions:
@@ -744,8 +753,6 @@ class RevisionManager:
             return -1
 
         # Group parts by run to handle multi-w:t runs
-        from collections import OrderedDict
-
         matched_nodes = set()
         run_parts: OrderedDict[int, list] = OrderedDict()
         for part in parts:
@@ -903,6 +910,7 @@ class RevisionManager:
                 elem.firstChild.data = before_text + text + anchor + after_text
             else:
                 elem.firstChild.data = before_text + anchor + text + after_text
+            _set_xml_space_preserve(elem)
             return -1
 
         # Build split runs + insertion
@@ -1156,6 +1164,11 @@ class RevisionManager:
 
         # Unwrap the w:del element
         self._unwrap_element(del_elem)
+
+
+def _set_xml_space_preserve(wt_elem) -> None:
+    """Set xml:space='preserve' on a w:t element to preserve whitespace."""
+    wt_elem.setAttribute("xml:space", "preserve")
 
 
 def _escape_xml(text: str) -> str:
