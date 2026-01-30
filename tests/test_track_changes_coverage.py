@@ -116,11 +116,6 @@ class TestReplaceSameContextAllInsideIns:
         assert "NEW" in text
 
 
-class TestReplaceSameContextReturnMinusOne:
-    """Line 446: _replace_same_context returns -1 when no w:ins found in result nodes."""
-
-    # Already covered by all-inside-ins path returning -1
-
 
 class TestReplaceMixedStateNoDelFound:
     """Line 499: _replace_mixed_state inserts after marker when no w:del siblings."""
@@ -141,11 +136,6 @@ class TestReplaceMixedStateNoDelFound:
         text = _get_text_content(mgr)
         assert "NEW W" in text
 
-
-class TestReplaceMixedStateReturnMinusOne:
-    """Line 509: _replace_mixed_state returns -1 when no w:ins in new_nodes."""
-
-    # This is hard to hit without mocking; covered indirectly by mixed state tests.
 
 
 class TestRemoveFromInsertionMiddleSplit:
@@ -287,18 +277,6 @@ class TestDeleteSameContextReturnMinusOne:
         assert result == -1
 
 
-class TestInsertTextAnchorNotFound:
-    """Line 888: _insert_text raises TextNotFoundError when anchor_idx == -1."""
-
-    # This is very hard to trigger because _get_nth_match uses `contains` which
-    # ensures the text is there. Skip this edge case.
-
-
-class TestInsertNearMatchAfterNoRun:
-    """Lines 942, 946: _insert_near_match returns -1 when run is None."""
-
-    # These require orphaned w:t nodes which is unlikely in practice.
-
 
 class TestInsertNearMatchInsideInsBeforePosition:
     """Line 955: _insert_near_match with position='before' inside w:ins."""
@@ -314,17 +292,6 @@ class TestInsertNearMatchInsideInsBeforePosition:
         text = _get_text_content(mgr)
         assert "XX" in text
 
-
-class TestInsertNearMatchReturnMinusOne:
-    """Line 968: _insert_near_match returns -1 when no w:ins in nodes."""
-
-    # Covered indirectly by inside-ins paths that return -1.
-
-
-class TestReplaceMixedRefNodeNone:
-    """Line 471: _replace_mixed_state returns -1 when ref_node is None."""
-
-    # Hard to trigger without mocking, skip.
 
 
 class TestSuggestDeletionMultiWtDelegates:
