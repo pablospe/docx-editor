@@ -1,17 +1,8 @@
 """Tests for text map building (Phase 1: Core Infrastructure)."""
 
-import defusedxml.minidom
+from conftest import parse_paragraph as _parse_paragraph
 
 from docx_editor.xml_editor import build_text_map, find_in_text_map
-
-# Namespace declarations needed for OOXML elements
-NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
-
-
-def _parse_paragraph(xml: str):
-    """Parse XML string and return the first w:p element."""
-    doc = defusedxml.minidom.parseString(f"<root {NS}>{xml}</root>")
-    return doc.getElementsByTagName("w:p")[0]
 
 
 class TestBuildTextMapPlainText:

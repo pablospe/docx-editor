@@ -1,18 +1,10 @@
 """Tests for mixed-state editing (Phase 5: Atomic Decomposition)."""
 
-import defusedxml.minidom
 import pytest
+from conftest import parse_paragraph as _parse_paragraph
 
 from docx_editor import Document
 from docx_editor.xml_editor import build_text_map, find_in_text_map
-
-NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
-
-
-def _parse_paragraph(xml: str):
-    """Parse XML string and return the first w:p element."""
-    doc = defusedxml.minidom.parseString(f"<root {NS}>{xml}</root>")
-    return doc.getElementsByTagName("w:p")[0]
 
 
 class TestMixedStateDetection:
@@ -46,7 +38,7 @@ class TestMixedStateDetection:
         match = find_in_text_map(tm, "beautiful")
         assert match is not None
         assert not match.spans_boundary
-        assert all(p.is_inside_ins for p in match.positions)
+        assert all(pos.is_inside_ins for pos in match.positions)
 
 
 class TestMixedStateReplace:
@@ -95,7 +87,7 @@ class TestMixedStateReplace:
             doc.close()
             pytest.skip("Text not found in insertion")
 
-        if not all(p.is_inside_ins for p in match.positions):
+        if not all(pos.is_inside_ins for pos in match.positions):
             doc.close()
             pytest.skip("Text not entirely within insertion")
 
@@ -166,7 +158,7 @@ class TestMixedStateReplace:
         doc.insert_after("dog.", " beautiful amazing")
 
         match = doc.find_text("beautiful")
-        if match is None or not all(p.is_inside_ins for p in match.positions):
+        if match is None or not all(pos.is_inside_ins for pos in match.positions):
             doc.close()
             pytest.skip("Text not entirely within insertion")
 

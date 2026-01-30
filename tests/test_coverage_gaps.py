@@ -1,7 +1,7 @@
 """Tests for coverage gaps in cross-boundary text operations."""
 
-import defusedxml.minidom
 import pytest
+from conftest import parse_paragraph as _parse_paragraph
 
 from docx_editor import Document
 from docx_editor.xml_editor import (
@@ -9,14 +9,6 @@ from docx_editor.xml_editor import (
     TextPosition,
     build_text_map,
 )
-
-NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
-
-
-def _parse_paragraph(xml: str):
-    doc = defusedxml.minidom.parseString(f"<root {NS}>{xml}</root>")
-    return doc.getElementsByTagName("w:p")[0]
-
 
 # -- build_text_map edge cases --
 

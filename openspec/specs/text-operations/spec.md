@@ -1,8 +1,11 @@
 # text-operations Specification
 
 ## Purpose
+
 Enable text search, replacement, and deletion across `<w:t>` element boundaries within a paragraph, including mixed revision contexts (regular text and tracked insertions).
+
 ## Requirements
+
 ### Requirement: Virtual Text Map
 
 The system SHALL provide a flattened text view of document content that maps character positions back to their source XML elements.

@@ -664,7 +664,7 @@ class RevisionManager:
                 continue
 
             # Build xml_parts for ALL w:t nodes in this run, preserving unmatched ones
-            matched_node_ids = set(id(ng["node"]) for ng in run_info["nodes"].values())
+            matched_node_ids = {id(ng["node"]) for ng in run_info["nodes"].values()}
             node_items = list(run_info["nodes"].values())
             all_wt_nodes = list(run.getElementsByTagName("w:t"))
             xml_parts: list[str] = []

@@ -4,7 +4,16 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import defusedxml.minidom
 import pytest
+
+NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+
+def parse_paragraph(xml: str):
+    """Parse XML string and return the first w:p element."""
+    doc = defusedxml.minidom.parseString(f"<root {NS}>{xml}</root>")
+    return doc.getElementsByTagName("w:p")[0]
 
 
 @pytest.fixture
