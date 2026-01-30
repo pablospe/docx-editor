@@ -214,3 +214,91 @@ class TestSiteDAttributeInjection:
                 break
         else:
             pytest.fail("Could not find w:t with 'NEW'")
+
+
+class TestXmlSpacePreserveOnGeneratedWt:
+    """Generated <w:t> elements with leading/trailing spaces must have xml:space='preserve'."""
+
+    def test_replace_preserves_trailing_space_in_before_text(self, temp_xml):
+        # "Hello world" -> replace "world" -> before_text is "Hello " (trailing space)
+        xml_path = temp_xml("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")
+        mgr = _make_manager(xml_path)
+        mgr.replace_text("world", "earth")
+        # Find the w:t containing "Hello "
+        for wt in mgr.editor.dom.getElementsByTagName("w:t"):
+            if wt.firstChild and wt.firstChild.data == "Hello ":
+                assert wt.getAttribute("xml:space") == "preserve", (
+                    "w:t with trailing space must have xml:space='preserve'"
+                )
+                break
+        else:
+            pytest.fail("Could not find w:t with 'Hello '")
+
+    def test_delete_preserves_leading_space_in_after_text(self, temp_xml):
+        # "Hello world" -> delete "Hello" -> after_text is " world" (leading space)
+        xml_path = temp_xml("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")
+        mgr = _make_manager(xml_path)
+        mgr.suggest_deletion("Hello")
+        for wt in mgr.editor.dom.getElementsByTagName("w:t"):
+            if wt.firstChild and wt.firstChild.data == " world":
+                assert wt.getAttribute("xml:space") == "preserve", (
+                    "w:t with leading space must have xml:space='preserve'"
+                )
+                break
+        else:
+            pytest.fail("Could not find w:t with ' world'")
+
+
+class TestOccurrenceFallbackConsistency:
+    """Initial fallback from _get_nth_match to _find_across_boundaries must find the right match."""
+
+    def test_replace_cross_boundary_second_occurrence(self, temp_xml):
+        # First paragraph: "catdog" split across two w:t (not findable by _get_nth_match)
+        # Second paragraph: "catdog" also split across two w:t
+        # Asking for occurrence=1 should replace the SECOND "catdog", not the first.
+        xml_path = temp_xml(
+            "<w:p><w:r><w:t>cat</w:t></w:r><w:r><w:t>dog</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>cat</w:t></w:r><w:r><w:t>dog</w:t></w:r></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        mgr.replace_text("catdog", "REPLACED", occurrence=1)
+        text = _get_text_content(mgr)
+        # First "catdog" should remain, second should be replaced
+        assert text.startswith("catdog")
+        assert "REPLACED" in text
+
+    def test_delete_cross_boundary_second_occurrence(self, temp_xml):
+        xml_path = temp_xml(
+            "<w:p><w:r><w:t>cat</w:t></w:r><w:r><w:t>dog</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>cat</w:t></w:r><w:r><w:t>dog</w:t></w:r></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        mgr.suggest_deletion("catdog", occurrence=1)
+        text = _get_text_content(mgr)
+        # First "catdog" untouched
+        assert text.startswith("catdog")
+        # Only one "catdog" should remain
+        assert text.count("catdog") == 1
+
+
+class TestMixedStateMarkerPlacement:
+    """_replace_mixed_state insertion must go after deletion, not before prefix text."""
+
+    def test_replace_mixed_state_with_before_text(self, temp_xml):
+        # Regular text "xxAB" followed by ins text "CD"
+        # Replace "ABCD" -> before_text="xx" from regular, ins text removed
+        # The replacement should appear AFTER the deletion of "AB", not before "xx"
+        xml_path = temp_xml(
+            "<w:p>"
+            "<w:r><w:t>xxAB</w:t></w:r>"
+            '<w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>CD</w:t></w:r></w:ins>"
+            "</w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        mgr.replace_text("ABCD", "NEW")
+        text = _get_text_content(mgr)
+        assert "xx" in text
+        assert "NEW" in text
+        # "xx" must come BEFORE "NEW" in the visible text
+        assert text.index("xx") < text.index("NEW"), f"Prefix 'xx' should appear before 'NEW', got: '{text}'"
