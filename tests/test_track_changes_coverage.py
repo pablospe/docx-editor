@@ -64,8 +64,7 @@ class TestSuggestDeletionInsideInsRemovesEntireIns:
 
     def test_delete_entire_single_wt_inside_ins(self, temp_xml):
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
-            "<w:r><w:t>Hello</w:t></w:r></w:ins></w:p>"
+            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"><w:r><w:t>Hello</w:t></w:r></w:ins></w:p>'
         )
         mgr = _make_manager(xml_path)
         mgr.suggest_deletion("Hello")
@@ -154,8 +153,7 @@ class TestRemoveFromInsertionMiddleSplit:
 
     def test_remove_middle_from_single_node_ins(self, temp_xml):
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
-            "<w:r><w:t>ABCDE</w:t></w:r></w:ins></w:p>"
+            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"><w:r><w:t>ABCDE</w:t></w:r></w:ins></w:p>'
         )
         mgr = _make_manager(xml_path)
         # Delete "BCD" from middle of "ABCDE" inside w:ins
@@ -254,11 +252,7 @@ class TestDeleteRegularSegmentUnmatchedWt:
     def test_delete_preserves_unmatched_wt(self, temp_xml):
         # Already tested in test_multi_wt_safety.py but let's cover the
         # specific "unmatched sibling" branch in _delete_regular_segment
-        xml_path = temp_xml(
-            "<w:p>"
-            "<w:r><w:t>prefix</w:t><w:t>MATCH</w:t><w:t>suffix</w:t></w:r>"
-            "</w:p>"
-        )
+        xml_path = temp_xml("<w:p><w:r><w:t>prefix</w:t><w:t>MATCH</w:t><w:t>suffix</w:t></w:r></w:p>")
         mgr = _make_manager(xml_path)
         mgr.suggest_deletion("MATCH")
         text = _get_text_content(mgr)
@@ -272,13 +266,7 @@ class TestDeleteRegularSegmentIntermediateNode:
 
     def test_three_wt_nodes_spanning_deletion(self, temp_xml):
         # Three separate runs, delete spanning all three
-        xml_path = temp_xml(
-            "<w:p>"
-            "<w:r><w:t>xxAB</w:t></w:r>"
-            "<w:r><w:t>CD</w:t></w:r>"
-            "<w:r><w:t>EFyy</w:t></w:r>"
-            "</w:p>"
-        )
+        xml_path = temp_xml("<w:p><w:r><w:t>xxAB</w:t></w:r><w:r><w:t>CD</w:t></w:r><w:r><w:t>EFyy</w:t></w:r></w:p>")
         mgr = _make_manager(xml_path)
         mgr.suggest_deletion("ABCDEF")
         text = _get_text_content(mgr)
@@ -374,15 +362,7 @@ class TestReplaceSameContextInsAppendNoFirstChild:
     """Lines 405-407: _replace_same_context appends when ins_elem has no firstChild."""
 
     def test_replace_all_inside_ins_removes_then_appends(self, temp_xml):
-        # Single run w:ins, replace entire text -> removal empties ins, then appends
-        xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
-            "<w:r><w:t>XY</w:t></w:r></w:ins></w:p>"
-        )
-        mgr = _make_manager(xml_path)
-        # Use cross-boundary path: need two runs
-        # Actually, to hit _replace_same_context we need cross-boundary match.
-        # Let's use two runs both inside ins, replace entire content.
+        # Two runs both inside ins, replace entire content.
         xml_path2 = temp_xml(
             '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>X</w:t></w:r><w:r><w:t>Y</w:t></w:r></w:ins></w:p>"
