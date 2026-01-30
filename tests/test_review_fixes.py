@@ -302,3 +302,72 @@ class TestMixedStateMarkerPlacement:
         assert "NEW" in text
         # "xx" must come BEFORE "NEW" in the visible text
         assert text.index("xx") < text.index("NEW"), f"Prefix 'xx' should appear before 'NEW', got: '{text}'"
+
+
+class TestSingleNodeRemovalXmlSpaceAndGuard:
+    """_remove_from_insertion single-node truncation should set xml:space and guard non-text children."""
+
+    def test_truncate_before_sets_xml_space(self, temp_xml):
+        # Delete prefix from " Hello" inside ins -> after_text=" Hello"[len(""):] needs xml:space
+        xml_path = temp_xml(
+            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"><w:r><w:t>AB cd</w:t></w:r></w:ins></w:p>'
+        )
+        mgr = _make_manager(xml_path)
+        mgr.suggest_deletion("AB")
+        # Remaining text is " cd" which has leading space
+        for wt in mgr.editor.dom.getElementsByTagName("w:t"):
+            if wt.firstChild and wt.firstChild.data == " cd":
+                assert wt.getAttribute("xml:space") == "preserve"
+                break
+        else:
+            pytest.fail("Could not find w:t with ' cd'")
+
+    def test_truncate_after_sets_xml_space(self, temp_xml):
+        xml_path = temp_xml(
+            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"><w:r><w:t>cd AB</w:t></w:r></w:ins></w:p>'
+        )
+        mgr = _make_manager(xml_path)
+        mgr.suggest_deletion("AB")
+        for wt in mgr.editor.dom.getElementsByTagName("w:t"):
+            if wt.firstChild and wt.firstChild.data == "cd ":
+                assert wt.getAttribute("xml:space") == "preserve"
+                break
+        else:
+            pytest.fail("Could not find w:t with 'cd '")
+
+    def test_full_removal_preserves_run_with_tab(self, temp_xml):
+        # Run has w:t + w:tab; removing w:t should keep run alive for the tab
+        xml_path = temp_xml(
+            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>GONE</w:t><w:tab/></w:r>"
+            "<w:r><w:t>STAY</w:t></w:r></w:ins></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        mgr.suggest_deletion("GONE")
+        text = _get_text_content(mgr)
+        assert "STAY" in text
+        assert "GONE" not in text
+        # The run with w:tab should still exist
+        tabs = mgr.editor.dom.getElementsByTagName("w:tab")
+        assert tabs.length > 0, "w:tab should be preserved when its sibling w:t is removed"
+
+
+class TestRunRebuildPreservesNonTextChildren:
+    """_replace_same_context and _delete_same_context should preserve non-text run children."""
+
+    def test_replace_preserves_tab_in_run(self, temp_xml):
+        # Run has w:tab + w:t; replacing text should keep the tab
+        xml_path = temp_xml("<w:p><w:r><w:tab/><w:t>MATCH</w:t></w:r><w:r><w:t>END</w:t></w:r></w:p>")
+        mgr = _make_manager(xml_path)
+        mgr.replace_text("MATCHEND", "NEW")
+        text = _get_text_content(mgr)
+        assert "NEW" in text
+        tabs = mgr.editor.dom.getElementsByTagName("w:tab")
+        assert tabs.length > 0, "w:tab should be preserved during run rebuild"
+
+    def test_delete_preserves_tab_in_run(self, temp_xml):
+        xml_path = temp_xml("<w:p><w:r><w:tab/><w:t>MATCH</w:t></w:r><w:r><w:t>END</w:t></w:r></w:p>")
+        mgr = _make_manager(xml_path)
+        mgr.suggest_deletion("MATCHEND")
+        tabs = mgr.editor.dom.getElementsByTagName("w:tab")
+        assert tabs.length > 0, "w:tab should be preserved during deletion rebuild"

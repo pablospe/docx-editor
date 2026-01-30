@@ -285,12 +285,8 @@ class RevisionManager:
                     if ins_ancestor.parentNode:
                         ins_ancestor.parentNode.removeChild(ins_ancestor)
                 else:
-                    # Other w:t nodes exist — remove just this w:t node
-                    if elem.parentNode:
-                        elem.parentNode.removeChild(elem)
-                    # If the run has no more w:t children, remove it too
-                    if not run.getElementsByTagName("w:t") and run.parentNode:
-                        run.parentNode.removeChild(run)
+                    # Other w:t nodes exist — remove just this w:t (and run if empty)
+                    self._remove_wt_and_maybe_run(elem)
             return -1
 
         # Build the replacement runs
@@ -330,6 +326,16 @@ class RevisionManager:
         if rPr_elems:
             rPr_xml = rPr_elems[0].toxml()
         return run, rPr_xml
+
+    def _get_non_text_children_xml(self, run) -> str:
+        """Serialize non-text, non-rPr children (w:tab, w:br, w:drawing, etc.) of a run."""
+        parts = []
+        for child in run.childNodes:
+            if child.nodeType == child.ELEMENT_NODE:
+                tag = getattr(child, "tagName", "")
+                if tag not in ("w:t", "w:rPr"):
+                    parts.append(child.toxml())
+        return "".join(parts)
 
     def _get_node_text(self, node) -> str:
         """Get text content of a w:t node."""
@@ -465,6 +471,11 @@ class RevisionManager:
 
             # Build deterministic node-to-part mapping using node ids from parts
             node_to_part = {nid: (before, matched, after) for before, matched, after, nid in info["parts"]}
+
+            # Preserve non-text children (w:tab, w:br, w:drawing, etc.)
+            non_text_xml = self._get_non_text_children_xml(run)
+            if non_text_xml:
+                xml_parts.append(f"<w:r>{rPr_xml}{non_text_xml}</w:r>")
 
             # Iterate all w:t in document order, emitting unmatched as preserved
             all_wt = list(run.getElementsByTagName("w:t"))
@@ -638,13 +649,8 @@ class RevisionManager:
                         # Sole w:t — remove entire <w:ins>
                         ins_elem.parentNode.removeChild(ins_elem)
                     else:
-                        # Other w:t nodes exist — remove just this w:t
-                        run = self._find_ancestor(first_node, "w:r")
-                        if first_node.parentNode:
-                            first_node.parentNode.removeChild(first_node)
-                        # If the run has no more w:t children, remove the run
-                        if run and not run.getElementsByTagName("w:t") and run.parentNode:
-                            run.parentNode.removeChild(run)
+                        # Other w:t nodes exist — remove just this w:t (and run if empty)
+                        self._remove_wt_and_maybe_run(first_node)
             elif not before_text:
                 first_node.firstChild.data = after_text
             elif not after_text:
@@ -752,6 +758,11 @@ class RevisionManager:
             all_wt_nodes = list(run.getElementsByTagName("w:t"))
             xml_parts: list[str] = []
 
+            # Preserve non-text children (w:tab, w:br, w:drawing, etc.)
+            non_text_xml = self._get_non_text_children_xml(run)
+            if non_text_xml:
+                xml_parts.append(f"<w:r>{rPr_xml}{non_text_xml}</w:r>")
+
             for wt_node in all_wt_nodes:
                 if id(wt_node) not in matched_node_ids:
                     # Unmatched sibling — preserve as-is
@@ -835,6 +846,11 @@ class RevisionManager:
 
             # Build deterministic node-to-part mapping using node ids from parts
             node_to_part = {nid: (rp_xml, before, matched, after) for _, rp_xml, before, matched, after, nid in rparts}
+
+            # Preserve non-text children (w:tab, w:br, w:drawing, etc.)
+            non_text_xml = self._get_non_text_children_xml(run)
+            if non_text_xml:
+                xml_parts.append(f"<w:r>{rPr_xml}{non_text_xml}</w:r>")
 
             # Emit w:t nodes in document order, matched as <w:del>, unmatched preserved
             all_wt = list(run.getElementsByTagName("w:t"))
