@@ -326,11 +326,11 @@ class TestReplaceSameContextInsAppendNoFirstChild:
 
     def test_replace_all_inside_ins_removes_then_appends(self, temp_xml):
         # Two runs both inside ins, replace entire content.
-        xml_path2 = temp_xml(
+        xml_path = temp_xml(
             '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>X</w:t></w:r><w:r><w:t>Y</w:t></w:r></w:ins></w:p>"
         )
-        mgr2 = _make_manager(xml_path2)
-        mgr2.replace_text("XY", "NEW")
-        text = _get_text_content(mgr2)
+        mgr = _make_manager(xml_path)
+        mgr.replace_text("XY", "NEW")
+        text = _get_text_content(mgr)
         assert "NEW" in text

@@ -1019,10 +1019,15 @@ class RevisionManager:
 
         ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
 
+        # If ref_run is inside a <w:ins>, insert relative to the <w:ins> ancestor
+        # to avoid nesting <w:ins> inside <w:ins>.
+        ins_ancestor = self._find_ancestor(ref_run, "w:ins")
+        insert_ref = ins_ancestor if ins_ancestor else ref_run
+
         if position == "after":
-            nodes = self.editor.insert_after(ref_run, ins_xml)
+            nodes = self.editor.insert_after(insert_ref, ins_xml)
         else:
-            nodes = self.editor.insert_before(ref_run, ins_xml)
+            nodes = self.editor.insert_before(insert_ref, ins_xml)
 
         for node in nodes:
             if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
