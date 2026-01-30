@@ -142,6 +142,11 @@ class RevisionManager:
         before_text = full_text[:start_idx]
         after_text = full_text[start_idx + len(find) :]
 
+        # Site A: If inside <w:ins>, edit text in-place (no del/ins wrappers)
+        if self._find_ancestor(run, "w:ins"):
+            elem.firstChild.data = before_text + replace_with + after_text
+            return -1
+
         # Preserve run properties if present
         rPr_xml = ""
         rPr_elems = run.getElementsByTagName("w:rPr")
@@ -222,6 +227,18 @@ class RevisionManager:
 
         before_text = full_text[:start_idx]
         after_text = full_text[start_idx + len(text) :]
+
+        # Site B: If inside <w:ins>, shrink/remove the insertion (no <w:del>)
+        ins_ancestor = self._find_ancestor(run, "w:ins")
+        if ins_ancestor:
+            remaining = before_text + after_text
+            if remaining:
+                elem.firstChild.data = remaining
+            else:
+                # Entire text removed — remove the <w:ins> element
+                if ins_ancestor.parentNode:
+                    ins_ancestor.parentNode.removeChild(ins_ancestor)
+            return -1
 
         # Build the replacement runs
         xml_parts = []
@@ -343,6 +360,30 @@ class RevisionManager:
         """
         parts = self._build_cross_boundary_parts(match)
         if not parts:
+            return -1
+
+        # Site D: If all positions inside <w:ins>, edit in-place
+        if all(p.is_inside_ins for p in match.positions):
+            self._remove_from_insertion(match.positions)
+            # Insert replacement text into the first node's remaining text
+            first_node = match.positions[0].node
+            first_offset = match.positions[0].offset_in_node
+            ins_elem = self._find_ancestor(first_node, "w:ins")
+            if ins_elem and ins_elem.parentNode:
+                # Add replacement run inside the existing <w:ins>
+                first_rPr = parts[0][1]
+                new_run_xml = f"<w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r>"
+                # Find insertion point: after current content or at first_offset position
+                # Insert new run as a child of the ins element
+                nodes = self.editor._parse_fragment(new_run_xml)
+                # Insert before the first remaining child or append
+                first_child = ins_elem.firstChild
+                if first_child:
+                    for node in nodes:
+                        ins_elem.insertBefore(node, first_child)
+                else:
+                    for node in nodes:
+                        ins_elem.appendChild(node)
             return -1
 
         # Use first run's rPr for the insertion
@@ -588,6 +629,11 @@ class RevisionManager:
         if not parts:
             return -1
 
+        # Site F: If all positions inside <w:ins>, remove from insertion directly
+        if all(p.is_inside_ins for p in match.positions):
+            self._remove_from_insertion(match.positions)
+            return -1
+
         xml_parts = []
         for _run, rPr_xml, before, matched, after in parts:
             if before:
@@ -701,6 +747,14 @@ class RevisionManager:
         before_text = full_text[:anchor_idx]
         after_text = full_text[anchor_idx + len(anchor) :]
 
+        # Site C: If inside <w:ins>, add text directly (no <w:ins> wrapper)
+        if self._find_ancestor(run, "w:ins"):
+            if position == "before":
+                elem.firstChild.data = before_text + text + anchor + after_text
+            else:
+                elem.firstChild.data = before_text + anchor + text + after_text
+            return -1
+
         # Build split runs + insertion
         xml_parts = []
         if before_text:
@@ -738,17 +792,32 @@ class RevisionManager:
         # Get rPr from first run
         first_run, rPr_xml = self._get_run_info(positions[0].node)
 
-        ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
-
+        # Sites H/I: If ref run is inside <w:ins>, insert bare <w:r> (no wrapper)
         if position == "after":
             last_run, _ = self._get_run_info(positions[-1].node)
             if not last_run:
                 return -1
-            nodes = self.editor.insert_after(last_run, ins_xml)
+            ref_run = last_run
         else:
             if not first_run:
                 return -1
-            nodes = self.editor.insert_before(first_run, ins_xml)
+            ref_run = first_run
+
+        inside_ins = self._find_ancestor(ref_run, "w:ins")
+        if inside_ins:
+            bare_xml = f"<w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r>"
+            if position == "after":
+                self.editor.insert_after(ref_run, bare_xml)
+            else:
+                self.editor.insert_before(ref_run, bare_xml)
+            return -1
+
+        ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
+
+        if position == "after":
+            nodes = self.editor.insert_after(ref_run, ins_xml)
+        else:
+            nodes = self.editor.insert_before(ref_run, ins_xml)
 
         for node in nodes:
             if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
