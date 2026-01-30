@@ -681,12 +681,21 @@ class RevisionManager:
                 self._remove_wt_and_maybe_run(group["node"])
 
     def _remove_wt_and_maybe_run(self, wt_node) -> None:
-        """Remove a w:t node, and its parent w:r if no w:t children remain."""
+        """Remove a w:t node, and its parent w:r if no meaningful children remain.
+
+        Preserves the run if it still contains non-text content children
+        like w:tab, w:br, w:drawing, etc.
+        """
         run = self._find_ancestor(wt_node, "w:r")
         if wt_node.parentNode:
             wt_node.parentNode.removeChild(wt_node)
         if run and not run.getElementsByTagName("w:t") and run.parentNode:
-            run.parentNode.removeChild(run)
+            has_content_children = any(
+                n.nodeType == n.ELEMENT_NODE and getattr(n, "tagName", None) not in ("w:t", "w:rPr")
+                for n in run.childNodes
+            )
+            if not has_content_children:
+                run.parentNode.removeChild(run)
 
     def _get_wt_nodes_in_ancestor(self, ancestor) -> list:
         """Get all w:t nodes inside an ancestor element."""
