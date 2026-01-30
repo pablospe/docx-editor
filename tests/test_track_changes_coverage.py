@@ -26,7 +26,7 @@ def _make_manager(xml_path: Path) -> RevisionManager:
     return RevisionManager(editor)
 
 
-def _get_text_content(manager):
+def _get_text_content(manager) -> str:
     dom = manager.editor.dom
     result = []
     for wt in dom.getElementsByTagName("w:t"):
