@@ -417,8 +417,9 @@ class RevisionManager:
                     for node in nodes:
                         ins_elem.appendChild(node)
             elif ins_parent:
-                # ins_elem was fully removed — insert bare run at its former position
-                nodes = self.editor._parse_fragment(new_run_xml)
+                # ins_elem was fully removed — wrap replacement in a new <w:ins>
+                ins_wrapper_xml = f"<w:ins>{new_run_xml}</w:ins>"
+                nodes = self.editor._parse_fragment(ins_wrapper_xml)
                 for node in nodes:
                     ins_parent.insertBefore(node, ins_next)
             return -1
@@ -426,19 +427,52 @@ class RevisionManager:
         # Use first run's rPr for the insertion
         first_rPr = parts[0][1]
 
+        # Collect matched node ids from match positions
+        matched_node_ids = {id(pos.node) for pos in match.positions}
+
+        # Group parts by run for multi-w:t preservation
+        run_order: list[int] = []
+        run_map: dict[int, dict] = {}
+        for run, rPr_xml, before, matched, after in parts:
+            rid = id(run)
+            if rid not in run_map:
+                run_order.append(rid)
+                run_map[rid] = {"run": run, "rPr_xml": rPr_xml, "parts": []}
+            run_map[rid]["parts"].append((before, matched, after))
+
         xml_parts = []
-        for idx, (_run, rPr_xml, before, matched, after) in enumerate(parts):
-            if before:
-                xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+        part_idx = 0
+        total_parts = len(parts)
+        for rid in run_order:
+            info = run_map[rid]
+            run = info["run"]
+            rPr_xml = info["rPr_xml"]
 
-            xml_parts.append(f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
+            # Iterate all w:t in document order, emitting unmatched as preserved
+            all_wt = list(run.getElementsByTagName("w:t"))
+            part_sub_idx = 0
+            for wt in all_wt:
+                if id(wt) in matched_node_ids and part_sub_idx < len(info["parts"]):
+                    before, matched, after = info["parts"][part_sub_idx]
+                    part_sub_idx += 1
 
-            # Insert replacement after the last deletion
-            if idx == len(parts) - 1:
-                xml_parts.append(f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>")
+                    if before:
+                        xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                    xml_parts.append(f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
 
-            if after:
-                xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+                    # Insert replacement after the last deletion
+                    if part_idx + part_sub_idx == total_parts:
+                        xml_parts.append(f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>")
+
+                    if after:
+                        xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+                else:
+                    # Unmatched sibling — preserve
+                    wt_text = self._get_node_text(wt)
+                    if wt_text:
+                        xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+
+            part_idx += len(info["parts"])
 
         # Replace all affected runs: insert new XML before first run, remove all runs
         first_run = parts[0][0]
@@ -608,27 +642,34 @@ class RevisionManager:
                     self.editor.insert_after(ins_elem, after_xml)
         else:
             # Multi-node: truncate first node to before, last node to after,
-            # remove intermediate nodes entirely
+            # remove intermediate nodes entirely.
+            # Only remove the w:t node; remove the run only if no w:t children remain.
             if before:
                 first_node.firstChild.data = before
+                _set_xml_space_preserve(first_node)
             else:
-                # Remove the entire run containing this node
-                run = self._find_ancestor(first_node, "w:r")
-                if run and run.parentNode:
-                    run.parentNode.removeChild(run)
+                self._remove_wt_and_maybe_run(first_node)
 
             if after:
                 last_node.firstChild.data = after
+                _set_xml_space_preserve(last_node)
             else:
-                run = self._find_ancestor(last_node, "w:r")
-                if run and run.parentNode:
-                    run.parentNode.removeChild(run)
+                self._remove_wt_and_maybe_run(last_node)
 
             # Remove intermediate nodes
             for group in groups[1:-1]:
-                run = self._find_ancestor(group["node"], "w:r")
-                if run and run.parentNode:
-                    run.parentNode.removeChild(run)
+                node = group["node"]
+                node_text = self._get_node_text(node)
+                if not node_text or node_text == self._get_node_text(node):
+                    self._remove_wt_and_maybe_run(node)
+
+    def _remove_wt_and_maybe_run(self, wt_node) -> None:
+        """Remove a w:t node, and its parent w:r if no w:t children remain."""
+        run = self._find_ancestor(wt_node, "w:r")
+        if wt_node.parentNode:
+            wt_node.parentNode.removeChild(wt_node)
+        if run and not run.getElementsByTagName("w:t") and run.parentNode:
+            run.parentNode.removeChild(run)
 
     def _get_wt_nodes_in_ancestor(self, ancestor) -> list:
         """Get all w:t nodes inside an ancestor element."""
@@ -894,7 +935,7 @@ class RevisionManager:
         if rPr_elems:
             rPr_xml = rPr_elems[0].toxml()
 
-        # Split the run at the anchor boundary so insertion goes inline
+        # Site C: If inside <w:ins>, edit text in-place (safe for multi-w:t)
         full_text = elem.firstChild.data if elem.firstChild else ""
         anchor_idx = full_text.find(anchor)
 
@@ -904,7 +945,6 @@ class RevisionManager:
         before_text = full_text[:anchor_idx]
         after_text = full_text[anchor_idx + len(anchor) :]
 
-        # Site C: If inside <w:ins>, add text directly (no <w:ins> wrapper)
         if self._find_ancestor(run, "w:ins"):
             if position == "before":
                 elem.firstChild.data = before_text + text + anchor + after_text
@@ -912,6 +952,13 @@ class RevisionManager:
                 elem.firstChild.data = before_text + anchor + text + after_text
             _set_xml_space_preserve(elem)
             return -1
+
+        # If run has multiple w:t children, delegate to cross-boundary path
+        # to avoid losing sibling w:t nodes when replacing the whole run.
+        if len(run.getElementsByTagName("w:t")) > 1:
+            match = self._find_across_boundaries(anchor, occurrence)
+            if match is not None:
+                return self._insert_near_match(match, text, position)
 
         # Build split runs + insertion
         xml_parts = []
