@@ -16,6 +16,8 @@ Pure Python library for Word document track changes and comments, without requir
 ## Features
 
 - **Track Changes**: Replace, delete, and insert text with revision tracking
+- **Cross-Boundary Editing**: Find and replace text spanning multiple XML elements and revision boundaries
+- **Mixed-State Editing**: Atomic decomposition for text spanning `<w:ins>`/`<w:del>` boundaries
 - **Comments**: Add, reply, resolve, and delete comments
 - **Revision Management**: List, accept, and reject tracked changes
 - **Cross-Platform**: Works on Linux, macOS, and Windows
@@ -44,6 +46,28 @@ with Document.open("contract.docx") as doc:
     # Revision management
     revisions = doc.list_revisions()
     doc.accept_revision(revision_id=1)
+
+    doc.save()
+```
+
+### Cross-Boundary Text Operations
+
+Text in Word documents with tracked changes can span revision boundaries. `docx-editor` handles this transparently:
+
+```python
+from docx_editor import Document
+
+with Document.open("reviewed.docx") as doc:
+    # Get visible text (inserted text included, deleted excluded)
+    text = doc.get_visible_text()
+
+    # Find text across element boundaries
+    match = doc.find_text("Aim: To")
+    if match and match.spans_boundary:
+        print("Text spans a revision boundary")
+
+    # Replace works even across revision boundaries
+    doc.replace("Aim: To", "Goal: To")
 
     doc.save()
 ```

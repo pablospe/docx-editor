@@ -413,3 +413,89 @@ class TestDocumentInternalMethods:
         doc._ensure_comment_content_types()
 
         doc.close()
+
+
+class TestDocumentGetVisibleText:
+    """Tests for get_visible_text()."""
+
+    def test_get_visible_text_basic(self, clean_workspace):
+        """Test getting visible text from a simple document."""
+        doc = Document.open(clean_workspace)
+        text = doc.get_visible_text()
+        # The simple.docx test fixture has some text content
+        assert isinstance(text, str)
+        assert len(text) > 0
+        doc.close()
+
+    def test_get_visible_text_after_insertion(self, clean_workspace):
+        """Inserted text should appear in visible text."""
+        doc = Document.open(clean_workspace)
+        original = doc.get_visible_text()
+        doc.insert_after("fox", " INSERTED")
+        updated = doc.get_visible_text()
+        assert "INSERTED" in updated
+        assert len(updated) > len(original)
+        doc.close()
+
+    def test_get_visible_text_after_deletion(self, clean_workspace):
+        """Deleted text should NOT appear in visible text."""
+        doc = Document.open(clean_workspace)
+        original = doc.get_visible_text()
+        assert "fox" in original
+        doc.delete("fox")
+        updated = doc.get_visible_text()
+        assert "fox" not in updated
+        doc.close()
+
+    def test_get_visible_text_after_replace(self, clean_workspace):
+        """Replaced text should show new text, not old."""
+        doc = Document.open(clean_workspace)
+        doc.replace("fox", "cat")
+        text = doc.get_visible_text()
+        assert "cat" in text
+        assert "fox" not in text
+        doc.close()
+
+    def test_get_visible_text_after_close_raises(self, clean_workspace):
+        """Should raise ValueError after document is closed."""
+        doc = Document.open(clean_workspace)
+        doc.close()
+        with pytest.raises(ValueError, match="closed"):
+            doc.get_visible_text()
+
+
+class TestDocumentFindText:
+    """Tests for find_text()."""
+
+    def test_find_text_simple(self, clean_workspace):
+        """Find text in a simple document."""
+        doc = Document.open(clean_workspace)
+        match = doc.find_text("fox")
+        assert match is not None
+        assert match.text == "fox"
+        assert not match.spans_boundary
+        doc.close()
+
+    def test_find_text_not_found(self, clean_workspace):
+        """Return None when text not found."""
+        doc = Document.open(clean_workspace)
+        match = doc.find_text("nonexistent")
+        assert match is None
+        doc.close()
+
+    def test_find_text_after_insertion(self, clean_workspace):
+        """Find text that spans an insertion boundary."""
+        doc = Document.open(clean_workspace)
+        # insert_after splits the run at the anchor and inserts inline after it
+        doc.insert_after("fox", " INSERTED")
+        # "fox INSERTED" spans original run + insertion
+        match = doc.find_text("fox INSERTED")
+        assert match is not None
+        assert match.spans_boundary
+        doc.close()
+
+    def test_find_text_after_close_raises(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        doc.close()
+        with pytest.raises(ValueError, match="closed"):
+            doc.find_text("test")

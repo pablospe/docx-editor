@@ -12,7 +12,7 @@ from .comments import Comment, CommentManager
 from .exceptions import WorkspaceSyncError
 from .track_changes import Revision, RevisionManager
 from .workspace import Workspace
-from .xml_editor import DocxXMLEditor
+from .xml_editor import DocxXMLEditor, build_text_map
 
 
 class Document:
@@ -117,6 +117,14 @@ class Document:
 
     # ==================== Track Changes API ====================
 
+    def find_text(self, text: str, occurrence: int = 0):
+        """Find text in the document, including across element boundaries.
+
+        Returns match info or None if not found.
+        """
+        self._ensure_open()
+        return self._revision_manager._find_across_boundaries(text, occurrence)
+
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.
 
@@ -136,6 +144,23 @@ class Document:
         """
         self._ensure_open()
         return self._revision_manager.count_matches(text)
+
+    def get_visible_text(self) -> str:
+        """Get the visible text of the document.
+
+        Returns flattened text with paragraphs separated by newlines.
+        Inserted text is included, deleted text is excluded.
+
+        Returns:
+            The visible text content
+        """
+        self._ensure_open()
+        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        parts = []
+        for p in paragraphs:
+            tm = build_text_map(p)
+            parts.append(tm.text)
+        return "\n".join(parts)
 
     def replace(self, find: str, replace_with: str, occurrence: int = 0) -> int:
         """Replace text with tracked changes.

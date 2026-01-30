@@ -45,6 +45,7 @@ from .exceptions import (
     XMLError,
 )
 from .track_changes import Revision
+from .xml_editor import TextMap, TextMapMatch, TextPosition, build_text_map, find_in_text_map
 
 __all__ = [
     # Main classes
@@ -64,4 +65,10 @@ __all__ = [
     "RevisionError",
     "CommentError",
     "TextNotFoundError",
+    # Text map
+    "TextPosition",
+    "TextMap",
+    "TextMapMatch",
+    "build_text_map",
+    "find_in_text_map",
 ]
