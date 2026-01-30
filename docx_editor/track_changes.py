@@ -7,9 +7,10 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
+from xml.dom.minidom import Element
 
 from .exceptions import RevisionError, TextNotFoundError
-from .xml_editor import DocxXMLEditor, TextMapMatch, build_text_map, find_in_text_map
+from .xml_editor import DocxXMLEditor, TextMapMatch, TextPosition, build_text_map, find_in_text_map
 
 
 @dataclass
@@ -298,7 +299,7 @@ class RevisionManager:
 
         return -1
 
-    def _get_run_info(self, node):
+    def _get_run_info(self, node) -> tuple[Element | None, str]:
         """Get the parent w:r element and its rPr XML for a w:t node."""
         run = node.parentNode
         while run and run.nodeName != "w:r":
@@ -319,7 +320,7 @@ class RevisionManager:
                 text += child.data
         return text
 
-    def _build_cross_boundary_parts(self, match: TextMapMatch):
+    def _build_cross_boundary_parts(self, match: TextMapMatch) -> list[tuple[Element, str, str, str, str]]:
         """Build per-node data for a cross-boundary match.
 
         Returns list of (run, rPr_xml, before_text, matched_part, after_text) tuples,
@@ -354,7 +355,7 @@ class RevisionManager:
             result.append((info["run"], info["rPr_xml"], before, matched, after))
         return result
 
-    def _classify_segments(self, match: TextMapMatch):
+    def _classify_segments(self, match: TextMapMatch) -> list[tuple[bool | None, list[TextPosition]]]:
         """Group match positions into contiguous segments by revision context.
 
         Returns list of (is_inside_ins, positions_list) tuples.
@@ -421,7 +422,7 @@ class RevisionManager:
                 ins_wrapper_xml = f"<w:ins>{new_run_xml}</w:ins>"
                 nodes = self.editor._parse_fragment(ins_wrapper_xml)
                 for node in nodes:
-                    ins_parent.insertBefore(node, ins_next)
+                    ins_parent.insertBefore(node, ins_next)  # type: ignore[arg-type]
             return -1
 
         # Use first run's rPr for the insertion
@@ -525,7 +526,7 @@ class RevisionManager:
         # Place a marker before ref_node so we can find the insertion point
         # after deletion processing (which may remove ref_node).
         marker = self.editor.dom.createElement("w:_marker")
-        ref_node.parentNode.insertBefore(marker, ref_node)
+        ref_node.parentNode.insertBefore(marker, ref_node)  # type: ignore[union-attr]
 
         # Process each segment to delete/remove the matched text
         for is_inside_ins, positions in segments:
@@ -564,7 +565,7 @@ class RevisionManager:
                 return int(node.getAttribute("w:id"))
         return -1
 
-    def _find_ancestor(self, node, tag_name: str):
+    def _find_ancestor(self, node, tag_name: str) -> Element | None:
         """Find the nearest ancestor with the given tag name."""
         parent = node.parentNode
         while parent:
@@ -658,12 +659,9 @@ class RevisionManager:
             else:
                 self._remove_wt_and_maybe_run(last_node)
 
-            # Remove intermediate nodes
+            # Remove intermediate nodes unconditionally (entire text is matched)
             for group in groups[1:-1]:
-                node = group["node"]
-                node_text = self._get_node_text(node)
-                if not node_text or node_text == self._get_node_text(node):
-                    self._remove_wt_and_maybe_run(node)
+                self._remove_wt_and_maybe_run(group["node"])
 
     def _remove_wt_and_maybe_run(self, wt_node) -> None:
         """Remove a w:t node, and its parent w:r if no w:t children remain."""

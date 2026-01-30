@@ -21,7 +21,7 @@ def temp_xml(tmp_path):
     return _create_xml
 
 
-def _make_manager(xml_path):
+def _make_manager(xml_path) -> RevisionManager:
     editor = DocxXMLEditor(xml_path, rsid="00000000", author="Test Author")
     return RevisionManager(editor)
 
