@@ -458,7 +458,9 @@ class RevisionManager:
 
                     if before:
                         xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
-                    xml_parts.append(f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
+                    xml_parts.append(
+                        f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>"
+                    )
 
                     # Insert replacement after the last deletion
                     if part_idx + part_sub_idx == total_parts:
