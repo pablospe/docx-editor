@@ -170,17 +170,26 @@ import os
 # Get author from system username
 author = os.environ.get("USER") or os.environ.get("USERNAME") or "Reviewer"
 
-# Open document with author name for tracked changes
+# Open document (supports context manager)
+with Document.open("contract.docx", author=author) as doc:
+    # Make changes (automatically tracked)
+    doc.replace("old text", "new text")   # Tracked replacement
+    doc.delete("text to delete")           # Tracked deletion
+    doc.insert_after("anchor", "new text") # Tracked insertion after anchor
+    doc.insert_before("anchor", "prefix")  # Tracked insertion before anchor
+
+    doc.save()  # Overwrites original
+    # or doc.save("reviewed.docx")  # Save to new file
+# Workspace is cleaned up automatically on normal exit
+# On exception, workspace is preserved for inspection
+```
+
+Without context manager:
+
+```python
 doc = Document.open("contract.docx", author=author)
-
-# Make changes (automatically tracked)
-doc.replace("old text", "new text")  # Tracked replacement
-doc.delete("text to delete")          # Tracked deletion
-doc.insert_after("anchor", "new text") # Tracked insertion
-
-# Save and close
-doc.save()  # Overwrites original
-# or doc.save("reviewed.docx")  # Save to new file
+# ... edits ...
+doc.save()
 doc.close()
 ```
 
@@ -197,6 +206,12 @@ doc = Document.open("document.docx", author=author)
 count = doc.count_matches("30 days")
 print(f"Found {count} occurrences")
 
+# Find text (returns TextMapMatch or None, works across element boundaries)
+match = doc.find_text("30 days")
+
+# Get all visible text (inserted text included, deleted text excluded)
+visible = doc.get_visible_text()
+
 # Replace text (creates tracked deletion + insertion)
 doc.replace("30 days", "60 days")  # Replaces first occurrence
 doc.replace("30 days", "90 days", occurrence=1)  # Replaces second occurrence
@@ -205,13 +220,18 @@ doc.replace("30 days", "90 days", occurrence=1)  # Replaces second occurrence
 doc.delete("unnecessary clause")
 doc.delete("duplicate text", occurrence=2)  # Delete third occurrence
 
-# Insert after anchor text (creates tracked insertion)
+# Insert text (creates tracked insertion)
 doc.insert_after("Section 3.", " Additional terms apply.")
+doc.insert_before("Section 3.", "See also: ")
 doc.insert_after("Section 3.", " (revised)", occurrence=1)  # After second match
 
 doc.save("edited.docx")
 doc.close()
 ```
+
+**Return values:** All track changes methods return an `int` change ID. Returns `-1` when the target text is already inside a tracked insertion (`<w:ins>`), because the edit is done in-place without creating new revision markup.
+
+**Raises:** `TextNotFoundError` if the text is not found.
 
 ### Comments API
 
@@ -222,18 +242,23 @@ import os
 author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("document.docx", author=author)
 
-# Add a comment anchored to text
+# Add a comment anchored to text (returns comment ID)
 doc.add_comment("ambiguous term", "Please clarify this term")
 
-# List all comments
+# List all comments (returns list[Comment] objects)
 comments = doc.list_comments()
 for c in comments:
-    print(f"ID: {c['id']}, Author: {c['author']}, Text: {c['text']}")
+    print(f"ID: {c.id}, Author: {c.author}, Text: {c.text}, Resolved: {c.resolved}")
+    for reply in c.replies:
+        print(f"  Reply: {reply.text}")
 
-# Reply to a comment
-doc.reply_to_comment(comment_id=1, "I agree, needs clarification")
+# Filter by author
+my_comments = doc.list_comments(author="Reviewer")
 
-# Resolve or delete comments
+# Reply to a comment (returns new comment ID)
+doc.reply_to_comment(comment_id=1, reply="I agree, needs clarification")
+
+# Resolve or delete comments (return True if found, False if not)
 doc.resolve_comment(comment_id=1)
 doc.delete_comment(comment_id=2)
 
@@ -250,19 +275,25 @@ import os
 author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("reviewed.docx", author=author)
 
-# List all tracked revisions
+# List all tracked revisions (returns list[Revision] objects)
 revisions = doc.list_revisions()
 for r in revisions:
-    print(f"ID: {r['id']}, Type: {r['type']}, Author: {r['author']}")
+    print(f"ID: {r.id}, Type: {r.type}, Author: {r.author}, Text: {r.text}")
 
-# Accept or reject individual revisions
+# Filter by author
+their_changes = doc.list_revisions(author="OtherUser")
+
+# Accept or reject individual revisions (return True if found, False if not)
 doc.accept_revision(revision_id=1)
 doc.reject_revision(revision_id=2)
 
-# Accept or reject all revisions
+# Accept or reject all revisions (returns count of revisions processed)
 doc.accept_all()
-# or
 doc.reject_all()
+
+# Accept/reject only specific author's revisions
+doc.accept_all(author="Reviewer")
+doc.reject_all(author="OtherUser")
 
 doc.save()
 doc.close()
