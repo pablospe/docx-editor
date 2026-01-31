@@ -6,6 +6,8 @@ from pathlib import Path
 
 import defusedxml.minidom
 
+from docx_editor.exceptions import DocumentNotFoundError, InvalidDocumentError
+
 
 def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
     """Unpack a .docx file to a directory with pretty-printed XML.
@@ -18,18 +20,21 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
         str: Suggested RSID for edit session (8-character hex string)
 
     Raises:
-        FileNotFoundError: If the input file doesn't exist
-        zipfile.BadZipFile: If the file is not a valid zip/docx
+        DocumentNotFoundError: If the input file doesn't exist
+        InvalidDocumentError: If the file is not a valid zip/docx
     """
     input_path = Path(input_file)
     output_path = Path(output_dir)
 
     if not input_path.exists():
-        raise FileNotFoundError(f"Document not found: {input_file}")
+        raise DocumentNotFoundError(f"Document not found: {input_file}")
 
     # Extract and format
     output_path.mkdir(parents=True, exist_ok=True)
-    zipfile.ZipFile(input_path).extractall(output_path)
+    try:
+        zipfile.ZipFile(input_path).extractall(output_path)
+    except zipfile.BadZipFile as e:
+        raise InvalidDocumentError(f"Not a valid .docx file: {input_file}") from e
 
     # Pretty print all XML files
     xml_files = list(output_path.rglob("*.xml")) + list(output_path.rglob("*.rels"))
