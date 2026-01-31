@@ -2,6 +2,7 @@
 
 import pytest
 
+from docx_editor.exceptions import DocumentNotFoundError, InvalidDocumentError
 from docx_editor.ooxml.pack import pack_document
 from docx_editor.ooxml.unpack import unpack_document
 
@@ -11,17 +12,15 @@ class TestUnpack:
 
     def test_unpack_nonexistent_file(self, temp_dir):
         """Test error when unpacking nonexistent file."""
-        with pytest.raises(FileNotFoundError, match="Document not found"):
+        with pytest.raises(DocumentNotFoundError, match="Document not found"):
             unpack_document(temp_dir / "nonexistent.docx", temp_dir / "output")
 
     def test_unpack_invalid_zip(self, temp_dir):
         """Test error when unpacking invalid zip file."""
-        import zipfile
-
         invalid_file = temp_dir / "invalid.docx"
         invalid_file.write_text("not a zip file")
 
-        with pytest.raises(zipfile.BadZipFile):
+        with pytest.raises(InvalidDocumentError, match="Not a valid .docx file"):
             unpack_document(invalid_file, temp_dir / "output")
 
     def test_unpack_returns_rsid(self, simple_docx, temp_dir):
