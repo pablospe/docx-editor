@@ -7,5 +7,11 @@
   },
   "repository": "https://github.com/pablospe/docx-editor",
   "license": "MIT",
-  "keywords": ["docx", "documents", "word", "track-changes", "comments"]
+  "keywords": [
+    "docx",
+    "documents",
+    "word",
+    "track-changes",
+    "comments"
+  ]
 }
