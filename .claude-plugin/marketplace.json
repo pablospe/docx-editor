@@ -1,6 +1,9 @@
 {
   "name": "docx-editor-marketplace",
   "description": "Marketplace for the docx-editor plugin",
+  "owner": {
+    "name": "pablospe"
+  },
   "plugins": [
     {
       "name": "docx-editor",
