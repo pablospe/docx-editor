@@ -29,6 +29,40 @@ Pure Python library for Word document track changes and comments, without requir
 pip install docx-editor
 ```
 
+## Claude Code Plugin
+
+This repo includes a plugin for [Claude Code](https://claude.ai/claude-code) that enables AI-assisted Word document editing.
+
+This plugin extends the [original Anthropic docx skill](https://github.com/anthropics/skills/tree/main/skills/docx) which requires Claude to manually manipulate OOXML. Instead, this plugin provides an interface (`docx-editor`) that handles all the complexity—Claude just calls simple Python methods like `doc.replace()` or `doc.add_comment()`, making document editing significantly faster and less error-prone.
+
+### Install as plugin
+
+```bash
+# Add the marketplace
+/plugin marketplace add pablospe/docx-editor
+
+# Install the plugin
+/plugin install docx-editor@docx-editor-marketplace
+
+# Install dependencies
+pip install docx-editor python-docx
+```
+
+### Manual install (alternative)
+
+```bash
+# Install dependencies
+pip install docx-editor python-docx
+
+# Copy skill to Claude Code skills directory
+git clone https://github.com/pablospe/docx-editor /tmp/docx-editor
+mkdir -p ~/.claude/skills
+cp -r /tmp/docx-editor/skills/docx ~/.claude/skills/
+rm -rf /tmp/docx-editor
+```
+
+Once installed, Claude Code can help you edit Word documents with track changes, comments, and revisions.
+
 ## Quick Start
 
 ```python
@@ -71,37 +105,3 @@ with Document.open("reviewed.docx") as doc:
 
     doc.save()
 ```
-
-## Claude Code Skill
-
-This repo includes a skill for [Claude Code](https://claude.ai/claude-code) that enables AI-assisted Word document editing.
-
-This skill extends the [original Anthropic docx skill](https://github.com/anthropics/skills/tree/main/skills/docx) which requires Claude to manually manipulate OOXML. Instead, this skill provides an interface (`docx-editor`) that handles all the complexity—Claude just calls simple Python methods like `doc.replace()` or `doc.add_comment()`, making document editing significantly faster and less error-prone.
-
-### Install as plugin
-
-```bash
-# Add the marketplace
-/plugin marketplace add pablospe/docx-editor
-
-# Install the plugin
-/plugin install docx-editor@docx-editor-marketplace
-
-# Install dependencies
-pip install docx-editor python-docx
-```
-
-### Manual install (alternative)
-
-```bash
-# Install dependencies
-pip install docx-editor python-docx
-
-# Copy skill to Claude Code skills directory
-git clone https://github.com/pablospe/docx-editor /tmp/docx-editor
-mkdir -p ~/.claude/skills
-cp -r /tmp/docx-editor/skills/docx ~/.claude/skills/
-rm -rf /tmp/docx-editor
-```
-
-Once installed, Claude Code can help you edit Word documents with track changes, comments, and revisions.
