@@ -1,0 +1,11 @@
+{
+  "name": "docx-editor-marketplace",
+  "description": "Marketplace for the docx-editor plugin",
+  "plugins": [
+    {
+      "name": "docx-editor",
+      "description": "Comprehensive DOCX creation, editing, and analysis with tracked changes, comments, and revisions",
+      "source": "./"
+    }
+  ]
+}

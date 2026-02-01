@@ -1,0 +1,11 @@
+{
+  "name": "docx-editor",
+  "description": "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction",
+  "version": "0.1.1",
+  "author": {
+    "name": "pablospe"
+  },
+  "repository": "https://github.com/pablospe/docx-editor",
+  "license": "MIT",
+  "keywords": ["docx", "documents", "word", "track-changes", "comments"]
+}
