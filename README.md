@@ -78,7 +78,20 @@ This repo includes a skill for [Claude Code](https://claude.ai/claude-code) that
 
 This skill extends the [original Anthropic docx skill](https://github.com/anthropics/skills/tree/main/skills/docx) which requires Claude to manually manipulate OOXML. Instead, this skill provides an interface (`docx-editor`) that handles all the complexity—Claude just calls simple Python methods like `doc.replace()` or `doc.add_comment()`, making document editing significantly faster and less error-prone.
 
-### Install the skill
+### Install as plugin
+
+```bash
+# Add the marketplace
+/plugin marketplace add pablospe/docx-editor
+
+# Install the plugin
+/plugin install docx-editor@docx-editor-marketplace
+
+# Install dependencies
+pip install docx-editor python-docx
+```
+
+### Manual install (alternative)
 
 ```bash
 # Install dependencies
