@@ -1,0 +1,6 @@
+{
+  "docx": {
+    "command": "uvx",
+    "args": ["mcp-server-docx"]
+  }
+}
