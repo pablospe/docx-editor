@@ -105,3 +105,50 @@ with Document.open("reviewed.docx") as doc:
 
     doc.save()
 ```
+
+## MCP Server (Optional)
+
+For faster performance when making multiple edits, use the MCP (Model Context Protocol) server. It keeps documents loaded between operations, making repeated edits 10-30x faster.
+
+### Installation
+
+```bash
+pip install docx-editor[mcp]
+```
+
+### Running the Server
+
+```bash
+# Via console script
+mcp-server-docx
+
+# Or via Python module
+python -m docx_editor_mcp
+```
+
+### Claude Code Configuration
+
+The docx-editor plugin automatically configures the MCP server when installed. For manual configuration:
+
+```bash
+claude mcp add docx -- uvx mcp-server-docx
+```
+
+Or add to your `.mcp.json`:
+
+```json
+{
+  "docx": {
+    "command": "uvx",
+    "args": ["mcp-server-docx"]
+  }
+}
+```
+
+### Available MCP Tools
+
+- **Document lifecycle**: `open_document`, `save_document`, `close_document`, `reload_document`, `force_save`
+- **Track changes**: `replace_text`, `delete_text`, `insert_after`, `insert_before`
+- **Comments**: `add_comment`, `list_comments`, `reply_to_comment`, `resolve_comment`, `delete_comment`
+- **Revisions**: `list_revisions`, `accept_revision`, `reject_revision`, `accept_all`, `reject_all`
+- **Read**: `find_text`, `count_matches`, `get_visible_text`
