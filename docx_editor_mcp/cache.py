@@ -1,10 +1,13 @@
 """Document cache for MCP server with LRU eviction and external change detection."""
 
 import getpass
+import logging
 import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_path(path: str) -> str:
@@ -27,7 +30,9 @@ class CachedDocument:
     dirty: bool = field(default=False)
 
     def __post_init__(self):
-        """Initialize mtime from file if it exists."""
+        """Normalize path and initialize mtime from file if it exists."""
+        # Normalize path to ensure consistency with cache key
+        self.path = normalize_path(self.path)
         if os.path.exists(self.path):
             self.mtime = os.path.getmtime(self.path)
 
@@ -124,7 +129,11 @@ class DocumentCache:
         yield from self._cache.values()
 
     def _evict_lru(self) -> None:
-        """Evict the least recently used document."""
+        """Evict the least recently used document.
+
+        If the document is dirty, saves it first. If save fails,
+        the document is NOT evicted to prevent data loss.
+        """
         if not self._cache:
             return
 
@@ -132,9 +141,13 @@ class DocumentCache:
         lru_path = min(self._cache, key=lambda p: self._cache[p].last_access)
         lru_doc = self._cache[lru_path]
 
-        # Save if dirty
+        # Save if dirty - don't evict if save fails
         if lru_doc.dirty:
-            lru_doc.document.save()
+            try:
+                lru_doc.document.save()
+            except Exception:
+                logger.exception("Failed to save during eviction: %s", lru_path)
+                return  # Don't evict if save failed
 
         # Remove from cache
         del self._cache[lru_path]

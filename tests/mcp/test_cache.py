@@ -1,12 +1,9 @@
 """Tests for DocumentCache following TDD."""
 
 import os
-import tempfile
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 class TestPathNormalization:
@@ -245,15 +242,11 @@ class TestDocumentCache:
             (tmp_path / f"doc{i}.docx").touch()
 
         # Add first two documents
-        doc1 = CachedDocument(
-            path=str(tmp_path / "doc0.docx"), document=MagicMock(), author="Tester"
-        )
+        doc1 = CachedDocument(path=str(tmp_path / "doc0.docx"), document=MagicMock(), author="Tester")
         cache.put(doc1)
         time.sleep(0.01)
 
-        doc2 = CachedDocument(
-            path=str(tmp_path / "doc1.docx"), document=MagicMock(), author="Tester"
-        )
+        doc2 = CachedDocument(path=str(tmp_path / "doc1.docx"), document=MagicMock(), author="Tester")
         cache.put(doc2)
         time.sleep(0.01)
 
@@ -262,9 +255,7 @@ class TestDocumentCache:
         time.sleep(0.01)
 
         # Add third document - should evict doc2 (LRU)
-        doc3 = CachedDocument(
-            path=str(tmp_path / "doc2.docx"), document=MagicMock(), author="Tester"
-        )
+        doc3 = CachedDocument(path=str(tmp_path / "doc2.docx"), document=MagicMock(), author="Tester")
         cache.put(doc3)
 
         assert cache.size == 2
@@ -283,16 +274,12 @@ class TestDocumentCache:
         (tmp_path / "doc1.docx").touch()
 
         mock_doc = MagicMock()
-        doc1 = CachedDocument(
-            path=str(tmp_path / "doc0.docx"), document=mock_doc, author="Tester"
-        )
+        doc1 = CachedDocument(path=str(tmp_path / "doc0.docx"), document=mock_doc, author="Tester")
         doc1.mark_dirty()
         cache.put(doc1)
 
         # Add second document - should trigger eviction and save
-        doc2 = CachedDocument(
-            path=str(tmp_path / "doc1.docx"), document=MagicMock(), author="Tester"
-        )
+        doc2 = CachedDocument(path=str(tmp_path / "doc1.docx"), document=MagicMock(), author="Tester")
         cache.put(doc2)
 
         # Verify save was called on the evicted document
