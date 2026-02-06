@@ -25,8 +25,8 @@ class DocxMCPServer:
                 try:
                     cached_doc.document.save()
                     logger.info(f"Saved dirty document: {cached_doc.path}")
-                except Exception as e:
-                    logger.error(f"Failed to save {cached_doc.path}: {e}")
+                except Exception:
+                    logger.exception("Failed to save %s", cached_doc.path)
                     # Continue with other documents (best-effort)
 
         # Clear cache
