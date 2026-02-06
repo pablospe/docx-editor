@@ -1,9 +1,6 @@
 """Tests for MCP Server following TDD."""
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 
 class TestMCPServer:

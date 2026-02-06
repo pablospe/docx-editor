@@ -1,7 +1,7 @@
 """MCP Tools for docx_editor operations."""
 
 import os
-from typing import Any
+from typing import Any, cast
 
 from docx_editor import Document
 from docx_editor.exceptions import TextNotFoundError
@@ -10,13 +10,18 @@ from .cache import CachedDocument, normalize_path
 from .server import DocxMCPServer
 
 
-def _get_cached_or_error(server: DocxMCPServer, path: str) -> tuple[CachedDocument | None, dict | None]:
-    """Get cached document or return error dict."""
+def _get_cached_or_error(server: DocxMCPServer, path: str) -> CachedDocument | dict[str, Any]:
+    """Get cached document or return error dict.
+
+    Returns:
+        CachedDocument if found, or error dict if not open.
+    """
     normalized = normalize_path(path)
     cached = server.cache.get(normalized)
     if not cached:
-        return None, {"success": False, "error": f"Document not open: {path}"}
-    return cached, None
+        error: dict[str, Any] = {"success": False, "error": f"Document not open: {path}"}
+        return error
+    return cached
 
 
 def _check_external_changes(cached: CachedDocument) -> dict | None:
@@ -101,9 +106,10 @@ def save_document(server: DocxMCPServer, path: str) -> dict[str, Any]:
     Returns:
         Result dict with success status.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     # Check for external changes
     ext_error = _check_external_changes(cached)
@@ -129,9 +135,10 @@ def close_document(server: DocxMCPServer, path: str) -> dict[str, Any]:
     Returns:
         Result dict with success status and optional warning.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     result = {"success": True, "path": cached.path}
 
@@ -158,9 +165,10 @@ def reload_document(server: DocxMCPServer, path: str) -> dict[str, Any]:
     Returns:
         Result dict with success status and optional warning.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     result = {"success": True, "path": cached.path}
     author = cached.author
@@ -201,9 +209,10 @@ def force_save(server: DocxMCPServer, path: str) -> dict[str, Any]:
     Returns:
         Result dict with success status.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     try:
         cached.document.save()
@@ -238,9 +247,10 @@ def replace_text(
     Returns:
         Result dict with success status and change_id.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -273,9 +283,10 @@ def delete_text(
     Returns:
         Result dict with success status and change_id.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -310,9 +321,10 @@ def insert_after(
     Returns:
         Result dict with success status and change_id.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -347,9 +359,10 @@ def insert_before(
     Returns:
         Result dict with success status and change_id.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -387,9 +400,10 @@ def add_comment(
     Returns:
         Result dict with success status and comment_id.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -420,9 +434,10 @@ def list_comments(
     Returns:
         Result dict with success status and comments list.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     try:
         comments = cached.document.list_comments(author=author)
@@ -460,9 +475,10 @@ def reply_to_comment(
     Returns:
         Result dict with success status and new comment_id.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -491,9 +507,10 @@ def resolve_comment(
     Returns:
         Result dict with success status.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -524,9 +541,10 @@ def delete_comment(
     Returns:
         Result dict with success status.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -562,9 +580,10 @@ def list_revisions(
     Returns:
         Result dict with success status and revisions list.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     try:
         revisions = cached.document.list_revisions(author=author)
@@ -599,9 +618,10 @@ def accept_revision(
     Returns:
         Result dict with success status.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -632,9 +652,10 @@ def reject_revision(
     Returns:
         Result dict with success status.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -665,9 +686,10 @@ def accept_all(
     Returns:
         Result dict with success status and count.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -697,9 +719,10 @@ def reject_all(
     Returns:
         Result dict with success status and count.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     ext_error = _check_external_changes(cached)
     if ext_error:
@@ -734,9 +757,10 @@ def find_text(
     Returns:
         Result dict with success status and found flag.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     try:
         match = cached.document.find_text(text)
@@ -760,9 +784,10 @@ def count_matches(
     Returns:
         Result dict with success status and count.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     try:
         count = cached.document.count_matches(text)
@@ -784,9 +809,10 @@ def get_visible_text(
     Returns:
         Result dict with success status and text.
     """
-    cached, error = _get_cached_or_error(server, path)
-    if error:
-        return error
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
 
     try:
         text = cached.document.get_visible_text()

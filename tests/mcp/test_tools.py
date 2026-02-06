@@ -3,8 +3,7 @@
 import os
 import shutil
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -383,9 +382,7 @@ class TestCommentTools:
         open_document(server, str(mcp_temp_docx), author="Tester")
         add_result = add_comment(server, str(mcp_temp_docx), "quick brown fox", "Original")
 
-        result = reply_to_comment(
-            server, str(mcp_temp_docx), add_result["comment_id"], "Reply text"
-        )
+        result = reply_to_comment(server, str(mcp_temp_docx), add_result["comment_id"], "Reply text")
 
         assert result["success"] is True
         assert "comment_id" in result
