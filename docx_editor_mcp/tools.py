@@ -5,12 +5,12 @@ import os
 from typing import Any, cast
 
 from docx_editor import Document
-
-logger = logging.getLogger(__name__)
 from docx_editor.exceptions import TextNotFoundError
 
 from .cache import CachedDocument, normalize_path
 from .server import DocxMCPServer
+
+logger = logging.getLogger(__name__)
 
 
 def _get_cached_or_error(server: DocxMCPServer, path: str) -> CachedDocument | dict[str, Any]:
