@@ -1,9 +1,12 @@
 """MCP Tools for docx_editor operations."""
 
+import logging
 import os
 from typing import Any, cast
 
 from docx_editor import Document
+
+logger = logging.getLogger(__name__)
 from docx_editor.exceptions import TextNotFoundError
 
 from .cache import CachedDocument, normalize_path
@@ -149,7 +152,7 @@ def close_document(server: DocxMCPServer, path: str) -> dict[str, Any]:
     try:
         cached.document.close()
     except Exception:
-        pass  # Best effort
+        logger.debug("Failed to close document: %s", path)
 
     server.cache.remove(path)
     return result
@@ -178,7 +181,7 @@ def reload_document(server: DocxMCPServer, path: str) -> dict[str, Any]:
     try:
         cached.document.close()
     except Exception:
-        pass
+        logger.debug("Failed to close document during reload: %s", path)
 
     # Remove from cache
     server.cache.remove(path)
