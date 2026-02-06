@@ -19,6 +19,12 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+[project.optional-dependencies]
+mcp = ["mcp>=1.0.0"]
+
+[project.scripts]
+mcp-server-docx = "docx_editor_mcp.server:main"
+
 [project.urls]
 Homepage = "https://pablospe.github.io/docx-editor/"
 Repository = "https://github.com/pablospe/docx-editor"
@@ -43,7 +49,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["docx_editor"]
+packages = ["docx_editor", "docx_editor_mcp"]
 
 [tool.ty.environment]
 python = "./.venv"
@@ -64,7 +70,7 @@ ignore = ["B008", "TID252"]
 "tests/*" = ["S101"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["docx_editor"]
+known-first-party = ["docx_editor", "docx_editor_mcp"]
 
 [tool.ruff.format]
 preview = true
@@ -74,4 +80,4 @@ skip_empty = true
 
 [tool.coverage.run]
 branch = true
-source = ["docx_editor"]
+source = ["docx_editor", "docx_editor_mcp"]
