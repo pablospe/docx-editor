@@ -85,7 +85,7 @@ def benchmark_speed(iterations: int = 50):
 
     # Build a larger doc for speed testing
     doc, tmp = build_multi_paragraph_doc(30)
-    paragraphs = doc.list_paragraphs()
+    doc.list_paragraphs()
     save_path = doc.save()
     doc.close()
 
@@ -242,7 +242,7 @@ def benchmark_accuracy():
 
         marker = f"[P{para_idx:02d}]"
         try:
-            doc1.replace("committee", f"EDITED", occurrence=old_occ)
+            doc1.replace("committee", "EDITED", occurrence=old_occ)
             vis = doc1.get_visible_text()
 
             # Check where "EDITED" landed
@@ -263,7 +263,7 @@ def benchmark_accuracy():
                 print(f"    occ={old_occ}: targeted {marker}, landed in {landed_para} ← WRONG")
             else:
                 plain_correct += 1  # Can't verify
-        except Exception as e:
+        except Exception:
             plain_error += 1
             # After first wrong edit, subsequent occurrences shift further
             # This is expected cascade failure
@@ -410,7 +410,7 @@ def benchmark_batch_vs_individual():
     print(f"  Speedup:              {speedup:.1f}x")
     print()
     print(f"  Individual: {n_edits} x list_paragraphs() + {n_edits} x replace()")
-    print(f"  Batch:      1 x list_paragraphs() + 1 x batch_edit()")
+    print("  Batch:      1 x list_paragraphs() + 1 x batch_edit()")
     print()
 
     shutil.rmtree(persist_dir, ignore_errors=True)
