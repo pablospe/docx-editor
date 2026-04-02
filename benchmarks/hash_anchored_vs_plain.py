@@ -85,7 +85,6 @@ def benchmark_speed(iterations: int = 50):
 
     # Build a larger doc for speed testing
     doc, tmp = build_multi_paragraph_doc(30)
-    doc.list_paragraphs()
     save_path = doc.save()
     doc.close()
 
