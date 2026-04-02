@@ -45,7 +45,7 @@ from .exceptions import (
     WorkspaceSyncError,
     XMLError,
 )
-from .track_changes import Revision
+from .track_changes import EditOperation, Revision
 from .xml_editor import (
     ParagraphRef,
     TextMap,
@@ -59,6 +59,7 @@ from .xml_editor import (
 __all__ = [
     # Main classes
     "Document",
+    "EditOperation",
     "Revision",
     "Comment",
     # Exceptions

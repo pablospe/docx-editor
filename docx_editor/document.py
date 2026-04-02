@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .comments import Comment, CommentManager
 from .exceptions import WorkspaceSyncError
-from .track_changes import Revision, RevisionManager
+from .track_changes import EditOperation, Revision, RevisionManager
 from .workspace import Workspace
 from .xml_editor import DocxXMLEditor, build_text_map, compute_paragraph_hash
 
@@ -262,6 +262,31 @@ class Document:
         """
         self._ensure_open()
         return self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
+
+    def batch_edit(self, operations: list[EditOperation]) -> list[int]:
+        """Apply multiple edits atomically with upfront hash validation.
+
+        All paragraph hashes are validated before any edits are applied.
+        If any hash is stale, the entire batch is rejected. Edits are applied
+        in reverse paragraph order so a single list_paragraphs() snapshot
+        suffices for the entire batch.
+
+        Args:
+            operations: List of EditOperation objects
+
+        Returns:
+            List of change IDs (one per operation, in input order)
+
+        Example:
+            refs = doc.list_paragraphs()
+            doc.batch_edit([
+                EditOperation(action="replace", find="old", replace_with="new", paragraph="P20#a7b2"),
+                EditOperation(action="delete", text="remove", paragraph="P15#f3c1"),
+                EditOperation(action="insert_after", anchor="here", text=" added", paragraph="P3#b2c4"),
+            ])
+        """
+        self._ensure_open()
+        return self._revision_manager.batch_edit(operations)
 
     # ==================== Comments API ====================
 

@@ -22,6 +22,19 @@ from .xml_editor import (
 
 
 @dataclass
+class EditOperation:
+    """A single edit operation for batch processing."""
+
+    action: Literal["replace", "delete", "insert_after", "insert_before"]
+    paragraph: str  # Required: hash-anchored ref like "P3#a7b2"
+    find: str | None = None  # For replace
+    replace_with: str | None = None  # For replace
+    text: str | None = None  # For delete (text to delete) or insert (text to insert)
+    anchor: str | None = None  # For insert_after/insert_before
+    occurrence: int = 0
+
+
+@dataclass
 class Revision:
     """Represents a tracked change (insertion or deletion)."""
 
@@ -84,6 +97,80 @@ class RevisionManager:
         """Find the nth occurrence of text within a single paragraph."""
         text_map = build_text_map(paragraph)
         return find_in_text_map(text_map, text, occurrence)
+
+    def batch_edit(self, operations: list[EditOperation]) -> list[int]:
+        """Apply multiple edits atomically with upfront hash validation.
+
+        Validates all paragraph hashes before applying any edits.
+        Applies edits in reverse paragraph order so earlier paragraphs'
+        hashes remain valid throughout.
+
+        Args:
+            operations: List of EditOperation objects (each must have paragraph set)
+
+        Returns:
+            List of change IDs, one per operation (in original input order)
+
+        Raises:
+            HashMismatchError: If any paragraph hash is stale (no edits applied)
+            ValueError: If any operation is missing required fields
+        """
+        if not operations:
+            return []
+
+        # Parse and validate all refs upfront
+        parsed: list[tuple[int, ParagraphRef, EditOperation]] = []
+        for i, op in enumerate(operations):
+            if not op.paragraph:
+                raise ValueError(f"Operation {i}: paragraph reference is required for batch mode")
+            ref = ParagraphRef.parse(op.paragraph)
+            self._resolve_paragraph(ref)  # Raises HashMismatchError if stale
+            parsed.append((i, ref, op))
+
+        # Sort by paragraph index descending (reverse order) for application
+        # Stable sort preserves original order for same-paragraph edits
+        parsed.sort(key=lambda x: x[1].index, reverse=True)
+
+        # Apply edits in reverse paragraph order
+        results = [0] * len(operations)
+        for original_idx, _ref, op in parsed:
+            change_id = self._apply_single_edit(op)
+            results[original_idx] = change_id
+
+        return results
+
+    def _apply_single_edit(self, op: EditOperation) -> int:
+        """Apply a single edit operation. Paragraph hash was already validated."""
+        ref = ParagraphRef.parse(op.paragraph)
+        p = self.editor.dom.getElementsByTagName("w:p")[ref.index - 1]
+
+        if op.action == "replace":
+            if not op.find or op.replace_with is None:
+                raise ValueError("replace requires 'find' and 'replace_with'")
+            match = self._find_in_paragraph(p, op.find, op.occurrence)
+            if match is None:
+                raise TextNotFoundError(f"Text not found in paragraph P{ref.index}: '{op.find}'")
+            return self._replace_across_nodes(match, op.replace_with)
+
+        elif op.action == "delete":
+            if not op.text:
+                raise ValueError("delete requires 'text'")
+            match = self._find_in_paragraph(p, op.text, op.occurrence)
+            if match is None:
+                raise TextNotFoundError(f"Text not found in paragraph P{ref.index}: '{op.text}'")
+            return self._delete_across_nodes(match)
+
+        elif op.action in ("insert_after", "insert_before"):
+            if not op.anchor or op.text is None:
+                raise ValueError(f"{op.action} requires 'anchor' and 'text'")
+            match = self._find_in_paragraph(p, op.anchor, op.occurrence)
+            if match is None:
+                raise TextNotFoundError(f"Anchor not found in paragraph P{ref.index}: '{op.anchor}'")
+            position = "after" if op.action == "insert_after" else "before"
+            return self._insert_near_match(match, op.text, position)
+
+        else:
+            raise ValueError(f"Unknown action: {op.action}")
 
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.
