@@ -22,4 +22,4 @@ Inspired by the "hash-anchored edit" approach (oh-my-openagent), we add content-
 
 - Affected specs: `specs/text-operations`
 - Affected code: `docx_editor/document.py`, `docx_editor/track_changes.py`, `docx_editor/xml_editor.py`, `docx_editor/exceptions.py`
-- **Non-breaking**: All new parameters are optional. Existing API is fully preserved.
+- **Breaking**: `paragraph` parameter is now required on `replace()`, `delete()`, `insert_after()`, `insert_before()`.

@@ -246,7 +246,10 @@ class TestBatchEdit:
 
         vis = doc.get_visible_text()
         assert "REPLACED" in vis
-        assert "item 5" not in vis or "[P05]" in vis  # "item 5" deleted
+        # Verify "item 5" was deleted (but [P05] marker remains in the paragraph)
+        assert "[P05]" in vis
+        p05_line = [line for line in vis.split("\n") if "[P05]" in line][0]
+        assert "item 5" not in p05_line
         assert "[APPENDED]" in vis
 
     def test_batch_missing_paragraph_raises(self, multi_para_doc):

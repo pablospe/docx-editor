@@ -179,16 +179,16 @@ class TestDocumentEdgeCases:
             doc.count_matches("test")
 
         with pytest.raises(ValueError, match="closed"):
-            doc.replace("old", "new", paragraph="dummy")
+            doc.replace("old", "new", paragraph="P1#0000")
 
         with pytest.raises(ValueError, match="closed"):
-            doc.delete("text", paragraph="dummy")
+            doc.delete("text", paragraph="P1#0000")
 
         with pytest.raises(ValueError, match="closed"):
-            doc.insert_after("anchor", "text", paragraph="dummy")
+            doc.insert_after("anchor", "text", paragraph="P1#0000")
 
         with pytest.raises(ValueError, match="closed"):
-            doc.insert_before("anchor", "text", paragraph="dummy")
+            doc.insert_before("anchor", "text", paragraph="P1#0000")
 
         with pytest.raises(ValueError, match="closed"):
             doc.add_comment("anchor", "comment")

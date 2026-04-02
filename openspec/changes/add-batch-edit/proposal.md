@@ -15,5 +15,5 @@ When an LLM issues multiple edits in a single turn, it must currently call `list
 
 - Affected specs: `specs/text-operations`
 - Affected code: `docx_editor/document.py`, `docx_editor/track_changes.py`
-- **Non-breaking**: New method, existing API unchanged
+- **Non-breaking**: New `batch_edit()` method; requires `paragraph` on each operation (consistent with breaking change in `add-paragraph-hash-anchors`)
 - **Depends on**: `add-paragraph-hash-anchors` (uses ParagraphRef, HashMismatchError, _resolve_paragraph)

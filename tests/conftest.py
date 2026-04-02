@@ -13,7 +13,7 @@ def find_ref(doc, text):
     for entry in doc.list_paragraphs():
         if text in entry:
             return entry.split("|")[0]
-    return doc.list_paragraphs()[0].split("|")[0]
+    raise ValueError(f"Paragraph containing '{text}' not found")
 
 
 NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'

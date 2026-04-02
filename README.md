@@ -72,7 +72,7 @@ from docx_editor import Document
 import os
 
 author = os.environ.get("USER") or "Reviewer"
-with Document.open("contract.docx", author=author) as doc:
+with Document.open("contract.docx", author="Editor") as doc:
     # Step 1: List paragraphs with hash-anchored references
     for p in doc.list_paragraphs():
         print(p)
@@ -103,7 +103,7 @@ from docx_editor import Document
 import os
 
 author = os.environ.get("USER") or "Reviewer"
-with Document.open("reviewed.docx", author=author) as doc:
+with Document.open("reviewed.docx", author="Editor") as doc:
     # Get visible text (inserted text included, deleted excluded)
     text = doc.get_visible_text()
 
@@ -128,7 +128,7 @@ Apply multiple edits atomically with upfront hash validation:
 ```python
 from docx_editor import Document, EditOperation
 
-with Document.open("contract.docx", author=author) as doc:
+with Document.open("contract.docx", author="Editor") as doc:
     refs = doc.list_paragraphs()
     doc.batch_edit([
         EditOperation(action="replace", find="old", replace_with="new", paragraph="P2#f3c1"),
