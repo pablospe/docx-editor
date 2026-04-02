@@ -285,6 +285,27 @@ class Document:
         self._ensure_open()
         return self._revision_manager.batch_edit(operations)
 
+    def rewrite_paragraph(self, ref: str, new_text: str) -> None:
+        """Rewrite a paragraph's text with automatic fine-grained tracked changes.
+
+        Diffs the current paragraph text against new_text at word level and
+        generates minimal tracked insertions, deletions, and replacements.
+
+        Args:
+            ref: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            new_text: Desired new text for the paragraph
+
+        Raises:
+            HashMismatchError: If the paragraph hash doesn't match
+            IndexError: If paragraph index is out of range
+
+        Example:
+            refs = doc.list_paragraphs()
+            doc.rewrite_paragraph("P2#f3c1", "The board shall approve the proposal.")
+        """
+        self._ensure_open()
+        self._revision_manager.rewrite_paragraph(ref, new_text)
+
     # ==================== Comments API ====================
 
     def add_comment(self, anchor_text: str, comment: str) -> int:
