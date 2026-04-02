@@ -174,6 +174,32 @@ class RevisionManager:
         else:
             raise ValueError(f"Unknown action: {op.action}")
 
+    def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> None:
+        """Rewrite multiple paragraphs atomically with upfront hash validation."""
+        if not rewrites:
+            return
+
+        # Parse and validate all refs upfront
+        parsed: list[tuple[ParagraphRef, str]] = []
+        seen_indices: set[int] = set()
+        for ref_str, new_text in rewrites:
+            ref = ParagraphRef.parse(ref_str)
+            if ref.index in seen_indices:
+                raise ValueError(
+                    f"Batch contains duplicate paragraph P{ref.index}. "
+                    f"Each paragraph can appear at most once in a batch rewrite."
+                )
+            seen_indices.add(ref.index)
+            self._resolve_paragraph(ref)  # Raises HashMismatchError if stale
+            parsed.append((ref, new_text))
+
+        # Sort by paragraph index descending
+        parsed.sort(key=lambda x: x[0].index, reverse=True)
+
+        # Apply rewrites in reverse paragraph order
+        for ref, new_text in parsed:
+            self.rewrite_paragraph(f"P{ref.index}#{ref.hash}", new_text)
+
     def rewrite_paragraph(self, ref_str: str, new_text: str) -> None:
         """Rewrite a paragraph's text, generating fine-grained tracked changes.
 

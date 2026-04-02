@@ -267,3 +267,54 @@ class TestRewriteParagraph:
             if rPr_elems:
                 b_elems = rPr_elems[0].getElementsByTagName("w:b")
                 assert len(b_elems) > 0, "Inserted text should inherit bold formatting"
+
+
+class TestBatchRewrite:
+    def test_batch_multiple_paragraphs(self, rewrite_doc):
+        """Batch rewrite of multiple paragraphs succeeds."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+
+        doc.batch_rewrite([
+            (refs[0].split("|")[0], "The board shall review and approve."),
+            (refs[2].split("|")[0], "The report is complete."),
+            (refs[4].split("|")[0], "Final decision pending."),
+        ])
+
+        vis = doc.get_visible_text()
+        assert "The board shall review and approve." in vis
+        assert "The report is complete." in vis
+        assert "Final decision pending." in vis
+
+    def test_batch_rejected_on_stale_hash(self, rewrite_doc):
+        """Stale hash in batch rejects entire batch (no changes applied)."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+
+        with pytest.raises(HashMismatchError):
+            doc.batch_rewrite([
+                (refs[0].split("|")[0], "Good text"),
+                ("P3#0000", "Bad hash"),
+            ])
+
+        # Verify no changes were applied (P1 unchanged)
+        vis = doc.get_visible_text()
+        assert "The committee shall review" in vis
+
+    def test_batch_rejected_on_duplicate(self, rewrite_doc):
+        """Duplicate paragraph in batch raises ValueError."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+        ref = refs[0].split("|")[0]
+
+        with pytest.raises(ValueError, match="duplicate"):
+            doc.batch_rewrite([
+                (ref, "First"),
+                (ref, "Second"),
+            ])
+
+    def test_batch_empty(self, rewrite_doc):
+        """Empty batch succeeds with no changes."""
+        doc, _ = rewrite_doc
+        doc.batch_rewrite([])
+        assert len(doc.list_revisions()) == 0

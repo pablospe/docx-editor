@@ -306,6 +306,25 @@ class Document:
         self._ensure_open()
         self._revision_manager.rewrite_paragraph(ref, new_text)
 
+    def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> None:
+        """Rewrite multiple paragraphs atomically with upfront hash validation.
+
+        All paragraph hashes are validated before any rewrites are applied.
+        If any hash is stale, the entire batch is rejected.
+
+        Args:
+            rewrites: List of (ref, new_text) tuples
+
+        Example:
+            refs = doc.list_paragraphs()
+            doc.batch_rewrite([
+                ("P1#a7b2", "Updated first paragraph."),
+                ("P3#c3d4", "Updated third paragraph."),
+            ])
+        """
+        self._ensure_open()
+        self._revision_manager.batch_rewrite(rewrites)
+
     # ==================== Comments API ====================
 
     def add_comment(self, anchor_text: str, comment: str) -> int:
