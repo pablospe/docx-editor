@@ -411,6 +411,55 @@ with Document.open("file.docx", author=author) as doc:
 
 If any hash is stale, the entire batch is rejected before any edits are applied.
 
+### Paragraph Rewrite (Alternative to Surgical Edits)
+
+Use `rewrite_paragraph()` when you need to restructure a sentence, reword multiple parts, or the search text would be ambiguous. Instead of chaining multiple `replace()` / `delete()` / `insert_after()` calls, just specify what the paragraph should say — the system diffs old vs new text at word level and generates fine-grained tracked changes automatically.
+
+**When to use `rewrite_paragraph()` vs surgical methods:**
+
+| Situation | Use | Why |
+|-----------|-----|-----|
+| Change one word ("30" → "60") | `replace()` | Token-efficient, guaranteed minimal track changes |
+| Delete a phrase | `delete()` | Direct, one `<w:del>` |
+| Reword a sentence | `rewrite_paragraph()` | One call vs chaining 3+ edits |
+| Multiple changes in same paragraph | `rewrite_paragraph()` | No occurrence counting needed |
+| Ambiguous search text | `rewrite_paragraph()` | Zero ambiguity — hash-anchored, full paragraph |
+
+**Example: rewrite is clearly better** — restructuring a sentence with multiple changes:
+
+```python
+# BEFORE (chaining 3 surgical edits — error-prone):
+doc.replace("committee", "board", paragraph="P5#a7b2")
+# Oops — need fresh hash now since paragraph changed:
+refs = doc.list_paragraphs()
+doc.replace("shall review and proceed with", "must evaluate", paragraph=refs[4].split("|")[0])
+refs = doc.list_paragraphs()
+doc.replace("the committee", "the board", paragraph=refs[4].split("|")[0])
+
+# AFTER (one rewrite call — zero ambiguity):
+doc.rewrite_paragraph("P5#a7b2",
+    "The board must evaluate item 5. The report includes conclusions from the board.")
+```
+
+**Example: surgical is better** — simple single-word change:
+
+```python
+# Simple, token-efficient, guaranteed minimal track changes:
+doc.replace("30", "60", paragraph="P2#f3c1")
+```
+
+**Batch rewrite** for multiple paragraphs at once:
+
+```python
+with Document.open("contract.docx", author=author) as doc:
+    refs = doc.list_paragraphs()
+    doc.batch_rewrite([
+        (refs[1].split("|")[0], "Updated paragraph 2 text here."),
+        (refs[4].split("|")[0], "Updated paragraph 5 text here."),
+    ])
+    doc.save()
+```
+
 ### Workflow for Large Documents
 
 1. **List paragraphs** with hash-anchored references:
