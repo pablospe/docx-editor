@@ -269,6 +269,91 @@ class TestRewriteParagraph:
                 assert len(b_elems) > 0, "Inserted text should inherit bold formatting"
 
 
+class TestRewriteDuplicateText:
+    """Tests for paragraphs containing duplicate text (Bug #1 fix)."""
+
+    @pytest.fixture
+    def dup_doc(self):
+        """Build a document with a paragraph containing repeated words."""
+        test_data = Path(__file__).parent / "test_data" / "simple.docx"
+        tmp = tempfile.mkdtemp(prefix="rewrite_dup_test_")
+        dest = Path(tmp) / "test.docx"
+        shutil.copy(test_data, dest)
+
+        doc = Document.open(dest)
+        doc.accept_all()
+        doc.save()
+        doc.close()
+
+        doc = Document.open(dest, force_recreate=True)
+        editor = doc._document_editor
+        body = editor.dom.getElementsByTagName("w:body")[0]
+
+        for p in list(editor.dom.getElementsByTagName("w:p")):
+            if p.parentNode == body:
+                body.removeChild(p)
+
+        sect_pr = editor.dom.getElementsByTagName("w:sectPr")
+        insert_before = sect_pr[0] if sect_pr else None
+
+        # Paragraph with "the" appearing 3 times
+        text = "The cat and the dog and the bird"
+        p_xml = f'<w:p><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>'
+        nodes = editor._parse_fragment(p_xml)
+        for node in nodes:
+            if insert_before:
+                body.insertBefore(node, insert_before)
+            else:
+                body.appendChild(node)
+
+        editor.save()
+        save_path = doc.save()
+        doc.close()
+
+        doc = Document.open(save_path, force_recreate=True)
+        yield doc, Path(tmp)
+        doc.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_replace_second_occurrence(self, dup_doc):
+        """Replacing only the second 'the' should not touch the first or third."""
+        doc, _ = dup_doc
+        refs = doc.list_paragraphs()
+        ref = refs[0].split("|")[0]
+
+        # Change "the dog" to "the hound" — second "the" stays, "dog" becomes "hound"
+        doc.rewrite_paragraph(ref, "The cat and the hound and the bird")
+
+        vis = doc.get_visible_text()
+        assert "The cat and the hound and the bird" in vis
+
+        revisions = doc.list_revisions()
+        del_texts = [r.text for r in revisions if r.type == "deletion"]
+        ins_texts = [r.text for r in revisions if r.type == "insertion"]
+        assert any("dog" in t for t in del_texts)
+        assert any("hound" in t for t in ins_texts)
+        # "the" should NOT appear in deletions or insertions
+        assert not any(t.strip() == "the" for t in del_texts)
+        assert not any(t.strip() == "the" for t in ins_texts)
+
+    def test_replace_last_occurrence(self, dup_doc):
+        """Replacing only the last 'the' should not touch earlier occurrences."""
+        doc, _ = dup_doc
+        refs = doc.list_paragraphs()
+        ref = refs[0].split("|")[0]
+
+        doc.rewrite_paragraph(ref, "The cat and the dog and a bird")
+
+        vis = doc.get_visible_text()
+        assert "The cat and the dog and a bird" in vis
+
+        revisions = doc.list_revisions()
+        del_texts = [r.text for r in revisions if r.type == "deletion"]
+        ins_texts = [r.text for r in revisions if r.type == "insertion"]
+        assert any("the" in t.lower() for t in del_texts)
+        assert any("a" == t.strip() for t in ins_texts)
+
+
 class TestRewriteWithTrackedChanges:
     def test_rewrite_after_prior_edit(self, rewrite_doc):
         """Rewriting a paragraph that already has tracked changes works."""

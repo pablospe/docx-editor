@@ -264,18 +264,49 @@ class RevisionManager:
 
             if tag == "replace":
                 match_text = old_text[old_char_start:old_char_end]
-                match = find_in_text_map(text_map, match_text)
-                if match is not None:
-                    self._replace_across_nodes(match, new_fragment)
+                match = self._find_match_at_position(
+                    text_map, match_text, old_char_start
+                )
+                self._replace_across_nodes(match, new_fragment)
 
             elif tag == "delete":
                 match_text = old_text[old_char_start:old_char_end]
-                match = find_in_text_map(text_map, match_text)
-                if match is not None:
-                    self._delete_across_nodes(match)
+                match = self._find_match_at_position(
+                    text_map, match_text, old_char_start
+                )
+                self._delete_across_nodes(match)
 
             elif tag == "insert":
                 self._rewrite_insert_at(p, text_map, old_char_start, new_fragment)
+
+    def _find_match_at_position(
+        self, text_map: TextMap, search: str, expected_pos: int
+    ) -> TextMapMatch:
+        """Find text at an expected character position in the text map.
+
+        Unlike find_in_text_map which finds the first occurrence, this
+        verifies the match is at the expected position. Used by
+        rewrite_paragraph() to avoid matching the wrong occurrence when
+        the same text appears multiple times in a paragraph.
+
+        Raises RevisionError if the text is not found at the expected position.
+        """
+        idx = text_map.find(search, expected_pos)
+        if idx == -1 or idx != expected_pos:
+            raise RevisionError(
+                f"Rewrite failed: could not locate '{search}' at position {expected_pos}"
+            )
+        end = idx + len(search)
+        positions = text_map.get_nodes_for_range(idx, end)
+        if positions:
+            first_ins = positions[0].is_inside_ins
+            spans = any(p.is_inside_ins != first_ins for p in positions)
+        else:
+            spans = False
+        return TextMapMatch(
+            start=idx, end=end, text=search,
+            positions=positions, spans_boundary=spans,
+        )
 
     def _rewrite_insert_at(self, paragraph, text_map: TextMap, char_pos: int, text: str) -> None:
         """Insert text at a character position within a paragraph.
