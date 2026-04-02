@@ -264,9 +264,9 @@ class TestRewriteParagraph:
         editor = doc._document_editor
         for ins_elem in editor.dom.getElementsByTagName("w:ins"):
             rPr_elems = ins_elem.getElementsByTagName("w:rPr")
-            if rPr_elems:
-                b_elems = rPr_elems[0].getElementsByTagName("w:b")
-                assert len(b_elems) > 0, "Inserted text should inherit bold formatting"
+            assert len(rPr_elems) > 0, "Inserted run should have rPr"
+            b_elems = rPr_elems[0].getElementsByTagName("w:b")
+            assert len(b_elems) > 0, "Inserted text should inherit bold formatting"
 
 
 class TestRewriteDuplicateText:

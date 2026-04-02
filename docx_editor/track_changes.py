@@ -354,9 +354,7 @@ class RevisionManager:
                 return
 
             ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
-            ins_ancestor_ref = self._find_ancestor(run, "w:ins")
-            insert_ref = ins_ancestor_ref if ins_ancestor_ref else run
-            self.editor.insert_after(insert_ref, ins_xml)
+            self.editor.insert_after(run, ins_xml)
             return
 
         # Insert at a position within the text
