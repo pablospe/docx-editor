@@ -12,21 +12,16 @@ The ultimate goal of this project is producing **high-quality tracked changes** 
 
 ### When to Use Rewrite vs Surgical Methods
 
-Both methods produce proper tracked changes. The choice depends on the edit:
+**Default: always use surgical methods** (`replace`, `delete`, `insert_after`, `insert_before`, `batch_edit`).
 
-**Use `replace()` / `delete()` / `insert_after()` / `insert_before()` when:**
-- Making a single, precise change (e.g., "30" → "60", delete one phrase)
-- The change is simple and unambiguous — no occurrence confusion
-- Token efficiency matters (only the changed word is sent, not the whole paragraph)
-- You want guaranteed minimal track changes (exactly one `<w:del>` + `<w:ins>`)
+**Use `rewrite_paragraph()` only when the edit cannot be decomposed into independent find→replace pairs:**
+- **Sentence restructuring** — the grammar or clause order changes, not just word swaps
+- **Reordering** — words, items, or clauses move to different positions
+- **Intertwined changes** — edits overlap or depend on each other so they can't be applied independently
 
-**Use `rewrite_paragraph()` when:**
-- Restructuring a sentence or rewriting multiple parts of a paragraph at once
-- The search text would be ambiguous or hard to specify precisely
-- You'd otherwise need to chain 3+ surgical edits on the same paragraph
-- The paragraph is short enough that outputting the full text is not wasteful
+**Use surgical methods when** each change is an independent substitution — even if there are many. Five independent word swaps → `batch_edit`, not `rewrite_paragraph`.
 
-A single-word change via `rewrite_paragraph()` produces identical track changes to `replace()` — it's a degenerate case. The difference is only in token cost (rewrite sends the full paragraph text).
+This criterion is designed to be mechanical, not judgmental: "Can each change be expressed as an independent find→replace?" If yes → surgical. If no → rewrite.
 
 ## What Changes
 

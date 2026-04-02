@@ -411,41 +411,46 @@ with Document.open("file.docx", author=author) as doc:
 
 If any hash is stale, the entire batch is rejected before any edits are applied.
 
-### Paragraph Rewrite (Alternative to Surgical Edits)
+### Paragraph Rewrite (Fallback for Structural Edits)
 
-Use `rewrite_paragraph()` when you need to restructure a sentence, reword multiple parts, or the search text would be ambiguous. Instead of chaining multiple `replace()` / `delete()` / `insert_after()` calls, just specify what the paragraph should say — the system diffs old vs new text at word level and generates fine-grained tracked changes automatically.
+**Default: always use surgical methods** (`replace`, `delete`, `insert_after`, `insert_before`, `batch_edit`).
 
-**When to use `rewrite_paragraph()` vs surgical methods:**
+**Use `rewrite_paragraph()` only when the edit cannot be decomposed into independent find→replace pairs.** This happens when:
+- **Sentence restructuring** — the grammar or clause order changes, not just word swaps
+- **Reordering** — words, items, or clauses move to different positions
+- **Intertwined changes** — edits overlap or depend on each other so they can't be applied independently
 
-| Situation | Use | Why |
-|-----------|-----|-----|
-| Change one word ("30" → "60") | `replace()` | Token-efficient, guaranteed minimal track changes |
-| Delete a phrase | `delete()` | Direct, one `<w:del>` |
-| Reword a sentence | `rewrite_paragraph()` | One call vs chaining 3+ edits |
-| Multiple changes in same paragraph | `rewrite_paragraph()` | No occurrence counting needed |
-| Ambiguous search text | `rewrite_paragraph()` | Zero ambiguity — hash-anchored, full paragraph |
+**Use surgical methods when** each change is an independent substitution, even if there are many of them. Five independent word swaps → `batch_edit`, not `rewrite_paragraph`.
 
-**Example: rewrite is clearly better** — restructuring a sentence with multiple changes:
+**Examples — surgical is correct:**
 
 ```python
-# BEFORE (chaining 3 surgical edits — error-prone):
-doc.replace("committee", "board", paragraph="P5#a7b2")
-# Oops — need fresh hash now since paragraph changed:
-refs = doc.list_paragraphs()
-doc.replace("shall review and proceed with", "must evaluate", paragraph=refs[4].split("|")[0])
-refs = doc.list_paragraphs()
-doc.replace("the committee", "the board", paragraph=refs[4].split("|")[0])
+# Single word swap — use replace():
+doc.replace("30", "60", paragraph="P2#f3c1")
 
-# AFTER (one rewrite call — zero ambiguity):
-doc.rewrite_paragraph("P5#a7b2",
-    "The board must evaluate item 5. The report includes conclusions from the board.")
+# Multiple independent swaps — use batch_edit():
+# "CFO" → "Finance Director", "audit committee" → "board", "December 31st" → "January 15th"
+doc.batch_edit([
+    {"paragraph": "P5#a7b2", "find": "CFO", "replace": "Finance Director"},
+    {"paragraph": "P5#a7b2", "find": "audit committee", "replace": "board"},
+    {"paragraph": "P5#a7b2", "find": "December 31st", "replace": "January 15th"},
+])
 ```
 
-**Example: surgical is better** — simple single-word change:
+**Examples — rewrite is correct:**
 
 ```python
-# Simple, token-efficient, guaranteed minimal track changes:
-doc.replace("30", "60", paragraph="P2#f3c1")
+# Rephrasing (sentence structure changes completely):
+# "The committee recommends that the timeline be extended by three months"
+# → "The board has approved a three-month extension"
+doc.rewrite_paragraph("P5#a7b2",
+    "The board has approved a three-month extension for further stakeholder review.")
+
+# Reordering items in a list:
+# "final report, executive summary, and presentation slides"
+# → "presentation slides, final report, and executive summary"
+doc.rewrite_paragraph("P3#c4d5",
+    "Deliverables include the presentation slides, final report, and executive summary.")
 ```
 
 **Batch rewrite** for multiple paragraphs at once:
@@ -454,8 +459,8 @@ doc.replace("30", "60", paragraph="P2#f3c1")
 with Document.open("contract.docx", author=author) as doc:
     refs = doc.list_paragraphs()
     doc.batch_rewrite([
-        (refs[1].split("|")[0], "Updated paragraph 2 text here."),
-        (refs[4].split("|")[0], "Updated paragraph 5 text here."),
+        (refs[1].split("|")[0], "Rephrased paragraph 2 text here."),
+        (refs[4].split("|")[0], "Restructured paragraph 5 text here."),
     ])
     doc.save()
 ```
