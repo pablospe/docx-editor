@@ -339,9 +339,89 @@ def _get_fresh_hash(doc, para_index):
     return ref.split("#")[1]
 
 
+def benchmark_batch_vs_individual():
+    """Compare batch_edit() vs N individual calls."""
+    from docx_editor import EditOperation
+
+    print("=" * 60)
+    print("BATCH vs INDIVIDUAL BENCHMARK (30-paragraph document)")
+    print("=" * 60)
+
+    # Build doc and save
+    doc, tmp = build_multi_paragraph_doc(30)
+    save_path = doc.save()
+    doc.close()
+    persist_dir = tempfile.mkdtemp(prefix="bench_batch_persist_")
+    persist_path = Path(persist_dir) / "bench.docx"
+    shutil.copy(save_path, persist_path)
+    shutil.rmtree(tmp, ignore_errors=True)
+
+    iterations = 30
+    n_edits = 10  # Edit paragraphs 1-10
+
+    def open_saved():
+        t = tempfile.mkdtemp(prefix="bench_b_")
+        d = Path(t) / "b.docx"
+        shutil.copy(persist_path, d)
+        return Document.open(d), Path(t)
+
+    # INDIVIDUAL: N calls, each with list_paragraphs() + replace()
+    individual_times = []
+    for _ in range(iterations):
+        d, t = open_saved()
+        t0 = time.perf_counter()
+        for i in range(1, n_edits + 1):
+            refs = d.list_paragraphs()
+            ref = refs[i - 1].split("|")[0]
+            d.replace(f"item {i}", f"EDIT_{i}", paragraph=ref)
+        t1 = time.perf_counter()
+        individual_times.append(t1 - t0)
+        cleanup(d, t)
+
+    # BATCH: 1 list_paragraphs() + 1 batch_edit()
+    batch_times = []
+    for _ in range(iterations):
+        d, t = open_saved()
+        t0 = time.perf_counter()
+        refs = d.list_paragraphs()
+        ops = [
+            EditOperation(
+                action="replace",
+                find=f"item {i}",
+                replace_with=f"EDIT_{i}",
+                paragraph=refs[i - 1].split("|")[0],
+            )
+            for i in range(1, n_edits + 1)
+        ]
+        d.batch_edit(ops)
+        t1 = time.perf_counter()
+        batch_times.append(t1 - t0)
+        cleanup(d, t)
+
+    avg_individual = sum(individual_times) / len(individual_times) * 1000
+    avg_batch = sum(batch_times) / len(batch_times) * 1000
+    speedup = avg_individual / avg_batch if avg_batch > 0 else 0
+
+    print(f"  Iterations:          {iterations}")
+    print(f"  Edits per iteration: {n_edits}")
+    print()
+    print(f"  Individual (N calls): {avg_individual:.1f} ms total")
+    print(f"  Batch (1 call):       {avg_batch:.1f} ms total")
+    print(f"  Speedup:              {speedup:.1f}x")
+    print()
+    print(f"  Individual: {n_edits} x list_paragraphs() + {n_edits} x replace()")
+    print(f"  Batch:      1 x list_paragraphs() + 1 x batch_edit()")
+    print()
+
+    shutil.rmtree(persist_dir, ignore_errors=True)
+    return {"individual_ms": avg_individual, "batch_ms": avg_batch, "speedup": speedup}
+
+
 if __name__ == "__main__":
     print()
     speed = benchmark_speed(iterations=50)
     print()
     accuracy = benchmark_accuracy()
+    print()
+    batch = benchmark_batch_vs_individual()
     print()
