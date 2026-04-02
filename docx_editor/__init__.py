@@ -6,11 +6,12 @@ without requiring Microsoft Word installed.
 Example:
     from docx_editor import Document
 
-    # Open and edit
+    # Open and edit with hash-anchored paragraph references
     doc = Document.open("contract.docx")
-    doc.replace("30 days", "60 days")           # Tracked replacement
-    doc.insert_after("Section 5", "New clause") # Tracked insertion
-    doc.delete("obsolete text")                 # Tracked deletion
+    refs = doc.list_paragraphs()                               # Snapshot paragraphs
+    doc.replace("30 days", "60 days", paragraph="P2#f3c1")     # Tracked replacement
+    doc.insert_after("Section 5", "New clause", paragraph="P3#a7b2")  # Tracked insertion
+    doc.delete("obsolete text", paragraph="P5#c4d8")           # Tracked deletion
 
     # Comments
     doc.add_comment("Section 5", "Please review")

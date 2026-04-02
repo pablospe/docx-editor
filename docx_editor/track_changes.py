@@ -1182,7 +1182,7 @@ class RevisionManager:
 
         return -1
 
-    def _insert_near_match(self, match: TextMapMatch, text: str, position: str) -> int:
+    def _insert_near_match(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:
         """Insert text before/after a cross-boundary match."""
         positions = match.positions
         if not positions:

@@ -102,12 +102,12 @@ def benchmark_speed(iterations: int = 50):
         shutil.copy(persist_path, d)
         return Document.open(d), Path(t)
 
-    # Benchmark PLAIN replace
+    # Benchmark PLAIN replace (using RevisionManager directly, no paragraph scoping)
     plain_times = []
     for _ in range(iterations):
         d, t = open_saved()
         t0 = time.perf_counter()
-        d.replace("[P15]", "[X15]")
+        d._revision_manager.replace_text("[P15]", "[X15]")
         t1 = time.perf_counter()
         plain_times.append(t1 - t0)
         cleanup(d, t)
@@ -243,7 +243,7 @@ def benchmark_accuracy():
 
         marker = f"[P{para_idx:02d}]"
         try:
-            doc1.replace("committee", "EDITED", occurrence=old_occ)
+            doc1._revision_manager.replace_text("committee", "EDITED", occurrence=old_occ)
             vis = doc1.get_visible_text()
 
             # Check where "EDITED" landed
