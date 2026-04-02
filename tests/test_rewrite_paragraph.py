@@ -269,6 +269,66 @@ class TestRewriteParagraph:
                 assert len(b_elems) > 0, "Inserted text should inherit bold formatting"
 
 
+class TestRewriteWithTrackedChanges:
+    def test_rewrite_after_prior_edit(self, rewrite_doc):
+        """Rewriting a paragraph that already has tracked changes works."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+        ref1 = refs[0].split("|")[0]
+
+        # Make a surgical edit first (creates tracked insertion/deletion)
+        doc.replace("committee", "board", paragraph=ref1)
+
+        # Now rewrite the paragraph using fresh hash
+        refs2 = doc.list_paragraphs()
+        ref2 = refs2[0].split("|")[0]
+        doc.rewrite_paragraph(ref2, "The board shall review and approve the annual budget proposal.")
+
+        vis = doc.get_visible_text()
+        assert "approve" in vis
+        assert "proceed with" not in vis
+
+    def test_save_and_reopen(self, rewrite_doc):
+        """Document can be saved and reopened after rewrite."""
+        doc, tmp = rewrite_doc
+        refs = doc.list_paragraphs()
+        ref = refs[0].split("|")[0]
+
+        doc.rewrite_paragraph(ref, "Completely rewritten paragraph text.")
+        save_path = doc.save()
+        doc.close()
+
+        # Reopen and verify
+        doc2 = Document.open(save_path, force_recreate=True)
+        vis = doc2.get_visible_text()
+        assert "Completely rewritten paragraph text." in vis
+
+        # Verify revisions are preserved
+        revisions = doc2.list_revisions()
+        assert len(revisions) > 0
+        doc2.close()
+
+    def test_rewrite_after_batch(self, rewrite_doc):
+        """Individual rewrite works after batch rewrite."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+
+        doc.batch_rewrite([
+            (refs[0].split("|")[0], "First changed."),
+            (refs[2].split("|")[0], "Third changed."),
+        ])
+
+        # Now do another rewrite on a different paragraph
+        refs2 = doc.list_paragraphs()
+        ref = refs2[4].split("|")[0]
+        doc.rewrite_paragraph(ref, "Fifth also changed.")
+
+        vis = doc.get_visible_text()
+        assert "First changed." in vis
+        assert "Third changed." in vis
+        assert "Fifth also changed." in vis
+
+
 class TestBatchRewrite:
     def test_batch_multiple_paragraphs(self, rewrite_doc):
         """Batch rewrite of multiple paragraphs succeeds."""
