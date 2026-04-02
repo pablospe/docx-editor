@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from docx_editor import Document, EditOperation, HashMismatchError
+from docx_editor import Document, EditOperation, HashMismatchError, TextNotFoundError
 
 
 @pytest.fixture
@@ -261,4 +261,60 @@ class TestBatchEdit:
         ]
 
         with pytest.raises(ValueError, match="paragraph reference is required"):
+            doc.batch_edit(ops)
+
+    def test_batch_replace_missing_find(self, multi_para_doc):
+        """Replace without find raises ValueError."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        ops = [EditOperation(action="replace", find=None, replace_with="x", paragraph=ref)]
+        with pytest.raises(ValueError, match="replace requires"):
+            doc.batch_edit(ops)
+
+    def test_batch_replace_text_not_found(self, multi_para_doc):
+        """Replace with non-existent text raises TextNotFoundError."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        ops = [EditOperation(action="replace", find="NONEXISTENT", replace_with="x", paragraph=ref)]
+        with pytest.raises(TextNotFoundError):
+            doc.batch_edit(ops)
+
+    def test_batch_delete_missing_text(self, multi_para_doc):
+        """Delete without text raises ValueError."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        ops = [EditOperation(action="delete", text=None, paragraph=ref)]
+        with pytest.raises(ValueError, match="delete requires"):
+            doc.batch_edit(ops)
+
+    def test_batch_delete_text_not_found(self, multi_para_doc):
+        """Delete with non-existent text raises TextNotFoundError."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        ops = [EditOperation(action="delete", text="NONEXISTENT", paragraph=ref)]
+        with pytest.raises(TextNotFoundError):
+            doc.batch_edit(ops)
+
+    def test_batch_insert_missing_anchor(self, multi_para_doc):
+        """Insert without anchor raises ValueError."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        ops = [EditOperation(action="insert_after", anchor=None, text="x", paragraph=ref)]
+        with pytest.raises(ValueError, match="insert_after requires"):
+            doc.batch_edit(ops)
+
+    def test_batch_insert_anchor_not_found(self, multi_para_doc):
+        """Insert with non-existent anchor raises TextNotFoundError."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        ops = [EditOperation(action="insert_after", anchor="NONEXISTENT", text="x", paragraph=ref)]
+        with pytest.raises(TextNotFoundError):
+            doc.batch_edit(ops)
+
+    def test_batch_unknown_action(self, multi_para_doc):
+        """Unknown action raises ValueError."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        ops = [EditOperation(action="unknown", paragraph=ref)]
+        with pytest.raises(ValueError, match="Unknown action"):
             doc.batch_edit(ops)
