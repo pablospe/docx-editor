@@ -36,10 +36,7 @@ def multi_para_doc():
     insert_before = sect_pr[0] if sect_pr else None
 
     for i in range(1, 11):
-        text = (
-            f"[P{i:02d}] The committee shall review item {i}. "
-            f"The report includes findings from the committee."
-        )
+        text = f"[P{i:02d}] The committee shall review item {i}. The report includes findings from the committee."
         p_xml = f'<w:p><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>'
         nodes = editor._parse_fragment(p_xml)
         for node in nodes:
@@ -66,15 +63,21 @@ class TestBatchEdit:
 
         ops = [
             EditOperation(
-                action="replace", find="item 3", replace_with="ITEM_THREE",
+                action="replace",
+                find="item 3",
+                replace_with="ITEM_THREE",
                 paragraph=refs[2].split("|")[0],
             ),
             EditOperation(
-                action="replace", find="item 7", replace_with="ITEM_SEVEN",
+                action="replace",
+                find="item 7",
+                replace_with="ITEM_SEVEN",
                 paragraph=refs[6].split("|")[0],
             ),
             EditOperation(
-                action="replace", find="item 9", replace_with="ITEM_NINE",
+                action="replace",
+                find="item 9",
+                replace_with="ITEM_NINE",
                 paragraph=refs[8].split("|")[0],
             ),
         ]
@@ -99,15 +102,21 @@ class TestBatchEdit:
         # Now try a batch using OLD refs (P5 hash is stale)
         ops = [
             EditOperation(
-                action="replace", find="item 3", replace_with="EDIT_3",
+                action="replace",
+                find="item 3",
+                replace_with="EDIT_3",
                 paragraph=refs[2].split("|")[0],
             ),
             EditOperation(
-                action="replace", find="CHANGED", replace_with="EDIT_5",
+                action="replace",
+                find="CHANGED",
+                replace_with="EDIT_5",
                 paragraph=p5_ref,  # STALE hash
             ),
             EditOperation(
-                action="replace", find="item 8", replace_with="EDIT_8",
+                action="replace",
+                find="item 8",
+                replace_with="EDIT_8",
                 paragraph=refs[7].split("|")[0],
             ),
         ]
@@ -129,11 +138,15 @@ class TestBatchEdit:
         # Take ONE snapshot, edit both ends
         ops = [
             EditOperation(
-                action="replace", find="item 2", replace_with="SECOND",
+                action="replace",
+                find="item 2",
+                replace_with="SECOND",
                 paragraph=refs[1].split("|")[0],
             ),
             EditOperation(
-                action="replace", find="item 10", replace_with="TENTH",
+                action="replace",
+                find="item 10",
+                replace_with="TENTH",
                 paragraph=refs[9].split("|")[0],
             ),
         ]
@@ -152,12 +165,14 @@ class TestBatchEdit:
 
         ops = []
         for i in range(10):
-            ops.append(EditOperation(
-                action="replace",
-                find=f"item {i + 1}",
-                replace_with=f"BATCH_{i + 1}",
-                paragraph=refs[i].split("|")[0],
-            ))
+            ops.append(
+                EditOperation(
+                    action="replace",
+                    find=f"item {i + 1}",
+                    replace_with=f"BATCH_{i + 1}",
+                    paragraph=refs[i].split("|")[0],
+                )
+            )
 
         result = doc.batch_edit(ops)
         assert len(result) == 10
@@ -174,12 +189,17 @@ class TestBatchEdit:
         p3_ref = refs[2].split("|")[0]
         ops = [
             EditOperation(
-                action="replace", find="item 3", replace_with="FIRST_EDIT",
+                action="replace",
+                find="item 3",
+                replace_with="FIRST_EDIT",
                 paragraph=p3_ref,
             ),
             EditOperation(
-                action="replace", find="committee", replace_with="BOARD",
-                paragraph=p3_ref, occurrence=0,
+                action="replace",
+                find="committee",
+                replace_with="BOARD",
+                paragraph=p3_ref,
+                occurrence=0,
             ),
         ]
 
@@ -203,15 +223,20 @@ class TestBatchEdit:
 
         ops = [
             EditOperation(
-                action="replace", find="item 2", replace_with="REPLACED",
+                action="replace",
+                find="item 2",
+                replace_with="REPLACED",
                 paragraph=refs[1].split("|")[0],
             ),
             EditOperation(
-                action="delete", text="item 5",
+                action="delete",
+                text="item 5",
                 paragraph=refs[4].split("|")[0],
             ),
             EditOperation(
-                action="insert_after", anchor="item 8", text=" [APPENDED]",
+                action="insert_after",
+                anchor="item 8",
+                text=" [APPENDED]",
                 paragraph=refs[7].split("|")[0],
             ),
         ]

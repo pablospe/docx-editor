@@ -102,9 +102,7 @@ class TestComputeParagraphHash:
             "<w:del><w:r><w:delText>old </w:delText></w:r></w:del>"
             "<w:r><w:t>world</w:t></w:r></w:p>"
         )
-        p_without_del = parse_paragraph(
-            "<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"
-        )
+        p_without_del = parse_paragraph("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")
         assert compute_paragraph_hash(p_with_del) == compute_paragraph_hash(p_without_del)
 
     def test_includes_inserted_text(self):
@@ -113,9 +111,7 @@ class TestComputeParagraphHash:
             "<w:ins><w:r><w:t>beautiful </w:t></w:r></w:ins>"
             "<w:r><w:t>world</w:t></w:r></w:p>"
         )
-        p_without_ins = parse_paragraph(
-            "<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"
-        )
+        p_without_ins = parse_paragraph("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")
         # Insertions are visible, so hashes differ
         assert compute_paragraph_hash(p_with_ins) != compute_paragraph_hash(p_without_ins)
 

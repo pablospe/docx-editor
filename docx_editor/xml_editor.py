@@ -107,8 +107,7 @@ class ParagraphRef:
         m = _PARAGRAPH_REF_RE.match(ref)
         if not m:
             raise ValueError(
-                f"Invalid paragraph reference '{ref}'. "
-                f"Expected format: P{{index}}#{{hash}} (e.g., P3#a7b2)"
+                f"Invalid paragraph reference '{ref}'. Expected format: P{{index}}#{{hash}} (e.g., P3#a7b2)"
             )
         return cls(index=int(m.group(1)), hash=m.group(2))
 

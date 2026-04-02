@@ -80,8 +80,7 @@ class RevisionManager:
         paragraphs = self.editor.dom.getElementsByTagName("w:p")
         if ref.index < 1 or ref.index > len(paragraphs):
             raise IndexError(
-                f"Paragraph index {ref.index} out of range. "
-                f"Document has {len(paragraphs)} paragraphs (1-indexed)."
+                f"Paragraph index {ref.index} out of range. Document has {len(paragraphs)} paragraphs (1-indexed)."
             )
         p = paragraphs[ref.index - 1]
         actual_hash = compute_paragraph_hash(p)
@@ -1093,8 +1092,12 @@ class RevisionManager:
         return self._insert_text(anchor, text, position="before", occurrence=occurrence, paragraph=paragraph)
 
     def _insert_text(
-        self, anchor: str, text: str, position: Literal["before", "after"],
-        occurrence: int = 0, paragraph: str | None = None,
+        self,
+        anchor: str,
+        text: str,
+        position: Literal["before", "after"],
+        occurrence: int = 0,
+        paragraph: str | None = None,
     ) -> int:
         """Insert text before or after anchor with tracked changes."""
         if paragraph is not None:

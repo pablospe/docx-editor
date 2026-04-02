@@ -15,6 +15,7 @@ def find_ref(doc, text):
             return entry.split("|")[0]
     return doc.list_paragraphs()[0].split("|")[0]
 
+
 NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 
 

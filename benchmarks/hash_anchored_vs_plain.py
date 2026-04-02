@@ -57,8 +57,7 @@ def build_multi_paragraph_doc(n_paragraphs: int = 30) -> tuple[Document, Path]:
 
     for i in range(1, n_paragraphs + 1):
         text = (
-            f"[P{i:02d}] The committee shall review item {i}. "
-            f"The report shall include all findings from the committee."
+            f"[P{i:02d}] The committee shall review item {i}. The report shall include all findings from the committee."
         )
         p_xml = f'<w:p><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>'
         nodes = editor._parse_fragment(p_xml)
@@ -79,6 +78,7 @@ def build_multi_paragraph_doc(n_paragraphs: int = 30) -> tuple[Document, Path]:
 # ---------------------------------------------------------------------------
 # Speed Benchmark
 # ---------------------------------------------------------------------------
+
 
 def benchmark_speed(iterations: int = 50):
     """Measure per-operation overhead of hash-anchored vs plain replace."""
@@ -150,6 +150,7 @@ def benchmark_speed(iterations: int = 50):
 # ---------------------------------------------------------------------------
 # Accuracy Benchmark
 # ---------------------------------------------------------------------------
+
 
 def benchmark_accuracy():
     """Simulate batch edits with index/occurrence drift.
