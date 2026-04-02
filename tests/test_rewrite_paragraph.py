@@ -354,6 +354,243 @@ class TestRewriteDuplicateText:
         assert any("a" == t.strip() for t in ins_texts)
 
 
+def _make_doc_with_paragraphs(paragraphs: list[str]):
+    """Helper: build a document with specific paragraph texts. Returns (doc, tmp_dir)."""
+    test_data = Path(__file__).parent / "test_data" / "simple.docx"
+    tmp = tempfile.mkdtemp(prefix="rewrite_stress_")
+    dest = Path(tmp) / "test.docx"
+    shutil.copy(test_data, dest)
+
+    doc = Document.open(dest)
+    doc.accept_all()
+    doc.save()
+    doc.close()
+
+    doc = Document.open(dest, force_recreate=True)
+    editor = doc._document_editor
+    body = editor.dom.getElementsByTagName("w:body")[0]
+
+    for p in list(editor.dom.getElementsByTagName("w:p")):
+        if p.parentNode == body:
+            body.removeChild(p)
+
+    sect_pr = editor.dom.getElementsByTagName("w:sectPr")
+    insert_before = sect_pr[0] if sect_pr else None
+
+    for text in paragraphs:
+        if text:
+            p_xml = f'<w:p><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>'
+        else:
+            p_xml = "<w:p/>"
+        nodes = editor._parse_fragment(p_xml)
+        for node in nodes:
+            if insert_before:
+                body.insertBefore(node, insert_before)
+            else:
+                body.appendChild(node)
+
+    editor.save()
+    save_path = doc.save()
+    doc.close()
+
+    doc = Document.open(save_path, force_recreate=True)
+    return doc, Path(tmp)
+
+
+class TestRewriteStructuralEdits:
+    """Stress tests for structural edits where rewrite_paragraph is the right tool."""
+
+    def test_passive_to_active_voice(self):
+        """Passive→active voice conversion restructures clauses."""
+        doc, tmp = _make_doc_with_paragraphs(
+            ["The proposal was reviewed by the committee and was approved by the board."]
+        )
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            doc.rewrite_paragraph(
+                ref, "The committee reviewed the proposal and the board approved it."
+            )
+
+            vis = doc.get_visible_text()
+            assert "The committee reviewed the proposal and the board approved it." in vis
+
+            revisions = doc.list_revisions()
+            assert len(revisions) > 0
+            del_texts = [r.text for r in revisions if r.type == "deletion"]
+            ins_texts = [r.text for r in revisions if r.type == "insertion"]
+            assert len(del_texts) > 0
+            assert len(ins_texts) > 0
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_reorder_list_items(self):
+        """Reordering items in a list produces correct tracked changes."""
+        doc, tmp = _make_doc_with_paragraphs(
+            ["Deliverables include the final report, executive summary, and presentation slides."]
+        )
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            doc.rewrite_paragraph(
+                ref,
+                "Deliverables include the presentation slides, final report, and executive summary.",
+            )
+
+            vis = doc.get_visible_text()
+            assert "presentation slides, final report, and executive summary" in vis
+
+            revisions = doc.list_revisions()
+            assert len(revisions) > 0
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_full_sentence_rephrasing(self):
+        """Complete rephrasing produces tracked changes for restructured sentence."""
+        doc, tmp = _make_doc_with_paragraphs(
+            ["The committee recommends that the project timeline be extended by three months to allow for additional stakeholder consultation and review."]
+        )
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            doc.rewrite_paragraph(
+                ref,
+                "The board has approved a three-month extension for further stakeholder review.",
+            )
+
+            vis = doc.get_visible_text()
+            assert "The board has approved a three-month extension" in vis
+
+            revisions = doc.list_revisions()
+            del_texts = [r.text for r in revisions if r.type == "deletion"]
+            ins_texts = [r.text for r in revisions if r.type == "insertion"]
+            assert len(del_texts) > 0
+            assert len(ins_texts) > 0
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_prose_tightening(self):
+        """Removing filler words (multiple independent deletions)."""
+        doc, tmp = _make_doc_with_paragraphs(
+            ["We need to ensure that all stakeholders are informed and that all risks are mitigated."]
+        )
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            doc.rewrite_paragraph(
+                ref,
+                "We need to ensure all stakeholders are informed and all risks mitigated.",
+            )
+
+            vis = doc.get_visible_text()
+            assert "ensure all stakeholders" in vis
+            assert "and all risks mitigated" in vis
+
+            revisions = doc.list_revisions()
+            del_texts = [r.text for r in revisions if r.type == "deletion"]
+            # "that" should be deleted (twice) and "are " before "mitigated"
+            assert len(del_texts) >= 2
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_duplicate_phrase_different_changes(self):
+        """Different changes to different occurrences of the same phrase."""
+        doc, tmp = _make_doc_with_paragraphs(
+            ["The team will meet on Monday, the team will present on Wednesday, and the team will review on Friday."]
+        )
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            doc.rewrite_paragraph(
+                ref,
+                "The team will meet on Monday, management will present on Wednesday, and everyone will review on Friday.",
+            )
+
+            vis = doc.get_visible_text()
+            assert "management will present" in vis
+            assert "everyone will review" in vis
+            # First "The team will meet" unchanged
+            assert "The team will meet on Monday" in vis
+
+            revisions = doc.list_revisions()
+            del_texts = [r.text for r in revisions if r.type == "deletion"]
+            ins_texts = [r.text for r in revisions if r.type == "insertion"]
+            assert any("the team" in t.lower() for t in del_texts)
+            assert any("management" in t for t in ins_texts)
+            assert any("everyone" in t for t in ins_texts)
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_add_clause_and_change_value(self):
+        """Insert a clause in the middle while also changing a value elsewhere."""
+        doc, tmp = _make_doc_with_paragraphs(
+            ["The contract expires on December 31st."]
+        )
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            doc.rewrite_paragraph(
+                ref,
+                "The contract, unless renewed by either party, expires on January 15th.",
+            )
+
+            vis = doc.get_visible_text()
+            assert "unless renewed by either party" in vis
+            assert "January 15th" in vis
+
+            revisions = doc.list_revisions()
+            del_texts = [r.text for r in revisions if r.type == "deletion"]
+            ins_texts = [r.text for r in revisions if r.type == "insertion"]
+            assert any("December" in t for t in del_texts)
+            assert any("January" in t for t in ins_texts)
+            assert any("unless renewed" in t for t in ins_texts)
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_duplicate_manager_different_replacements(self):
+        """Two occurrences of 'manager' replaced with different words."""
+        doc, tmp = _make_doc_with_paragraphs(
+            ["The manager will review the report and the manager will approve the budget."]
+        )
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            doc.rewrite_paragraph(
+                ref,
+                "The director will review the findings and the supervisor will approve the budget.",
+            )
+
+            vis = doc.get_visible_text()
+            assert "director will review" in vis
+            assert "supervisor will approve" in vis
+            assert "findings" in vis
+
+            revisions = doc.list_revisions()
+            del_texts = [r.text for r in revisions if r.type == "deletion"]
+            ins_texts = [r.text for r in revisions if r.type == "insertion"]
+            assert any("manager" in t for t in del_texts)
+            assert any("director" in t for t in ins_texts)
+            assert any("supervisor" in t for t in ins_texts)
+            assert any("report" in t for t in del_texts)
+            assert any("findings" in t for t in ins_texts)
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class TestRewriteWithTrackedChanges:
     def test_rewrite_after_prior_edit(self, rewrite_doc):
         """Rewriting a paragraph that already has tracked changes works."""
