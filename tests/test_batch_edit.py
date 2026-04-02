@@ -315,6 +315,6 @@ class TestBatchEdit:
         """Unknown action raises ValueError."""
         doc, _ = multi_para_doc
         ref = doc.list_paragraphs()[0].split("|")[0]
-        ops = [EditOperation(action="unknown", paragraph=ref)]
+        ops = [EditOperation(action="unknown", paragraph=ref)]  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="Unknown action"):
             doc.batch_edit(ops)
