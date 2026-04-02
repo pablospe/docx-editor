@@ -186,7 +186,7 @@ class Document:
             parts.append(tm.text)
         return "\n".join(parts)
 
-    def replace(self, find: str, replace_with: str, occurrence: int = 0, paragraph: str | None = None) -> int:
+    def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int = 0) -> int:
         """Replace text with tracked changes.
 
         Creates a tracked deletion of the old text and insertion of the new text.
@@ -194,71 +194,68 @@ class Document:
         Args:
             find: Text to find and replace
             replace_with: Replacement text
-            occurrence: Which occurrence to replace (0 = first, 1 = second, etc.)
-            paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope the search
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence within the paragraph (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the insertion
 
         Example:
-            doc.replace("30 days", "60 days")  # Replace first occurrence
-            doc.replace("the", "THE", paragraph="P2#f3c1")  # Scoped to paragraph
+            refs = doc.list_paragraphs()
+            doc.replace("30 days", "60 days", paragraph="P2#f3c1")
         """
         self._ensure_open()
         return self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
 
-    def delete(self, text: str, occurrence: int = 0, paragraph: str | None = None) -> int:
+    def delete(self, text: str, *, paragraph: str, occurrence: int = 0) -> int:
         """Mark text as deleted with tracked changes.
 
         Args:
             text: Text to mark as deleted
-            occurrence: Which occurrence to delete (0 = first, 1 = second, etc.)
-            paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope the search
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence within the paragraph (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the deletion
 
         Example:
-            doc.delete("obsolete clause")
-            doc.delete("obsolete clause", paragraph="P2#f3c1")  # Scoped to paragraph
+            doc.delete("obsolete clause", paragraph="P2#f3c1")
         """
         self._ensure_open()
         return self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
 
-    def insert_after(self, anchor: str, text: str, occurrence: int = 0, paragraph: str | None = None) -> int:
+    def insert_after(self, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> int:
         """Insert text after anchor with tracked changes.
 
         Args:
             anchor: Text to find as insertion point
             text: Text to insert after the anchor
-            occurrence: Which occurrence of anchor to use (0 = first, 1 = second, etc.)
-            paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope the search
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence of anchor within the paragraph (0 = first)
 
         Returns:
             The change ID of the insertion
 
         Example:
-            doc.insert_after("Section 5", " (as amended)")
-            doc.insert_after("Section 5", " (revised)", paragraph="P2#f3c1")
+            doc.insert_after("Section 5", " (as amended)", paragraph="P2#f3c1")
         """
         self._ensure_open()
         return self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
 
-    def insert_before(self, anchor: str, text: str, occurrence: int = 0, paragraph: str | None = None) -> int:
+    def insert_before(self, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> int:
         """Insert text before anchor with tracked changes.
 
         Args:
             anchor: Text to find as insertion point
             text: Text to insert before the anchor
-            occurrence: Which occurrence of anchor to use (0 = first, 1 = second, etc.)
-            paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope the search
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence of anchor within the paragraph (0 = first)
 
         Returns:
             The change ID of the insertion
 
         Example:
-            doc.insert_before("Section 6", "New clause: ")
-            doc.insert_before("Section 6", "Note: ", paragraph="P2#f3c1")
+            doc.insert_before("Section 6", "New clause: ", paragraph="P2#f3c1")
         """
         self._ensure_open()
         return self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)

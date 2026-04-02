@@ -7,6 +7,14 @@ from pathlib import Path
 import defusedxml.minidom
 import pytest
 
+
+def find_ref(doc, text):
+    """Find the paragraph ref containing the given text."""
+    for entry in doc.list_paragraphs():
+        if text in entry:
+            return entry.split("|")[0]
+    return doc.list_paragraphs()[0].split("|")[0]
+
 NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 
 

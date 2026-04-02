@@ -1,6 +1,7 @@
 """Tests for coverage gaps in cross-boundary text operations."""
 
 import pytest
+from conftest import find_ref
 from conftest import parse_paragraph as _parse_paragraph
 
 from docx_editor import Document
@@ -184,14 +185,16 @@ class TestMixedStateDeletion:
     def test_delete_spanning_regular_and_insertion(self, clean_workspace):
         """Delete text that spans regular text + insertion."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " ADDED")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " ADDED", paragraph=ref)
 
         match = doc.find_text("fox ADDED")
         if match is None or not match.spans_boundary:
             doc.close()
             pytest.skip("Expected boundary not created")
 
-        change_id = doc.delete("fox ADDED")
+        ref = find_ref(doc, "fox")
+        change_id = doc.delete("fox ADDED", paragraph=ref)
         assert change_id >= 0
 
         text = doc.get_visible_text()
@@ -202,14 +205,16 @@ class TestMixedStateDeletion:
     def test_delete_spanning_insertion_and_regular(self, clean_workspace):
         """Delete text spanning insertion + regular text."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " ADDED")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " ADDED", paragraph=ref)
 
         match = doc.find_text("ADDED jumps")
         if match is None or not match.spans_boundary:
             doc.close()
             pytest.skip("Expected boundary not created")
 
-        doc.delete("ADDED jumps")
+        ref = find_ref(doc, "ADDED")
+        doc.delete("ADDED jumps", paragraph=ref)
         text = doc.get_visible_text()
         assert "ADDED" not in text
         assert "jumps" not in text
@@ -218,14 +223,16 @@ class TestMixedStateDeletion:
     def test_delete_entirely_within_insertion(self, clean_workspace):
         """Delete text entirely within an insertion."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " beautiful amazing")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " beautiful amazing", paragraph=ref)
 
         match = doc.find_text("beautiful")
         if match is None or not all(p.is_inside_ins for p in match.positions):
             doc.close()
             pytest.skip("Text not entirely within insertion")
 
-        doc.delete("beautiful")
+        ref = find_ref(doc, "beautiful")
+        doc.delete("beautiful", paragraph=ref)
         text = doc.get_visible_text()
         assert "beautiful" not in text
         assert "amazing" in text
@@ -234,14 +241,16 @@ class TestMixedStateDeletion:
     def test_delete_mixed_state_roundtrip(self, clean_workspace, temp_dir):
         """Round-trip: delete across boundary, save, reopen."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " ADDED")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " ADDED", paragraph=ref)
 
         match = doc.find_text("fox ADDED")
         if match is None or not match.spans_boundary:
             doc.close()
             pytest.skip("Expected boundary not created")
 
-        doc.delete("fox ADDED")
+        ref = find_ref(doc, "fox")
+        doc.delete("fox ADDED", paragraph=ref)
         output = temp_dir / "delete_mixed.docx"
         doc.save(output)
         doc.close()
@@ -262,9 +271,11 @@ class TestRemoveFromInsertionBranches:
     def test_entire_insertion_removed(self, clean_workspace):
         """Removing all text from an insertion removes the w:ins element."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " WORD")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " WORD", paragraph=ref)
 
-        doc.delete("WORD")
+        ref = find_ref(doc, "WORD")
+        doc.delete("WORD", paragraph=ref)
         text = doc.get_visible_text()
         assert "WORD" not in text
         doc.close()
@@ -272,9 +283,11 @@ class TestRemoveFromInsertionBranches:
     def test_match_at_start_of_insertion(self, clean_workspace):
         """Removing text at the start of insertion truncates to remainder."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " hello world")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " hello world", paragraph=ref)
 
-        doc.delete("hello")
+        ref = find_ref(doc, "hello")
+        doc.delete("hello", paragraph=ref)
         text = doc.get_visible_text()
         assert "hello" not in text
         assert " world" in text or "world" in text
@@ -283,9 +296,11 @@ class TestRemoveFromInsertionBranches:
     def test_match_at_end_of_insertion(self, clean_workspace):
         """Removing text at end of insertion truncates to start."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " hello world")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " hello world", paragraph=ref)
 
-        doc.delete("world")
+        ref = find_ref(doc, "world")
+        doc.delete("world", paragraph=ref)
         text = doc.get_visible_text()
         assert "world" not in text
         assert "hello" in text
@@ -294,9 +309,11 @@ class TestRemoveFromInsertionBranches:
     def test_match_in_middle_of_insertion_splits(self, clean_workspace):
         """Removing text in middle of insertion splits into two w:ins elements."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " hello beautiful world")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " hello beautiful world", paragraph=ref)
 
-        doc.delete("beautiful")
+        ref = find_ref(doc, "beautiful")
+        doc.delete("beautiful", paragraph=ref)
         text = doc.get_visible_text()
         assert "beautiful" not in text
         assert "hello" in text
@@ -306,9 +323,11 @@ class TestRemoveFromInsertionBranches:
     def test_middle_split_roundtrip(self, clean_workspace, temp_dir):
         """Round-trip: middle split, save, reopen."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " hello beautiful world")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " hello beautiful world", paragraph=ref)
 
-        doc.delete("beautiful")
+        ref = find_ref(doc, "beautiful")
+        doc.delete("beautiful", paragraph=ref)
         output = temp_dir / "middle_split.docx"
         doc.save(output)
         doc.close()
@@ -330,7 +349,8 @@ class TestXmlSpecialCharacters:
     def test_replace_text_with_ampersand(self, clean_workspace):
         """Replace with text containing & character."""
         doc = Document.open(clean_workspace)
-        doc.replace("fox", "fox & cat")
+        ref = find_ref(doc, "fox")
+        doc.replace("fox", "fox & cat", paragraph=ref)
         text = doc.get_visible_text()
         assert "fox & cat" in text
         doc.close()
@@ -338,7 +358,8 @@ class TestXmlSpecialCharacters:
     def test_replace_text_with_angle_brackets(self, clean_workspace):
         """Replace with text containing < and > characters."""
         doc = Document.open(clean_workspace)
-        doc.replace("fox", "a < b > c")
+        ref = find_ref(doc, "fox")
+        doc.replace("fox", "a < b > c", paragraph=ref)
         text = doc.get_visible_text()
         assert "a < b > c" in text
         doc.close()
@@ -346,7 +367,8 @@ class TestXmlSpecialCharacters:
     def test_insert_text_with_special_chars(self, clean_workspace):
         """Insert text containing XML special characters."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " & friends <team>")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " & friends <team>", paragraph=ref)
         text = doc.get_visible_text()
         assert "& friends <team>" in text
         doc.close()
@@ -354,7 +376,8 @@ class TestXmlSpecialCharacters:
     def test_special_chars_roundtrip(self, clean_workspace, temp_dir):
         """Round-trip with special characters."""
         doc = Document.open(clean_workspace)
-        doc.replace("fox", "A & B")
+        ref = find_ref(doc, "fox")
+        doc.replace("fox", "A & B", paragraph=ref)
         output = temp_dir / "special_chars.docx"
         doc.save(output)
         doc.close()
@@ -385,15 +408,18 @@ class TestOccurrenceParameter:
     def test_replace_second_occurrence_cross_boundary(self, clean_workspace):
         """Replace second occurrence when both span boundaries."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " test")
-        doc.insert_after("dog", " test")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " test", paragraph=ref)
+        ref = find_ref(doc, "dog")
+        doc.insert_after("dog", " test", paragraph=ref)
 
         match = doc.find_text("test", occurrence=1)
         if match is None:
             doc.close()
             pytest.skip("Second occurrence not found")
 
-        doc.replace("test", "REPLACED", occurrence=1)
+        ref = find_ref(doc, "test")
+        doc.replace("test", "REPLACED", paragraph=ref, occurrence=1)
         text = doc.get_visible_text()
         assert "test" in text
         assert "REPLACED" in text
@@ -409,7 +435,8 @@ class TestFindTextEdgeCases:
     def test_find_deleted_text_returns_none(self, clean_workspace):
         """Text inside w:del should not be found."""
         doc = Document.open(clean_workspace)
-        doc.delete("fox")
+        ref = find_ref(doc, "fox")
+        doc.delete("fox", paragraph=ref)
         match = doc.find_text("fox")
         assert match is None
         doc.close()
@@ -417,7 +444,8 @@ class TestFindTextEdgeCases:
     def test_get_visible_text_excludes_deleted(self, clean_workspace):
         """Visible text should not include deleted text."""
         doc = Document.open(clean_workspace)
-        doc.delete("fox")
+        ref = find_ref(doc, "fox")
+        doc.delete("fox", paragraph=ref)
         text = doc.get_visible_text()
         assert "fox" not in text
         doc.close()
@@ -432,14 +460,16 @@ class TestInsertWithCrossBoundaryAnchor:
     def test_insert_after_cross_boundary_anchor(self, clean_workspace):
         """insert_after works when anchor spans a boundary."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " RED")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " RED", paragraph=ref)
 
         match = doc.find_text("fox RED")
         if match is None or not match.spans_boundary:
             doc.close()
             pytest.skip("Boundary not created")
 
-        change_id = doc.insert_after("fox RED", " NEW")
+        ref = find_ref(doc, "fox RED")
+        change_id = doc.insert_after("fox RED", " NEW", paragraph=ref)
         assert change_id >= 0
         text = doc.get_visible_text()
         assert "fox RED NEW" in text
@@ -448,14 +478,16 @@ class TestInsertWithCrossBoundaryAnchor:
     def test_insert_before_cross_boundary_anchor(self, clean_workspace):
         """insert_before works when anchor spans a boundary."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " RED")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " RED", paragraph=ref)
 
         match = doc.find_text("fox RED")
         if match is None or not match.spans_boundary:
             doc.close()
             pytest.skip("Boundary not created")
 
-        change_id = doc.insert_before("fox RED", "NEW ")
+        ref = find_ref(doc, "fox RED")
+        change_id = doc.insert_before("fox RED", "NEW ", paragraph=ref)
         assert change_id >= 0
         text = doc.get_visible_text()
         assert "NEW fox RED" in text
@@ -464,14 +496,16 @@ class TestInsertWithCrossBoundaryAnchor:
     def test_insert_cross_boundary_roundtrip(self, clean_workspace, temp_dir):
         """Round-trip: insert with cross-boundary anchor, save, reopen."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("fox", " RED")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " RED", paragraph=ref)
 
         match = doc.find_text("fox RED")
         if match is None or not match.spans_boundary:
             doc.close()
             pytest.skip("Boundary not created")
 
-        doc.insert_after("fox RED", " NEW")
+        ref = find_ref(doc, "fox RED")
+        doc.insert_after("fox RED", " NEW", paragraph=ref)
         output = temp_dir / "insert_cross_boundary.docx"
         doc.save(output)
         doc.close()

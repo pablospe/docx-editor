@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import defusedxml.minidom
+from conftest import find_ref
 
 from docx_editor import Document
 from docx_editor.track_changes import RevisionManager, _escape_xml
@@ -39,7 +40,8 @@ class TestCrossBoundaryReplaceRegression:
     def test_replace_within_single_element(self, clean_workspace):
         """Replace text contained in a single w:t element."""
         doc = Document.open(clean_workspace)
-        change_id = doc.replace("fox", "cat")
+        ref = find_ref(doc, "fox")
+        change_id = doc.replace("fox", "cat", paragraph=ref)
         assert change_id >= 0
         assert "cat" in doc.get_visible_text()
         assert "fox" not in doc.get_visible_text()
@@ -200,7 +202,8 @@ class TestCrossBoundaryReplaceRoundtrip:
                 break
 
         # Now "fox" spans two runs: "...fo" and "x jumps..."
-        change_id = doc.replace("fox", "cat")
+        ref = find_ref(doc, "fo")
+        change_id = doc.replace("fox", "cat", paragraph=ref)
         assert change_id >= 0
 
         output = temp_dir / "output.docx"

@@ -172,11 +172,17 @@ author = os.environ.get("USER") or os.environ.get("USERNAME") or "Reviewer"
 
 # Open document (supports context manager)
 with Document.open("contract.docx", author=author) as doc:
-    # Make changes (automatically tracked)
-    doc.replace("old text", "new text")   # Tracked replacement
-    doc.delete("text to delete")           # Tracked deletion
-    doc.insert_after("anchor", "new text") # Tracked insertion after anchor
-    doc.insert_before("anchor", "prefix")  # Tracked insertion before anchor
+    # Step 1: List paragraphs with hash-anchored references
+    for p in doc.list_paragraphs():
+        print(p)
+    # Output: P1#a7b2| Introduction to the contract...
+    #         P2#f3c1| The committee shall review...
+
+    # Step 2: Edit using paragraph references (safe, unambiguous)
+    doc.replace("old text", "new text", paragraph="P2#f3c1")
+    doc.delete("text to delete", paragraph="P5#d4e5")
+    doc.insert_after("anchor", "new text", paragraph="P3#b2c4")
+    doc.insert_before("anchor", "prefix", paragraph="P3#b2c4")
 
     doc.save()  # Overwrites original
     # or doc.save("reviewed.docx")  # Save to new file
@@ -188,7 +194,8 @@ Without context manager:
 
 ```python
 doc = Document.open("contract.docx", author=author)
-# ... edits ...
+refs = doc.list_paragraphs()
+# ... edits using paragraph references ...
 doc.save()
 doc.close()
 ```
@@ -202,9 +209,12 @@ import os
 author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("document.docx", author=author)
 
-# Count occurrences before editing (verify uniqueness)
-count = doc.count_matches("30 days")
-print(f"Found {count} occurrences")
+# List paragraphs to get hash-anchored references
+for p in doc.list_paragraphs():
+    print(p)
+# Output: P1#a7b2| Introduction...
+#         P2#f3c1| The payment term is 30 days...
+#         P3#b2c4| Section 3. Terms and conditions...
 
 # Find text (returns TextMapMatch or None, works across element boundaries)
 match = doc.find_text("30 days")
@@ -213,17 +223,14 @@ match = doc.find_text("30 days")
 visible = doc.get_visible_text()
 
 # Replace text (creates tracked deletion + insertion)
-doc.replace("30 days", "60 days")  # Replaces first occurrence
-doc.replace("30 days", "90 days", occurrence=1)  # Replaces second occurrence
+doc.replace("30 days", "60 days", paragraph="P2#f3c1")
 
 # Delete text (creates tracked deletion)
-doc.delete("unnecessary clause")
-doc.delete("duplicate text", occurrence=2)  # Delete third occurrence
+doc.delete("unnecessary clause", paragraph="P5#d4e5")
 
 # Insert text (creates tracked insertion)
-doc.insert_after("Section 3.", " Additional terms apply.")
-doc.insert_before("Section 3.", "See also: ")
-doc.insert_after("Section 3.", " (revised)", occurrence=1)  # After second match
+doc.insert_after("Section 3.", " Additional terms apply.", paragraph="P3#b2c4")
+doc.insert_before("Section 3.", "See also: ", paragraph="P3#b2c4")
 
 doc.save("edited.docx")
 doc.close()
@@ -329,13 +336,17 @@ import os
 author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("contract.docx", author=author)
 
-# Section 2 changes
-doc.replace("30 days", "60 days")
-doc.replace("January 1, 2024", "March 1, 2024")
+# List paragraphs to get hash-anchored references
+for p in doc.list_paragraphs():
+    print(p)
+
+# Section 2 changes (using paragraph references from list_paragraphs)
+doc.replace("30 days", "60 days", paragraph="P4#a1b2")
+doc.replace("January 1, 2024", "March 1, 2024", paragraph="P5#c3d4")
 
 # Section 5 changes
-doc.delete("and any affiliates")
-doc.insert_after("termination.", " Notice must be provided in writing.")
+doc.delete("and any affiliates", paragraph="P12#e5f6")
+doc.insert_after("termination.", " Notice must be provided in writing.", paragraph="P14#g7h8")
 
 # Add review comments
 doc.add_comment("indemnification clause", "Review with counsel")
@@ -354,73 +365,70 @@ Check that all changes appear correctly in the output.
 
 ## Best Practices for AI Editing
 
-### Targeting Specific Text
+### Hash-Anchored Paragraph References
 
-docx_editor replaces the **first occurrence** of text found. To target specific locations, use unique surrounding context:
+The `list_paragraphs()` method returns stable, hash-based paragraph references that eliminate ambiguity when targeting text. Each reference includes a paragraph number and a content hash:
 
-```python
-# BAD - ambiguous, might match wrong location
-doc.replace("the", "a")
-
-# GOOD - unique context ensures correct match
-doc.replace("the meeting was productive", "the conference was productive")
-```
-
-### Verifying Edits (Critical for Large Documents)
-
-Since you may not read the entire document, your "unique" text might not actually be unique. **Always verify edits**:
-
-**Step 1: Count occurrences BEFORE editing**
 ```python
 from docx_editor import Document
 import os
 
 author = os.environ.get("USER") or "Reviewer"
-doc = Document.open('file.docx', author=author)
-count = doc.count_matches("the meeting was productive")
-print(f"Found {count} occurrences")
+with Document.open("file.docx", author=author) as doc:
+    # Step 1: List paragraphs — each has a unique hash anchor
+    for p in doc.list_paragraphs():
+        print(p)
+    # Output: P1#a7b2| Introduction to the contract...
+    #         P2#f3c1| The committee shall review all...
+    #         P3#b2c4| The meeting was productive...
+
+    # Step 2: Use the paragraph reference to target exactly the right paragraph
+    doc.replace("the meeting was productive",
+                "the conference was productive",
+                paragraph="P3#b2c4")
+
+    doc.save()
 ```
 
-**Step 2: If multiple matches, either add more context OR use occurrence parameter**
+The `paragraph` argument is **required** for all edit methods (`replace`, `delete`, `insert_after`, `insert_before`). If the paragraph content has changed since you called `list_paragraphs()`, a `HashMismatchError` is raised — preventing edits to the wrong location.
+
+### Batch Editing
+
+For multiple edits, use `batch_edit()` to validate all paragraph hashes upfront before applying any changes:
+
 ```python
-# Option A: Use more surrounding context for uniqueness
-doc.replace("In Q3, the meeting was productive and resulted",
-            "In Q3, the conference was productive and resulted")
+from docx_editor import Document, EditOperation
 
-# Option B: Target specific occurrence (0-indexed)
-doc.replace("the meeting was productive",
-            "the conference was productive",
-            occurrence=2)  # Replace the 3rd match
+with Document.open("file.docx", author=author) as doc:
+    refs = doc.list_paragraphs()
+    doc.batch_edit([
+        EditOperation(action="replace", find="old term", replace_with="new term", paragraph="P2#f3c1"),
+        EditOperation(action="delete", text="remove this", paragraph="P5#d4e5"),
+        EditOperation(action="insert_after", anchor="Section 5", text=" (amended)", paragraph="P3#b2c4"),
+    ])
+    doc.save()
 ```
 
-**Step 3: Verify AFTER editing**
-```python
-# Check the revision was created in the expected location
-revisions = doc.list_revisions()
-for r in revisions:
-    print(f"{r.type}: '{r.text[:50]}...'")
-```
-
-If the edit appears in an unexpected location, reject it and retry with more context or different occurrence.
+If any hash is stale, the entire batch is rejected before any edits are applied.
 
 ### Workflow for Large Documents
 
-1. **Explore structure first** with python-docx:
+1. **List paragraphs** with hash-anchored references:
    ```python
-   from docx import Document
-   doc = Document('large-file.docx')
-   for i, p in enumerate(doc.paragraphs):
-       if "keyword" in p.text:
-           print(f"{i}: {p.text[:80]}...")
+   from docx_editor import Document
+   doc = Document.open("large-file.docx", author="Reviewer")
+   for p in doc.list_paragraphs():
+       print(p)
    ```
 
-2. **Count occurrences** of your target text to ensure uniqueness
+2. **Identify target paragraphs** by scanning the output for relevant content
 
-3. **Add surrounding context** if multiple matches exist
+3. **Edit with paragraph references** — the hash ensures you target the correct location:
+   ```python
+   doc.replace("old text", "new text", paragraph="P42#c3d4")
+   ```
 
-4. **Edit with docx_editor** using that unique context
-
-5. **Verify the edit** was made in the correct location
+4. **Verify** with `list_revisions()` if needed
 
 ### Complementary Tools
 

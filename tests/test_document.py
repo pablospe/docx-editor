@@ -1,6 +1,7 @@
 """Tests for the main Document class."""
 
 import pytest
+from conftest import find_ref
 
 from docx_editor import Document
 from docx_editor.workspace import Workspace
@@ -178,16 +179,16 @@ class TestDocumentEdgeCases:
             doc.count_matches("test")
 
         with pytest.raises(ValueError, match="closed"):
-            doc.replace("old", "new")
+            doc.replace("old", "new", paragraph="dummy")
 
         with pytest.raises(ValueError, match="closed"):
-            doc.delete("text")
+            doc.delete("text", paragraph="dummy")
 
         with pytest.raises(ValueError, match="closed"):
-            doc.insert_after("anchor", "text")
+            doc.insert_after("anchor", "text", paragraph="dummy")
 
         with pytest.raises(ValueError, match="closed"):
-            doc.insert_before("anchor", "text")
+            doc.insert_before("anchor", "text", paragraph="dummy")
 
         with pytest.raises(ValueError, match="closed"):
             doc.add_comment("anchor", "comment")
@@ -431,7 +432,8 @@ class TestDocumentGetVisibleText:
         """Inserted text should appear in visible text."""
         doc = Document.open(clean_workspace)
         original = doc.get_visible_text()
-        doc.insert_after("fox", " INSERTED")
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " INSERTED", paragraph=ref)
         updated = doc.get_visible_text()
         assert "INSERTED" in updated
         assert len(updated) > len(original)
@@ -442,7 +444,8 @@ class TestDocumentGetVisibleText:
         doc = Document.open(clean_workspace)
         original = doc.get_visible_text()
         assert "fox" in original
-        doc.delete("fox")
+        ref = find_ref(doc, "fox")
+        doc.delete("fox", paragraph=ref)
         updated = doc.get_visible_text()
         assert "fox" not in updated
         doc.close()
@@ -450,7 +453,8 @@ class TestDocumentGetVisibleText:
     def test_get_visible_text_after_replace(self, clean_workspace):
         """Replaced text should show new text, not old."""
         doc = Document.open(clean_workspace)
-        doc.replace("fox", "cat")
+        ref = find_ref(doc, "fox")
+        doc.replace("fox", "cat", paragraph=ref)
         text = doc.get_visible_text()
         assert "cat" in text
         assert "fox" not in text
@@ -486,10 +490,11 @@ class TestDocumentFindText:
     def test_find_text_after_insertion(self, clean_workspace):
         """Find text that spans an insertion boundary."""
         doc = Document.open(clean_workspace)
-        # insert_after splits the run at the anchor and inserts inline after it
-        doc.insert_after("fox", " INSERTED")
-        # "fox INSERTED" spans original run + insertion
-        match = doc.find_text("fox INSERTED")
+        # insert_after with paragraph= inserts after the run containing anchor
+        ref = find_ref(doc, "dog.")
+        doc.insert_after("dog.", " INSERTED", paragraph=ref)
+        # "dog. INSERTED" spans original run + insertion
+        match = doc.find_text("dog. INSERTED")
         assert match is not None
         assert match.spans_boundary
         doc.close()
