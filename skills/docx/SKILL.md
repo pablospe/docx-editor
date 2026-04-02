@@ -431,9 +431,9 @@ doc.replace("30", "60", paragraph="P2#f3c1")
 # Multiple independent swaps — use batch_edit():
 # "CFO" → "Finance Director", "audit committee" → "board", "December 31st" → "January 15th"
 doc.batch_edit([
-    {"paragraph": "P5#a7b2", "find": "CFO", "replace": "Finance Director"},
-    {"paragraph": "P5#a7b2", "find": "audit committee", "replace": "board"},
-    {"paragraph": "P5#a7b2", "find": "December 31st", "replace": "January 15th"},
+    EditOperation(action="replace", find="CFO", replace_with="Finance Director", paragraph="P5#a7b2"),
+    EditOperation(action="replace", find="audit committee", replace_with="board", paragraph="P5#a7b2"),
+    EditOperation(action="replace", find="December 31st", replace_with="January 15th", paragraph="P5#a7b2"),
 ])
 ```
 

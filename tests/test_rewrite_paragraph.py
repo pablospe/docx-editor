@@ -351,7 +351,7 @@ class TestRewriteDuplicateText:
         del_texts = [r.text for r in revisions if r.type == "deletion"]
         ins_texts = [r.text for r in revisions if r.type == "insertion"]
         assert any("the" in t.lower() for t in del_texts)
-        assert any("a" == t.strip() for t in ins_texts)
+        assert any(t.strip() == "a" for t in ins_texts)
 
 
 def _make_doc_with_paragraphs(paragraphs: list[str]):
