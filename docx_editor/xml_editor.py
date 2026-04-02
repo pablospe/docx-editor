@@ -6,6 +6,8 @@ line-number-based node finding and DOM manipulation.
 
 import html
 import random
+import re
+import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +85,40 @@ def find_in_text_map(text_map: TextMap, search: str, occurrence: int = 0) -> Tex
         positions=positions,
         spans_boundary=spans,
     )
+
+
+_PARAGRAPH_REF_RE = re.compile(r"^P(\d+)#([0-9a-f]{4})$")
+
+
+@dataclass
+class ParagraphRef:
+    """A reference to a specific paragraph by index and content hash."""
+
+    index: int  # 1-based paragraph index
+    hash: str  # 4-char lowercase hex hash
+
+    @classmethod
+    def parse(cls, ref: str) -> "ParagraphRef":
+        """Parse a paragraph reference string like 'P3#a7b2'.
+
+        Raises:
+            ValueError: If the reference format is invalid
+        """
+        m = _PARAGRAPH_REF_RE.match(ref)
+        if not m:
+            raise ValueError(
+                f"Invalid paragraph reference '{ref}'. Expected format: P{{index}}#{{hash}} (e.g., P3#a7b2)"
+            )
+        return cls(index=int(m.group(1)), hash=m.group(2))
+
+
+def compute_paragraph_hash(paragraph) -> str:
+    """Compute a 4-char hex content hash for a paragraph element.
+
+    Uses CRC32 of the paragraph's visible text (from build_text_map).
+    """
+    text = build_text_map(paragraph).text
+    return f"{zlib.crc32(text.encode('utf-8')) & 0xFFFF:04x}"
 
 
 def _is_inside_element(node, tag_name: str) -> bool:

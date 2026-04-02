@@ -6,11 +6,12 @@ without requiring Microsoft Word installed.
 Example:
     from docx_editor import Document
 
-    # Open and edit
+    # Open and edit with hash-anchored paragraph references
     doc = Document.open("contract.docx")
-    doc.replace("30 days", "60 days")           # Tracked replacement
-    doc.insert_after("Section 5", "New clause") # Tracked insertion
-    doc.delete("obsolete text")                 # Tracked deletion
+    refs = doc.list_paragraphs()                               # Snapshot paragraphs
+    doc.replace("30 days", "60 days", paragraph="P2#f3c1")     # Tracked replacement
+    doc.insert_after("Section 5", "New clause", paragraph="P3#a7b2")  # Tracked insertion
+    doc.delete("obsolete text", paragraph="P5#c4d8")           # Tracked deletion
 
     # Comments
     doc.add_comment("Section 5", "Please review")
@@ -34,6 +35,7 @@ from .exceptions import (
     CommentError,
     DocumentNotFoundError,
     DocxEditError,
+    HashMismatchError,
     InvalidDocumentError,
     MultipleNodesFoundError,
     NodeNotFoundError,
@@ -44,12 +46,21 @@ from .exceptions import (
     WorkspaceSyncError,
     XMLError,
 )
-from .track_changes import Revision
-from .xml_editor import TextMap, TextMapMatch, TextPosition, build_text_map, find_in_text_map
+from .track_changes import EditOperation, Revision
+from .xml_editor import (
+    ParagraphRef,
+    TextMap,
+    TextMapMatch,
+    TextPosition,
+    build_text_map,
+    compute_paragraph_hash,
+    find_in_text_map,
+)
 
 __all__ = [
     # Main classes
     "Document",
+    "EditOperation",
     "Revision",
     "Comment",
     # Exceptions
@@ -65,10 +76,13 @@ __all__ = [
     "RevisionError",
     "CommentError",
     "TextNotFoundError",
-    # Text map
+    "HashMismatchError",
+    # Text map & paragraph refs
     "TextPosition",
     "TextMap",
     "TextMapMatch",
+    "ParagraphRef",
     "build_text_map",
+    "compute_paragraph_hash",
     "find_in_text_map",
 ]

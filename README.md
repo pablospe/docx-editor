@@ -15,6 +15,8 @@ Pure Python library for Word document track changes and comments, without requir
 
 ## Features
 
+- **Hash-Anchored Paragraph References**: `list_paragraphs()` returns stable, hash-based paragraph IDs for safe, unambiguous targeting
+- **Batch Editing**: Atomic `batch_edit()` with upfront hash validation across all operations
 - **Track Changes**: Replace, delete, and insert text with revision tracking
 - **Cross-Boundary Editing**: Find and replace text spanning multiple XML elements and revision boundaries
 - **Mixed-State Editing**: Atomic decomposition for text spanning `<w:ins>`/`<w:del>` boundaries
@@ -67,12 +69,20 @@ Once installed, Claude Code can help you edit Word documents with track changes,
 
 ```python
 from docx_editor import Document
+import os
 
-with Document.open("contract.docx") as doc:
-    # Track changes
-    doc.replace("30 days", "60 days")
-    doc.insert_after("Section 5", "New clause")
-    doc.delete("obsolete text")
+author = os.environ.get("USER") or "Reviewer"
+with Document.open("contract.docx", author="Editor") as doc:
+    # Step 1: List paragraphs with hash-anchored references
+    for p in doc.list_paragraphs():
+        print(p)
+    # Output: P1#a7b2| Introduction to the contract...
+    #         P2#f3c1| The committee shall review...
+
+    # Step 2: Edit using paragraph references (safe, unambiguous)
+    doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+    doc.delete("obsolete text", paragraph="P5#d4e5")
+    doc.insert_after("Section 5", " (as amended)", paragraph="P3#b2c4")
 
     # Comments
     doc.add_comment("Section 5", "Please review")
@@ -90,10 +100,15 @@ Text in Word documents with tracked changes can span revision boundaries. `docx-
 
 ```python
 from docx_editor import Document
+import os
 
-with Document.open("reviewed.docx") as doc:
+author = os.environ.get("USER") or "Reviewer"
+with Document.open("reviewed.docx", author="Editor") as doc:
     # Get visible text (inserted text included, deleted excluded)
     text = doc.get_visible_text()
+
+    # List paragraphs to find hash-anchored references
+    refs = doc.list_paragraphs()
 
     # Find text across element boundaries
     match = doc.find_text("Aim: To")
@@ -101,7 +116,23 @@ with Document.open("reviewed.docx") as doc:
         print("Text spans a revision boundary")
 
     # Replace works even across revision boundaries
-    doc.replace("Aim: To", "Goal: To")
+    doc.replace("Aim: To", "Goal: To", paragraph="P1#a7b2")
 
+    doc.save()
+```
+
+### Batch Editing
+
+Apply multiple edits atomically with upfront hash validation:
+
+```python
+from docx_editor import Document, EditOperation
+
+with Document.open("contract.docx", author="Editor") as doc:
+    refs = doc.list_paragraphs()
+    doc.batch_edit([
+        EditOperation(action="replace", find="old", replace_with="new", paragraph="P2#f3c1"),
+        EditOperation(action="delete", text="remove this", paragraph="P5#d4e5"),
+    ])
     doc.save()
 ```

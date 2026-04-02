@@ -9,8 +9,29 @@ from datetime import datetime
 from typing import Literal
 from xml.dom.minidom import Element
 
-from .exceptions import RevisionError, TextNotFoundError
-from .xml_editor import DocxXMLEditor, TextMapMatch, TextPosition, build_text_map, find_in_text_map
+from .exceptions import HashMismatchError, RevisionError, TextNotFoundError
+from .xml_editor import (
+    DocxXMLEditor,
+    ParagraphRef,
+    TextMapMatch,
+    TextPosition,
+    build_text_map,
+    compute_paragraph_hash,
+    find_in_text_map,
+)
+
+
+@dataclass
+class EditOperation:
+    """A single edit operation for batch processing."""
+
+    action: Literal["replace", "delete", "insert_after", "insert_before"]
+    paragraph: str  # Required: hash-anchored ref like "P3#a7b2"
+    find: str | None = None  # For replace
+    replace_with: str | None = None  # For replace
+    text: str | None = None  # For delete (text to delete) or insert (text to insert)
+    anchor: str | None = None  # For insert_after/insert_before
+    occurrence: int = 0
 
 
 @dataclass
@@ -42,6 +63,113 @@ class RevisionManager:
             editor: DocxXMLEditor instance for word/document.xml
         """
         self.editor = editor
+
+    def _resolve_paragraph(self, ref: ParagraphRef):
+        """Resolve a ParagraphRef to its <w:p> element, validating the hash.
+
+        Args:
+            ref: Parsed paragraph reference
+
+        Returns:
+            The <w:p> DOM element
+
+        Raises:
+            IndexError: If paragraph index is out of range
+            HashMismatchError: If the hash doesn't match current content
+        """
+        paragraphs = self.editor.dom.getElementsByTagName("w:p")
+        if ref.index < 1 or ref.index > len(paragraphs):
+            raise IndexError(
+                f"Paragraph index {ref.index} out of range. Document has {len(paragraphs)} paragraphs (1-indexed)."
+            )
+        p = paragraphs[ref.index - 1]
+        actual_hash = compute_paragraph_hash(p)
+        if actual_hash != ref.hash:
+            tm = build_text_map(p)
+            preview = tm.text[:80]
+            if len(tm.text) > 80:
+                preview += "..."
+            raise HashMismatchError(ref.index, ref.hash, actual_hash, preview)
+        return p
+
+    def _find_in_paragraph(self, paragraph, text: str, occurrence: int = 0) -> TextMapMatch | None:
+        """Find the nth occurrence of text within a single paragraph."""
+        text_map = build_text_map(paragraph)
+        return find_in_text_map(text_map, text, occurrence)
+
+    def batch_edit(self, operations: list[EditOperation]) -> list[int]:
+        """Apply multiple edits atomically with upfront hash validation.
+
+        Validates all paragraph hashes before applying any edits.
+        Applies edits in reverse paragraph order so earlier paragraphs'
+        hashes remain valid throughout.
+
+        Args:
+            operations: List of EditOperation objects (each must have paragraph set)
+
+        Returns:
+            List of change IDs, one per operation (in original input order)
+
+        Raises:
+            HashMismatchError: If any paragraph hash is stale (no edits applied)
+            ValueError: If any operation is missing required fields
+        """
+        if not operations:
+            return []
+
+        # Parse and validate all refs upfront
+        parsed: list[tuple[int, ParagraphRef, EditOperation]] = []
+        for i, op in enumerate(operations):
+            if not op.paragraph:
+                raise ValueError(f"Operation {i}: paragraph reference is required for batch mode")
+            ref = ParagraphRef.parse(op.paragraph)
+            self._resolve_paragraph(ref)  # Raises HashMismatchError if stale
+            parsed.append((i, ref, op))
+
+        # Sort by paragraph index descending (reverse order) for application
+        # Stable sort preserves original order for same-paragraph edits
+        parsed.sort(key=lambda x: x[1].index, reverse=True)
+
+        # Apply edits in reverse paragraph order
+        results = [0] * len(operations)
+        for original_idx, _ref, op in parsed:
+            change_id = self._apply_single_edit(op)
+            results[original_idx] = change_id
+
+        return results
+
+    def _apply_single_edit(self, op: EditOperation) -> int:
+        """Apply a single edit operation. Paragraph hash was already validated."""
+        ref = ParagraphRef.parse(op.paragraph)
+        p = self.editor.dom.getElementsByTagName("w:p")[ref.index - 1]
+
+        if op.action == "replace":
+            if not op.find or op.replace_with is None:
+                raise ValueError("replace requires 'find' and 'replace_with'")
+            match = self._find_in_paragraph(p, op.find, op.occurrence)
+            if match is None:
+                raise TextNotFoundError(f"Text not found in paragraph P{ref.index}: '{op.find}'")
+            return self._replace_across_nodes(match, op.replace_with)
+
+        elif op.action == "delete":
+            if not op.text:
+                raise ValueError("delete requires 'text'")
+            match = self._find_in_paragraph(p, op.text, op.occurrence)
+            if match is None:
+                raise TextNotFoundError(f"Text not found in paragraph P{ref.index}: '{op.text}'")
+            return self._delete_across_nodes(match)
+
+        elif op.action in ("insert_after", "insert_before"):
+            if not op.anchor or op.text is None:
+                raise ValueError(f"{op.action} requires 'anchor' and 'text'")
+            match = self._find_in_paragraph(p, op.anchor, op.occurrence)
+            if match is None:
+                raise TextNotFoundError(f"Anchor not found in paragraph P{ref.index}: '{op.anchor}'")
+            position = "after" if op.action == "insert_after" else "before"
+            return self._insert_near_match(match, op.text, position)
+
+        else:
+            raise ValueError(f"Unknown action: {op.action}")
 
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.
@@ -125,7 +253,7 @@ class RevisionManager:
                 local_occ += 1
         return None
 
-    def replace_text(self, find: str, replace_with: str, occurrence: int = 0) -> int:
+    def replace_text(self, find: str, replace_with: str, occurrence: int = 0, paragraph: str | None = None) -> int:
         """Replace text with tracked changes (deletion + insertion).
 
         Finds the specified occurrence of `find` text and replaces it with `replace_with`,
@@ -135,13 +263,23 @@ class RevisionManager:
             find: Text to find and replace
             replace_with: Replacement text
             occurrence: Which occurrence to replace (0 = first, 1 = second, etc.)
+            paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope the search
 
         Returns:
             The change ID of the insertion
 
         Raises:
             TextNotFoundError: If the text is not found or occurrence doesn't exist
+            HashMismatchError: If the paragraph hash doesn't match
         """
+        if paragraph is not None:
+            ref = ParagraphRef.parse(paragraph)
+            p = self._resolve_paragraph(ref)
+            match = self._find_in_paragraph(p, find, occurrence)
+            if match is None:
+                raise TextNotFoundError(f"Text not found in paragraph P{ref.index}: '{find}'")
+            return self._replace_across_nodes(match, replace_with)
+
         # Find the text element containing the search text
         try:
             elem = self._get_nth_match(find, occurrence)
@@ -218,19 +356,29 @@ class RevisionManager:
 
         return -1
 
-    def suggest_deletion(self, text: str, occurrence: int = 0) -> int:
+    def suggest_deletion(self, text: str, occurrence: int = 0, paragraph: str | None = None) -> int:
         """Mark text as deleted with tracked changes.
 
         Args:
             text: Text to mark as deleted
             occurrence: Which occurrence to delete (0 = first, 1 = second, etc.)
+            paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope the search
 
         Returns:
             The change ID of the deletion
 
         Raises:
             TextNotFoundError: If the text is not found or occurrence doesn't exist
+            HashMismatchError: If the paragraph hash doesn't match
         """
+        if paragraph is not None:
+            ref = ParagraphRef.parse(paragraph)
+            p = self._resolve_paragraph(ref)
+            match = self._find_in_paragraph(p, text, occurrence)
+            if match is None:
+                raise TextNotFoundError(f"Text not found in paragraph P{ref.index}: '{text}'")
+            return self._delete_across_nodes(match)
+
         # Find the text element containing the search text
         try:
             elem = self._get_nth_match(text, occurrence)
@@ -907,40 +1055,59 @@ class RevisionManager:
 
         return first_del_id
 
-    def insert_text_after(self, anchor: str, text: str, occurrence: int = 0) -> int:
+    def insert_text_after(self, anchor: str, text: str, occurrence: int = 0, paragraph: str | None = None) -> int:
         """Insert text after anchor with tracked changes.
 
         Args:
             anchor: Text to find as the anchor point
             text: Text to insert after the anchor
             occurrence: Which occurrence of anchor to use (0 = first, 1 = second, etc.)
+            paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope the search
 
         Returns:
             The change ID of the insertion
 
         Raises:
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
+            HashMismatchError: If the paragraph hash doesn't match
         """
-        return self._insert_text(anchor, text, position="after", occurrence=occurrence)
+        return self._insert_text(anchor, text, position="after", occurrence=occurrence, paragraph=paragraph)
 
-    def insert_text_before(self, anchor: str, text: str, occurrence: int = 0) -> int:
+    def insert_text_before(self, anchor: str, text: str, occurrence: int = 0, paragraph: str | None = None) -> int:
         """Insert text before anchor with tracked changes.
 
         Args:
             anchor: Text to find as the anchor point
             text: Text to insert before the anchor
             occurrence: Which occurrence of anchor to use (0 = first, 1 = second, etc.)
+            paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope the search
 
         Returns:
             The change ID of the insertion
 
         Raises:
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
+            HashMismatchError: If the paragraph hash doesn't match
         """
-        return self._insert_text(anchor, text, position="before", occurrence=occurrence)
+        return self._insert_text(anchor, text, position="before", occurrence=occurrence, paragraph=paragraph)
 
-    def _insert_text(self, anchor: str, text: str, position: Literal["before", "after"], occurrence: int = 0) -> int:
+    def _insert_text(
+        self,
+        anchor: str,
+        text: str,
+        position: Literal["before", "after"],
+        occurrence: int = 0,
+        paragraph: str | None = None,
+    ) -> int:
         """Insert text before or after anchor with tracked changes."""
+        if paragraph is not None:
+            ref = ParagraphRef.parse(paragraph)
+            p = self._resolve_paragraph(ref)
+            match = self._find_in_paragraph(p, anchor, occurrence)
+            if match is None:
+                raise TextNotFoundError(f"Anchor text not found in paragraph P{ref.index}: '{anchor}'")
+            return self._insert_near_match(match, text, position)
+
         # Find the text element containing the anchor text
         try:
             elem = self._get_nth_match(anchor, occurrence)
@@ -1015,7 +1182,7 @@ class RevisionManager:
 
         return -1
 
-    def _insert_near_match(self, match: TextMapMatch, text: str, position: str) -> int:
+    def _insert_near_match(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:
         """Insert text before/after a cross-boundary match."""
         positions = match.positions
         if not positions:

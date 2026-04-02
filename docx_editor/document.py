@@ -10,9 +10,9 @@ from pathlib import Path
 
 from .comments import Comment, CommentManager
 from .exceptions import WorkspaceSyncError
-from .track_changes import Revision, RevisionManager
+from .track_changes import EditOperation, Revision, RevisionManager
 from .workspace import Workspace
-from .xml_editor import DocxXMLEditor, build_text_map
+from .xml_editor import DocxXMLEditor, build_text_map, compute_paragraph_hash
 
 
 class Document:
@@ -145,6 +145,30 @@ class Document:
         self._ensure_open()
         return self._revision_manager.count_matches(text)
 
+    def list_paragraphs(self, max_chars: int = 80) -> list[str]:
+        """List all paragraphs with hash-anchored references.
+
+        Returns a list of strings like "P1#a7b2| Introduction to the..."
+        for use as stable paragraph references in editing operations.
+
+        Args:
+            max_chars: Maximum characters for the preview text (default 80)
+
+        Returns:
+            List of hash-tagged paragraph preview strings
+        """
+        self._ensure_open()
+        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        result = []
+        for i, p in enumerate(paragraphs, start=1):
+            h = compute_paragraph_hash(p)
+            tm = build_text_map(p)
+            preview = tm.text[:max_chars]
+            if len(tm.text) > max_chars:
+                preview += "..."
+            result.append(f"P{i}#{h}| {preview}")
+        return result
+
     def get_visible_text(self) -> str:
         """Get the visible text of the document.
 
@@ -162,7 +186,7 @@ class Document:
             parts.append(tm.text)
         return "\n".join(parts)
 
-    def replace(self, find: str, replace_with: str, occurrence: int = 0) -> int:
+    def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int = 0) -> int:
         """Replace text with tracked changes.
 
         Creates a tracked deletion of the old text and insertion of the new text.
@@ -170,70 +194,96 @@ class Document:
         Args:
             find: Text to find and replace
             replace_with: Replacement text
-            occurrence: Which occurrence to replace (0 = first, 1 = second, etc.)
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence within the paragraph (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the insertion
 
         Example:
-            doc.replace("30 days", "60 days")  # Replace first occurrence
-            doc.replace("30 days", "60 days", occurrence=2)  # Replace third occurrence
+            refs = doc.list_paragraphs()
+            doc.replace("30 days", "60 days", paragraph="P2#f3c1")
         """
         self._ensure_open()
-        return self._revision_manager.replace_text(find, replace_with, occurrence=occurrence)
+        return self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
 
-    def delete(self, text: str, occurrence: int = 0) -> int:
+    def delete(self, text: str, *, paragraph: str, occurrence: int = 0) -> int:
         """Mark text as deleted with tracked changes.
 
         Args:
             text: Text to mark as deleted
-            occurrence: Which occurrence to delete (0 = first, 1 = second, etc.)
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence within the paragraph (0 = first, 1 = second, etc.)
 
         Returns:
             The change ID of the deletion
 
         Example:
-            doc.delete("obsolete clause")
-            doc.delete("obsolete clause", occurrence=1)  # Delete second occurrence
+            doc.delete("obsolete clause", paragraph="P2#f3c1")
         """
         self._ensure_open()
-        return self._revision_manager.suggest_deletion(text, occurrence=occurrence)
+        return self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
 
-    def insert_after(self, anchor: str, text: str, occurrence: int = 0) -> int:
+    def insert_after(self, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> int:
         """Insert text after anchor with tracked changes.
 
         Args:
             anchor: Text to find as insertion point
             text: Text to insert after the anchor
-            occurrence: Which occurrence of anchor to use (0 = first, 1 = second, etc.)
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence of anchor within the paragraph (0 = first)
 
         Returns:
             The change ID of the insertion
 
         Example:
-            doc.insert_after("Section 5", " (as amended)")
-            doc.insert_after("Section 5", " (revised)", occurrence=1)  # After second match
+            doc.insert_after("Section 5", " (as amended)", paragraph="P2#f3c1")
         """
         self._ensure_open()
-        return self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence)
+        return self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
 
-    def insert_before(self, anchor: str, text: str, occurrence: int = 0) -> int:
+    def insert_before(self, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> int:
         """Insert text before anchor with tracked changes.
 
         Args:
             anchor: Text to find as insertion point
             text: Text to insert before the anchor
-            occurrence: Which occurrence of anchor to use (0 = first, 1 = second, etc.)
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence of anchor within the paragraph (0 = first)
 
         Returns:
             The change ID of the insertion
 
         Example:
-            doc.insert_before("Section 6", "New clause: ")
-            doc.insert_before("Section 6", "Note: ", occurrence=1)  # Before second match
+            doc.insert_before("Section 6", "New clause: ", paragraph="P2#f3c1")
         """
         self._ensure_open()
-        return self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence)
+        return self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
+
+    def batch_edit(self, operations: list[EditOperation]) -> list[int]:
+        """Apply multiple edits atomically with upfront hash validation.
+
+        All paragraph hashes are validated before any edits are applied.
+        If any hash is stale, the entire batch is rejected. Edits are applied
+        in reverse paragraph order so a single list_paragraphs() snapshot
+        suffices for the entire batch.
+
+        Args:
+            operations: List of EditOperation objects
+
+        Returns:
+            List of change IDs (one per operation, in input order)
+
+        Example:
+            refs = doc.list_paragraphs()
+            doc.batch_edit([
+                EditOperation(action="replace", find="old", replace_with="new", paragraph="P20#a7b2"),
+                EditOperation(action="delete", text="remove", paragraph="P15#f3c1"),
+                EditOperation(action="insert_after", anchor="here", text=" added", paragraph="P3#b2c4"),
+            ])
+        """
+        self._ensure_open()
+        return self._revision_manager.batch_edit(operations)
 
     # ==================== Comments API ====================
 

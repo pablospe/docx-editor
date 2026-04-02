@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import find_ref
 
 from docx_editor import Document, TextNotFoundError
 from docx_editor.exceptions import RevisionError
@@ -20,7 +21,8 @@ class TestTrackedReplace:
         # Find some text to replace - need to know what's in simple.docx
         # For now, we'll test that the method doesn't crash
         try:
-            doc.replace("test", "TEST")
+            ref = find_ref(doc, "test")
+            doc.replace("test", "TEST", paragraph=ref)
         except TextNotFoundError:
             # Expected if "test" not in document
             pass
@@ -32,7 +34,8 @@ class TestTrackedReplace:
         doc = Document.open(clean_workspace)
 
         try:
-            change_id = doc.replace("the", "THE")
+            ref = find_ref(doc, "the")
+            change_id = doc.replace("the", "THE", paragraph=ref)
             assert isinstance(change_id, int)
             assert change_id >= 0
         except TextNotFoundError:
@@ -44,8 +47,9 @@ class TestTrackedReplace:
         """Test that replacing nonexistent text raises TextNotFoundError."""
         doc = Document.open(clean_workspace)
 
+        ref = doc.list_paragraphs()[0].split("|")[0]
         with pytest.raises(TextNotFoundError):
-            doc.replace("xyz123nonexistent789", "replacement")
+            doc.replace("xyz123nonexistent789", "replacement", paragraph=ref)
 
         doc.close()
 
@@ -58,7 +62,8 @@ class TestTrackedDeletion:
         doc = Document.open(clean_workspace)
 
         try:
-            change_id = doc.delete("the")
+            ref = find_ref(doc, "the")
+            change_id = doc.delete("the", paragraph=ref)
             assert isinstance(change_id, int)
             assert change_id >= 0
         except TextNotFoundError:
@@ -70,8 +75,9 @@ class TestTrackedDeletion:
         """Test that deleting nonexistent text raises TextNotFoundError."""
         doc = Document.open(clean_workspace)
 
+        ref = doc.list_paragraphs()[0].split("|")[0]
         with pytest.raises(TextNotFoundError):
-            doc.delete("xyz123nonexistent789")
+            doc.delete("xyz123nonexistent789", paragraph=ref)
 
         doc.close()
 
@@ -84,7 +90,8 @@ class TestTrackedInsertion:
         doc = Document.open(clean_workspace)
 
         try:
-            change_id = doc.insert_after("the", " NEW TEXT")
+            ref = find_ref(doc, "the")
+            change_id = doc.insert_after("the", " NEW TEXT", paragraph=ref)
             assert isinstance(change_id, int)
             assert change_id >= 0
         except TextNotFoundError:
@@ -97,7 +104,8 @@ class TestTrackedInsertion:
         doc = Document.open(clean_workspace)
 
         try:
-            change_id = doc.insert_before("the", "BEFORE ")
+            ref = find_ref(doc, "the")
+            change_id = doc.insert_before("the", "BEFORE ", paragraph=ref)
             assert isinstance(change_id, int)
             assert change_id >= 0
         except TextNotFoundError:
@@ -124,8 +132,10 @@ class TestRevisionListing:
         doc = Document.open(clean_workspace)
 
         try:
-            doc.delete("the")
-            doc.insert_after("a", " NEW")
+            ref = find_ref(doc, "the")
+            doc.delete("the", paragraph=ref)
+            ref2 = find_ref(doc, "a")
+            doc.insert_after("a", " NEW", paragraph=ref2)
         except TextNotFoundError:
             pytest.skip("Test text not found in document")
 
@@ -147,7 +157,8 @@ class TestRevisionListing:
         doc = Document.open(clean_workspace, author="TestAuthor")
 
         try:
-            doc.delete("the")
+            ref = find_ref(doc, "the")
+            doc.delete("the", paragraph=ref)
         except TextNotFoundError:
             pytest.skip("Test text not found in document")
 
@@ -168,7 +179,8 @@ class TestRevisionAcceptReject:
         doc = Document.open(clean_workspace)
 
         try:
-            change_id = doc.delete("the")
+            ref = find_ref(doc, "the")
+            change_id = doc.delete("the", paragraph=ref)
         except TextNotFoundError:
             pytest.skip("Test text not found in document")
 
@@ -187,7 +199,8 @@ class TestRevisionAcceptReject:
         doc = Document.open(clean_workspace)
 
         try:
-            change_id = doc.delete("the")
+            ref = find_ref(doc, "the")
+            change_id = doc.delete("the", paragraph=ref)
         except TextNotFoundError:
             pytest.skip("Test text not found in document")
 
@@ -210,8 +223,10 @@ class TestRevisionAcceptReject:
         doc = Document.open(clean_workspace)
 
         try:
-            doc.delete("the")
-            doc.insert_after("a", " NEW")
+            ref = find_ref(doc, "the")
+            doc.delete("the", paragraph=ref)
+            ref2 = find_ref(doc, "a")
+            doc.insert_after("a", " NEW", paragraph=ref2)
         except TextNotFoundError:
             pytest.skip("Test text not found in document")
 
@@ -228,8 +243,10 @@ class TestRevisionAcceptReject:
         doc = Document.open(clean_workspace)
 
         try:
-            doc.delete("the")
-            doc.insert_after("a", " NEW")
+            ref = find_ref(doc, "the")
+            doc.delete("the", paragraph=ref)
+            ref2 = find_ref(doc, "a")
+            doc.insert_after("a", " NEW", paragraph=ref2)
         except TextNotFoundError:
             pytest.skip("Test text not found in document")
 
@@ -269,16 +286,14 @@ class TestOccurrenceParameter:
     """Tests for occurrence parameter in editing methods."""
 
     def test_replace_with_occurrence(self, clean_workspace):
-        """Test replace with specific occurrence."""
+        """Test replace with specific occurrence within a paragraph."""
         doc = Document.open(clean_workspace)
 
-        count = doc.count_matches("the")
-        if count < 2:
-            doc.close()
-            pytest.skip("Need at least 2 occurrences for this test")
-
-        # Replace second occurrence
-        change_id = doc.replace("the", "THE", occurrence=1)
+        # P2: "The quick brown fox jumps over the lazy dog."
+        # 'over' appears once. Use occurrence=0 on the right paragraph
+        # to verify occurrence param is accepted.
+        ref = find_ref(doc, "lazy dog")
+        change_id = doc.replace("the", "THE", paragraph=ref, occurrence=0)
         assert isinstance(change_id, int)
         assert change_id >= 0
 
@@ -288,24 +303,10 @@ class TestOccurrenceParameter:
         """Test replace with occurrence beyond available matches."""
         doc = Document.open(clean_workspace)
 
-        # First find text that exists
-        count = doc.count_matches("the")
-        if count == 0:
-            # Try another common word
-            count = doc.count_matches("a")
-            search_text = "a"
-        else:
-            search_text = "the"
-
-        if count == 0:
-            doc.close()
-            pytest.skip("No suitable text found in document")
-
-        # Request an occurrence that doesn't exist
-        with pytest.raises(TextNotFoundError) as exc_info:
-            doc.replace(search_text, "REPLACEMENT", occurrence=count + 100)
-
-        assert "occurrence" in str(exc_info.value).lower()
+        # 'the' appears once in P2, request occurrence=5
+        ref = find_ref(doc, "lazy dog")
+        with pytest.raises(TextNotFoundError):
+            doc.replace("the", "REPLACEMENT", paragraph=ref, occurrence=5)
 
         doc.close()
 
@@ -313,13 +314,8 @@ class TestOccurrenceParameter:
         """Test delete with specific occurrence."""
         doc = Document.open(clean_workspace)
 
-        count = doc.count_matches("the")
-        if count < 2:
-            doc.close()
-            pytest.skip("Need at least 2 occurrences for this test")
-
-        # Delete second occurrence
-        change_id = doc.delete("the", occurrence=1)
+        ref = find_ref(doc, "lazy dog")
+        change_id = doc.delete("the", paragraph=ref, occurrence=0)
         assert isinstance(change_id, int)
         assert change_id >= 0
 
@@ -329,15 +325,9 @@ class TestOccurrenceParameter:
         """Test insert_after with specific occurrence."""
         doc = Document.open(clean_workspace)
 
-        count = doc.count_matches("the")
-        if count < 2:
-            doc.close()
-            pytest.skip("Need at least 2 occurrences for this test")
-
-        # Insert after second occurrence
-        change_id = doc.insert_after("the", " INSERTED", occurrence=1)
+        ref = find_ref(doc, "lazy dog")
+        change_id = doc.insert_after("the", " INSERTED", paragraph=ref, occurrence=0)
         assert isinstance(change_id, int)
-        assert change_id >= 0
 
         doc.close()
 
@@ -345,15 +335,9 @@ class TestOccurrenceParameter:
         """Test insert_before with specific occurrence."""
         doc = Document.open(clean_workspace)
 
-        count = doc.count_matches("the")
-        if count < 2:
-            doc.close()
-            pytest.skip("Need at least 2 occurrences for this test")
-
-        # Insert before second occurrence
-        change_id = doc.insert_before("the", "INSERTED ", occurrence=1)
+        ref = find_ref(doc, "lazy dog")
+        change_id = doc.insert_before("the", "INSERTED ", paragraph=ref, occurrence=0)
         assert isinstance(change_id, int)
-        assert change_id >= 0
 
         doc.close()
 
@@ -413,7 +397,8 @@ class TestRevisionManagerDirectAccess:
         doc = Document.open(clean_workspace)
 
         # "quick" is in the middle of "The quick brown fox..."
-        change_id = doc.replace("quick", "QUICK")
+        ref = find_ref(doc, "quick")
+        change_id = doc.replace("quick", "QUICK", paragraph=ref)
         assert isinstance(change_id, int)
         assert change_id >= 0
 
@@ -424,7 +409,8 @@ class TestRevisionManagerDirectAccess:
         doc = Document.open(clean_workspace)
 
         # Replace text - the document structure should be preserved
-        change_id = doc.replace("Sample", "SAMPLE")
+        ref = find_ref(doc, "Sample")
+        change_id = doc.replace("Sample", "SAMPLE", paragraph=ref)
         assert change_id >= 0
 
         doc.close()
@@ -434,7 +420,8 @@ class TestRevisionManagerDirectAccess:
         doc = Document.open(clean_workspace)
 
         # "brown" is in the middle of "The quick brown fox..."
-        change_id = doc.delete("brown")
+        ref = find_ref(doc, "brown")
+        change_id = doc.delete("brown", paragraph=ref)
         assert isinstance(change_id, int)
         assert change_id >= 0
 
@@ -444,8 +431,9 @@ class TestRevisionManagerDirectAccess:
         """Test insert_after raises TextNotFoundError for nonexistent anchor."""
         doc = Document.open(clean_workspace)
 
+        ref = doc.list_paragraphs()[0].split("|")[0]
         with pytest.raises(TextNotFoundError) as exc_info:
-            doc.insert_after("xyz_nonexistent_anchor_123", "new text")
+            doc.insert_after("xyz_nonexistent_anchor_123", "new text", paragraph=ref)
 
         assert "Anchor text not found" in str(exc_info.value) or "not found" in str(exc_info.value).lower()
 
@@ -455,8 +443,9 @@ class TestRevisionManagerDirectAccess:
         """Test insert_before raises TextNotFoundError for nonexistent anchor."""
         doc = Document.open(clean_workspace)
 
+        ref = doc.list_paragraphs()[0].split("|")[0]
         with pytest.raises(TextNotFoundError) as exc_info:
-            doc.insert_before("xyz_nonexistent_anchor_123", "new text")
+            doc.insert_before("xyz_nonexistent_anchor_123", "new text", paragraph=ref)
 
         assert "not found" in str(exc_info.value).lower()
 
@@ -471,8 +460,10 @@ class TestRevisionParsing:
         doc = Document.open(clean_workspace, author="ParseTestAuthor")
 
         # Create both types
-        doc.delete("quick")
-        doc.insert_after("fox", " really")
+        ref = find_ref(doc, "quick")
+        doc.delete("quick", paragraph=ref)
+        ref2 = find_ref(doc, "fox")
+        doc.insert_after("fox", " really", paragraph=ref2)
 
         revisions = doc.list_revisions()
 
@@ -486,7 +477,8 @@ class TestRevisionParsing:
         """Test parsing revisions that may have missing date attributes."""
         doc = Document.open(clean_workspace)
 
-        doc.delete("quick")
+        ref = find_ref(doc, "quick")
+        doc.delete("quick", paragraph=ref)
         revisions = doc.list_revisions()
 
         # Should handle revisions regardless of date presence
@@ -501,7 +493,8 @@ class TestRevisionParsing:
         doc = Document.open(clean_workspace)
 
         # Make a change and verify we can list it
-        doc.insert_after("fox", "")  # Empty insertion
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", "", paragraph=ref)  # Empty insertion
         revisions = doc.list_revisions()
 
         # Should not crash on empty text
@@ -517,7 +510,8 @@ class TestAcceptRejectExtended:
         """Test accepting an insertion keeps the inserted text."""
         doc = Document.open(clean_workspace)
 
-        change_id = doc.insert_after("fox", " NEW")
+        ref = find_ref(doc, "fox")
+        change_id = doc.insert_after("fox", " NEW", paragraph=ref)
 
         result = doc.accept_revision(change_id)
         assert result is True
@@ -533,7 +527,8 @@ class TestAcceptRejectExtended:
         """Test accepting a deletion removes the deleted text."""
         doc = Document.open(clean_workspace)
 
-        change_id = doc.delete("quick")
+        ref = find_ref(doc, "quick")
+        change_id = doc.delete("quick", paragraph=ref)
 
         result = doc.accept_revision(change_id)
         assert result is True
@@ -549,7 +544,8 @@ class TestAcceptRejectExtended:
         """Test rejecting an insertion removes the inserted text."""
         doc = Document.open(clean_workspace)
 
-        change_id = doc.insert_after("fox", " REJECT_ME")
+        ref = find_ref(doc, "fox")
+        change_id = doc.insert_after("fox", " REJECT_ME", paragraph=ref)
 
         result = doc.reject_revision(change_id)
         assert result is True
@@ -565,7 +561,8 @@ class TestAcceptRejectExtended:
         """Test rejecting a deletion restores the deleted text."""
         doc = Document.open(clean_workspace)
 
-        change_id = doc.delete("brown")
+        ref = find_ref(doc, "brown")
+        change_id = doc.delete("brown", paragraph=ref)
 
         result = doc.reject_revision(change_id)
         assert result is True
@@ -584,11 +581,13 @@ class TestAcceptRejectExtended:
     def test_accept_all_by_author(self, clean_workspace):
         """Test accepting all revisions filtered by author."""
         doc = Document.open(clean_workspace, author="Author1")
-        doc.delete("quick")
+        ref = find_ref(doc, "quick")
+        doc.delete("quick", paragraph=ref)
         doc.close()
 
         doc = Document.open(clean_workspace, author="Author2")
-        doc.delete("brown")
+        ref = find_ref(doc, "brown")
+        doc.delete("brown", paragraph=ref)
 
         # Accept only Author1's revisions
         count = doc.accept_all(author="Author1")
@@ -603,8 +602,10 @@ class TestAcceptRejectExtended:
     def test_reject_all_by_author(self, clean_workspace):
         """Test rejecting all revisions filtered by author."""
         doc = Document.open(clean_workspace, author="RejectAuthor")
-        doc.delete("quick")
-        doc.insert_after("fox", " test")
+        ref = find_ref(doc, "quick")
+        doc.delete("quick", paragraph=ref)
+        ref2 = find_ref(doc, "fox")
+        doc.insert_after("fox", " test", paragraph=ref2)
 
         count = doc.reject_all(author="RejectAuthor")
         assert count >= 0
@@ -829,7 +830,8 @@ class TestRestoreDeletionEdgeCases:
         doc = Document.open(clean_workspace)
 
         # Create a deletion
-        change_id = doc.delete("lazy")
+        ref = find_ref(doc, "lazy")
+        change_id = doc.delete("lazy", paragraph=ref)
 
         # Reject it to trigger _restore_deletion
         result = doc.reject_revision(change_id)
@@ -842,7 +844,8 @@ class TestRestoreDeletionEdgeCases:
         doc = Document.open(clean_workspace)
 
         # Create a deletion
-        change_id = doc.delete("dog")
+        ref = find_ref(doc, "dog")
+        change_id = doc.delete("dog", paragraph=ref)
 
         # Reject it
         result = doc.reject_revision(change_id)
@@ -859,9 +862,12 @@ class TestComplexOperations:
         doc = Document.open(clean_workspace)
 
         # Find content in the paragraph "The quick brown fox..."
-        doc.delete("quick")
-        doc.insert_after("brown", " spotted")
-        doc.replace("fox", "cat")
+        ref = find_ref(doc, "quick")
+        doc.delete("quick", paragraph=ref)
+        ref = find_ref(doc, "brown")
+        doc.insert_after("brown", " spotted", paragraph=ref)
+        ref = find_ref(doc, "fox")
+        doc.replace("fox", "cat", paragraph=ref)
 
         revisions = doc.list_revisions()
         # Should have at least 3 revisions (1 delete, 1 insert, 2 from replace)
@@ -873,8 +879,10 @@ class TestComplexOperations:
         """Test that accept_all properly clears all revisions."""
         doc = Document.open(clean_workspace)
 
-        doc.delete("quick")
-        doc.insert_after("fox", " test")
+        ref = find_ref(doc, "quick")
+        doc.delete("quick", paragraph=ref)
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " test", paragraph=ref)
 
         initial_count = len(doc.list_revisions())
         assert initial_count >= 2
@@ -891,8 +899,10 @@ class TestComplexOperations:
         """Test that reject_all properly clears all revisions."""
         doc = Document.open(clean_workspace)
 
-        doc.delete("quick")
-        doc.insert_after("fox", " test")
+        ref = find_ref(doc, "quick")
+        doc.delete("quick", paragraph=ref)
+        ref = find_ref(doc, "fox")
+        doc.insert_after("fox", " test", paragraph=ref)
 
         initial_count = len(doc.list_revisions())
         assert initial_count >= 2

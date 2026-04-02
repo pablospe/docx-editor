@@ -12,6 +12,7 @@ These tests exercise the multi-node grouping logic in:
 
 import defusedxml.minidom
 import pytest
+from conftest import find_ref
 
 from docx_editor.xml_editor import build_text_map, find_in_text_map
 
@@ -115,7 +116,8 @@ class TestMultiWtCrossBoundary:
         match = doc.find_text("o beautiful w")
         assert match is not None
 
-        doc.delete("o beautiful w")
+        ref = find_ref(doc, "o beautiful w")
+        doc.delete("o beautiful w", paragraph=ref)
         text = doc.get_visible_text()
         assert "o beautiful w" not in text
         # Should keep "Hell" from first w:t and "orld" from second
@@ -141,7 +143,8 @@ class TestMultiWtCrossBoundary:
         match = doc.find_text("o beautiful w")
         assert match is not None
 
-        doc.replace("o beautiful w", "O REPLACED W")
+        ref = find_ref(doc, "o beautiful w")
+        doc.replace("o beautiful w", "O REPLACED W", paragraph=ref)
         text = doc.get_visible_text()
         assert "o beautiful w" not in text
         assert "O REPLACED W" in text
@@ -187,7 +190,8 @@ class TestMultiWtCrossBoundary:
         assert match is not None
         assert all(pos.is_inside_ins for pos in match.positions)
 
-        doc.delete("o wor")
+        ref = find_ref(doc, "o wor")
+        doc.delete("o wor", paragraph=ref)
         text = doc.get_visible_text()
         assert "o wor" not in text
         assert "hell" in text

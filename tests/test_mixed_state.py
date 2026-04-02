@@ -1,6 +1,7 @@
 """Tests for mixed-state editing (Phase 5: Atomic Decomposition)."""
 
 import pytest
+from conftest import find_ref
 from conftest import parse_paragraph as _parse_paragraph
 
 from docx_editor import Document
@@ -54,14 +55,16 @@ class TestMixedStateReplace:
         doc = Document.open(clean_workspace)
         # insert_after puts text after the run containing anchor,
         # so "dog." is at end of run -> " ADDED" is in <w:ins> right after
-        doc.insert_after("dog.", " ADDED")
+        ref = find_ref(doc, "dog.")
+        doc.insert_after("dog.", " ADDED", paragraph=ref)
 
         match = doc.find_text("dog. ADDED")
         if match is None or not match.spans_boundary:
             doc.close()
             pytest.skip("Expected boundary not created")
 
-        change_id = doc.replace("dog. ADDED", "cat. CHANGED")
+        ref = find_ref(doc, "dog.")
+        change_id = doc.replace("dog. ADDED", "cat. CHANGED", paragraph=ref)
         assert change_id >= 0
 
         text = doc.get_visible_text()
@@ -80,7 +83,8 @@ class TestMixedStateReplace:
     def test_replace_fully_within_insertion(self, clean_workspace):
         """Replace text fully within an <w:ins> -- regression."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("dog.", " beautiful amazing")
+        ref = find_ref(doc, "dog.")
+        doc.insert_after("dog.", " beautiful amazing", paragraph=ref)
 
         match = doc.find_text("beautiful")
         if match is None:
@@ -91,7 +95,8 @@ class TestMixedStateReplace:
             doc.close()
             pytest.skip("Text not entirely within insertion")
 
-        change_id = doc.replace("beautiful", "wonderful")
+        ref = find_ref(doc, "beautiful")
+        change_id = doc.replace("beautiful", "wonderful", paragraph=ref)
         # change_id is -1 when editing in-place inside an existing insertion
         assert isinstance(change_id, int)
         text = doc.get_visible_text()
@@ -102,14 +107,16 @@ class TestMixedStateReplace:
     def test_ins_node_splitting(self, clean_workspace):
         """When partially matching an insertion, the ins node is split."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("dog.", " To examine whether")
+        ref = find_ref(doc, "dog.")
+        doc.insert_after("dog.", " To examine whether", paragraph=ref)
 
         match = doc.find_text("To")
         if match is None:
             doc.close()
             pytest.skip("Text not found")
 
-        doc.delete("To")
+        ref = find_ref(doc, "To")
+        doc.delete("To", paragraph=ref)
 
         text = doc.get_visible_text()
         assert "To" not in text
@@ -119,14 +126,16 @@ class TestMixedStateReplace:
     def test_rpr_preservation_across_split(self, clean_workspace):
         """w:rPr is preserved when splitting runs."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("dog.", " ADDED")
+        ref = find_ref(doc, "dog.")
+        doc.insert_after("dog.", " ADDED", paragraph=ref)
 
         match = doc.find_text("dog. ADDED")
         if match is None or not match.spans_boundary:
             doc.close()
             pytest.skip("Expected boundary not created")
 
-        doc.replace("dog. ADDED", "cat. CHANGED")
+        ref = find_ref(doc, "dog.")
+        doc.replace("dog. ADDED", "cat. CHANGED", paragraph=ref)
         text = doc.get_visible_text()
         assert "cat. CHANGED" in text
         doc.close()
@@ -134,14 +143,16 @@ class TestMixedStateReplace:
     def test_roundtrip_mixed_state_replace(self, clean_workspace, temp_dir):
         """Round-trip: mixed-state replace, save, reopen."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("dog.", " ADDED")
+        ref = find_ref(doc, "dog.")
+        doc.insert_after("dog.", " ADDED", paragraph=ref)
 
         match = doc.find_text("dog. ADDED")
         if match is None or not match.spans_boundary:
             doc.close()
             pytest.skip("Expected boundary not created")
 
-        doc.replace("dog. ADDED", "cat. CHANGED")
+        ref = find_ref(doc, "dog.")
+        doc.replace("dog. ADDED", "cat. CHANGED", paragraph=ref)
         output = temp_dir / "mixed_state_output.docx"
         doc.save(output)
         doc.close()
@@ -155,14 +166,16 @@ class TestMixedStateReplace:
     def test_roundtrip_within_insertion_replace(self, clean_workspace, temp_dir):
         """Round-trip: replace within insertion, save, reopen."""
         doc = Document.open(clean_workspace)
-        doc.insert_after("dog.", " beautiful amazing")
+        ref = find_ref(doc, "dog.")
+        doc.insert_after("dog.", " beautiful amazing", paragraph=ref)
 
         match = doc.find_text("beautiful")
         if match is None or not all(pos.is_inside_ins for pos in match.positions):
             doc.close()
             pytest.skip("Text not entirely within insertion")
 
-        doc.replace("beautiful", "wonderful")
+        ref = find_ref(doc, "beautiful")
+        doc.replace("beautiful", "wonderful", paragraph=ref)
         output = temp_dir / "within_ins_output.docx"
         doc.save(output)
         doc.close()

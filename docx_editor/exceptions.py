@@ -71,3 +71,19 @@ class TextNotFoundError(DocxEditError):
     """Raised when the target text cannot be found in the document."""
 
     pass
+
+
+class HashMismatchError(DocxEditError):
+    """Raised when a paragraph's content hash doesn't match the expected hash."""
+
+    def __init__(self, paragraph_index: int, expected_hash: str, actual_hash: str, paragraph_preview: str):
+        self.paragraph_index = paragraph_index
+        self.expected_hash = expected_hash
+        self.actual_hash = actual_hash
+        self.paragraph_preview = paragraph_preview
+        super().__init__(
+            f"Paragraph P{paragraph_index} content has changed. "
+            f"Expected hash '{expected_hash}', got '{actual_hash}'. "
+            f'Current content: "{paragraph_preview}". '
+            f"Use P{paragraph_index}#{actual_hash} to target current content."
+        )
