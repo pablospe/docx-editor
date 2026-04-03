@@ -289,9 +289,9 @@ def replace_text(
         return ext_error
 
     try:
-        change_id = cached.document.replace(old_text, new_text, paragraph=paragraph, occurrence=occurrence)
+        new_ref = cached.document.replace(old_text, new_text, paragraph=paragraph, occurrence=occurrence)
         cached.mark_dirty()
-        return {"success": True, "change_id": change_id}
+        return {"success": True, "new_ref": new_ref}
     except TextNotFoundError:
         return {"success": False, "error": f"Text not found: '{old_text}'"}
     except Exception as e:
@@ -327,9 +327,9 @@ def delete_text(
         return ext_error
 
     try:
-        change_id = cached.document.delete(text, paragraph=paragraph, occurrence=occurrence)
+        new_ref = cached.document.delete(text, paragraph=paragraph, occurrence=occurrence)
         cached.mark_dirty()
-        return {"success": True, "change_id": change_id}
+        return {"success": True, "new_ref": new_ref}
     except TextNotFoundError:
         return {"success": False, "error": f"Text not found: '{text}'"}
     except Exception as e:
@@ -367,9 +367,9 @@ def insert_after(
         return ext_error
 
     try:
-        change_id = cached.document.insert_after(anchor, text, paragraph=paragraph, occurrence=occurrence)
+        new_ref = cached.document.insert_after(anchor, text, paragraph=paragraph, occurrence=occurrence)
         cached.mark_dirty()
-        return {"success": True, "change_id": change_id}
+        return {"success": True, "new_ref": new_ref}
     except TextNotFoundError:
         return {"success": False, "error": f"Anchor not found: '{anchor}'"}
     except Exception as e:
@@ -407,9 +407,9 @@ def insert_before(
         return ext_error
 
     try:
-        change_id = cached.document.insert_before(anchor, text, paragraph=paragraph, occurrence=occurrence)
+        new_ref = cached.document.insert_before(anchor, text, paragraph=paragraph, occurrence=occurrence)
         cached.mark_dirty()
-        return {"success": True, "change_id": change_id}
+        return {"success": True, "new_ref": new_ref}
     except TextNotFoundError:
         return {"success": False, "error": f"Anchor not found: '{anchor}'"}
     except Exception as e:
@@ -457,11 +457,85 @@ def batch_edit(
         return {"success": False, "error": f"Invalid operation: {e}"}
 
     try:
-        change_ids = cached.document.batch_edit(ops)
+        new_refs = cached.document.batch_edit(ops)
         cached.mark_dirty()
-        return {"success": True, "change_ids": change_ids}
+        return {"success": True, "new_refs": new_refs}
     except TextNotFoundError as e:
         return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def rewrite_paragraph(
+    server: DocxMCPServer,
+    path: str,
+    paragraph: str,
+    new_text: str,
+) -> dict[str, Any]:
+    """Rewrite a paragraph with automatic word-level tracked changes.
+
+    Diffs old vs new text and generates fine-grained tracked insertions/deletions.
+    Use only when the edit cannot be decomposed into independent find/replace pairs
+    (e.g., sentence restructuring, reordering).
+
+    Args:
+        server: The MCP server instance.
+        path: Path to the document.
+        paragraph: Paragraph reference from list_paragraphs (e.g., "P2#f3c1").
+        new_text: Desired new text for the paragraph.
+
+    Returns:
+        Result dict with success status and new_ref.
+    """
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
+
+    ext_error = _check_external_changes(cached)
+    if ext_error:
+        return ext_error
+
+    try:
+        new_ref = cached.document.rewrite_paragraph(paragraph, new_text)
+        cached.mark_dirty()
+        return {"success": True, "new_ref": new_ref}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def batch_rewrite(
+    server: DocxMCPServer,
+    path: str,
+    rewrites: list[list[str]],
+) -> dict[str, Any]:
+    """Rewrite multiple paragraphs with upfront hash validation.
+
+    All paragraph hashes are validated before any rewrites are applied.
+    If any hash is stale, the entire batch is rejected.
+
+    Args:
+        server: The MCP server instance.
+        path: Path to the document.
+        rewrites: List of [paragraph_ref, new_text] pairs.
+
+    Returns:
+        Result dict with success status and list of new_refs.
+    """
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
+
+    ext_error = _check_external_changes(cached)
+    if ext_error:
+        return ext_error
+
+    try:
+        tuples = [(ref, text) for ref, text in rewrites]
+        new_refs = cached.document.batch_rewrite(tuples)
+        cached.mark_dirty()
+        return {"success": True, "new_refs": new_refs}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

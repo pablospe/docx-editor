@@ -289,7 +289,7 @@ class TestTrackChangesTools:
         result = replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi", para)
 
         assert result["success"] is True
-        assert "change_id" in result
+        assert "new_ref" in result
         assert server.cache.get(str(mcp_temp_docx)).dirty is True
 
     def test_replace_text_not_found(self, server, mcp_temp_docx):
@@ -326,7 +326,7 @@ class TestTrackChangesTools:
         result = delete_text(server, str(mcp_temp_docx), "quick brown fox", para)
 
         assert result["success"] is True
-        assert "change_id" in result
+        assert "new_ref" in result
         assert server.cache.get(str(mcp_temp_docx)).dirty is True
 
     def test_insert_after(self, server, mcp_temp_docx):
@@ -339,7 +339,7 @@ class TestTrackChangesTools:
         result = insert_after(server, str(mcp_temp_docx), "quick brown fox", " World", para)
 
         assert result["success"] is True
-        assert "change_id" in result
+        assert "new_ref" in result
 
     def test_insert_before(self, server, mcp_temp_docx):
         """insert_before inserts text before anchor."""
@@ -351,7 +351,7 @@ class TestTrackChangesTools:
         result = insert_before(server, str(mcp_temp_docx), "quick brown fox", "Say: ", para)
 
         assert result["success"] is True
-        assert "change_id" in result
+        assert "new_ref" in result
 
 
 class TestCommentTools:

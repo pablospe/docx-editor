@@ -157,6 +157,7 @@ class TestFastMCPApp:
             # Paragraphs & track changes
             "list_paragraphs", "replace_text", "delete_text",
             "insert_after", "insert_before", "batch_edit",
+            "rewrite_paragraph", "batch_rewrite",
             # Comments
             "add_comment", "list_comments", "reply_to_comment",
             "resolve_comment", "delete_comment",

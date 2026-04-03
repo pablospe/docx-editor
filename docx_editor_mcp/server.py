@@ -216,6 +216,29 @@ def _register_tools(mcp) -> None:
         """
         return json.dumps(tools.batch_edit(_get_server(ctx), path, operations))
 
+    @mcp.tool()
+    def rewrite_paragraph(path: str, paragraph: str, new_text: str, ctx: Context) -> str:
+        """Rewrite a paragraph with automatic word-level tracked changes. Use only for structural edits
+        (sentence restructuring, reordering) that can't be expressed as independent find/replace pairs.
+
+        Args:
+            path: Path to the document.
+            paragraph: Paragraph reference from list_paragraphs (e.g., "P2#f3c1").
+            new_text: Desired new text for the paragraph.
+        """
+        return json.dumps(tools.rewrite_paragraph(_get_server(ctx), path, paragraph, new_text))
+
+    @mcp.tool()
+    def batch_rewrite(path: str, rewrites: list[list[str]], ctx: Context) -> str:
+        """Rewrite multiple paragraphs atomically with word-level tracked changes.
+        All paragraph hashes are validated before any rewrites are applied.
+
+        Args:
+            path: Path to the document.
+            rewrites: List of [paragraph_ref, new_text] pairs.
+        """
+        return json.dumps(tools.batch_rewrite(_get_server(ctx), path, rewrites))
+
     # -- Comments --
 
     @mcp.tool()
