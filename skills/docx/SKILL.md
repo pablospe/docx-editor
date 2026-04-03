@@ -179,7 +179,8 @@ with Document.open("contract.docx", author=author) as doc:
     #         P2#f3c1| The committee shall review...
 
     # Step 2: Edit using paragraph references (safe, unambiguous)
-    doc.replace("old text", "new text", paragraph="P2#f3c1")
+    # Each method returns the new paragraph ref for chaining
+    new_ref = doc.replace("old text", "new text", paragraph="P2#f3c1")
     doc.delete("text to delete", paragraph="P5#d4e5")
     doc.insert_after("anchor", "new text", paragraph="P3#b2c4")
     doc.insert_before("anchor", "prefix", paragraph="P3#b2c4")
@@ -222,8 +223,10 @@ match = doc.find_text("30 days")
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()
 
-# Replace text (creates tracked deletion + insertion)
-doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+# All edit methods return the new paragraph ref as a plain string.
+# Use it for follow-up edits on the same paragraph:
+new_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+doc.replace("net", "gross", paragraph=new_ref)  # chain without list_paragraphs()
 
 # Delete text (creates tracked deletion)
 doc.delete("unnecessary clause", paragraph="P5#d4e5")
@@ -232,11 +235,15 @@ doc.delete("unnecessary clause", paragraph="P5#d4e5")
 doc.insert_after("Section 3.", " Additional terms apply.", paragraph="P3#b2c4")
 doc.insert_before("Section 3.", "See also: ", paragraph="P3#b2c4")
 
+# To accept/reject a specific edit, use list_revisions() to get the change ID:
+revisions = doc.list_revisions()
+doc.accept_revision(revisions[-1].id)
+
 doc.save("edited.docx")
 doc.close()
 ```
 
-**Return values:** All track changes methods return an `int` change ID. Returns `-1` when the target text is already inside a tracked insertion (`<w:ins>`), because the edit is done in-place without creating new revision markup.
+**Return values:** All edit methods return the new paragraph reference as a plain `str` (e.g., `"P2#c3d4"`). Use this for follow-up edits on the same paragraph without calling `list_paragraphs()` again. To get change IDs for accept/reject, use `doc.list_revisions()`.
 
 **Raises:** `TextNotFoundError` if the text is not found.
 
@@ -341,7 +348,9 @@ for p in doc.list_paragraphs():
     print(p)
 
 # Section 2 changes (using paragraph references from list_paragraphs)
-doc.replace("30 days", "60 days", paragraph="P4#a1b2")
+# Each edit returns the new ref — chain edits on the same paragraph
+r = doc.replace("30 days", "60 days", paragraph="P4#a1b2")
+doc.replace("net", "gross", paragraph=r)  # second edit on same paragraph
 doc.replace("January 1, 2024", "March 1, 2024", paragraph="P5#c3d4")
 
 # Section 5 changes
