@@ -14,7 +14,9 @@ SERVER_INSTRUCTIONS = (
     "Document editing server for .docx files with tracked changes, comments, and revisions. "
     "Use open_document to load a file, then edit with replace_text/delete_text/insert_after/insert_before. "
     "Add comments with add_comment, manage revisions with accept/reject. "
-    "Save changes with save_document. Documents stay cached between operations for fast repeated edits."
+    "Save changes with save_document. Documents stay cached between operations for fast repeated edits. "
+    "For large documents: use get_document_info for an overview, search_text to find specific content, "
+    "and get_paragraph_text to read targeted sections. Avoid reading the full document when possible."
 )
 
 
@@ -141,7 +143,7 @@ def _register_tools(mcp) -> None:
     # -- Paragraphs & Track Changes --
 
     @mcp.tool()
-    def list_paragraphs(path: str, ctx: Context, max_chars: int = 80) -> str:
+    def list_paragraphs(path: str, ctx: Context, max_chars: int = 80, start: int = 0, limit: int = 0) -> str:
         """List all paragraphs with hash-anchored references. Call this before editing to get paragraph refs.
 
         Returns references like "P1#a7b2| Introduction to the..." that you must pass to edit tools.
@@ -149,8 +151,10 @@ def _register_tools(mcp) -> None:
         Args:
             path: Path to the document.
             max_chars: Maximum characters for the preview text (default 80).
+            start: Starting paragraph index, 0-based (default 0).
+            limit: Maximum paragraphs to return, 0 for all (default 0).
         """
-        return json.dumps(tools.list_paragraphs(_get_server(ctx), path, max_chars))
+        return json.dumps(tools.list_paragraphs(_get_server(ctx), path, max_chars, start, limit))
 
     @mcp.tool()
     def replace_text(path: str, old_text: str, new_text: str, paragraph: str, ctx: Context, occurrence: int = 0) -> str:
@@ -368,13 +372,44 @@ def _register_tools(mcp) -> None:
         return json.dumps(tools.count_matches(_get_server(ctx), path, text))
 
     @mcp.tool()
-    def get_visible_text(path: str, ctx: Context) -> str:
-        """Get the full visible text of the document (insertions included, deletions excluded).
+    def search_text(path: str, query: str, ctx: Context, context_chars: int = 100) -> str:
+        """Search for text in the document, returning matches with surrounding context and paragraph refs.
+
+        Args:
+            path: Path to the document.
+            query: Text to search for.
+            context_chars: Characters of context before and after each match (default 100).
+        """
+        return json.dumps(tools.search_text(_get_server(ctx), path, query, context_chars))
+
+    @mcp.tool()
+    def get_paragraph_text(path: str, paragraphs: list[str], ctx: Context) -> str:
+        """Read specific paragraphs in full by their hash-anchored refs.
+
+        Args:
+            path: Path to the document.
+            paragraphs: List of paragraph references (e.g., ["P1#a7b2", "P3#cc33"]).
+        """
+        return json.dumps(tools.get_paragraph_text(_get_server(ctx), path, paragraphs))
+
+    @mcp.tool()
+    def get_document_info(path: str, ctx: Context) -> str:
+        """Get document overview: paragraph count, word count, and heading outline.
 
         Args:
             path: Path to the document.
         """
-        return json.dumps(tools.get_visible_text(_get_server(ctx), path))
+        return json.dumps(tools.get_document_info(_get_server(ctx), path))
+
+    @mcp.tool()
+    def get_visible_text(path: str, ctx: Context, max_chars: int = 10000) -> str:
+        """Get the visible text of the document. Auto-truncates large documents with a hint to use exploration tools.
+
+        Args:
+            path: Path to the document.
+            max_chars: Maximum characters to return (default 10000). Set to 0 for no limit.
+        """
+        return json.dumps(tools.get_visible_text(_get_server(ctx), path, max_chars))
 
 
 def main() -> None:

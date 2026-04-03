@@ -145,7 +145,7 @@ class TestFastMCPApp:
         assert app.instructions == SERVER_INSTRUCTIONS
 
     def test_all_tools_registered(self):
-        """All 24 tools are registered on the app."""
+        """All tools are registered on the app."""
         from docx_editor_mcp.server import _create_mcp_app
 
         app = _create_mcp_app()
@@ -164,8 +164,9 @@ class TestFastMCPApp:
             # Revisions
             "list_revisions", "accept_revision", "reject_revision",
             "accept_all", "reject_all",
-            # Read
+            # Read & Exploration
             "find_text", "count_matches", "get_visible_text",
+            "search_text", "get_paragraph_text", "get_document_info",
         }
         assert tool_names == expected
 

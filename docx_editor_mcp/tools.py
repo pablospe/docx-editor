@@ -235,6 +235,8 @@ def list_paragraphs(
     server: DocxMCPServer,
     path: str,
     max_chars: int = 80,
+    start: int = 0,
+    limit: int = 0,
 ) -> dict[str, Any]:
     """List all paragraphs with hash-anchored references.
 
@@ -242,6 +244,8 @@ def list_paragraphs(
         server: The MCP server instance.
         path: Path to the document.
         max_chars: Maximum characters for preview text.
+        start: Starting paragraph index, 0-based.
+        limit: Maximum paragraphs to return, 0 for all.
 
     Returns:
         Result dict with success status and paragraphs list.
@@ -252,8 +256,9 @@ def list_paragraphs(
     cached = result
 
     try:
-        paragraphs = cached.document.list_paragraphs(max_chars=max_chars)
-        return {"success": True, "paragraphs": paragraphs}
+        total_count = len(cached.document._document_editor.dom.getElementsByTagName("w:p"))
+        paragraphs = cached.document.list_paragraphs(max_chars=max_chars, start=start, limit=limit)
+        return {"success": True, "paragraphs": paragraphs, "total": total_count}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -536,6 +541,92 @@ def batch_rewrite(
         new_refs = cached.document.batch_rewrite(tuples)
         cached.mark_dirty()
         return {"success": True, "new_refs": new_refs}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
+# Exploration Tools
+# =============================================================================
+
+
+def search_text(
+    server: DocxMCPServer,
+    path: str,
+    query: str,
+    context_chars: int = 100,
+) -> dict[str, Any]:
+    """Search for text in the document with surrounding context.
+
+    Args:
+        server: The MCP server instance.
+        path: Path to the document.
+        query: Text to search for.
+        context_chars: Characters of context before and after each match.
+
+    Returns:
+        Result dict with success status, matches, and count.
+    """
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
+
+    try:
+        matches = cached.document.search_text(query, context_chars=context_chars)
+        return {"success": True, "matches": matches, "count": len(matches)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def get_paragraph_text(
+    server: DocxMCPServer,
+    path: str,
+    paragraphs: list[str],
+) -> dict[str, Any]:
+    """Read specific paragraphs in full by their hash-anchored refs.
+
+    Args:
+        server: The MCP server instance.
+        path: Path to the document.
+        paragraphs: List of paragraph references (e.g., ["P1#a7b2", "P3#cc33"]).
+
+    Returns:
+        Result dict with success status and paragraphs.
+    """
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
+
+    try:
+        results = cached.document.get_paragraph_text(paragraphs)
+        return {"success": True, "paragraphs": results}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def get_document_info(
+    server: DocxMCPServer,
+    path: str,
+) -> dict[str, Any]:
+    """Get document overview: paragraph count, word count, and heading outline.
+
+    Args:
+        server: The MCP server instance.
+        path: Path to the document.
+
+    Returns:
+        Result dict with success status and document info.
+    """
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
+
+    try:
+        info = cached.document.get_document_info()
+        return {"success": True, **info}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -961,12 +1052,14 @@ def count_matches(
 def get_visible_text(
     server: DocxMCPServer,
     path: str,
+    max_chars: int = 10000,
 ) -> dict[str, Any]:
     """Get the visible text of the document.
 
     Args:
         server: The MCP server instance.
         path: Path to the document.
+        max_chars: Maximum characters to return. 0 for no limit.
 
     Returns:
         Result dict with success status and text.
@@ -978,6 +1071,18 @@ def get_visible_text(
 
     try:
         text = cached.document.get_visible_text()
-        return {"success": True, "text": text}
+        if max_chars and len(text) > max_chars:
+            text = text[:max_chars]
+            return {
+                "success": True,
+                "text": text,
+                "truncated": True,
+                "hint": (
+                    "Document too large to return in full. Use search_text to find specific "
+                    "content, get_paragraph_text to read specific paragraphs, or "
+                    "get_document_info for an overview."
+                ),
+            }
+        return {"success": True, "text": text, "truncated": False}
     except Exception as e:
         return {"success": False, "error": str(e)}

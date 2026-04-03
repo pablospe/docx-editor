@@ -560,6 +560,167 @@ class TestReadTools:
         assert isinstance(result["text"], str)
 
 
+class TestExplorationTools:
+    """Test exploration tools for large document support."""
+
+    def test_search_text_found(self, server, mcp_temp_docx):
+        """search_text returns matches with context."""
+        from docx_editor_mcp.tools import open_document, search_text
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+
+        result = search_text(server, str(mcp_temp_docx), "quick brown fox")
+
+        assert result["success"] is True
+        assert result["count"] >= 1
+        match = result["matches"][0]
+        assert "paragraph_ref" in match
+        assert "context" in match
+        assert "quick brown fox" in match["context"]
+
+    def test_search_text_not_found(self, server, mcp_temp_docx):
+        """search_text returns empty list for missing text."""
+        from docx_editor_mcp.tools import open_document, search_text
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+
+        result = search_text(server, str(mcp_temp_docx), "nonexistent xyz abc")
+
+        assert result["success"] is True
+        assert result["count"] == 0
+        assert result["matches"] == []
+
+    def test_search_text_context_chars(self, server, mcp_temp_docx):
+        """search_text respects context_chars parameter."""
+        from docx_editor_mcp.tools import open_document, search_text
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+
+        result = search_text(server, str(mcp_temp_docx), "quick brown fox", context_chars=5)
+
+        assert result["success"] is True
+        assert result["count"] >= 1
+
+    def test_get_paragraph_text_valid(self, server, mcp_temp_docx):
+        """get_paragraph_text returns full text for valid refs."""
+        from docx_editor_mcp.tools import get_paragraph_text, list_paragraphs, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+        paras = list_paragraphs(server, str(mcp_temp_docx))
+        ref = paras["paragraphs"][0].split("|")[0].strip()
+
+        result = get_paragraph_text(server, str(mcp_temp_docx), [ref])
+
+        assert result["success"] is True
+        assert len(result["paragraphs"]) == 1
+        assert result["paragraphs"][0]["error"] is None
+        assert isinstance(result["paragraphs"][0]["text"], str)
+
+    def test_get_paragraph_text_invalid_ref(self, server, mcp_temp_docx):
+        """get_paragraph_text returns error for invalid refs."""
+        from docx_editor_mcp.tools import get_paragraph_text, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+
+        result = get_paragraph_text(server, str(mcp_temp_docx), ["P99#dead"])
+
+        assert result["success"] is True
+        assert result["paragraphs"][0]["error"] is not None
+
+    def test_get_paragraph_text_multiple(self, server, mcp_temp_docx):
+        """get_paragraph_text handles multiple refs including invalid ones."""
+        from docx_editor_mcp.tools import get_paragraph_text, list_paragraphs, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+        paras = list_paragraphs(server, str(mcp_temp_docx))
+        valid_ref = paras["paragraphs"][0].split("|")[0].strip()
+
+        result = get_paragraph_text(server, str(mcp_temp_docx), [valid_ref, "P99#dead"])
+
+        assert result["success"] is True
+        assert len(result["paragraphs"]) == 2
+        assert result["paragraphs"][0]["error"] is None
+        assert result["paragraphs"][1]["error"] is not None
+
+    def test_get_document_info(self, server, mcp_temp_docx):
+        """get_document_info returns paragraph count, word count, headings."""
+        from docx_editor_mcp.tools import get_document_info, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+
+        result = get_document_info(server, str(mcp_temp_docx))
+
+        assert result["success"] is True
+        assert "paragraph_count" in result
+        assert "word_count" in result
+        assert "headings" in result
+        assert result["paragraph_count"] > 0
+        assert result["word_count"] > 0
+
+    def test_list_paragraphs_pagination(self, server, mcp_temp_docx):
+        """list_paragraphs supports start/limit pagination."""
+        from docx_editor_mcp.tools import list_paragraphs, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+
+        all_paras = list_paragraphs(server, str(mcp_temp_docx))
+        total = all_paras["total"]
+        assert total > 0
+
+        # Get first 2
+        page1 = list_paragraphs(server, str(mcp_temp_docx), start=0, limit=2)
+        assert page1["success"] is True
+        assert len(page1["paragraphs"]) <= 2
+        assert page1["total"] == total
+
+    def test_list_paragraphs_start_beyond_end(self, server, mcp_temp_docx):
+        """list_paragraphs with start beyond end returns empty."""
+        from docx_editor_mcp.tools import list_paragraphs, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+
+        result = list_paragraphs(server, str(mcp_temp_docx), start=9999, limit=10)
+        assert result["success"] is True
+        assert result["paragraphs"] == []
+
+    def test_get_visible_text_small_doc(self, server, mcp_temp_docx):
+        """get_visible_text returns full text for small docs."""
+        from docx_editor_mcp.tools import get_visible_text, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+
+        result = get_visible_text(server, str(mcp_temp_docx))
+
+        assert result["success"] is True
+        assert result["truncated"] is False
+        assert "hint" not in result
+
+    def test_get_visible_text_truncation(self, server, mcp_temp_docx):
+        """get_visible_text truncates with hint when doc exceeds max_chars."""
+        from docx_editor_mcp.tools import get_visible_text, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+
+        # Use very small max_chars to force truncation
+        result = get_visible_text(server, str(mcp_temp_docx), max_chars=5)
+
+        assert result["success"] is True
+        assert result["truncated"] is True
+        assert "hint" in result
+        assert len(result["text"]) == 5
+
+    def test_get_visible_text_no_limit(self, server, mcp_temp_docx):
+        """get_visible_text with max_chars=0 returns full text."""
+        from docx_editor_mcp.tools import get_visible_text, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+
+        result = get_visible_text(server, str(mcp_temp_docx), max_chars=0)
+
+        assert result["success"] is True
+        assert result["truncated"] is False
+
+
 class TestExternalChangeDetection:
     """Test external change detection across tools."""
 
