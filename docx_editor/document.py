@@ -15,7 +15,6 @@ from .workspace import Workspace
 from .xml_editor import DocxXMLEditor, ParagraphRef, build_text_map, compute_paragraph_hash
 
 
-
 class Document:
     """Word document with track changes and comment support.
 

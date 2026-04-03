@@ -264,24 +264,18 @@ class RevisionManager:
 
             if tag == "replace":
                 match_text = old_text[old_char_start:old_char_end]
-                match = self._find_match_at_position(
-                    text_map, match_text, old_char_start
-                )
+                match = self._find_match_at_position(text_map, match_text, old_char_start)
                 self._replace_across_nodes(match, new_fragment)
 
             elif tag == "delete":
                 match_text = old_text[old_char_start:old_char_end]
-                match = self._find_match_at_position(
-                    text_map, match_text, old_char_start
-                )
+                match = self._find_match_at_position(text_map, match_text, old_char_start)
                 self._delete_across_nodes(match)
 
             elif tag == "insert":
                 self._rewrite_insert_at(p, text_map, old_char_start, new_fragment)
 
-    def _find_match_at_position(
-        self, text_map: TextMap, search: str, expected_pos: int
-    ) -> TextMapMatch:
+    def _find_match_at_position(self, text_map: TextMap, search: str, expected_pos: int) -> TextMapMatch:
         """Find text at an expected character position in the text map.
 
         Unlike find_in_text_map which finds the first occurrence, this
@@ -293,9 +287,7 @@ class RevisionManager:
         """
         idx = text_map.find(search, expected_pos)
         if idx == -1 or idx != expected_pos:
-            raise RevisionError(
-                f"Rewrite failed: could not locate '{search}' at position {expected_pos}"
-            )
+            raise RevisionError(f"Rewrite failed: could not locate '{search}' at position {expected_pos}")
         end = idx + len(search)
         positions = text_map.get_nodes_for_range(idx, end)
         if positions:
@@ -304,8 +296,11 @@ class RevisionManager:
         else:
             spans = False
         return TextMapMatch(
-            start=idx, end=end, text=search,
-            positions=positions, spans_boundary=spans,
+            start=idx,
+            end=end,
+            text=search,
+            positions=positions,
+            spans_boundary=spans,
         )
 
     def _rewrite_insert_at(self, paragraph, text_map: TextMap, char_pos: int, text: str) -> None:

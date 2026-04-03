@@ -402,16 +402,14 @@ class TestRewriteStructuralEdits:
 
     def test_passive_to_active_voice(self):
         """Passive→active voice conversion restructures clauses."""
-        doc, tmp = _make_doc_with_paragraphs(
-            ["The proposal was reviewed by the committee and was approved by the board."]
-        )
+        doc, tmp = _make_doc_with_paragraphs([
+            "The proposal was reviewed by the committee and was approved by the board."
+        ])
         try:
             refs = doc.list_paragraphs()
             ref = refs[0].split("|")[0]
 
-            doc.rewrite_paragraph(
-                ref, "The committee reviewed the proposal and the board approved it."
-            )
+            doc.rewrite_paragraph(ref, "The committee reviewed the proposal and the board approved it.")
 
             vis = doc.get_visible_text()
             assert "The committee reviewed the proposal and the board approved it." in vis
@@ -428,9 +426,9 @@ class TestRewriteStructuralEdits:
 
     def test_reorder_list_items(self):
         """Reordering items in a list produces correct tracked changes."""
-        doc, tmp = _make_doc_with_paragraphs(
-            ["Deliverables include the final report, executive summary, and presentation slides."]
-        )
+        doc, tmp = _make_doc_with_paragraphs([
+            "Deliverables include the final report, executive summary, and presentation slides."
+        ])
         try:
             refs = doc.list_paragraphs()
             ref = refs[0].split("|")[0]
@@ -451,9 +449,10 @@ class TestRewriteStructuralEdits:
 
     def test_full_sentence_rephrasing(self):
         """Complete rephrasing produces tracked changes for restructured sentence."""
-        doc, tmp = _make_doc_with_paragraphs(
-            ["The committee recommends that the project timeline be extended by three months to allow for additional stakeholder consultation and review."]
-        )
+        doc, tmp = _make_doc_with_paragraphs([
+            "The committee recommends that the project timeline be extended by three months"
+            " to allow for additional stakeholder consultation and review."
+        ])
         try:
             refs = doc.list_paragraphs()
             ref = refs[0].split("|")[0]
@@ -477,9 +476,9 @@ class TestRewriteStructuralEdits:
 
     def test_prose_tightening(self):
         """Removing filler words (multiple independent deletions)."""
-        doc, tmp = _make_doc_with_paragraphs(
-            ["We need to ensure that all stakeholders are informed and that all risks are mitigated."]
-        )
+        doc, tmp = _make_doc_with_paragraphs([
+            "We need to ensure that all stakeholders are informed and that all risks are mitigated."
+        ])
         try:
             refs = doc.list_paragraphs()
             ref = refs[0].split("|")[0]
@@ -503,16 +502,17 @@ class TestRewriteStructuralEdits:
 
     def test_duplicate_phrase_different_changes(self):
         """Different changes to different occurrences of the same phrase."""
-        doc, tmp = _make_doc_with_paragraphs(
-            ["The team will meet on Monday, the team will present on Wednesday, and the team will review on Friday."]
-        )
+        doc, tmp = _make_doc_with_paragraphs([
+            "The team will meet on Monday, the team will present on Wednesday, and the team will review on Friday."
+        ])
         try:
             refs = doc.list_paragraphs()
             ref = refs[0].split("|")[0]
 
             doc.rewrite_paragraph(
                 ref,
-                "The team will meet on Monday, management will present on Wednesday, and everyone will review on Friday.",
+                "The team will meet on Monday, management will present on Wednesday,"
+                " and everyone will review on Friday.",
             )
 
             vis = doc.get_visible_text()
@@ -533,9 +533,7 @@ class TestRewriteStructuralEdits:
 
     def test_add_clause_and_change_value(self):
         """Insert a clause in the middle while also changing a value elsewhere."""
-        doc, tmp = _make_doc_with_paragraphs(
-            ["The contract expires on December 31st."]
-        )
+        doc, tmp = _make_doc_with_paragraphs(["The contract expires on December 31st."])
         try:
             refs = doc.list_paragraphs()
             ref = refs[0].split("|")[0]
@@ -561,9 +559,9 @@ class TestRewriteStructuralEdits:
 
     def test_duplicate_manager_different_replacements(self):
         """Two occurrences of 'manager' replaced with different words."""
-        doc, tmp = _make_doc_with_paragraphs(
-            ["The manager will review the report and the manager will approve the budget."]
-        )
+        doc, tmp = _make_doc_with_paragraphs([
+            "The manager will review the report and the manager will approve the budget."
+        ])
         try:
             refs = doc.list_paragraphs()
             ref = refs[0].split("|")[0]
@@ -719,7 +717,7 @@ class TestEditReturnsRef:
         # Chain 3 edits on the same paragraph, using returned ref each time
         r1 = doc.replace("committee", "board", paragraph=ref)
         r2 = doc.replace("shall", "must", paragraph=r1)
-        r3 = doc.replace("annual", "quarterly", paragraph=r2)
+        doc.replace("annual", "quarterly", paragraph=r2)
 
         vis = doc.get_visible_text()
         assert "board" in vis

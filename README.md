@@ -73,15 +73,16 @@ from docx_editor import Document
 import os
 
 author = os.environ.get("USER") or "Reviewer"
-with Document.open("contract.docx", author="Editor") as doc:
+with Document.open("contract.docx", author=author) as doc:
     # Step 1: List paragraphs with hash-anchored references
     for p in doc.list_paragraphs():
         print(p)
     # Output: P1#a7b2| Introduction to the contract...
     #         P2#f3c1| The committee shall review...
 
-    # Step 2: Edit using paragraph references (safe, unambiguous)
-    doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+    # Step 2: Edit — each method returns the new paragraph ref
+    r = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+    doc.replace("net", "gross", paragraph=r)  # chain without list_paragraphs()
     doc.delete("obsolete text", paragraph="P5#d4e5")
     doc.insert_after("Section 5", " (as amended)", paragraph="P3#b2c4")
 
