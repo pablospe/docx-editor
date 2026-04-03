@@ -152,15 +152,13 @@ class Document:
         for use as stable paragraph references in editing operations.
 
         Args:
-            max_chars: Maximum characters for the preview text (default 80,
-                minimum 10). Use a smaller value like 20 when refreshing
-                hashes after edits.
+            max_chars: Maximum characters for the preview text (default 80).
+                Use 0 to get only hash refs without preview text.
 
         Returns:
             List of hash-tagged paragraph preview strings
         """
         self._ensure_open()
-        max_chars = max(max_chars, 10)
         paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
         result = []
         for i, p in enumerate(paragraphs, start=1):
