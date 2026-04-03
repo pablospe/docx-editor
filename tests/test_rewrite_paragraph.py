@@ -591,6 +591,140 @@ class TestRewriteStructuralEdits:
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestEditResultRef:
+    """Tests for edit methods returning new paragraph refs."""
+
+    def test_replace_returns_ref(self, rewrite_doc):
+        """replace() returns EditResult with .ref for follow-up edits."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+        ref = refs[0].split("|")[0]
+
+        result = doc.replace("committee", "board", paragraph=ref)
+
+        # .ref is a fresh paragraph reference
+        assert result.ref.startswith("P1#")
+        assert result.ref != ref  # hash changed
+
+        # Can use .ref for a follow-up edit without list_paragraphs()
+        result2 = doc.replace("board", "council", paragraph=result.ref)
+        assert result2.ref.startswith("P1#")
+        assert result2.ref != result.ref  # hash changed again
+
+        vis = doc.get_visible_text()
+        assert "council" in vis
+
+    def test_delete_returns_ref(self, rewrite_doc):
+        """delete() returns EditResult with .ref."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+        ref = refs[0].split("|")[0]
+
+        result = doc.delete("committee", paragraph=ref)
+        assert result.ref.startswith("P1#")
+        assert result.ref != ref
+
+    def test_insert_after_returns_ref(self, rewrite_doc):
+        """insert_after() returns EditResult with .ref."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+        ref = refs[0].split("|")[0]
+
+        result = doc.insert_after("committee", " meeting", paragraph=ref)
+        assert result.ref.startswith("P1#")
+        assert result.ref != ref
+
+    def test_insert_before_returns_ref(self, rewrite_doc):
+        """insert_before() returns EditResult with .ref."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+        ref = refs[0].split("|")[0]
+
+        result = doc.insert_before("committee", "special ", paragraph=ref)
+        assert result.ref.startswith("P1#")
+        assert result.ref != ref
+
+    def test_rewrite_returns_ref(self, rewrite_doc):
+        """rewrite_paragraph() returns new ref string."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+        ref = refs[0].split("|")[0]
+
+        new_ref = doc.rewrite_paragraph(ref, "Completely new text.")
+        assert new_ref.startswith("P1#")
+        assert new_ref != ref
+
+        # Can chain with another rewrite
+        new_ref2 = doc.rewrite_paragraph(new_ref, "Even newer text.")
+        assert new_ref2.startswith("P1#")
+        assert new_ref2 != new_ref
+
+        vis = doc.get_visible_text()
+        assert "Even newer text." in vis
+
+    def test_batch_rewrite_returns_refs(self, rewrite_doc):
+        """batch_rewrite() returns list of new refs in input order."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+
+        new_refs = doc.batch_rewrite([
+            (refs[0].split("|")[0], "First changed."),
+            (refs[2].split("|")[0], "Third changed."),
+        ])
+
+        assert len(new_refs) == 2
+        assert new_refs[0].startswith("P1#")
+        assert new_refs[1].startswith("P3#")
+
+    def test_batch_edit_returns_refs(self, rewrite_doc):
+        """batch_edit() returns list of EditResults with .ref."""
+        from docx_editor import EditOperation
+
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+
+        results = doc.batch_edit([
+            EditOperation(action="replace", find="committee", replace_with="board", paragraph=refs[0].split("|")[0]),
+            EditOperation(action="replace", find="quarterly", replace_with="monthly", paragraph=refs[1].split("|")[0]),
+        ])
+
+        assert len(results) == 2
+        assert results[0].ref.startswith("P1#")
+        assert results[1].ref.startswith("P2#")
+
+    def test_edit_result_backwards_compatible(self, rewrite_doc):
+        """EditResult works as int for accept/reject operations."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+        ref = refs[0].split("|")[0]
+
+        result = doc.insert_after("committee", " NEW", paragraph=ref)
+
+        # Acts as int
+        assert isinstance(result, int)
+        assert int(result) >= 0
+
+        # Can be used for accept/reject
+        accepted = doc.accept_revision(result)
+        assert accepted is True
+
+    def test_sequential_edits_without_list_paragraphs(self, rewrite_doc):
+        """Chain multiple edits using .ref without ever calling list_paragraphs() again."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+        ref = refs[0].split("|")[0]
+
+        # Chain 3 edits on the same paragraph, using .ref each time
+        r1 = doc.replace("committee", "board", paragraph=ref)
+        r2 = doc.replace("shall", "must", paragraph=r1.ref)
+        r3 = doc.replace("annual", "quarterly", paragraph=r2.ref)
+
+        vis = doc.get_visible_text()
+        assert "board" in vis
+        assert "must" in vis
+        assert "quarterly" in vis
+
+
 class TestRewriteWithTrackedChanges:
     def test_rewrite_after_prior_edit(self, rewrite_doc):
         """Rewriting a paragraph that already has tracked changes works."""

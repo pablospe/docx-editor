@@ -12,7 +12,26 @@ from .comments import Comment, CommentManager
 from .exceptions import WorkspaceSyncError
 from .track_changes import EditOperation, Revision, RevisionManager
 from .workspace import Workspace
-from .xml_editor import DocxXMLEditor, build_text_map, compute_paragraph_hash
+from .xml_editor import DocxXMLEditor, ParagraphRef, build_text_map, compute_paragraph_hash
+
+
+class EditResult(int):
+    """Edit result that acts as a change ID (int) and carries the new paragraph ref.
+
+    Backwards-compatible: behaves as int (change_id) for accept/reject operations.
+    New code can use .ref to get the updated paragraph reference.
+    """
+
+    def __new__(cls, change_id: int, ref: str):
+        instance = super().__new__(cls, change_id)
+        instance.ref = ref
+        return instance
+
+    def __repr__(self):
+        return f"EditResult(change_id={int(self)}, ref={self.ref!r})"
+
+    def __str__(self):
+        return str(int(self))
 
 
 class Document:
@@ -145,6 +164,13 @@ class Document:
         self._ensure_open()
         return self._revision_manager.count_matches(text)
 
+    def _compute_new_ref(self, old_ref: str) -> str:
+        """Compute a fresh paragraph reference after mutation."""
+        ref = ParagraphRef.parse(old_ref)
+        p = self._document_editor.dom.getElementsByTagName("w:p")[ref.index - 1]
+        new_hash = compute_paragraph_hash(p)
+        return f"P{ref.index}#{new_hash}"
+
     def list_paragraphs(self, max_chars: int = 80) -> list[str]:
         """List all paragraphs with hash-anchored references.
 
@@ -187,7 +213,7 @@ class Document:
             parts.append(tm.text)
         return "\n".join(parts)
 
-    def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int = 0) -> int:
+    def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int = 0) -> EditResult:
         """Replace text with tracked changes.
 
         Creates a tracked deletion of the old text and insertion of the new text.
@@ -199,16 +225,17 @@ class Document:
             occurrence: Which occurrence within the paragraph (0 = first, 1 = second, etc.)
 
         Returns:
-            The change ID of the insertion
+            EditResult with .ref (new paragraph reference) and int value (change ID)
 
         Example:
-            refs = doc.list_paragraphs()
-            doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+            result = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+            result.ref  # "P2#c3d4" — fresh ref for follow-up edits
         """
         self._ensure_open()
-        return self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
+        change_id = self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
+        return EditResult(change_id, self._compute_new_ref(paragraph))
 
-    def delete(self, text: str, *, paragraph: str, occurrence: int = 0) -> int:
+    def delete(self, text: str, *, paragraph: str, occurrence: int = 0) -> EditResult:
         """Mark text as deleted with tracked changes.
 
         Args:
@@ -217,15 +244,17 @@ class Document:
             occurrence: Which occurrence within the paragraph (0 = first, 1 = second, etc.)
 
         Returns:
-            The change ID of the deletion
+            EditResult with .ref (new paragraph reference) and int value (change ID)
 
         Example:
-            doc.delete("obsolete clause", paragraph="P2#f3c1")
+            result = doc.delete("obsolete clause", paragraph="P2#f3c1")
+            result.ref  # fresh ref for follow-up edits
         """
         self._ensure_open()
-        return self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
+        change_id = self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
+        return EditResult(change_id, self._compute_new_ref(paragraph))
 
-    def insert_after(self, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> int:
+    def insert_after(self, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> EditResult:
         """Insert text after anchor with tracked changes.
 
         Args:
@@ -235,15 +264,17 @@ class Document:
             occurrence: Which occurrence of anchor within the paragraph (0 = first)
 
         Returns:
-            The change ID of the insertion
+            EditResult with .ref (new paragraph reference) and int value (change ID)
 
         Example:
-            doc.insert_after("Section 5", " (as amended)", paragraph="P2#f3c1")
+            result = doc.insert_after("Section 5", " (as amended)", paragraph="P2#f3c1")
+            result.ref  # fresh ref for follow-up edits
         """
         self._ensure_open()
-        return self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
+        change_id = self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
+        return EditResult(change_id, self._compute_new_ref(paragraph))
 
-    def insert_before(self, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> int:
+    def insert_before(self, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> EditResult:
         """Insert text before anchor with tracked changes.
 
         Args:
@@ -253,15 +284,17 @@ class Document:
             occurrence: Which occurrence of anchor within the paragraph (0 = first)
 
         Returns:
-            The change ID of the insertion
+            EditResult with .ref (new paragraph reference) and int value (change ID)
 
         Example:
-            doc.insert_before("Section 6", "New clause: ", paragraph="P2#f3c1")
+            result = doc.insert_before("Section 6", "New clause: ", paragraph="P2#f3c1")
+            result.ref  # fresh ref for follow-up edits
         """
         self._ensure_open()
-        return self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
+        change_id = self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
+        return EditResult(change_id, self._compute_new_ref(paragraph))
 
-    def batch_edit(self, operations: list[EditOperation]) -> list[int]:
+    def batch_edit(self, operations: list[EditOperation]) -> list[EditResult]:
         """Apply multiple edits atomically with upfront hash validation.
 
         All paragraph hashes are validated before any edits are applied.
@@ -273,20 +306,24 @@ class Document:
             operations: List of EditOperation objects
 
         Returns:
-            List of change IDs (one per operation, in input order)
+            List of EditResult objects (in input order), each with .ref (new
+            paragraph reference) and int value (change ID).
 
         Example:
-            refs = doc.list_paragraphs()
-            doc.batch_edit([
+            results = doc.batch_edit([
                 EditOperation(action="replace", find="old", replace_with="new", paragraph="P20#a7b2"),
                 EditOperation(action="delete", text="remove", paragraph="P15#f3c1"),
-                EditOperation(action="insert_after", anchor="here", text=" added", paragraph="P3#b2c4"),
             ])
+            results[0].ref  # "P20#c3d4" — fresh ref
         """
         self._ensure_open()
-        return self._revision_manager.batch_edit(operations)
+        change_ids = self._revision_manager.batch_edit(operations)
+        return [
+            EditResult(cid, self._compute_new_ref(op.paragraph))
+            for cid, op in zip(change_ids, operations)
+        ]
 
-    def rewrite_paragraph(self, ref: str, new_text: str) -> None:
+    def rewrite_paragraph(self, ref: str, new_text: str) -> str:
         """Rewrite a paragraph's text with automatic fine-grained tracked changes.
 
         Diffs the current paragraph text against new_text at word level and
@@ -296,18 +333,18 @@ class Document:
             ref: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
             new_text: Desired new text for the paragraph
 
-        Raises:
-            HashMismatchError: If the paragraph hash doesn't match
-            IndexError: If paragraph index is out of range
+        Returns:
+            The new paragraph reference with updated hash (e.g., "P2#c3d4").
+            Use this ref for follow-up edits without calling list_paragraphs().
 
         Example:
-            refs = doc.list_paragraphs()
-            doc.rewrite_paragraph("P2#f3c1", "The board shall approve the proposal.")
+            new_ref = doc.rewrite_paragraph("P2#f3c1", "The board shall approve the proposal.")
         """
         self._ensure_open()
         self._revision_manager.rewrite_paragraph(ref, new_text)
+        return self._compute_new_ref(ref)
 
-    def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> None:
+    def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> list[str]:
         """Rewrite multiple paragraphs atomically with upfront hash validation.
 
         All paragraph hashes are validated before any rewrites are applied.
@@ -316,15 +353,19 @@ class Document:
         Args:
             rewrites: List of (ref, new_text) tuples
 
+        Returns:
+            List of new paragraph references with updated hashes, in input order
+
         Example:
             refs = doc.list_paragraphs()
-            doc.batch_rewrite([
+            new_refs = doc.batch_rewrite([
                 ("P1#a7b2", "Updated first paragraph."),
                 ("P3#c3d4", "Updated third paragraph."),
             ])
         """
         self._ensure_open()
         self._revision_manager.batch_rewrite(rewrites)
+        return [self._compute_new_ref(ref) for ref, _ in rewrites]
 
     # ==================== Comments API ====================
 
