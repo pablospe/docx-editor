@@ -411,6 +411,13 @@ with Document.open("file.docx", author=author) as doc:
 
 If any hash is stale, the entire batch is rejected before any edits are applied.
 
+**Tip: `max_chars` for faster hash refresh.** `list_paragraphs(max_chars=N)` controls the preview length (default 80). After a batch edit, you already know which paragraphs changed — you just need fresh hashes, not full previews:
+
+```python
+# Refresh hashes with minimal output after editing:
+refs = doc.list_paragraphs(max_chars=20)
+```
+
 ### Paragraph Rewrite (Fallback for Structural Edits)
 
 **Default: always use surgical methods** (`replace`, `delete`, `insert_after`, `insert_before`, `batch_edit`).
