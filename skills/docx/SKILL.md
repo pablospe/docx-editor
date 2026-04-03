@@ -386,20 +386,20 @@ with Document.open("file.docx", author=author) as doc:
     result = doc.replace("the meeting was productive",
                          "the conference was productive",
                          paragraph="P3#b2c4")
-    # result.ref = "P3#d5e6" — fresh hash, ready for the next edit
+    # returns "P3#d5e6" — fresh hash, ready for the next edit
     doc.save()
 ```
 
 The `paragraph` argument is **required** for all edit methods. If the paragraph content has changed since you called `list_paragraphs()`, a `HashMismatchError` is raised — preventing edits to the wrong location.
 
-**Every edit method returns the new paragraph ref.** Use `.ref` to chain edits without calling `list_paragraphs()` again:
+**Every edit method returns the new paragraph ref as a plain string.** Chain edits without calling `list_paragraphs()` again:
 
 ```python
 # Chain 3 edits on the same paragraph — no list_paragraphs() between them:
 r1 = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
-r2 = doc.replace("Manager", "Director", paragraph=r1.ref)
-r3 = doc.delete("draft ", paragraph=r2.ref)
-# r3.ref is the final hash for paragraph 2
+r2 = doc.replace("Manager", "Director", paragraph=r1)
+r3 = doc.delete("draft ", paragraph=r2)
+# r3 is "P2#xxxx" — the final hash for paragraph 2
 ```
 
 ### Batch Editing
@@ -411,12 +411,12 @@ from docx_editor import Document, EditOperation
 
 with Document.open("file.docx", author=author) as doc:
     refs = doc.list_paragraphs()
-    results = doc.batch_edit([
+    new_refs = doc.batch_edit([
         EditOperation(action="replace", find="old term", replace_with="new term", paragraph="P2#f3c1"),
         EditOperation(action="delete", text="remove this", paragraph="P5#d4e5"),
         EditOperation(action="insert_after", anchor="Section 5", text=" (amended)", paragraph="P3#b2c4"),
     ])
-    # results[0].ref = "P2#c3d4" — fresh ref for paragraph 2
+    # new_refs[0] = "P2#c3d4" — fresh ref for paragraph 2
     doc.save()
 ```
 

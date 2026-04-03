@@ -194,8 +194,8 @@ class TestMixedStateDeletion:
             pytest.skip("Expected boundary not created")
 
         ref = find_ref(doc, "fox")
-        change_id = doc.delete("fox ADDED", paragraph=ref)
-        assert change_id >= 0
+        new_ref = doc.delete("fox ADDED", paragraph=ref)
+        assert isinstance(new_ref, str)
 
         text = doc.get_visible_text()
         assert "fox" not in text
@@ -469,8 +469,8 @@ class TestInsertWithCrossBoundaryAnchor:
             pytest.skip("Boundary not created")
 
         ref = find_ref(doc, "fox RED")
-        change_id = doc.insert_after("fox RED", " NEW", paragraph=ref)
-        assert change_id >= 0
+        new_ref = doc.insert_after("fox RED", " NEW", paragraph=ref)
+        assert isinstance(new_ref, str)
         text = doc.get_visible_text()
         assert "fox RED NEW" in text
         doc.close()
@@ -487,8 +487,8 @@ class TestInsertWithCrossBoundaryAnchor:
             pytest.skip("Boundary not created")
 
         ref = find_ref(doc, "fox RED")
-        change_id = doc.insert_before("fox RED", "NEW ", paragraph=ref)
-        assert change_id >= 0
+        new_ref = doc.insert_before("fox RED", "NEW ", paragraph=ref)
+        assert isinstance(new_ref, str)
         text = doc.get_visible_text()
         assert "NEW fox RED" in text
         doc.close()

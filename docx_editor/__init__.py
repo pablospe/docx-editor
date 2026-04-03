@@ -30,7 +30,7 @@ Example:
 __version__ = "0.0.1"
 
 from .comments import Comment
-from .document import Document, EditResult
+from .document import Document
 from .exceptions import (
     CommentError,
     DocumentNotFoundError,
@@ -60,7 +60,6 @@ from .xml_editor import (
 __all__ = [
     # Main classes
     "Document",
-    "EditResult",
     "EditOperation",
     "Revision",
     "Comment",
