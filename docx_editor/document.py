@@ -320,10 +320,11 @@ class Document:
         return self._compute_new_ref(ref)
 
     def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> list[str]:
-        """Rewrite multiple paragraphs atomically with upfront hash validation.
+        """Rewrite multiple paragraphs with upfront hash validation.
 
         All paragraph hashes are validated before any rewrites are applied.
-        If any hash is stale, the entire batch is rejected.
+        If any hash is stale, the entire batch is rejected before any changes
+        are made. Once validation passes, rewrites are applied sequentially.
 
         Args:
             rewrites: List of (ref, new_text) tuples

@@ -477,6 +477,8 @@ new_ref = doc.rewrite_paragraph("P3#c4d5",
 **Batch rewrite** for multiple paragraphs at once:
 
 ```python
+import os
+author = os.environ.get("USER") or "Reviewer"
 with Document.open("contract.docx", author=author) as doc:
     refs = doc.list_paragraphs()
     doc.batch_rewrite([

@@ -175,7 +175,7 @@ class RevisionManager:
             raise ValueError(f"Unknown action: {op.action}")
 
     def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> None:
-        """Rewrite multiple paragraphs atomically with upfront hash validation."""
+        """Rewrite multiple paragraphs with upfront hash validation."""
         if not rewrites:
             return
 
