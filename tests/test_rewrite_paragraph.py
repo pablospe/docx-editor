@@ -834,3 +834,269 @@ class TestBatchRewrite:
         doc, _ = rewrite_doc
         doc.batch_rewrite([])
         assert len(doc.list_revisions()) == 0
+
+
+class TestRewriteInsertEdgeCases:
+    """Coverage tests for _rewrite_insert_at edge cases."""
+
+    def test_rewrite_empty_paragraph(self):
+        """Rewriting an empty paragraph inserts all text as tracked insertion."""
+        doc, tmp = _make_doc_with_paragraphs([""])
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            doc.rewrite_paragraph(ref, "Brand new content.")
+
+            vis = doc.get_visible_text()
+            assert "Brand new content." in vis
+
+            revisions = doc.list_revisions()
+            ins_texts = [r.text for r in revisions if r.type == "insertion"]
+            assert any("Brand new content." in t for t in ins_texts)
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rewrite_append_text_at_end(self):
+        """Rewriting to append text at end of paragraph covers insert-at-end path."""
+        doc, tmp = _make_doc_with_paragraphs(["Hello world."])
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            # Add text at the end — triggers insert opcode at end position
+            doc.rewrite_paragraph(ref, "Hello world. Goodbye world.")
+
+            vis = doc.get_visible_text()
+            assert "Hello world." in vis
+            assert "Goodbye world." in vis
+
+            revisions = doc.list_revisions()
+            ins_texts = [r.text for r in revisions if r.type == "insertion"]
+            assert any("Goodbye" in t for t in ins_texts)
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rewrite_prepend_text_at_start(self):
+        """Rewriting to prepend text at start covers insert-at-position path."""
+        doc, tmp = _make_doc_with_paragraphs(["The contract is valid."])
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            doc.rewrite_paragraph(ref, "IMPORTANT: The contract is valid.")
+
+            vis = doc.get_visible_text()
+            assert "IMPORTANT:" in vis
+            assert "The contract is valid." in vis
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rewrite_insert_into_tracked_insertion(self):
+        """Inserting text into a paragraph with prior tracked insertion covers w:ins splice path."""
+        doc, tmp = _make_doc_with_paragraphs(["The quick fox."])
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            # First: surgical insert creates a <w:ins> node
+            new_ref = doc.insert_after("quick", " brown", paragraph=ref)
+
+            # Now rewrite to add more text inside the same area
+            # The word "brown" is inside <w:ins>, so rewriting to change it
+            # will exercise the w:ins splice path
+            doc.rewrite_paragraph(new_ref, "The quick brown and spotted fox.")
+
+            vis = doc.get_visible_text()
+            assert "spotted" in vis
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rewrite_append_after_tracked_insertion(self):
+        """Appending after tracked insertion at paragraph end covers end-of-ins path."""
+        doc, tmp = _make_doc_with_paragraphs(["Start."])
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            # Insert at end creates <w:ins> at paragraph end
+            new_ref = doc.insert_after("Start.", " Middle.", paragraph=ref)
+
+            # Rewrite to append more — last char is inside <w:ins>
+            doc.rewrite_paragraph(new_ref, "Start. Middle. End.")
+
+            vis = doc.get_visible_text()
+            assert "End." in vis
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rewrite_insert_mid_word(self):
+        """Insert text in the middle of a word to cover run-splitting path."""
+        doc, tmp = _make_doc_with_paragraphs(["The contract expires soon."])
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            # "expires" → "will expire" — changes the word at a non-boundary position
+            doc.rewrite_paragraph(ref, "The contract will expire soon.")
+
+            vis = doc.get_visible_text()
+            assert "will expire" in vis
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rewrite_append_after_ins_at_end(self):
+        """Append text when the paragraph ends with a <w:ins> node.
+
+        Covers _rewrite_insert_at lines 344-349: insert at end inside w:ins.
+        """
+        doc, tmp = _make_doc_with_paragraphs(["Hello"])
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            # Insert " world" at end — creates <w:ins> at paragraph end
+            new_ref = doc.insert_after("Hello", " world", paragraph=ref)
+
+            # Rewrite keeping existing text and appending " today"
+            # " world" is inside <w:ins>, so appending triggers the
+            # ins_ancestor splice at line 344
+            doc.rewrite_paragraph(new_ref, "Hello world today")
+
+            vis = doc.get_visible_text()
+            assert "today" in vis
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rewrite_modify_within_ins_node(self):
+        """Modify text inside a <w:ins> node mid-paragraph.
+
+        Covers _rewrite_insert_at lines 362-368: insert at mid-position inside w:ins.
+        """
+        doc, tmp = _make_doc_with_paragraphs(["start end"])
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+
+            # Insert " alpha beta" after "start" — creates <w:ins> mid-paragraph
+            new_ref = doc.insert_after("start", " alpha beta", paragraph=ref)
+            # Visible text: "start alpha beta end"
+            # "alpha beta" is inside <w:ins>
+
+            # Rewrite to add a word between "alpha" and "beta"
+            # The insert opcode for "gamma " should land inside <w:ins>
+            doc.rewrite_paragraph(new_ref, "start alpha gamma beta end")
+
+            vis = doc.get_visible_text()
+            assert "gamma" in vis
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rewrite_empty_paragraph_with_formatting(self):
+        """Rewriting empty paragraph with formatted run inherits rPr.
+
+        Covers _rewrite_insert_at lines 322-325: empty paragraph with w:rPr.
+        """
+        test_data = Path(__file__).parent / "test_data" / "simple.docx"
+        tmp = tempfile.mkdtemp(prefix="rewrite_fmt_")
+        dest = Path(tmp) / "test.docx"
+        shutil.copy(test_data, dest)
+
+        doc = Document.open(dest)
+        doc.accept_all()
+        doc.save()
+        doc.close()
+
+        doc = Document.open(dest, force_recreate=True)
+        editor = doc._document_editor
+        body = editor.dom.getElementsByTagName("w:body")[0]
+
+        for p in list(editor.dom.getElementsByTagName("w:p")):
+            if p.parentNode == body:
+                body.removeChild(p)
+
+        # Create a paragraph with a run that has rPr but empty text
+        p_xml = "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t></w:t></w:r></w:p>"
+        sect_prs = editor.dom.getElementsByTagName("w:sectPr")
+        insert_before = sect_prs[0] if sect_prs else None
+        nodes = editor._parse_fragment(p_xml)
+        for node in nodes:
+            if insert_before:
+                body.insertBefore(node, insert_before)
+            else:
+                body.appendChild(node)
+
+        editor.save()
+        save_path = doc.save()
+        doc.close()
+
+        doc = Document.open(save_path, force_recreate=True)
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+            doc.rewrite_paragraph(ref, "Bold text here.")
+            vis = doc.get_visible_text()
+            assert "Bold text here." in vis
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rewrite_empty_paragraph_with_sectpr(self):
+        """Rewriting an empty paragraph that has w:sectPr covers insert-before-sectPr path.
+
+        Covers _rewrite_insert_at line 331.
+        """
+        test_data = Path(__file__).parent / "test_data" / "simple.docx"
+        tmp = tempfile.mkdtemp(prefix="rewrite_sectpr_")
+        dest = Path(tmp) / "test.docx"
+        shutil.copy(test_data, dest)
+
+        doc = Document.open(dest)
+        doc.accept_all()
+        doc.save()
+        doc.close()
+
+        doc = Document.open(dest, force_recreate=True)
+        editor = doc._document_editor
+        body = editor.dom.getElementsByTagName("w:body")[0]
+
+        # Remove all paragraphs but keep sectPr
+        for p in list(editor.dom.getElementsByTagName("w:p")):
+            if p.parentNode == body:
+                body.removeChild(p)
+
+        # Add an empty paragraph that contains a w:sectPr child
+        sect_prs = editor.dom.getElementsByTagName("w:sectPr")
+        if sect_prs:
+            sect_pr = sect_prs[0]
+            # Move sectPr inside a new empty paragraph
+            sect_pr.parentNode.removeChild(sect_pr)
+            p_xml = "<w:p/>"
+            nodes = editor._parse_fragment(p_xml)
+            for node in nodes:
+                body.appendChild(node)
+            p_elem = editor.dom.getElementsByTagName("w:p")[0]
+            p_elem.appendChild(sect_pr)
+
+        editor.save()
+        save_path = doc.save()
+        doc.close()
+
+        doc = Document.open(save_path, force_recreate=True)
+        try:
+            refs = doc.list_paragraphs()
+            ref = refs[0].split("|")[0]
+            doc.rewrite_paragraph(ref, "New content.")
+            vis = doc.get_visible_text()
+            assert "New content." in vis
+        finally:
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
