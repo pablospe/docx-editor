@@ -263,6 +263,19 @@ class TestForceSave:
         assert "not open" in result["error"].lower()
 
 
+def _get_paragraph_ref(server, path, text):
+    """Helper to find the paragraph reference containing the given text."""
+    from docx_editor_mcp.tools import list_paragraphs
+
+    result = list_paragraphs(server, path)
+    assert result["success"] is True
+    for ref in result["paragraphs"]:
+        # ref looks like "P1#a7b2| The quick brown fox..."
+        if text in ref:
+            return ref.split("|")[0].strip()
+    raise AssertionError(f"No paragraph containing '{text}' found")
+
+
 class TestTrackChangesTools:
     """Test track changes tools (Task 3.2)."""
 
@@ -271,8 +284,9 @@ class TestTrackChangesTools:
         from docx_editor_mcp.tools import open_document, replace_text
 
         open_document(server, str(mcp_temp_docx), author="Tester")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
 
-        result = replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi")
+        result = replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi", para)
 
         assert result["success"] is True
         assert "change_id" in result
@@ -283,8 +297,9 @@ class TestTrackChangesTools:
         from docx_editor_mcp.tools import open_document, replace_text
 
         open_document(server, str(mcp_temp_docx), author="Tester")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
 
-        result = replace_text(server, str(mcp_temp_docx), "nonexistent text xyz", "new")
+        result = replace_text(server, str(mcp_temp_docx), "nonexistent text xyz", "new", para)
 
         assert result["success"] is False
         assert "not found" in result["error"].lower()
@@ -294,9 +309,9 @@ class TestTrackChangesTools:
         from docx_editor_mcp.tools import open_document, replace_text
 
         open_document(server, str(mcp_temp_docx), author="Tester")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
 
-        # This may or may not find a second occurrence depending on fixture
-        result = replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi", occurrence=0)
+        result = replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi", para, occurrence=0)
 
         # Should at least not crash
         assert "success" in result
@@ -306,8 +321,9 @@ class TestTrackChangesTools:
         from docx_editor_mcp.tools import delete_text, open_document
 
         open_document(server, str(mcp_temp_docx), author="Tester")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
 
-        result = delete_text(server, str(mcp_temp_docx), "quick brown fox")
+        result = delete_text(server, str(mcp_temp_docx), "quick brown fox", para)
 
         assert result["success"] is True
         assert "change_id" in result
@@ -318,8 +334,9 @@ class TestTrackChangesTools:
         from docx_editor_mcp.tools import insert_after, open_document
 
         open_document(server, str(mcp_temp_docx), author="Tester")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
 
-        result = insert_after(server, str(mcp_temp_docx), "quick brown fox", " World")
+        result = insert_after(server, str(mcp_temp_docx), "quick brown fox", " World", para)
 
         assert result["success"] is True
         assert "change_id" in result
@@ -329,8 +346,9 @@ class TestTrackChangesTools:
         from docx_editor_mcp.tools import insert_before, open_document
 
         open_document(server, str(mcp_temp_docx), author="Tester")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
 
-        result = insert_before(server, str(mcp_temp_docx), "quick brown fox", "Say: ")
+        result = insert_before(server, str(mcp_temp_docx), "quick brown fox", "Say: ", para)
 
         assert result["success"] is True
         assert "change_id" in result
@@ -418,7 +436,8 @@ class TestRevisionTools:
         from docx_editor_mcp.tools import list_revisions, open_document, replace_text
 
         open_document(server, str(mcp_temp_docx), author="Tester")
-        replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
+        replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi", para)
 
         result = list_revisions(server, str(mcp_temp_docx))
 
@@ -436,7 +455,8 @@ class TestRevisionTools:
         )
 
         open_document(server, str(mcp_temp_docx), author="Tester")
-        replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
+        replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi", para)
         revisions = list_revisions(server, str(mcp_temp_docx))
 
         if revisions["revisions"]:
@@ -454,7 +474,8 @@ class TestRevisionTools:
         )
 
         open_document(server, str(mcp_temp_docx), author="Tester")
-        replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
+        replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi", para)
         revisions = list_revisions(server, str(mcp_temp_docx))
 
         if revisions["revisions"]:
@@ -467,7 +488,8 @@ class TestRevisionTools:
         from docx_editor_mcp.tools import accept_all, open_document, replace_text
 
         open_document(server, str(mcp_temp_docx), author="Tester")
-        replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
+        replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi", para)
 
         result = accept_all(server, str(mcp_temp_docx))
 
@@ -479,7 +501,8 @@ class TestRevisionTools:
         from docx_editor_mcp.tools import open_document, reject_all, replace_text
 
         open_document(server, str(mcp_temp_docx), author="Tester")
-        replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
+        replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi", para)
 
         result = reject_all(server, str(mcp_temp_docx))
 
@@ -545,12 +568,13 @@ class TestExternalChangeDetection:
         from docx_editor_mcp.tools import open_document, replace_text
 
         open_document(server, str(mcp_temp_docx), author="Tester")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
 
         # Simulate external modification
         time.sleep(0.01)
         mcp_temp_docx.write_bytes(mcp_temp_docx.read_bytes() + b"external")
 
-        result = replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi")
+        result = replace_text(server, str(mcp_temp_docx), "quick brown fox", "Hi", para)
 
         assert result["success"] is False
         assert "external" in result["error"].lower()

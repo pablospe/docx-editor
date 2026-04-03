@@ -231,11 +231,39 @@ def force_save(server: DocxMCPServer, path: str) -> dict[str, Any]:
 # =============================================================================
 
 
+def list_paragraphs(
+    server: DocxMCPServer,
+    path: str,
+    max_chars: int = 80,
+) -> dict[str, Any]:
+    """List all paragraphs with hash-anchored references.
+
+    Args:
+        server: The MCP server instance.
+        path: Path to the document.
+        max_chars: Maximum characters for preview text.
+
+    Returns:
+        Result dict with success status and paragraphs list.
+    """
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
+
+    try:
+        paragraphs = cached.document.list_paragraphs(max_chars=max_chars)
+        return {"success": True, "paragraphs": paragraphs}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def replace_text(
     server: DocxMCPServer,
     path: str,
     old_text: str,
     new_text: str,
+    paragraph: str,
     occurrence: int = 0,
 ) -> dict[str, Any]:
     """Replace text with tracked changes.
@@ -245,7 +273,8 @@ def replace_text(
         path: Path to the document.
         old_text: Text to find and replace.
         new_text: Replacement text.
-        occurrence: Which occurrence to replace (0 = first).
+        paragraph: Paragraph reference from list_paragraphs (e.g., "P2#f3c1").
+        occurrence: Which occurrence within the paragraph to replace (0 = first).
 
     Returns:
         Result dict with success status and change_id.
@@ -260,7 +289,7 @@ def replace_text(
         return ext_error
 
     try:
-        change_id = cached.document.replace(old_text, new_text, occurrence=occurrence)
+        change_id = cached.document.replace(old_text, new_text, paragraph=paragraph, occurrence=occurrence)
         cached.mark_dirty()
         return {"success": True, "change_id": change_id}
     except TextNotFoundError:
@@ -273,6 +302,7 @@ def delete_text(
     server: DocxMCPServer,
     path: str,
     text: str,
+    paragraph: str,
     occurrence: int = 0,
 ) -> dict[str, Any]:
     """Delete text with tracked changes.
@@ -281,7 +311,8 @@ def delete_text(
         server: The MCP server instance.
         path: Path to the document.
         text: Text to delete.
-        occurrence: Which occurrence to delete (0 = first).
+        paragraph: Paragraph reference from list_paragraphs (e.g., "P2#f3c1").
+        occurrence: Which occurrence within the paragraph to delete (0 = first).
 
     Returns:
         Result dict with success status and change_id.
@@ -296,7 +327,7 @@ def delete_text(
         return ext_error
 
     try:
-        change_id = cached.document.delete(text, occurrence=occurrence)
+        change_id = cached.document.delete(text, paragraph=paragraph, occurrence=occurrence)
         cached.mark_dirty()
         return {"success": True, "change_id": change_id}
     except TextNotFoundError:
@@ -310,6 +341,7 @@ def insert_after(
     path: str,
     anchor: str,
     text: str,
+    paragraph: str,
     occurrence: int = 0,
 ) -> dict[str, Any]:
     """Insert text after anchor with tracked changes.
@@ -319,7 +351,8 @@ def insert_after(
         path: Path to the document.
         anchor: Text to find as insertion point.
         text: Text to insert.
-        occurrence: Which occurrence of anchor to use (0 = first).
+        paragraph: Paragraph reference from list_paragraphs (e.g., "P2#f3c1").
+        occurrence: Which occurrence of anchor within the paragraph to use (0 = first).
 
     Returns:
         Result dict with success status and change_id.
@@ -334,7 +367,7 @@ def insert_after(
         return ext_error
 
     try:
-        change_id = cached.document.insert_after(anchor, text, occurrence=occurrence)
+        change_id = cached.document.insert_after(anchor, text, paragraph=paragraph, occurrence=occurrence)
         cached.mark_dirty()
         return {"success": True, "change_id": change_id}
     except TextNotFoundError:
@@ -348,6 +381,7 @@ def insert_before(
     path: str,
     anchor: str,
     text: str,
+    paragraph: str,
     occurrence: int = 0,
 ) -> dict[str, Any]:
     """Insert text before anchor with tracked changes.
@@ -357,7 +391,8 @@ def insert_before(
         path: Path to the document.
         anchor: Text to find as insertion point.
         text: Text to insert.
-        occurrence: Which occurrence of anchor to use (0 = first).
+        paragraph: Paragraph reference from list_paragraphs (e.g., "P2#f3c1").
+        occurrence: Which occurrence of anchor within the paragraph to use (0 = first).
 
     Returns:
         Result dict with success status and change_id.
@@ -372,11 +407,61 @@ def insert_before(
         return ext_error
 
     try:
-        change_id = cached.document.insert_before(anchor, text, occurrence=occurrence)
+        change_id = cached.document.insert_before(anchor, text, paragraph=paragraph, occurrence=occurrence)
         cached.mark_dirty()
         return {"success": True, "change_id": change_id}
     except TextNotFoundError:
         return {"success": False, "error": f"Anchor not found: '{anchor}'"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def batch_edit(
+    server: DocxMCPServer,
+    path: str,
+    operations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Apply multiple edits atomically with upfront hash validation.
+
+    All paragraph hashes are validated before any edits are applied.
+    If any hash is stale, the entire batch is rejected.
+
+    Args:
+        server: The MCP server instance.
+        path: Path to the document.
+        operations: List of operation dicts, each with keys:
+            - action: "replace", "delete", "insert_after", or "insert_before"
+            - paragraph: Hash-anchored paragraph reference (e.g., "P2#f3c1")
+            - find/replace_with: For "replace" action
+            - text: For "delete" (text to delete) or insert (text to insert)
+            - anchor: For "insert_after"/"insert_before"
+            - occurrence: Optional, defaults to 0
+
+    Returns:
+        Result dict with success status and list of change_ids.
+    """
+    from docx_editor import EditOperation
+
+    result = _get_cached_or_error(server, path)
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    cached = result
+
+    ext_error = _check_external_changes(cached)
+    if ext_error:
+        return ext_error
+
+    try:
+        ops = [EditOperation(**op) for op in operations]
+    except (TypeError, ValueError) as e:
+        return {"success": False, "error": f"Invalid operation: {e}"}
+
+    try:
+        change_ids = cached.document.batch_edit(ops)
+        cached.mark_dirty()
+        return {"success": True, "change_ids": change_ids}
+    except TextNotFoundError as e:
+        return {"success": False, "error": str(e)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

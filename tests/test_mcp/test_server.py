@@ -1,5 +1,6 @@
 """Tests for MCP Server following TDD."""
 
+import asyncio
 from unittest.mock import MagicMock
 
 
@@ -119,11 +120,75 @@ class TestGracefulShutdown:
         assert server.cache.size == 0
 
 
-class TestMainEntryPoint:
-    """Test main() entry point for running server."""
+class TestFastMCPApp:
+    """Test FastMCP application wiring."""
+
+    def test_create_mcp_app(self):
+        """_create_mcp_app returns a FastMCP instance."""
+        from docx_editor_mcp.server import _create_mcp_app
+
+        app = _create_mcp_app()
+        assert app is not None
+
+    def test_app_has_name(self):
+        """App has correct server name."""
+        from docx_editor_mcp.server import _create_mcp_app
+
+        app = _create_mcp_app()
+        assert app.name == "docx-editor"
+
+    def test_app_has_instructions(self):
+        """App has server instructions for Tool Search discoverability."""
+        from docx_editor_mcp.server import SERVER_INSTRUCTIONS, _create_mcp_app
+
+        app = _create_mcp_app()
+        assert app.instructions == SERVER_INSTRUCTIONS
+
+    def test_all_tools_registered(self):
+        """All 24 tools are registered on the app."""
+        from docx_editor_mcp.server import _create_mcp_app
+
+        app = _create_mcp_app()
+        tool_names = {t.name for t in app._tool_manager.list_tools()}
+        expected = {
+            # Lifecycle
+            "open_document", "save_document", "close_document",
+            "reload_document", "force_save",
+            # Paragraphs & track changes
+            "list_paragraphs", "replace_text", "delete_text",
+            "insert_after", "insert_before", "batch_edit",
+            # Comments
+            "add_comment", "list_comments", "reply_to_comment",
+            "resolve_comment", "delete_comment",
+            # Revisions
+            "list_revisions", "accept_revision", "reject_revision",
+            "accept_all", "reject_all",
+            # Read
+            "find_text", "count_matches", "get_visible_text",
+        }
+        assert tool_names == expected
 
     def test_main_function_exists(self):
         """main() function exists and is callable."""
         from docx_editor_mcp.server import main
 
         assert callable(main)
+
+
+class TestLifespan:
+    """Test server lifespan context manager."""
+
+    def test_lifespan_creates_and_shuts_down_server(self):
+        """Lifespan yields a DocxMCPServer and shuts it down on exit."""
+        from docx_editor_mcp.server import DocxMCPServer, server_lifespan
+
+        async def _run():
+            mock_mcp = MagicMock()
+            async with server_lifespan(mock_mcp) as server:
+                assert isinstance(server, DocxMCPServer)
+                assert server.cache is not None
+                assert server.cache.size == 0
+            # After exit, shutdown was called (cache cleared)
+            assert server.cache.size == 0
+
+        asyncio.run(_run())
