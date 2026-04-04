@@ -109,6 +109,8 @@ class DocumentCache:
         # Evict if at capacity and this is a new document
         if normalized not in self._cache and self.size >= self.max_documents:
             self._evict_lru()
+            if self.size >= self.max_documents:
+                raise RuntimeError("Cache full: cannot evict LRU document (dirty save failed)")
 
         self._cache[normalized] = cached_doc
 
@@ -177,7 +179,7 @@ class DocumentCache:
 
         # First time - use system default
         try:
-            default = getpass.getuser()
+            default = getpass.getuser() or "Reviewer"
         except Exception:
             default = "Reviewer"
 
