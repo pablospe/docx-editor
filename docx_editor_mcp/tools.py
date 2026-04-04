@@ -154,7 +154,7 @@ def close_document(server: DocxMCPServer, path: str) -> dict[str, Any]:
     except Exception:
         logger.debug("Failed to close document: %s", path)
 
-    server.cache.remove(path)
+    server.cache.remove(cached.path)
     return result
 
 
@@ -184,7 +184,7 @@ def reload_document(server: DocxMCPServer, path: str) -> dict[str, Any]:
         logger.debug("Failed to close document during reload: %s", path)
 
     # Remove from cache
-    server.cache.remove(path)
+    server.cache.remove(cached.path)
 
     # Reopen
     try:
