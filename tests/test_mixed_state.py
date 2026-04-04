@@ -64,8 +64,8 @@ class TestMixedStateReplace:
             pytest.skip("Expected boundary not created")
 
         ref = find_ref(doc, "dog.")
-        change_id = doc.replace("dog. ADDED", "cat. CHANGED", paragraph=ref)
-        assert change_id >= 0
+        new_ref = doc.replace("dog. ADDED", "cat. CHANGED", paragraph=ref)
+        assert isinstance(new_ref, str)
 
         text = doc.get_visible_text()
         assert "cat. CHANGED" in text
@@ -96,9 +96,8 @@ class TestMixedStateReplace:
             pytest.skip("Text not entirely within insertion")
 
         ref = find_ref(doc, "beautiful")
-        change_id = doc.replace("beautiful", "wonderful", paragraph=ref)
-        # change_id is -1 when editing in-place inside an existing insertion
-        assert isinstance(change_id, int)
+        new_ref = doc.replace("beautiful", "wonderful", paragraph=ref)
+        assert isinstance(new_ref, str)
         text = doc.get_visible_text()
         assert "wonderful" in text
         assert "beautiful" not in text

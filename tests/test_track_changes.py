@@ -29,15 +29,16 @@ class TestTrackedReplace:
 
         doc.close()
 
-    def test_replace_returns_change_id(self, clean_workspace):
-        """Test that replace returns a valid change ID."""
+    def test_replace_returns_new_ref(self, clean_workspace):
+        """Test that replace returns a new paragraph reference."""
         doc = Document.open(clean_workspace)
 
         try:
             ref = find_ref(doc, "the")
-            change_id = doc.replace("the", "THE", paragraph=ref)
-            assert isinstance(change_id, int)
-            assert change_id >= 0
+            new_ref = doc.replace("the", "THE", paragraph=ref)
+            assert isinstance(new_ref, str)
+            assert new_ref.startswith("P")
+            assert "#" in new_ref
         except TextNotFoundError:
             pytest.skip("Test text not found in document")
 
@@ -63,9 +64,9 @@ class TestTrackedDeletion:
 
         try:
             ref = find_ref(doc, "the")
-            change_id = doc.delete("the", paragraph=ref)
-            assert isinstance(change_id, int)
-            assert change_id >= 0
+            new_ref = doc.delete("the", paragraph=ref)
+            assert isinstance(new_ref, str)
+            assert new_ref.startswith("P")
         except TextNotFoundError:
             pytest.skip("Test text not found in document")
 
@@ -91,9 +92,9 @@ class TestTrackedInsertion:
 
         try:
             ref = find_ref(doc, "the")
-            change_id = doc.insert_after("the", " NEW TEXT", paragraph=ref)
-            assert isinstance(change_id, int)
-            assert change_id >= 0
+            new_ref = doc.insert_after("the", " NEW TEXT", paragraph=ref)
+            assert isinstance(new_ref, str)
+            assert new_ref.startswith("P")
         except TextNotFoundError:
             pytest.skip("Anchor text not found in document")
 
@@ -105,9 +106,9 @@ class TestTrackedInsertion:
 
         try:
             ref = find_ref(doc, "the")
-            change_id = doc.insert_before("the", "BEFORE ", paragraph=ref)
-            assert isinstance(change_id, int)
-            assert change_id >= 0
+            new_ref = doc.insert_before("the", "BEFORE ", paragraph=ref)
+            assert isinstance(new_ref, str)
+            assert new_ref.startswith("P")
         except TextNotFoundError:
             pytest.skip("Anchor text not found in document")
 
@@ -180,9 +181,12 @@ class TestRevisionAcceptReject:
 
         try:
             ref = find_ref(doc, "the")
-            change_id = doc.delete("the", paragraph=ref)
+            doc.delete("the", paragraph=ref)
         except TextNotFoundError:
             pytest.skip("Test text not found in document")
+
+        revisions = doc.list_revisions()
+        change_id = revisions[-1].id
 
         result = doc.accept_revision(change_id)
         assert result is True
@@ -200,9 +204,12 @@ class TestRevisionAcceptReject:
 
         try:
             ref = find_ref(doc, "the")
-            change_id = doc.delete("the", paragraph=ref)
+            doc.delete("the", paragraph=ref)
         except TextNotFoundError:
             pytest.skip("Test text not found in document")
+
+        revisions = doc.list_revisions()
+        change_id = revisions[-1].id
 
         result = doc.reject_revision(change_id)
         assert result is True
@@ -293,9 +300,8 @@ class TestOccurrenceParameter:
         # 'over' appears once. Use occurrence=0 on the right paragraph
         # to verify occurrence param is accepted.
         ref = find_ref(doc, "lazy dog")
-        change_id = doc.replace("the", "THE", paragraph=ref, occurrence=0)
-        assert isinstance(change_id, int)
-        assert change_id >= 0
+        new_ref = doc.replace("the", "THE", paragraph=ref, occurrence=0)
+        assert isinstance(new_ref, str)
 
         doc.close()
 
@@ -315,9 +321,8 @@ class TestOccurrenceParameter:
         doc = Document.open(clean_workspace)
 
         ref = find_ref(doc, "lazy dog")
-        change_id = doc.delete("the", paragraph=ref, occurrence=0)
-        assert isinstance(change_id, int)
-        assert change_id >= 0
+        new_ref = doc.delete("the", paragraph=ref, occurrence=0)
+        assert isinstance(new_ref, str)
 
         doc.close()
 
@@ -326,8 +331,8 @@ class TestOccurrenceParameter:
         doc = Document.open(clean_workspace)
 
         ref = find_ref(doc, "lazy dog")
-        change_id = doc.insert_after("the", " INSERTED", paragraph=ref, occurrence=0)
-        assert isinstance(change_id, int)
+        new_ref = doc.insert_after("the", " INSERTED", paragraph=ref, occurrence=0)
+        assert isinstance(new_ref, str)
 
         doc.close()
 
@@ -336,8 +341,8 @@ class TestOccurrenceParameter:
         doc = Document.open(clean_workspace)
 
         ref = find_ref(doc, "lazy dog")
-        change_id = doc.insert_before("the", "INSERTED ", paragraph=ref, occurrence=0)
-        assert isinstance(change_id, int)
+        new_ref = doc.insert_before("the", "INSERTED ", paragraph=ref, occurrence=0)
+        assert isinstance(new_ref, str)
 
         doc.close()
 
@@ -398,9 +403,8 @@ class TestRevisionManagerDirectAccess:
 
         # "quick" is in the middle of "The quick brown fox..."
         ref = find_ref(doc, "quick")
-        change_id = doc.replace("quick", "QUICK", paragraph=ref)
-        assert isinstance(change_id, int)
-        assert change_id >= 0
+        new_ref = doc.replace("quick", "QUICK", paragraph=ref)
+        assert isinstance(new_ref, str)
 
         doc.close()
 
@@ -410,8 +414,8 @@ class TestRevisionManagerDirectAccess:
 
         # Replace text - the document structure should be preserved
         ref = find_ref(doc, "Sample")
-        change_id = doc.replace("Sample", "SAMPLE", paragraph=ref)
-        assert change_id >= 0
+        new_ref = doc.replace("Sample", "SAMPLE", paragraph=ref)
+        assert isinstance(new_ref, str)
 
         doc.close()
 
@@ -421,9 +425,8 @@ class TestRevisionManagerDirectAccess:
 
         # "brown" is in the middle of "The quick brown fox..."
         ref = find_ref(doc, "brown")
-        change_id = doc.delete("brown", paragraph=ref)
-        assert isinstance(change_id, int)
-        assert change_id >= 0
+        new_ref = doc.delete("brown", paragraph=ref)
+        assert isinstance(new_ref, str)
 
         doc.close()
 
@@ -511,7 +514,10 @@ class TestAcceptRejectExtended:
         doc = Document.open(clean_workspace)
 
         ref = find_ref(doc, "fox")
-        change_id = doc.insert_after("fox", " NEW", paragraph=ref)
+        doc.insert_after("fox", " NEW", paragraph=ref)
+
+        revisions = doc.list_revisions()
+        change_id = revisions[-1].id
 
         result = doc.accept_revision(change_id)
         assert result is True
@@ -528,7 +534,10 @@ class TestAcceptRejectExtended:
         doc = Document.open(clean_workspace)
 
         ref = find_ref(doc, "quick")
-        change_id = doc.delete("quick", paragraph=ref)
+        doc.delete("quick", paragraph=ref)
+
+        revisions = doc.list_revisions()
+        change_id = revisions[-1].id
 
         result = doc.accept_revision(change_id)
         assert result is True
@@ -545,7 +554,10 @@ class TestAcceptRejectExtended:
         doc = Document.open(clean_workspace)
 
         ref = find_ref(doc, "fox")
-        change_id = doc.insert_after("fox", " REJECT_ME", paragraph=ref)
+        doc.insert_after("fox", " REJECT_ME", paragraph=ref)
+
+        revisions = doc.list_revisions()
+        change_id = revisions[-1].id
 
         result = doc.reject_revision(change_id)
         assert result is True
@@ -562,7 +574,10 @@ class TestAcceptRejectExtended:
         doc = Document.open(clean_workspace)
 
         ref = find_ref(doc, "brown")
-        change_id = doc.delete("brown", paragraph=ref)
+        doc.delete("brown", paragraph=ref)
+
+        revisions = doc.list_revisions()
+        change_id = revisions[-1].id
 
         result = doc.reject_revision(change_id)
         assert result is True
@@ -831,7 +846,10 @@ class TestRestoreDeletionEdgeCases:
 
         # Create a deletion
         ref = find_ref(doc, "lazy")
-        change_id = doc.delete("lazy", paragraph=ref)
+        doc.delete("lazy", paragraph=ref)
+
+        revisions = doc.list_revisions()
+        change_id = revisions[-1].id
 
         # Reject it to trigger _restore_deletion
         result = doc.reject_revision(change_id)
@@ -845,7 +863,10 @@ class TestRestoreDeletionEdgeCases:
 
         # Create a deletion
         ref = find_ref(doc, "dog")
-        change_id = doc.delete("dog", paragraph=ref)
+        doc.delete("dog", paragraph=ref)
+
+        revisions = doc.list_revisions()
+        change_id = revisions[-1].id
 
         # Reject it
         result = doc.reject_revision(change_id)

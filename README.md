@@ -17,6 +17,7 @@ Pure Python library for Word document track changes and comments, without requir
 
 - **Hash-Anchored Paragraph References**: `list_paragraphs()` returns stable, hash-based paragraph IDs for safe, unambiguous targeting
 - **Batch Editing**: Atomic `batch_edit()` with upfront hash validation across all operations
+- **Paragraph Rewrite**: `rewrite_paragraph()` with automatic word-level diffing — specify desired text, get fine-grained tracked changes
 - **Track Changes**: Replace, delete, and insert text with revision tracking
 - **Cross-Boundary Editing**: Find and replace text spanning multiple XML elements and revision boundaries
 - **Mixed-State Editing**: Atomic decomposition for text spanning `<w:ins>`/`<w:del>` boundaries
@@ -72,17 +73,22 @@ from docx_editor import Document
 import os
 
 author = os.environ.get("USER") or "Reviewer"
-with Document.open("contract.docx", author="Editor") as doc:
+with Document.open("contract.docx", author=author) as doc:
     # Step 1: List paragraphs with hash-anchored references
     for p in doc.list_paragraphs():
         print(p)
     # Output: P1#a7b2| Introduction to the contract...
     #         P2#f3c1| The committee shall review...
 
-    # Step 2: Edit using paragraph references (safe, unambiguous)
-    doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+    # Step 2: Edit — each method returns the new paragraph ref
+    r = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+    doc.replace("net", "gross", paragraph=r)  # chain without list_paragraphs()
     doc.delete("obsolete text", paragraph="P5#d4e5")
     doc.insert_after("Section 5", " (as amended)", paragraph="P3#b2c4")
+
+    # Rewrite entire paragraph (automatic word-level diff)
+    doc.rewrite_paragraph("P2#f3c1",
+        "The board shall approve the updated proposal.")
 
     # Comments
     doc.add_comment("Section 5", "Please review")

@@ -41,8 +41,8 @@ class TestCrossBoundaryReplaceRegression:
         """Replace text contained in a single w:t element."""
         doc = Document.open(clean_workspace)
         ref = find_ref(doc, "fox")
-        change_id = doc.replace("fox", "cat", paragraph=ref)
-        assert change_id >= 0
+        new_ref = doc.replace("fox", "cat", paragraph=ref)
+        assert isinstance(new_ref, str)
         assert "cat" in doc.get_visible_text()
         assert "fox" not in doc.get_visible_text()
         doc.close()
@@ -203,8 +203,8 @@ class TestCrossBoundaryReplaceRoundtrip:
 
         # Now "fox" spans two runs: "...fo" and "x jumps..."
         ref = find_ref(doc, "fo")
-        change_id = doc.replace("fox", "cat", paragraph=ref)
-        assert change_id >= 0
+        new_ref = doc.replace("fox", "cat", paragraph=ref)
+        assert isinstance(new_ref, str)
 
         output = temp_dir / "output.docx"
         doc.save(output)

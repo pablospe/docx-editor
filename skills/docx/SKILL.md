@@ -179,7 +179,8 @@ with Document.open("contract.docx", author=author) as doc:
     #         P2#f3c1| The committee shall review...
 
     # Step 2: Edit using paragraph references (safe, unambiguous)
-    doc.replace("old text", "new text", paragraph="P2#f3c1")
+    # Each method returns the new paragraph ref for chaining
+    new_ref = doc.replace("old text", "new text", paragraph="P2#f3c1")
     doc.delete("text to delete", paragraph="P5#d4e5")
     doc.insert_after("anchor", "new text", paragraph="P3#b2c4")
     doc.insert_before("anchor", "prefix", paragraph="P3#b2c4")
@@ -222,8 +223,10 @@ match = doc.find_text("30 days")
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()
 
-# Replace text (creates tracked deletion + insertion)
-doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+# All edit methods return the new paragraph ref as a plain string.
+# Use it for follow-up edits on the same paragraph:
+new_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+doc.replace("net", "gross", paragraph=new_ref)  # chain without list_paragraphs()
 
 # Delete text (creates tracked deletion)
 doc.delete("unnecessary clause", paragraph="P5#d4e5")
@@ -232,11 +235,15 @@ doc.delete("unnecessary clause", paragraph="P5#d4e5")
 doc.insert_after("Section 3.", " Additional terms apply.", paragraph="P3#b2c4")
 doc.insert_before("Section 3.", "See also: ", paragraph="P3#b2c4")
 
+# To accept/reject a specific edit, use list_revisions() to get the change ID:
+revisions = doc.list_revisions()
+doc.accept_revision(revisions[-1].id)
+
 doc.save("edited.docx")
 doc.close()
 ```
 
-**Return values:** All track changes methods return an `int` change ID. Returns `-1` when the target text is already inside a tracked insertion (`<w:ins>`), because the edit is done in-place without creating new revision markup.
+**Return values:** All edit methods return the new paragraph reference as a plain `str` (e.g., `"P2#c3d4"`). Use this for follow-up edits on the same paragraph without calling `list_paragraphs()` again. To get change IDs for accept/reject, use `doc.list_revisions()`.
 
 **Raises:** `TextNotFoundError` if the text is not found.
 
@@ -341,7 +348,9 @@ for p in doc.list_paragraphs():
     print(p)
 
 # Section 2 changes (using paragraph references from list_paragraphs)
-doc.replace("30 days", "60 days", paragraph="P4#a1b2")
+# Each edit returns the new ref — chain edits on the same paragraph
+r = doc.replace("30 days", "60 days", paragraph="P4#a1b2")
+doc.replace("net", "gross", paragraph=r)  # second edit on same paragraph
 doc.replace("January 1, 2024", "March 1, 2024", paragraph="P5#c3d4")
 
 # Section 5 changes
@@ -382,34 +391,102 @@ with Document.open("file.docx", author=author) as doc:
     #         P2#f3c1| The committee shall review all...
     #         P3#b2c4| The meeting was productive...
 
-    # Step 2: Use the paragraph reference to target exactly the right paragraph
-    doc.replace("the meeting was productive",
-                "the conference was productive",
-                paragraph="P3#b2c4")
-
+    # Step 2: Edit returns the new ref — use it for follow-up edits
+    result = doc.replace("the meeting was productive",
+                         "the conference was productive",
+                         paragraph="P3#b2c4")
+    # returns "P3#d5e6" — fresh hash, ready for the next edit
     doc.save()
 ```
 
-The `paragraph` argument is **required** for all edit methods (`replace`, `delete`, `insert_after`, `insert_before`). If the paragraph content has changed since you called `list_paragraphs()`, a `HashMismatchError` is raised — preventing edits to the wrong location.
+The `paragraph` argument is **required** for all edit methods. If the paragraph content has changed since you called `list_paragraphs()`, a `HashMismatchError` is raised — preventing edits to the wrong location.
+
+**Every edit method returns the new paragraph ref as a plain string.** Chain edits without calling `list_paragraphs()` again:
+
+```python
+# Chain 3 edits on the same paragraph — no list_paragraphs() between them:
+r1 = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+r2 = doc.replace("Manager", "Director", paragraph=r1)
+r3 = doc.delete("draft ", paragraph=r2)
+# r3 is "P2#xxxx" — the final hash for paragraph 2
+```
 
 ### Batch Editing
 
-For multiple edits, use `batch_edit()` to validate all paragraph hashes upfront before applying any changes:
+For multiple independent edits, use `batch_edit()`:
 
 ```python
 from docx_editor import Document, EditOperation
 
 with Document.open("file.docx", author=author) as doc:
     refs = doc.list_paragraphs()
-    doc.batch_edit([
+    new_refs = doc.batch_edit([
         EditOperation(action="replace", find="old term", replace_with="new term", paragraph="P2#f3c1"),
         EditOperation(action="delete", text="remove this", paragraph="P5#d4e5"),
         EditOperation(action="insert_after", anchor="Section 5", text=" (amended)", paragraph="P3#b2c4"),
     ])
+    # new_refs[0] = "P2#c3d4" — fresh ref for paragraph 2
     doc.save()
 ```
 
 If any hash is stale, the entire batch is rejected before any edits are applied.
+
+### Paragraph Rewrite (Fallback for Structural Edits)
+
+**Default: always use surgical methods** (`replace`, `delete`, `insert_after`, `insert_before`, `batch_edit`).
+
+**Use `rewrite_paragraph()` only when the edit cannot be decomposed into independent find→replace pairs.** This happens when:
+- **Sentence restructuring** — the grammar or clause order changes, not just word swaps
+- **Reordering** — words, items, or clauses move to different positions
+- **Intertwined changes** — edits overlap or depend on each other so they can't be applied independently
+
+**Use surgical methods when** each change is an independent substitution, even if there are many of them. Five independent word swaps → `batch_edit`, not `rewrite_paragraph`.
+
+**Examples — surgical is correct:**
+
+```python
+# Single word swap — use replace():
+doc.replace("30", "60", paragraph="P2#f3c1")
+
+# Multiple independent swaps — use batch_edit():
+# "CFO" → "Finance Director", "audit committee" → "board", "December 31st" → "January 15th"
+doc.batch_edit([
+    EditOperation(action="replace", find="CFO", replace_with="Finance Director", paragraph="P5#a7b2"),
+    EditOperation(action="replace", find="audit committee", replace_with="board", paragraph="P5#a7b2"),
+    EditOperation(action="replace", find="December 31st", replace_with="January 15th", paragraph="P5#a7b2"),
+])
+```
+
+**Examples — rewrite is correct:**
+
+```python
+# Rephrasing (sentence structure changes completely):
+# "The committee recommends that the timeline be extended by three months"
+# → "The board has approved a three-month extension"
+new_ref = doc.rewrite_paragraph("P5#a7b2",
+    "The board has approved a three-month extension for further stakeholder review.")
+# new_ref = "P5#d6e7" — fresh ref for follow-up edits
+
+# Reordering items in a list:
+# "final report, executive summary, and presentation slides"
+# → "presentation slides, final report, and executive summary"
+new_ref = doc.rewrite_paragraph("P3#c4d5",
+    "Deliverables include the presentation slides, final report, and executive summary.")
+```
+
+**Batch rewrite** for multiple paragraphs at once:
+
+```python
+import os
+author = os.environ.get("USER") or "Reviewer"
+with Document.open("contract.docx", author=author) as doc:
+    refs = doc.list_paragraphs()
+    doc.batch_rewrite([
+        (refs[1].split("|")[0], "Rephrased paragraph 2 text here."),
+        (refs[4].split("|")[0], "Restructured paragraph 5 text here."),
+    ])
+    doc.save()
+```
 
 ### Workflow for Large Documents
 

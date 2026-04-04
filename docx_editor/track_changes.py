@@ -3,6 +3,8 @@
 Provides RevisionManager for creating and managing tracked changes (insertions/deletions).
 """
 
+import difflib
+import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +15,7 @@ from .exceptions import HashMismatchError, RevisionError, TextNotFoundError
 from .xml_editor import (
     DocxXMLEditor,
     ParagraphRef,
+    TextMap,
     TextMapMatch,
     TextPosition,
     build_text_map,
@@ -170,6 +173,215 @@ class RevisionManager:
 
         else:
             raise ValueError(f"Unknown action: {op.action}")
+
+    def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> None:
+        """Rewrite multiple paragraphs with upfront hash validation."""
+        if not rewrites:
+            return
+
+        # Parse and validate all refs upfront
+        parsed: list[tuple[ParagraphRef, str]] = []
+        seen_indices: set[int] = set()
+        for ref_str, new_text in rewrites:
+            ref = ParagraphRef.parse(ref_str)
+            if ref.index in seen_indices:
+                raise ValueError(
+                    f"Batch contains duplicate paragraph P{ref.index}. "
+                    f"Each paragraph can appear at most once in a batch rewrite."
+                )
+            seen_indices.add(ref.index)
+            self._resolve_paragraph(ref)  # Raises HashMismatchError if stale
+            parsed.append((ref, new_text))
+
+        # Sort by paragraph index descending
+        parsed.sort(key=lambda x: x[0].index, reverse=True)
+
+        # Apply rewrites in reverse paragraph order
+        for ref, new_text in parsed:
+            self.rewrite_paragraph(f"P{ref.index}#{ref.hash}", new_text)
+
+    def rewrite_paragraph(self, ref_str: str, new_text: str) -> None:
+        """Rewrite a paragraph's text, generating fine-grained tracked changes.
+
+        Diffs old vs new text at word level and applies minimal tracked changes
+        (insertions, deletions, replacements) to transform the paragraph.
+
+        Args:
+            ref_str: Paragraph reference string (e.g., "P3#a7b2")
+            new_text: Desired new text for the paragraph
+
+        Raises:
+            HashMismatchError: If the paragraph hash doesn't match
+            IndexError: If paragraph index is out of range
+        """
+        ref = ParagraphRef.parse(ref_str)
+        p = self._resolve_paragraph(ref)
+        text_map = build_text_map(p)
+        old_text = text_map.text
+
+        if old_text == new_text:
+            return
+
+        old_tokens = _tokenize_words(old_text)
+        new_tokens = _tokenize_words(new_text)
+
+        sm = difflib.SequenceMatcher(None, old_tokens, new_tokens)
+        opcodes = sm.get_opcodes()
+
+        # Convert token indices to character offsets in old_text
+        old_token_offsets = []
+        pos = 0
+        for tok in old_tokens:
+            old_token_offsets.append(pos)
+            pos += len(tok)
+
+        # Build hunks: list of (tag, old_char_start, old_char_end, new_fragment)
+        hunks = []
+        for tag, i1, i2, j1, j2 in opcodes:
+            if tag == "equal":
+                continue
+
+            # Character range in old_text
+            if i1 < len(old_tokens):
+                old_char_start = old_token_offsets[i1]
+            else:
+                old_char_start = len(old_text)
+
+            if i2 > 0:
+                last_tok = old_tokens[i2 - 1]
+                old_char_end = old_token_offsets[i2 - 1] + len(last_tok)
+            else:
+                old_char_end = old_char_start
+
+            new_fragment = "".join(new_tokens[j1:j2])
+
+            hunks.append((tag, old_char_start, old_char_end, new_fragment))
+
+        # Process hunks in reverse order for position stability
+        for tag, old_char_start, old_char_end, new_fragment in reversed(hunks):
+            # Rebuild text_map each iteration since DOM changes
+            text_map = build_text_map(p)
+
+            if tag == "replace":
+                match_text = old_text[old_char_start:old_char_end]
+                match = self._find_match_at_position(text_map, match_text, old_char_start)
+                self._replace_across_nodes(match, new_fragment)
+
+            elif tag == "delete":
+                match_text = old_text[old_char_start:old_char_end]
+                match = self._find_match_at_position(text_map, match_text, old_char_start)
+                self._delete_across_nodes(match)
+
+            elif tag == "insert":
+                self._rewrite_insert_at(p, text_map, old_char_start, new_fragment)
+
+    def _find_match_at_position(self, text_map: TextMap, search: str, expected_pos: int) -> TextMapMatch:
+        """Find text at an expected character position in the text map.
+
+        Unlike find_in_text_map which finds the first occurrence, this
+        verifies the match is at the expected position. Used by
+        rewrite_paragraph() to avoid matching the wrong occurrence when
+        the same text appears multiple times in a paragraph.
+
+        Raises RevisionError if the text is not found at the expected position.
+        """
+        idx = text_map.find(search, expected_pos)
+        if idx == -1 or idx != expected_pos:
+            raise RevisionError(f"Rewrite failed: could not locate '{search}' at position {expected_pos}")
+        end = idx + len(search)
+        positions = text_map.get_nodes_for_range(idx, end)
+        if positions:
+            first_ins = positions[0].is_inside_ins
+            spans = any(p.is_inside_ins != first_ins for p in positions)
+        else:
+            spans = False
+        return TextMapMatch(
+            start=idx,
+            end=end,
+            text=search,
+            positions=positions,
+            spans_boundary=spans,
+        )
+
+    def _rewrite_insert_at(self, paragraph, text_map: TextMap, char_pos: int, text: str) -> None:
+        """Insert text at a character position within a paragraph.
+
+        Used by rewrite_paragraph() for 'insert' opcodes.
+
+        Args:
+            paragraph: The <w:p> DOM element
+            text_map: Current text map for the paragraph
+            char_pos: Character position in visible text to insert at
+            text: Text to insert
+        """
+        if not text_map.positions:
+            # Empty paragraph — append insertion
+            # Get rPr from any existing run, or use empty
+            rPr_xml = ""
+            runs = paragraph.getElementsByTagName("w:r")
+            if runs:
+                rPr_elems = runs[0].getElementsByTagName("w:rPr")
+                if rPr_elems:
+                    rPr_xml = rPr_elems[0].toxml()
+
+            ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
+            # Insert before w:sectPr if present, else append
+            sect_prs = paragraph.getElementsByTagName("w:sectPr")
+            if sect_prs:
+                self.editor.insert_before(sect_prs[0], ins_xml)
+            else:
+                self.editor.append_to(paragraph, ins_xml)
+            return
+
+        if char_pos >= len(text_map.positions):
+            # Insert at end — after last character's run
+            last_pos = text_map.positions[-1]
+            run, rPr_xml = self._get_run_info(last_pos.node)
+            if not run:
+                return
+
+            # If inside <w:ins>, splice text directly
+            ins_ancestor = self._find_ancestor(run, "w:ins")
+            if ins_ancestor:
+                node_text = self._get_node_text(last_pos.node)
+                last_pos.node.firstChild.data = node_text + text
+                _set_xml_space_preserve(last_pos.node)
+                return
+
+            ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
+            self.editor.insert_after(run, ins_xml)
+            return
+
+        # Insert at a position within the text
+        pos = text_map.positions[char_pos]
+        run, rPr_xml = self._get_run_info(pos.node)
+        if not run:
+            return
+
+        # If inside <w:ins>, splice text directly
+        ins_ancestor = self._find_ancestor(run, "w:ins")
+        if ins_ancestor:
+            node_text = self._get_node_text(pos.node)
+            offset = pos.offset_in_node
+            pos.node.firstChild.data = node_text[:offset] + text + node_text[offset:]
+            _set_xml_space_preserve(pos.node)
+            return
+
+        # Split the run at the offset and insert <w:ins> between
+        node_text = self._get_node_text(pos.node)
+        offset = pos.offset_in_node
+        before_text = node_text[:offset]
+        after_text = node_text[offset:]
+
+        xml_parts = []
+        if before_text:
+            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before_text)}</w:t></w:r>")
+        xml_parts.append(f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>")
+        if after_text:
+            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r>")
+
+        new_xml = "".join(xml_parts)
+        self.editor.replace_node(run, new_xml)
 
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.
@@ -1410,6 +1622,11 @@ class RevisionManager:
 
         # Unwrap the w:del element
         self._unwrap_element(del_elem)
+
+
+def _tokenize_words(text: str) -> list[str]:
+    """Split text into alternating word and whitespace tokens."""
+    return re.findall(r"\S+|\s+", text)
 
 
 def _set_xml_space_preserve(wt_elem) -> None:
