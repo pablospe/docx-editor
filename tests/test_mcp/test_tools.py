@@ -354,6 +354,64 @@ class TestTrackChangesTools:
         assert "new_ref" in result
 
 
+class TestBatchAndRewriteTools:
+    """Test batch_edit, rewrite_paragraph, and batch_rewrite tools."""
+
+    def test_batch_edit(self, server, mcp_temp_docx):
+        """batch_edit applies multiple edits atomically."""
+        from docx_editor_mcp.tools import batch_edit, list_paragraphs, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
+
+        result = batch_edit(server, str(mcp_temp_docx), [
+            {"action": "replace", "find": "quick", "replace_with": "slow", "paragraph": para},
+        ])
+
+        assert result["success"] is True
+        assert "new_refs" in result
+        assert len(result["new_refs"]) == 1
+
+    def test_batch_edit_invalid_operation(self, server, mcp_temp_docx):
+        """batch_edit returns error for invalid operations."""
+        from docx_editor_mcp.tools import batch_edit, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+
+        result = batch_edit(server, str(mcp_temp_docx), [
+            {"action": "replace"},  # missing required fields
+        ])
+
+        assert result["success"] is False
+
+    def test_rewrite_paragraph(self, server, mcp_temp_docx):
+        """rewrite_paragraph rewrites with tracked changes."""
+        from docx_editor_mcp.tools import open_document, rewrite_paragraph
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+        para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
+
+        result = rewrite_paragraph(server, str(mcp_temp_docx), para, "The slow red fox jumps over the lazy dog.")
+
+        assert result["success"] is True
+        assert "new_ref" in result
+        assert server.cache.get(str(mcp_temp_docx)).dirty is True
+
+    def test_batch_rewrite(self, server, mcp_temp_docx):
+        """batch_rewrite rewrites multiple paragraphs."""
+        from docx_editor_mcp.tools import batch_rewrite, list_paragraphs, open_document
+
+        open_document(server, str(mcp_temp_docx), author="Tester")
+        paras = list_paragraphs(server, str(mcp_temp_docx))
+        ref = paras["paragraphs"][0].split("|")[0].strip()
+
+        result = batch_rewrite(server, str(mcp_temp_docx), [[ref, "Completely new text."]])
+
+        assert result["success"] is True
+        assert "new_refs" in result
+        assert len(result["new_refs"]) == 1
+
+
 class TestCommentTools:
     """Test comment tools (Task 3.3)."""
 
