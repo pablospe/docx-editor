@@ -75,7 +75,7 @@ async def server_lifespan(mcp) -> AsyncIterator[DocxMCPServer]:
 
 def _create_mcp_app():
     """Create and configure the FastMCP application with all tools registered."""
-    from mcp.server.fastmcp import FastMCP as _FastMCP
+    from mcp.server.fastmcp import FastMCP as _FastMCP  # ty: ignore[unresolved-import]
 
     mcp = _FastMCP(
         "docx-editor",
@@ -88,7 +88,7 @@ def _create_mcp_app():
 
 def _register_tools(mcp) -> None:
     """Register all docx_editor tools on the FastMCP instance."""
-    from mcp.server.fastmcp import Context
+    from mcp.server.fastmcp import Context  # ty: ignore[unresolved-import]
 
     from . import tools
 
