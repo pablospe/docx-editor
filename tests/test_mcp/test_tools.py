@@ -359,7 +359,7 @@ class TestBatchAndRewriteTools:
 
     def test_batch_edit(self, server, mcp_temp_docx):
         """batch_edit applies multiple edits atomically."""
-        from docx_editor_mcp.tools import batch_edit, list_paragraphs, open_document
+        from docx_editor_mcp.tools import batch_edit, open_document
 
         open_document(server, str(mcp_temp_docx), author="Tester")
         para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
