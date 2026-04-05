@@ -364,9 +364,13 @@ class TestBatchAndRewriteTools:
         open_document(server, str(mcp_temp_docx), author="Tester")
         para = _get_paragraph_ref(server, str(mcp_temp_docx), "quick brown fox")
 
-        result = batch_edit(server, str(mcp_temp_docx), [
-            {"action": "replace", "find": "quick", "replace_with": "slow", "paragraph": para},
-        ])
+        result = batch_edit(
+            server,
+            str(mcp_temp_docx),
+            [
+                {"action": "replace", "find": "quick", "replace_with": "slow", "paragraph": para},
+            ],
+        )
 
         assert result["success"] is True
         assert "new_refs" in result
@@ -378,9 +382,13 @@ class TestBatchAndRewriteTools:
 
         open_document(server, str(mcp_temp_docx), author="Tester")
 
-        result = batch_edit(server, str(mcp_temp_docx), [
-            {"action": "replace"},  # missing required fields
-        ])
+        result = batch_edit(
+            server,
+            str(mcp_temp_docx),
+            [
+                {"action": "replace"},  # missing required fields
+            ],
+        )
 
         assert result["success"] is False
 

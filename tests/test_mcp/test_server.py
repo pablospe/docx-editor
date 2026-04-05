@@ -158,21 +158,39 @@ class TestFastMCPApp:
         tool_names = {t.name for t in app._tool_manager.list_tools()}
         expected = {
             # Lifecycle
-            "open_document", "save_document", "close_document",
-            "reload_document", "force_save",
+            "open_document",
+            "save_document",
+            "close_document",
+            "reload_document",
+            "force_save",
             # Paragraphs & track changes
-            "list_paragraphs", "replace_text", "delete_text",
-            "insert_after", "insert_before", "batch_edit",
-            "rewrite_paragraph", "batch_rewrite",
+            "list_paragraphs",
+            "replace_text",
+            "delete_text",
+            "insert_after",
+            "insert_before",
+            "batch_edit",
+            "rewrite_paragraph",
+            "batch_rewrite",
             # Comments
-            "add_comment", "list_comments", "reply_to_comment",
-            "resolve_comment", "delete_comment",
+            "add_comment",
+            "list_comments",
+            "reply_to_comment",
+            "resolve_comment",
+            "delete_comment",
             # Revisions
-            "list_revisions", "accept_revision", "reject_revision",
-            "accept_all", "reject_all",
+            "list_revisions",
+            "accept_revision",
+            "reject_revision",
+            "accept_all",
+            "reject_all",
             # Read & Exploration
-            "find_text", "count_matches", "get_visible_text",
-            "search_text", "get_paragraph_text", "get_document_info",
+            "find_text",
+            "count_matches",
+            "get_visible_text",
+            "search_text",
+            "get_paragraph_text",
+            "get_document_info",
         }
         assert tool_names == expected
 
