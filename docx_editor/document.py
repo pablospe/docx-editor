@@ -222,8 +222,8 @@ class Document:
                 if pos == -1:
                     break
                 h = compute_paragraph_hash(p)
-                before = text[max(0, pos - context_chars):pos]
-                after = text[pos + len(query):pos + len(query) + context_chars]
+                before = text[max(0, pos - context_chars) : pos]
+                after = text[pos + len(query) : pos + len(query) + context_chars]
                 results.append({
                     "paragraph_ref": f"P{i + 1}#{h}",
                     "paragraph_index": i + 1,
@@ -258,7 +258,11 @@ class Document:
             p = all_paragraphs[ref.index - 1]
             actual_hash = compute_paragraph_hash(p)
             if actual_hash != ref.hash:
-                results.append({"ref": ref_str, "text": None, "error": f"Hash mismatch: expected {ref.hash}, got {actual_hash}"})
+                results.append({
+                    "ref": ref_str,
+                    "text": None,
+                    "error": f"Hash mismatch: expected {ref.hash}, got {actual_hash}",
+                })
                 continue
             tm = build_text_map(p)
             results.append({"ref": ref_str, "text": tm.text, "error": None})

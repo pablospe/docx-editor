@@ -1,7 +1,12 @@
 """Tests for MCP Server following TDD."""
 
 import asyncio
+import importlib.util
 from unittest.mock import MagicMock
+
+import pytest
+
+_has_mcp = bool(importlib.util.find_spec("mcp"))
 
 
 class TestMCPServer:
@@ -120,6 +125,7 @@ class TestGracefulShutdown:
         assert server.cache.size == 0
 
 
+@pytest.mark.skipif(not _has_mcp, reason="mcp package not installed")
 class TestFastMCPApp:
     """Test FastMCP application wiring."""
 
@@ -177,6 +183,7 @@ class TestFastMCPApp:
         assert callable(main)
 
 
+@pytest.mark.skipif(not _has_mcp, reason="mcp package not installed")
 class TestLifespan:
     """Test server lifespan context manager."""
 
