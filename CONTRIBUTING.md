@@ -124,3 +124,43 @@ Before you submit a pull request, check that it meets these guidelines:
 
 2. If the pull request adds functionality, the docs should be updated.
    Put your new functionality into a function with a docstring, and add the feature to the list in `README.md`.
+
+# Releasing a New Version
+
+This project uses GitHub Releases to trigger automated publishing to PyPI and docs deployment.
+
+## Steps
+
+1. **Update the version** in both files on `main`:
+
+   - `pyproject.toml` → `version = "X.Y.Z"`
+   - `.claude-plugin/plugin.json` → `"version": "X.Y.Z"`
+
+2. **Commit and push** the version bump:
+
+   ```bash
+   git add pyproject.toml .claude-plugin/plugin.json
+   git commit -m "bump version to X.Y.Z"
+   git push origin main
+   ```
+
+3. **Create a GitHub Release**:
+
+   - Go to [Releases](https://github.com/pablospe/docx-editor/releases/new)
+   - Create a new tag matching the version: `X.Y.Z` (e.g., `0.3.0`)
+   - Set the target branch to `main`
+   - Add release notes (use "Generate release notes" for a changelog)
+   - Click **Publish release**
+
+4. **Automated CI** (`.github/workflows/on-release-main.yml`) will:
+
+   - Update `pyproject.toml` version from the release tag
+   - Build the package with `uv build`
+   - Publish to [PyPI](https://pypi.org/project/docx-editor/) via trusted publishing
+   - Deploy documentation to GitHub Pages with `mkdocs gh-deploy`
+
+## Notes
+
+- The release tag **must** match the version format (e.g., `0.3.0`, no `v` prefix)
+- PyPI publishing uses [trusted publishing](https://docs.pypi.org/trusted-publishers/) (no API tokens needed)
+- If you need to build and publish manually, you can use `make build-and-publish`
