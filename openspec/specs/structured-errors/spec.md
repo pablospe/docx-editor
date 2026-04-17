@@ -127,4 +127,3 @@ The documentation SHALL, at minimum, list for each of `HashMismatchError`, `Text
 - **WHEN** a reader opens `skills/docx/SKILL.md`
 - **THEN** the file contains a section documenting each of the four structured errors
 - **AND** each error's entry names its instance attributes and a recovery pattern
-
