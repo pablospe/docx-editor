@@ -136,15 +136,24 @@ This project uses GitHub Releases to trigger automated publishing to PyPI and do
    - `pyproject.toml` → `version = "X.Y.Z"`
    - `.claude-plugin/plugin.json` → `"version": "X.Y.Z"`
 
-2. **Commit and push** the version bump:
+2. **Refresh `uv.lock`** so its pinned project version matches:
 
    ```bash
-   git add pyproject.toml .claude-plugin/plugin.json
+   uv lock
+   ```
+
+   Skipping this makes `make check` (and the matching CI job) fail with
+   `The lockfile at 'uv.lock' needs to be updated, but '--locked' was provided.`
+
+3. **Commit and push** the version bump:
+
+   ```bash
+   git add pyproject.toml .claude-plugin/plugin.json uv.lock
    git commit -m "bump version to X.Y.Z"
    git push origin main
    ```
 
-3. **Create a GitHub Release**:
+4. **Create a GitHub Release**:
 
    - Go to [Releases](https://github.com/pablospe/docx-editor/releases/new)
    - Create a new tag matching the version: `X.Y.Z` (e.g., `0.3.0`)
@@ -152,7 +161,7 @@ This project uses GitHub Releases to trigger automated publishing to PyPI and do
    - Add release notes (use "Generate release notes" for a changelog)
    - Click **Publish release**
 
-4. **Automated CI** (`.github/workflows/on-release-main.yml`) will:
+5. **Automated CI** (`.github/workflows/on-release-main.yml`) will:
 
    - Update `pyproject.toml` version from the release tag
    - Build the package with `uv build`
