@@ -101,6 +101,19 @@ class TestTextNotFoundErrorQuality:
         assert err.paragraph_ref == "P3#a7b2"
         assert err.paragraph_preview is None
 
+    def test_occurrence_miss_with_paragraph_ref_names_scope(self):
+        """nth-match miss with paragraph_ref appends the ref so the agent knows where."""
+        err = TextNotFoundError(
+            "needle",
+            paragraph_ref="P2#cafe",
+            occurrence=3,
+            total_occurrences=1,
+        )
+        msg = str(err)
+        assert "Only 1 occurrence(s) of 'needle'" in msg
+        assert "occurrence=3 requested" in msg
+        assert "Paragraph: P2#cafe" in msg
+
 
 class TestParagraphIndexErrorQuality:
     """
@@ -129,6 +142,15 @@ class TestParagraphIndexErrorQuality:
             assert str(n) in msg
         finally:
             doc.close()
+
+    def test_empty_document_uses_distinct_phrasing(self):
+        """total_paragraphs=0 gets its own message — no misleading 'valid: P1-P0'."""
+        err = ParagraphIndexError(index=1, total_paragraphs=0)
+        msg = str(err)
+        assert "no paragraphs" in msg
+        assert "P1-P0" not in msg
+        assert err.index == 1
+        assert err.total_paragraphs == 0
 
 
 class TestBatchOperationErrorQuality:
