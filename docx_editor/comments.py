@@ -107,7 +107,7 @@ class CommentManager:
         try:
             elem = self.document_editor.get_node(tag="w:t", contains=anchor_text)
         except Exception:
-            raise TextNotFoundError(f"Anchor text not found: '{anchor_text}'") from None
+            raise TextNotFoundError(anchor_text) from None
 
         # Get the parent run and paragraph
         run = elem.parentNode

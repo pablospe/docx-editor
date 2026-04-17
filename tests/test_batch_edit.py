@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from docx_editor import Document, EditOperation, HashMismatchError, TextNotFoundError
+from docx_editor import (
+    BatchOperationError,
+    Document,
+    EditOperation,
+    HashMismatchError,
+    TextNotFoundError,
+)
 
 
 @pytest.fixture
@@ -253,22 +259,22 @@ class TestBatchEdit:
         assert "[APPENDED]" in vis
 
     def test_batch_missing_paragraph_raises(self, multi_para_doc):
-        """Batch with missing paragraph field raises ValueError."""
+        """Batch with missing paragraph field raises BatchOperationError."""
         doc, _ = multi_para_doc
 
         ops = [
             EditOperation(action="replace", find="a", replace_with="b", paragraph=""),
         ]
 
-        with pytest.raises(ValueError, match="paragraph reference is required"):
+        with pytest.raises(BatchOperationError, match="paragraph reference is required"):
             doc.batch_edit(ops)
 
     def test_batch_replace_missing_find(self, multi_para_doc):
-        """Replace without find raises ValueError."""
+        """Replace without find raises BatchOperationError."""
         doc, _ = multi_para_doc
         ref = doc.list_paragraphs()[0].split("|")[0]
         ops = [EditOperation(action="replace", find=None, replace_with="x", paragraph=ref)]
-        with pytest.raises(ValueError, match="replace requires"):
+        with pytest.raises(BatchOperationError, match="replace requires"):
             doc.batch_edit(ops)
 
     def test_batch_replace_text_not_found(self, multi_para_doc):
@@ -280,11 +286,11 @@ class TestBatchEdit:
             doc.batch_edit(ops)
 
     def test_batch_delete_missing_text(self, multi_para_doc):
-        """Delete without text raises ValueError."""
+        """Delete without text raises BatchOperationError."""
         doc, _ = multi_para_doc
         ref = doc.list_paragraphs()[0].split("|")[0]
         ops = [EditOperation(action="delete", text=None, paragraph=ref)]
-        with pytest.raises(ValueError, match="delete requires"):
+        with pytest.raises(BatchOperationError, match="delete requires"):
             doc.batch_edit(ops)
 
     def test_batch_delete_text_not_found(self, multi_para_doc):
@@ -296,11 +302,11 @@ class TestBatchEdit:
             doc.batch_edit(ops)
 
     def test_batch_insert_missing_anchor(self, multi_para_doc):
-        """Insert without anchor raises ValueError."""
+        """Insert without anchor raises BatchOperationError."""
         doc, _ = multi_para_doc
         ref = doc.list_paragraphs()[0].split("|")[0]
         ops = [EditOperation(action="insert_after", anchor=None, text="x", paragraph=ref)]
-        with pytest.raises(ValueError, match="insert_after requires"):
+        with pytest.raises(BatchOperationError, match="insert_after requires"):
             doc.batch_edit(ops)
 
     def test_batch_insert_anchor_not_found(self, multi_para_doc):
@@ -312,9 +318,81 @@ class TestBatchEdit:
             doc.batch_edit(ops)
 
     def test_batch_unknown_action(self, multi_para_doc):
-        """Unknown action raises ValueError."""
+        """Unknown action raises BatchOperationError."""
         doc, _ = multi_para_doc
         ref = doc.list_paragraphs()[0].split("|")[0]
         ops = [EditOperation(action="unknown", paragraph=ref)]  # type: ignore[arg-type]
-        with pytest.raises(ValueError, match="Unknown action"):
+        with pytest.raises(BatchOperationError, match="Unknown action"):
+            doc.batch_edit(ops)
+
+
+class TestStructuredBatchOperationError:
+    def test_predispatch_missing_paragraph_has_operation_index(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 1",
+                replace_with="x",
+                paragraph=refs[0].split("|")[0],
+            ),
+            EditOperation(action="replace", find="a", replace_with="b", paragraph=""),
+        ]
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_edit(ops)
+        err = exc.value
+        assert err.operation_index == 1
+        assert "paragraph" in err.reason.lower()
+        assert "1" in str(err)
+
+    def test_inner_missing_field_has_operation_index(self, multi_para_doc):
+        """`ValueError` raised inside `_apply_single_edit` is wrapped with the op index."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        ops = [
+            EditOperation(
+                action="replace",
+                find=None,
+                replace_with="x",
+                paragraph=refs[0].split("|")[0],
+            ),
+        ]
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_edit(ops)
+        err = exc.value
+        assert err.operation_index == 0
+        assert "replace requires" in err.reason
+
+    def test_inner_unknown_action_has_operation_index(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 1",
+                replace_with="x",
+                paragraph=refs[0].split("|")[0],
+            ),
+            EditOperation(action="bogus", paragraph=refs[1].split("|")[0]),  # type: ignore[arg-type]
+        ]
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_edit(ops)
+        err = exc.value
+        assert err.operation_index == 1
+        assert "Unknown action" in err.reason
+
+    def test_non_batch_value_error_unchanged(self):
+        """Malformed paragraph refs outside batch paths still raise plain ValueError."""
+        from docx_editor import ParagraphRef
+
+        with pytest.raises(ValueError):
+            ParagraphRef.parse("not-a-valid-ref")
+
+    def test_batch_operation_error_is_docx_edit_error(self, multi_para_doc):
+        from docx_editor import DocxEditError
+
+        doc, _ = multi_para_doc
+        ops = [EditOperation(action="replace", find="a", replace_with="b", paragraph="")]
+        with pytest.raises(DocxEditError):
             doc.batch_edit(ops)
