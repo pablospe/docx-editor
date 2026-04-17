@@ -152,7 +152,7 @@ class Document:
         new_hash = compute_paragraph_hash(p)
         return f"P{ref.index}#{new_hash}"
 
-    def list_paragraphs(self, max_chars: int = 80) -> list[str]:
+    def list_paragraphs(self, max_chars: int = 80, *, start: int = 0, limit: int = 0) -> list[str]:
         """List all paragraphs with hash-anchored references.
 
         Returns a list of strings like "P1#a7b2| Introduction to the..."
@@ -161,20 +161,26 @@ class Document:
         Args:
             max_chars: Maximum characters for the preview text (default 80).
                 Use 0 to get only hash refs without preview text.
+            start: Starting paragraph index (0-based, default 0).
+            limit: Maximum number of paragraphs to return (0 = all).
 
         Returns:
             List of hash-tagged paragraph preview strings
         """
         self._ensure_open()
         paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        total = len(paragraphs)
+        end = total if limit == 0 else min(start + limit, total)
         result = []
-        for i, p in enumerate(paragraphs, start=1):
+        for i in range(start, end):
+            p = paragraphs[i]
+            idx = i + 1  # 1-based
             h = compute_paragraph_hash(p)
             tm = build_text_map(p)
             preview = tm.text[:max_chars]
             if len(tm.text) > max_chars:
                 preview += "..."
-            result.append(f"P{i}#{h}| {preview}")
+            result.append(f"P{idx}#{h}| {preview}")
         return result
 
     def get_visible_text(self) -> str:
@@ -193,6 +199,112 @@ class Document:
             tm = build_text_map(p)
             parts.append(tm.text)
         return "\n".join(parts)
+
+    def search_text(self, query: str, context_chars: int = 100) -> list[dict]:
+        """Search for text in the document, returning matches with context.
+
+        Args:
+            query: Text to search for.
+            context_chars: Characters of context to include before and after each match.
+
+        Returns:
+            List of dicts with keys: paragraph_ref, paragraph_index, context, match_start.
+        """
+        self._ensure_open()
+        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        results = []
+        for i, p in enumerate(paragraphs):
+            tm = build_text_map(p)
+            text = tm.text
+            idx = 0
+            while True:
+                pos = text.find(query, idx)
+                if pos == -1:
+                    break
+                h = compute_paragraph_hash(p)
+                before = text[max(0, pos - context_chars) : pos]
+                after = text[pos + len(query) : pos + len(query) + context_chars]
+                results.append({
+                    "paragraph_ref": f"P{i + 1}#{h}",
+                    "paragraph_index": i + 1,
+                    "context": f"...{before}[{query}]{after}...",
+                    "match_start": pos,
+                })
+                idx = pos + 1
+        return results
+
+    def get_paragraph_text(self, paragraphs: list[str]) -> list[dict]:
+        """Get the full text of specific paragraphs by reference.
+
+        Args:
+            paragraphs: List of paragraph references (e.g., ["P1#a7b2", "P3#cc33"]).
+
+        Returns:
+            List of dicts with keys: ref, text, error (if ref is invalid).
+        """
+        self._ensure_open()
+        all_paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        total = len(all_paragraphs)
+        results = []
+        for ref_str in paragraphs:
+            try:
+                ref = ParagraphRef.parse(ref_str)
+            except Exception:
+                results.append({"ref": ref_str, "text": None, "error": f"Invalid reference: {ref_str}"})
+                continue
+            if ref.index < 1 or ref.index > total:
+                results.append({"ref": ref_str, "text": None, "error": f"Paragraph index out of range: {ref.index}"})
+                continue
+            p = all_paragraphs[ref.index - 1]
+            actual_hash = compute_paragraph_hash(p)
+            if actual_hash != ref.hash:
+                results.append({
+                    "ref": ref_str,
+                    "text": None,
+                    "error": f"Hash mismatch: expected {ref.hash}, got {actual_hash}",
+                })
+                continue
+            tm = build_text_map(p)
+            results.append({"ref": ref_str, "text": tm.text, "error": None})
+        return results
+
+    def get_document_info(self) -> dict:
+        """Get document overview information.
+
+        Returns:
+            Dict with keys: paragraph_count, word_count, headings (list of {level, text}).
+        """
+        self._ensure_open()
+        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        total_words = 0
+        headings = []
+        for p in paragraphs:
+            tm = build_text_map(p)
+            text = tm.text.strip()
+            if text:
+                total_words += len(text.split())
+            # Check for heading style
+            pPr = None
+            for child in p.childNodes:
+                if child.nodeType == child.ELEMENT_NODE and child.tagName == "w:pPr":
+                    pPr = child
+                    break
+            if pPr:
+                for child in pPr.childNodes:
+                    if child.nodeType == child.ELEMENT_NODE and child.tagName == "w:pStyle":
+                        style_val = child.getAttribute("w:val")
+                        if style_val.startswith("Heading"):
+                            try:
+                                level = int(style_val.replace("Heading", ""))
+                            except ValueError:
+                                level = 0
+                            if level > 0:
+                                headings.append({"level": level, "text": text})
+        return {
+            "paragraph_count": len(paragraphs),
+            "word_count": total_words,
+            "headings": headings,
+        }
 
     def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int = 0) -> str:
         """Replace text with tracked changes.
