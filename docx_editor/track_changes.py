@@ -105,7 +105,11 @@ class RevisionManager:
         return find_in_text_map(text_map, text, occurrence)
 
     def _paragraph_preview(self, paragraph) -> str:
-        """Visible text of a paragraph, used for scoped TextNotFoundError previews."""
+        """Visible text of a paragraph, used for scoped TextNotFoundError previews.
+
+        Truncation to 80 chars is handled by ``TextNotFoundError._truncate_preview``;
+        callers must not truncate here, to keep a single source of truth.
+        """
         return build_text_map(paragraph).text
 
     def batch_edit(self, operations: list[EditOperation]) -> list[int]:

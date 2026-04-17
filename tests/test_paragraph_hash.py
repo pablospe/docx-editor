@@ -456,7 +456,7 @@ class TestStructuredTextNotFoundError:
             assert ref in msg
             # Preview in the message should reflect current paragraph text
             # (list_paragraphs already truncates at 10 chars; check a non-empty prefix is in the error)
-            preview_prefix = current_preview.rstrip(".")[:10]
+            preview_prefix = current_preview.removesuffix("...")[:10]
             if preview_prefix:
                 assert preview_prefix in msg
 

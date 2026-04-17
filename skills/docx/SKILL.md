@@ -457,6 +457,15 @@ except HashMismatchError as e:
 except TextNotFoundError as e:
     # e.paragraph_preview shows the current paragraph content for recovery
     ...
+except ParagraphIndexError as e:
+    # Clamp to a valid 1-indexed paragraph number
+    safe_idx = max(1, min(e.index, e.total_paragraphs))
+    ref = doc.list_paragraphs()[safe_idx - 1].split("|")[0]
+    doc.replace("stale text", "new text", paragraph=ref)
+except BatchOperationError as e:
+    # Drop or fix the failing op and retry the batch
+    ops.pop(e.operation_index)
+    doc.batch_edit(ops)
 ```
 
 ### Paragraph Rewrite (Fallback for Structural Edits)

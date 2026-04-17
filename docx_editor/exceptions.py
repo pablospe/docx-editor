@@ -67,6 +67,13 @@ class CommentError(DocxEditError):
     pass
 
 
+def _truncate_preview(text: str, limit: int = 80) -> str:
+    """Cap a paragraph preview at ``limit`` characters, adding '...' if truncated."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
 class TextNotFoundError(DocxEditError):
     """Raised when the target text cannot be found in the document.
 
@@ -166,10 +173,3 @@ class HashMismatchError(DocxEditError):
             f'Current content: "{paragraph_preview}". '
             f"Use P{paragraph_index}#{actual_hash} to target current content."
         )
-
-
-def _truncate_preview(text: str, limit: int = 80) -> str:
-    """Cap a paragraph preview at ``limit`` characters, adding '...' if truncated."""
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "..."

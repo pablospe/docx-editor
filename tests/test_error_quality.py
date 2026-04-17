@@ -72,7 +72,7 @@ class TestTextNotFoundErrorQuality:
             msg = str(err)
             assert "__definitely_not_here__" in msg
             assert ref in msg
-            assert err.paragraph_preview.rstrip(".") in msg
+            assert err.paragraph_preview.removesuffix("...") in msg
         finally:
             doc.close()
 
@@ -144,7 +144,7 @@ class TestBatchOperationErrorQuality:
     `_apply_single_edit` — is wrapped so the index is always present.
     """
 
-    def _build_batch_doc(self, doc_path):
+    def _build_batch_doc(self, doc_path: Path) -> Document:
         doc = Document.open(doc_path, force_recreate=True)
         editor = doc._document_editor
         body = editor.dom.getElementsByTagName("w:body")[0]
