@@ -32,6 +32,7 @@ __version__ = "0.0.1"
 from .comments import Comment
 from .document import Document
 from .exceptions import (
+    BatchOperationError,
     CommentError,
     DocumentNotFoundError,
     DocxEditError,
@@ -39,6 +40,7 @@ from .exceptions import (
     InvalidDocumentError,
     MultipleNodesFoundError,
     NodeNotFoundError,
+    ParagraphIndexError,
     RevisionError,
     TextNotFoundError,
     WorkspaceError,
@@ -77,6 +79,8 @@ __all__ = [
     "CommentError",
     "TextNotFoundError",
     "HashMismatchError",
+    "ParagraphIndexError",
+    "BatchOperationError",
     # Text map & paragraph refs
     "TextPosition",
     "TextMap",

@@ -8,7 +8,13 @@ from pathlib import Path
 import defusedxml.minidom
 import pytest
 
-from docx_editor import Document, HashMismatchError, ParagraphRef
+from docx_editor import (
+    Document,
+    HashMismatchError,
+    ParagraphIndexError,
+    ParagraphRef,
+    TextNotFoundError,
+)
 from docx_editor.xml_editor import compute_paragraph_hash
 
 NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
@@ -402,13 +408,190 @@ class TestStalenessDetection:
             doc.close()
 
     def test_index_out_of_range(self, temp_docx):
-        """Using an index beyond document length raises IndexError."""
+        """Using an index beyond document length raises ParagraphIndexError."""
         doc = Document.open(temp_docx)
         try:
             paragraphs = doc.list_paragraphs()
             # Use an index way beyond the document
             fake_ref = f"P{len(paragraphs) + 100}#0000"
-            with pytest.raises(IndexError):
+            with pytest.raises(ParagraphIndexError):
                 doc.replace("anything", "else", paragraph=fake_ref)
+        finally:
+            doc.close()
+
+
+# ==================== Structured TextNotFoundError Tests ====================
+
+
+class TestStructuredTextNotFoundError:
+    @pytest.fixture
+    def temp_docx(self):
+        test_data = Path(__file__).parent / "test_data" / "simple.docx"
+        temp = tempfile.mkdtemp(prefix="docx_err_test_")
+        dest = Path(temp) / "test.docx"
+        shutil.copy(test_data, dest)
+        yield dest
+        shutil.rmtree(temp, ignore_errors=True)
+
+    def test_scoped_miss_carries_search_text_ref_and_preview(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            entry = doc.list_paragraphs()[0]
+            ref = entry.split("|")[0]
+            current_preview = entry.split("| ", 1)[1]
+
+            with pytest.raises(TextNotFoundError) as exc:
+                doc.replace("this_string_is_not_present", "x", paragraph=ref)
+
+            err = exc.value
+            assert err.search_text == "this_string_is_not_present"
+            assert err.paragraph_ref == ref
+            assert err.paragraph_preview is not None
+            # occurrence fields are None for a scoped miss
+            assert err.occurrence is None
+            assert err.total_occurrences is None
+            # message embeds the current paragraph content (either full or truncated preview)
+            msg = str(err)
+            assert "this_string_is_not_present" in msg
+            assert ref in msg
+            # Preview in the message should reflect current paragraph text
+            # (list_paragraphs already truncates at 10 chars; check a non-empty prefix is in the error)
+            preview_prefix = current_preview.removesuffix("...")[:10]
+            if preview_prefix:
+                assert preview_prefix in msg
+
+        finally:
+            doc.close()
+
+    def test_scoped_miss_preview_capped_at_80_chars(self, temp_docx):
+        """Preview in TextNotFoundError is truncated to 80 chars with ellipsis, matching HashMismatchError."""
+        doc = Document.open(temp_docx, force_recreate=True)
+        editor = doc._document_editor
+        body = editor.dom.getElementsByTagName("w:body")[0]
+        # Clear body paragraphs
+        for p in list(editor.dom.getElementsByTagName("w:p")):
+            if p.parentNode == body:
+                body.removeChild(p)
+        sect_pr = editor.dom.getElementsByTagName("w:sectPr")
+        insert_before = sect_pr[0] if sect_pr else None
+        # One long paragraph (>80 chars)
+        long_text = "a very long paragraph " + "x" * 200
+        p_xml = f'<w:p><w:r><w:t xml:space="preserve">{long_text}</w:t></w:r></w:p>'
+        for node in editor._parse_fragment(p_xml):
+            if insert_before:
+                body.insertBefore(node, insert_before)
+            else:
+                body.appendChild(node)
+        editor.save()
+        saved = doc.save()
+        doc.close()
+
+        doc = Document.open(saved, force_recreate=True)
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(TextNotFoundError) as exc:
+                doc.replace("ZZZ_not_there_ZZZ", "y", paragraph=ref)
+            err = exc.value
+            assert err.paragraph_preview is not None
+            # 80 chars max with "..." suffix -> length <= 83
+            assert len(err.paragraph_preview) <= 83
+            assert err.paragraph_preview.endswith("...")
+        finally:
+            doc.close()
+
+    def test_unscoped_miss_has_none_ref_and_preview(self, temp_docx):
+        """Unscoped anchor search (add_comment) leaves paragraph fields None."""
+        doc = Document.open(temp_docx)
+        try:
+            with pytest.raises(TextNotFoundError) as exc:
+                doc.add_comment("__definitely_absent_from_entire_doc__", "c")
+
+            err = exc.value
+            assert err.search_text == "__definitely_absent_from_entire_doc__"
+            assert err.paragraph_ref is None
+            assert err.paragraph_preview is None
+            assert err.occurrence is None
+            assert err.total_occurrences is None
+            assert "__definitely_absent_from_entire_doc__" in str(err)
+        finally:
+            doc.close()
+
+    def test_occurrence_failure_carries_counts(self, temp_docx):
+        """Occurrence-based miss carries `occurrence` and `total_occurrences`."""
+        doc = Document.open(temp_docx, force_recreate=True)
+        editor = doc._document_editor
+        body = editor.dom.getElementsByTagName("w:body")[0]
+        for p in list(editor.dom.getElementsByTagName("w:p")):
+            if p.parentNode == body:
+                body.removeChild(p)
+        sect_pr = editor.dom.getElementsByTagName("w:sectPr")
+        insert_before = sect_pr[0] if sect_pr else None
+        # 3 paragraphs each containing "needle"
+        for i in range(3):
+            p_xml = f'<w:p><w:r><w:t xml:space="preserve">paragraph {i} has needle in it.</w:t></w:r></w:p>'
+            for node in editor._parse_fragment(p_xml):
+                if insert_before:
+                    body.insertBefore(node, insert_before)
+                else:
+                    body.appendChild(node)
+        editor.save()
+        saved = doc.save()
+        doc.close()
+
+        doc = Document.open(saved, force_recreate=True)
+        try:
+            # Ask for occurrence=5 when only 3 exist. Use the internal unscoped
+            # API — the public Document.replace requires a paragraph arg.
+            with pytest.raises(TextNotFoundError) as exc:
+                doc._revision_manager.replace_text("needle", "pin", occurrence=5)
+            err = exc.value
+            assert err.search_text == "needle"
+            assert err.occurrence == 5
+            assert err.total_occurrences == 3
+            msg = str(err)
+            assert "5" in msg
+            assert "3" in msg
+        finally:
+            doc.close()
+
+
+# ==================== Structured ParagraphIndexError Tests ====================
+
+
+class TestStructuredParagraphIndexError:
+    @pytest.fixture
+    def temp_docx(self):
+        test_data = Path(__file__).parent / "test_data" / "simple.docx"
+        temp = tempfile.mkdtemp(prefix="docx_idx_test_")
+        dest = Path(temp) / "test.docx"
+        shutil.copy(test_data, dest)
+        yield dest
+        shutil.rmtree(temp, ignore_errors=True)
+
+    def test_out_of_range_raises_paragraph_index_error(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            n = len(doc.list_paragraphs())
+            bad = f"P{n + 50}#0000"
+            with pytest.raises(ParagraphIndexError) as exc:
+                doc.replace("x", "y", paragraph=bad)
+            err = exc.value
+            assert err.index == n + 50
+            assert err.total_paragraphs == n
+            msg = str(err)
+            assert str(n + 50) in msg
+            assert str(n) in msg
+        finally:
+            doc.close()
+
+    def test_paragraph_index_error_is_docx_edit_error(self, temp_docx):
+        from docx_editor import DocxEditError
+
+        doc = Document.open(temp_docx)
+        try:
+            n = len(doc.list_paragraphs())
+            bad = f"P{n + 50}#0000"
+            with pytest.raises(DocxEditError):
+                doc.replace("x", "y", paragraph=bad)
         finally:
             doc.close()

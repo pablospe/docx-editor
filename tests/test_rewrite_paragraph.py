@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from docx_editor import Document, HashMismatchError
+from docx_editor import BatchOperationError, Document, HashMismatchError
 from docx_editor.track_changes import _tokenize_words
 
 
@@ -818,12 +818,12 @@ class TestBatchRewrite:
         assert "The committee shall review" in vis
 
     def test_batch_rejected_on_duplicate(self, rewrite_doc):
-        """Duplicate paragraph in batch raises ValueError."""
+        """Duplicate paragraph in batch raises BatchOperationError."""
         doc, _ = rewrite_doc
         refs = doc.list_paragraphs()
         ref = refs[0].split("|")[0]
 
-        with pytest.raises(ValueError, match="duplicate"):
+        with pytest.raises(BatchOperationError, match="duplicate"):
             doc.batch_rewrite([
                 (ref, "First"),
                 (ref, "Second"),

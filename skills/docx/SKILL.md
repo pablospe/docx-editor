@@ -431,6 +431,45 @@ with Document.open("file.docx", author=author) as doc:
 
 If any hash is stale, the entire batch is rejected before any edits are applied.
 
+### Error Handling & Recovery
+
+All LLM-facing errors inherit from `DocxEditError` and carry structured fields so you can retry in-loop without re-reading the document. Catch the specific class or the base — both work.
+
+| Error                  | Fields                                                                                  | Recovery                                                                                         |
+| ---------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `HashMismatchError`    | `paragraph_index`, `expected_hash`, `actual_hash`, `paragraph_preview`                  | Retry with `P{paragraph_index}#{actual_hash}`.                                                   |
+| `TextNotFoundError`    | `search_text`, `paragraph_ref`, `paragraph_preview`, `occurrence`, `total_occurrences`  | Use `paragraph_preview` to pick a substring that actually appears; if `total_occurrences` is set, retry with an `occurrence` < `total_occurrences`. |
+| `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` or call `list_paragraphs()` to pick a valid ref.                 |
+| `BatchOperationError`  | `operation_index`, `reason`                                                             | Fix the op at `operations[operation_index]` (or drop it) and retry the batch.                    |
+
+```python
+from docx_editor import (
+    BatchOperationError,
+    HashMismatchError,
+    ParagraphIndexError,
+    TextNotFoundError,
+)
+
+try:
+    doc.replace("stale text", "new text", paragraph="P3#olda")
+except HashMismatchError as e:
+    doc.replace("stale text", "new text", paragraph=f"P{e.paragraph_index}#{e.actual_hash}")
+except TextNotFoundError as e:
+    # e.paragraph_preview shows the current paragraph content for recovery
+    ...
+except ParagraphIndexError as e:
+    # Clamp to a valid 1-indexed paragraph number (guard the empty-doc case)
+    if e.total_paragraphs == 0:
+        raise  # no paragraphs to retry against
+    safe_idx = max(1, min(e.index, e.total_paragraphs))
+    ref = doc.list_paragraphs()[safe_idx - 1].split("|")[0]
+    doc.replace("stale text", "new text", paragraph=ref)
+except BatchOperationError as e:
+    # Drop or fix the failing op and retry the batch
+    ops.pop(e.operation_index)
+    doc.batch_edit(ops)
+```
+
 ### Paragraph Rewrite (Fallback for Structural Edits)
 
 **Default: always use surgical methods** (`replace`, `delete`, `insert_after`, `insert_before`, `batch_edit`).

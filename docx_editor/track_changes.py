@@ -11,7 +11,13 @@ from datetime import datetime
 from typing import Literal
 from xml.dom.minidom import Element
 
-from .exceptions import HashMismatchError, RevisionError, TextNotFoundError
+from .exceptions import (
+    BatchOperationError,
+    HashMismatchError,
+    ParagraphIndexError,
+    RevisionError,
+    TextNotFoundError,
+)
 from .xml_editor import (
     DocxXMLEditor,
     ParagraphRef,
@@ -77,14 +83,12 @@ class RevisionManager:
             The <w:p> DOM element
 
         Raises:
-            IndexError: If paragraph index is out of range
+            ParagraphIndexError: If paragraph index is out of range
             HashMismatchError: If the hash doesn't match current content
         """
         paragraphs = self.editor.dom.getElementsByTagName("w:p")
         if ref.index < 1 or ref.index > len(paragraphs):
-            raise IndexError(
-                f"Paragraph index {ref.index} out of range. Document has {len(paragraphs)} paragraphs (1-indexed)."
-            )
+            raise ParagraphIndexError(ref.index, len(paragraphs))
         p = paragraphs[ref.index - 1]
         actual_hash = compute_paragraph_hash(p)
         if actual_hash != ref.hash:
@@ -99,6 +103,14 @@ class RevisionManager:
         """Find the nth occurrence of text within a single paragraph."""
         text_map = build_text_map(paragraph)
         return find_in_text_map(text_map, text, occurrence)
+
+    def _paragraph_preview(self, paragraph) -> str:
+        """Visible text of a paragraph, used for scoped TextNotFoundError previews.
+
+        Truncation to 80 chars is handled by ``TextNotFoundError._truncate_preview``;
+        callers must not truncate here, to keep a single source of truth.
+        """
+        return build_text_map(paragraph).text
 
     def batch_edit(self, operations: list[EditOperation]) -> list[int]:
         """Apply multiple edits atomically with upfront hash validation.
@@ -115,7 +127,8 @@ class RevisionManager:
 
         Raises:
             HashMismatchError: If any paragraph hash is stale (no edits applied)
-            ValueError: If any operation is missing required fields
+            BatchOperationError: If any operation fails validation (carries
+                ``operation_index`` so the caller knows which op failed).
         """
         if not operations:
             return []
@@ -124,7 +137,7 @@ class RevisionManager:
         parsed: list[tuple[int, ParagraphRef, EditOperation]] = []
         for i, op in enumerate(operations):
             if not op.paragraph:
-                raise ValueError(f"Operation {i}: paragraph reference is required for batch mode")
+                raise BatchOperationError(i, "paragraph reference is required for batch mode")
             ref = ParagraphRef.parse(op.paragraph)
             self._resolve_paragraph(ref)  # Raises HashMismatchError if stale
             parsed.append((i, ref, op))
@@ -136,7 +149,10 @@ class RevisionManager:
         # Apply edits in reverse paragraph order
         results = [0] * len(operations)
         for original_idx, _ref, op in parsed:
-            change_id = self._apply_single_edit(op)
+            try:
+                change_id = self._apply_single_edit(op)
+            except ValueError as e:
+                raise BatchOperationError(original_idx, str(e)) from e
             results[original_idx] = change_id
 
         return results
@@ -151,7 +167,11 @@ class RevisionManager:
                 raise ValueError("replace requires 'find' and 'replace_with'")
             match = self._find_in_paragraph(p, op.find, op.occurrence)
             if match is None:
-                raise TextNotFoundError(f"Text not found in paragraph P{ref.index}: '{op.find}'")
+                raise TextNotFoundError(
+                    op.find,
+                    paragraph_ref=op.paragraph,
+                    paragraph_preview=self._paragraph_preview(p),
+                )
             return self._replace_across_nodes(match, op.replace_with)
 
         elif op.action == "delete":
@@ -159,7 +179,11 @@ class RevisionManager:
                 raise ValueError("delete requires 'text'")
             match = self._find_in_paragraph(p, op.text, op.occurrence)
             if match is None:
-                raise TextNotFoundError(f"Text not found in paragraph P{ref.index}: '{op.text}'")
+                raise TextNotFoundError(
+                    op.text,
+                    paragraph_ref=op.paragraph,
+                    paragraph_preview=self._paragraph_preview(p),
+                )
             return self._delete_across_nodes(match)
 
         elif op.action in ("insert_after", "insert_before"):
@@ -167,7 +191,11 @@ class RevisionManager:
                 raise ValueError(f"{op.action} requires 'anchor' and 'text'")
             match = self._find_in_paragraph(p, op.anchor, op.occurrence)
             if match is None:
-                raise TextNotFoundError(f"Anchor not found in paragraph P{ref.index}: '{op.anchor}'")
+                raise TextNotFoundError(
+                    op.anchor,
+                    paragraph_ref=op.paragraph,
+                    paragraph_preview=self._paragraph_preview(p),
+                )
             position = "after" if op.action == "insert_after" else "before"
             return self._insert_near_match(match, op.text, position)
 
@@ -182,12 +210,12 @@ class RevisionManager:
         # Parse and validate all refs upfront
         parsed: list[tuple[ParagraphRef, str]] = []
         seen_indices: set[int] = set()
-        for ref_str, new_text in rewrites:
+        for i, (ref_str, new_text) in enumerate(rewrites):
             ref = ParagraphRef.parse(ref_str)
             if ref.index in seen_indices:
-                raise ValueError(
-                    f"Batch contains duplicate paragraph P{ref.index}. "
-                    f"Each paragraph can appear at most once in a batch rewrite."
+                raise BatchOperationError(
+                    i,
+                    f"duplicate paragraph P{ref.index}. Each paragraph can appear at most once in a batch rewrite.",
                 )
             seen_indices.add(ref.index)
             self._resolve_paragraph(ref)  # Raises HashMismatchError if stale
@@ -418,11 +446,12 @@ class RevisionManager:
         """
         matches = self.editor.find_all_nodes(tag="w:t", contains=text)
         if not matches:
-            raise TextNotFoundError(f"Text not found: '{text}'")
+            raise TextNotFoundError(text)
         if occurrence >= len(matches):
             raise TextNotFoundError(
-                f"Only {len(matches)} occurrence(s) of '{text}' found, "
-                f"but occurrence={occurrence} requested (0-indexed)"
+                text,
+                occurrence=occurrence,
+                total_occurrences=len(matches),
             )
         return matches[occurrence]
 
@@ -489,7 +518,11 @@ class RevisionManager:
             p = self._resolve_paragraph(ref)
             match = self._find_in_paragraph(p, find, occurrence)
             if match is None:
-                raise TextNotFoundError(f"Text not found in paragraph P{ref.index}: '{find}'")
+                raise TextNotFoundError(
+                    find,
+                    paragraph_ref=paragraph,
+                    paragraph_preview=self._paragraph_preview(p),
+                )
             return self._replace_across_nodes(match, replace_with)
 
         # Find the text element containing the search text
@@ -515,7 +548,7 @@ class RevisionManager:
         start_idx = full_text.find(find)
 
         if start_idx == -1:
-            raise TextNotFoundError(f"Text not found: '{find}'")
+            raise TextNotFoundError(find)
 
         # If run has multiple w:t children, delegate to cross-boundary path
         # to avoid losing sibling w:t nodes when replacing the whole run.
@@ -588,7 +621,11 @@ class RevisionManager:
             p = self._resolve_paragraph(ref)
             match = self._find_in_paragraph(p, text, occurrence)
             if match is None:
-                raise TextNotFoundError(f"Text not found in paragraph P{ref.index}: '{text}'")
+                raise TextNotFoundError(
+                    text,
+                    paragraph_ref=paragraph,
+                    paragraph_preview=self._paragraph_preview(p),
+                )
             return self._delete_across_nodes(match)
 
         # Find the text element containing the search text
@@ -614,7 +651,7 @@ class RevisionManager:
         start_idx = full_text.find(text)
 
         if start_idx == -1:
-            raise TextNotFoundError(f"Text not found: '{text}'")
+            raise TextNotFoundError(text)
 
         # If run has multiple w:t children, delegate to cross-boundary path
         if len(run.getElementsByTagName("w:t")) > 1:
@@ -1317,7 +1354,11 @@ class RevisionManager:
             p = self._resolve_paragraph(ref)
             match = self._find_in_paragraph(p, anchor, occurrence)
             if match is None:
-                raise TextNotFoundError(f"Anchor text not found in paragraph P{ref.index}: '{anchor}'")
+                raise TextNotFoundError(
+                    anchor,
+                    paragraph_ref=paragraph,
+                    paragraph_preview=self._paragraph_preview(p),
+                )
             return self._insert_near_match(match, text, position)
 
         # Find the text element containing the anchor text
@@ -1327,7 +1368,7 @@ class RevisionManager:
             # Fall back to cross-boundary search
             match = self._find_across_boundaries(anchor, occurrence)
             if match is None:
-                raise TextNotFoundError(f"Anchor text not found: '{anchor}'") from None
+                raise TextNotFoundError(anchor) from None
             return self._insert_near_match(match, text, position)
 
         # Get the parent run
@@ -1349,7 +1390,7 @@ class RevisionManager:
         anchor_idx = full_text.find(anchor)
 
         if anchor_idx == -1:
-            raise TextNotFoundError(f"Anchor text not found: '{anchor}'")
+            raise TextNotFoundError(anchor)
 
         before_text = full_text[:anchor_idx]
         after_text = full_text[anchor_idx + len(anchor) :]
