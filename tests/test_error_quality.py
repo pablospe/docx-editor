@@ -91,6 +91,16 @@ class TestTextNotFoundErrorQuality:
         finally:
             doc.close()
 
+    def test_scoped_miss_without_preview_omits_content_line(self):
+        """paragraph_ref set, no preview → message names the paragraph, skips content."""
+        err = TextNotFoundError("needle", paragraph_ref="P3#a7b2")
+        msg = str(err)
+        assert "needle" in msg
+        assert "P3#a7b2" in msg
+        assert "Current content" not in msg
+        assert err.paragraph_ref == "P3#a7b2"
+        assert err.paragraph_preview is None
+
 
 class TestParagraphIndexErrorQuality:
     """

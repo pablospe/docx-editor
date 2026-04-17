@@ -386,7 +386,7 @@ class TestStructuredBatchOperationError:
         """Malformed paragraph refs outside batch paths still raise plain ValueError."""
         from docx_editor import ParagraphRef
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid paragraph reference"):
             ParagraphRef.parse("not-a-valid-ref")
 
     def test_batch_operation_error_is_docx_edit_error(self, multi_para_doc):

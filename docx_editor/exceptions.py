@@ -102,12 +102,15 @@ class TextNotFoundError(DocxEditError):
                 f"Only {total_occurrences} occurrence(s) of '{search_text}' found, "
                 f"but occurrence={occurrence} requested."
             )
+            if paragraph_ref is not None:
+                msg += f" Paragraph: {paragraph_ref}."
         elif paragraph_ref is not None:
             msg = f"Text not found in paragraph {paragraph_ref}: '{search_text}'"
-            if self.paragraph_preview is not None:
-                msg += f'. Current content: "{self.paragraph_preview}"'
         else:
             msg = f"Text not found: '{search_text}'"
+
+        if self.paragraph_preview is not None:
+            msg += f'. Current content: "{self.paragraph_preview}"'
 
         super().__init__(msg)
 
@@ -123,11 +126,15 @@ class ParagraphIndexError(DocxEditError):
     def __init__(self, index: int, total_paragraphs: int):
         self.index = index
         self.total_paragraphs = total_paragraphs
-        super().__init__(
-            f"Paragraph index {index} out of range. "
-            f"Document has {total_paragraphs} paragraphs "
-            f"(1-indexed, valid: P1-P{total_paragraphs})."
-        )
+        if total_paragraphs == 0:
+            msg = f"Paragraph index {index} out of range. Document has no paragraphs."
+        else:
+            msg = (
+                f"Paragraph index {index} out of range. "
+                f"Document has {total_paragraphs} paragraphs "
+                f"(1-indexed, valid: P1-P{total_paragraphs})."
+            )
+        super().__init__(msg)
 
 
 class BatchOperationError(DocxEditError):
