@@ -1,0 +1,1824 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Edit docx with python">
+      
+      
+        <meta name="author" content="Pablo Speciale">
+      
+      
+        <link rel="canonical" href="https://pablospe.github.io/docx-editor/api/">
+      
+      
+        <link rel="prev" href="../quickstart/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>API Reference - docx-editor</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="white" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#api-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="docx-editor" class="md-header__button md-logo" aria-label="docx-editor" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            docx-editor
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              API Reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="white" data-md-color-accent="deep-orange"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="deep-orange"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/pablospe/docx-editor" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    pablospe/docx-editor
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="docx-editor" class="md-nav__button md-logo" aria-label="docx-editor" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    docx-editor
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/pablospe/docx-editor" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    pablospe/docx-editor
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#document" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Document
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Document">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#opening-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opening Documents
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Opening Documents">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#documentopenpath-authornone-force_recreatefalse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Document.open(path, author=None, force_recreate=False)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Properties
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Properties">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#author" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        author
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#source_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        source_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#track-changes-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Track Changes Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Track Changes Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#replacefind-replace_with" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        replace(find, replace_with)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deletetext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delete(text)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#insert_afteranchor-text" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        insert_after(anchor, text)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#insert_beforeanchor-text" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        insert_before(anchor, text)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#comment-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comment Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Comment Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#add_commentanchor_text-comment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_comment(anchor_text, comment)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reply_to_commentcomment_id-reply" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reply_to_comment(comment_id, reply)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#list_commentsauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_comments(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resolve_commentcomment_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        resolve_comment(comment_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete_commentcomment_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delete_comment(comment_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revision-management-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revision Management Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revision Management Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#list_revisionsauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_revisions(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_revisionrevision_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_revision(revision_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_revisionrevision_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_revision(revision_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_allauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_all(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_allauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_all(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#save-and-close-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save and Close Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Save and Close Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#savepathnone-validatefalse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        save(path=None, validate=False)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#closecleanuptrue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        close(cleanup=True)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#comment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Comment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#revision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exceptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exceptions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Exceptions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#textnotfounderror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TextNotFoundError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commenterror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CommentError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revisionerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RevisionError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspaceexistserror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkspaceExistsError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspacesyncerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkspaceSyncError
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#document" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Document
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Document">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#opening-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opening Documents
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Opening Documents">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#documentopenpath-authornone-force_recreatefalse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Document.open(path, author=None, force_recreate=False)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Properties
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Properties">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#author" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        author
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#source_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        source_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#track-changes-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Track Changes Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Track Changes Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#replacefind-replace_with" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        replace(find, replace_with)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deletetext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delete(text)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#insert_afteranchor-text" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        insert_after(anchor, text)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#insert_beforeanchor-text" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        insert_before(anchor, text)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#comment-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comment Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Comment Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#add_commentanchor_text-comment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_comment(anchor_text, comment)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reply_to_commentcomment_id-reply" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reply_to_comment(comment_id, reply)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#list_commentsauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_comments(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resolve_commentcomment_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        resolve_comment(comment_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete_commentcomment_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delete_comment(comment_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revision-management-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revision Management Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revision Management Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#list_revisionsauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_revisions(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_revisionrevision_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_revision(revision_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_revisionrevision_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_revision(revision_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_allauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_all(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_allauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_all(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#save-and-close-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save and Close Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Save and Close Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#savepathnone-validatefalse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        save(path=None, validate=False)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#closecleanuptrue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        close(cleanup=True)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#comment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Comment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#revision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exceptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exceptions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Exceptions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#textnotfounderror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TextNotFoundError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commenterror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CommentError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revisionerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RevisionError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspaceexistserror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkspaceExistsError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspacesyncerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkspaceSyncError
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="api-reference">API Reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h1>
+<h2 id="document">Document<a class="headerlink" href="#document" title="Permanent link">&para;</a></h2>
+<p>The main entry point for docx-editor. Provides methods for opening documents, making tracked changes, managing comments, and handling revisions.</p>
+<pre><code class="language-python">from docx_editor import Document
+</code></pre>
+<h3 id="opening-documents">Opening Documents<a class="headerlink" href="#opening-documents" title="Permanent link">&para;</a></h3>
+<h4 id="documentopenpath-authornone-force_recreatefalse"><code>Document.open(path, author=None, force_recreate=False)</code><a class="headerlink" href="#documentopenpath-authornone-force_recreatefalse" title="Permanent link">&para;</a></h4>
+<p>Open a Word document for editing.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>path</code> (str | Path): Path to the .docx file</li>
+<li><code>author</code> (str, optional): Author name for tracked changes. Defaults to system username.</li>
+<li><code>force_recreate</code> (bool): If True, delete existing workspace and create fresh. Defaults to False.</li>
+</ul>
+<p><strong>Returns:</strong> Document instance ready for editing</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc = Document.open(&quot;contract.docx&quot;)
+doc = Document.open(&quot;contract.docx&quot;, author=&quot;Legal Team&quot;)
+</code></pre>
+<h3 id="properties">Properties<a class="headerlink" href="#properties" title="Permanent link">&para;</a></h3>
+<h4 id="author"><code>author</code><a class="headerlink" href="#author" title="Permanent link">&para;</a></h4>
+<p>Get the author name for tracked changes.</p>
+<pre><code class="language-python">print(doc.author)  # &quot;Legal Team&quot;
+</code></pre>
+<h4 id="source_path"><code>source_path</code><a class="headerlink" href="#source_path" title="Permanent link">&para;</a></h4>
+<p>Get the path to the source document.</p>
+<pre><code class="language-python">print(doc.source_path)  # Path(&quot;/path/to/contract.docx&quot;)
+</code></pre>
+<h3 id="track-changes-methods">Track Changes Methods<a class="headerlink" href="#track-changes-methods" title="Permanent link">&para;</a></h3>
+<h4 id="replacefind-replace_with"><code>replace(find, replace_with)</code><a class="headerlink" href="#replacefind-replace_with" title="Permanent link">&para;</a></h4>
+<p>Replace text with tracked changes.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>find</code> (str): Text to find and replace</li>
+<li><code>replace_with</code> (str): Replacement text</li>
+</ul>
+<p><strong>Returns:</strong> The change ID of the insertion (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.replace(&quot;30 days&quot;, &quot;60 days&quot;)
+</code></pre>
+<h4 id="deletetext"><code>delete(text)</code><a class="headerlink" href="#deletetext" title="Permanent link">&para;</a></h4>
+<p>Mark text as deleted with tracked changes.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>text</code> (str): Text to mark as deleted</li>
+</ul>
+<p><strong>Returns:</strong> The change ID of the deletion (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.delete(&quot;obsolete clause&quot;)
+</code></pre>
+<h4 id="insert_afteranchor-text"><code>insert_after(anchor, text)</code><a class="headerlink" href="#insert_afteranchor-text" title="Permanent link">&para;</a></h4>
+<p>Insert text after anchor with tracked changes.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>anchor</code> (str): Text to find as insertion point</li>
+<li><code>text</code> (str): Text to insert after the anchor</li>
+</ul>
+<p><strong>Returns:</strong> The change ID of the insertion (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.insert_after(&quot;Section 5&quot;, &quot; (as amended)&quot;)
+</code></pre>
+<h4 id="insert_beforeanchor-text"><code>insert_before(anchor, text)</code><a class="headerlink" href="#insert_beforeanchor-text" title="Permanent link">&para;</a></h4>
+<p>Insert text before anchor with tracked changes.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>anchor</code> (str): Text to find as insertion point</li>
+<li><code>text</code> (str): Text to insert before the anchor</li>
+</ul>
+<p><strong>Returns:</strong> The change ID of the insertion (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.insert_before(&quot;Section 6&quot;, &quot;New clause: &quot;)
+</code></pre>
+<h3 id="comment-methods">Comment Methods<a class="headerlink" href="#comment-methods" title="Permanent link">&para;</a></h3>
+<h4 id="add_commentanchor_text-comment"><code>add_comment(anchor_text, comment)</code><a class="headerlink" href="#add_commentanchor_text-comment" title="Permanent link">&para;</a></h4>
+<p>Add a comment anchored to specific text.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>anchor_text</code> (str): Text to attach the comment to</li>
+<li><code>comment</code> (str): The comment content</li>
+</ul>
+<p><strong>Returns:</strong> The comment ID (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.add_comment(&quot;Section 5&quot;, &quot;Please review this section&quot;)
+</code></pre>
+<h4 id="reply_to_commentcomment_id-reply"><code>reply_to_comment(comment_id, reply)</code><a class="headerlink" href="#reply_to_commentcomment_id-reply" title="Permanent link">&para;</a></h4>
+<p>Add a reply to an existing comment.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>comment_id</code> (int): ID of the comment to reply to</li>
+<li><code>reply</code> (str): The reply content</li>
+</ul>
+<p><strong>Returns:</strong> The new comment ID for the reply (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.reply_to_comment(0, &quot;I agree with this change&quot;)
+</code></pre>
+<h4 id="list_commentsauthornone"><code>list_comments(author=None)</code><a class="headerlink" href="#list_commentsauthornone" title="Permanent link">&para;</a></h4>
+<p>List all comments in the document.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>author</code> (str, optional): If provided, filter by author name</li>
+</ul>
+<p><strong>Returns:</strong> List of Comment objects (with replies nested)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">comments = doc.list_comments()
+for c in comments:
+    print(f&quot;{c.author}: {c.text}&quot;)
+</code></pre>
+<h4 id="resolve_commentcomment_id"><code>resolve_comment(comment_id)</code><a class="headerlink" href="#resolve_commentcomment_id" title="Permanent link">&para;</a></h4>
+<p>Mark a comment as resolved.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>comment_id</code> (int): ID of the comment to resolve</li>
+</ul>
+<p><strong>Returns:</strong> True if resolved, False if not found (bool)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.resolve_comment(0)
+</code></pre>
+<h4 id="delete_commentcomment_id"><code>delete_comment(comment_id)</code><a class="headerlink" href="#delete_commentcomment_id" title="Permanent link">&para;</a></h4>
+<p>Delete a comment from the document.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>comment_id</code> (int): ID of the comment to delete</li>
+</ul>
+<p><strong>Returns:</strong> True if deleted, False if not found (bool)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.delete_comment(0)
+</code></pre>
+<h3 id="revision-management-methods">Revision Management Methods<a class="headerlink" href="#revision-management-methods" title="Permanent link">&para;</a></h3>
+<h4 id="list_revisionsauthornone"><code>list_revisions(author=None)</code><a class="headerlink" href="#list_revisionsauthornone" title="Permanent link">&para;</a></h4>
+<p>List all tracked changes in the document.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>author</code> (str, optional): If provided, filter by author name</li>
+</ul>
+<p><strong>Returns:</strong> List of Revision objects</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">revisions = doc.list_revisions()
+for r in revisions:
+    print(f&quot;{r.type}: {r.text} by {r.author}&quot;)
+</code></pre>
+<h4 id="accept_revisionrevision_id"><code>accept_revision(revision_id)</code><a class="headerlink" href="#accept_revisionrevision_id" title="Permanent link">&para;</a></h4>
+<p>Accept a revision by ID.</p>
+<ul>
+<li>For insertions: keeps the inserted content</li>
+<li>For deletions: permanently removes the deleted content</li>
+</ul>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>revision_id</code> (int): ID of the revision to accept</li>
+</ul>
+<p><strong>Returns:</strong> True if accepted, False if not found (bool)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.accept_revision(1)
+</code></pre>
+<h4 id="reject_revisionrevision_id"><code>reject_revision(revision_id)</code><a class="headerlink" href="#reject_revisionrevision_id" title="Permanent link">&para;</a></h4>
+<p>Reject a revision by ID.</p>
+<ul>
+<li>For insertions: removes the inserted content</li>
+<li>For deletions: restores the deleted content</li>
+</ul>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>revision_id</code> (int): ID of the revision to reject</li>
+</ul>
+<p><strong>Returns:</strong> True if rejected, False if not found (bool)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.reject_revision(1)
+</code></pre>
+<h4 id="accept_allauthornone"><code>accept_all(author=None)</code><a class="headerlink" href="#accept_allauthornone" title="Permanent link">&para;</a></h4>
+<p>Accept all revisions.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>author</code> (str, optional): If provided, only accept revisions by this author</li>
+</ul>
+<p><strong>Returns:</strong> Number of revisions accepted (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">count = doc.accept_all()
+print(f&quot;Accepted {count} revisions&quot;)
+</code></pre>
+<h4 id="reject_allauthornone"><code>reject_all(author=None)</code><a class="headerlink" href="#reject_allauthornone" title="Permanent link">&para;</a></h4>
+<p>Reject all revisions.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>author</code> (str, optional): If provided, only reject revisions by this author</li>
+</ul>
+<p><strong>Returns:</strong> Number of revisions rejected (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">count = doc.reject_all(author=&quot;OtherUser&quot;)
+</code></pre>
+<h3 id="save-and-close-methods">Save and Close Methods<a class="headerlink" href="#save-and-close-methods" title="Permanent link">&para;</a></h3>
+<h4 id="savepathnone-validatefalse"><code>save(path=None, validate=False)</code><a class="headerlink" href="#savepathnone-validatefalse" title="Permanent link">&para;</a></h4>
+<p>Save the document.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>path</code> (str | Path, optional): Output path. Defaults to original source path.</li>
+<li><code>validate</code> (bool): If True, validate with LibreOffice before saving. Defaults to False.</li>
+</ul>
+<p><strong>Returns:</strong> Path to the saved document (Path)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.save()  # Save to original path
+doc.save(&quot;contract_v2.docx&quot;)  # Save to new path
+</code></pre>
+<h4 id="closecleanuptrue"><code>close(cleanup=True)</code><a class="headerlink" href="#closecleanuptrue" title="Permanent link">&para;</a></h4>
+<p>Close the document and clean up workspace.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>cleanup</code> (bool): If True, delete the workspace folder. Defaults to True.</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.close()  # Clean up workspace
+doc.close(cleanup=False)  # Keep workspace for inspection
+</code></pre>
+<hr />
+<h2 id="comment">Comment<a class="headerlink" href="#comment" title="Permanent link">&para;</a></h2>
+<p>Represents a document comment.</p>
+<pre><code class="language-python">from docx_editor import Comment
+</code></pre>
+<h3 id="attributes">Attributes<a class="headerlink" href="#attributes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>int</td>
+<td>The comment ID</td>
+</tr>
+<tr>
+<td><code>text</code></td>
+<td>str</td>
+<td>The comment content</td>
+</tr>
+<tr>
+<td><code>author</code></td>
+<td>str</td>
+<td>The comment author</td>
+</tr>
+<tr>
+<td><code>date</code></td>
+<td>datetime or None</td>
+<td>When the comment was created</td>
+</tr>
+<tr>
+<td><code>resolved</code></td>
+<td>bool</td>
+<td>Whether the comment is resolved</td>
+</tr>
+<tr>
+<td><code>replies</code></td>
+<td>list[Comment]</td>
+<td>Nested replies to this comment</td>
+</tr>
+</tbody>
+</table>
+<h3 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">comments = doc.list_comments()
+for comment in comments:
+    print(f&quot;ID: {comment.id}&quot;)
+    print(f&quot;Text: {comment.text}&quot;)
+    print(f&quot;Author: {comment.author}&quot;)
+    print(f&quot;Date: {comment.date}&quot;)
+    print(f&quot;Resolved: {comment.resolved}&quot;)
+    print(f&quot;Replies: {len(comment.replies)}&quot;)
+</code></pre>
+<hr />
+<h2 id="revision">Revision<a class="headerlink" href="#revision" title="Permanent link">&para;</a></h2>
+<p>Represents a tracked change (insertion or deletion).</p>
+<pre><code class="language-python">from docx_editor import Revision
+</code></pre>
+<h3 id="attributes_1">Attributes<a class="headerlink" href="#attributes_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>int</td>
+<td>The revision ID</td>
+</tr>
+<tr>
+<td><code>type</code></td>
+<td>str</td>
+<td>Either "insertion" or "deletion"</td>
+</tr>
+<tr>
+<td><code>author</code></td>
+<td>str</td>
+<td>The revision author</td>
+</tr>
+<tr>
+<td><code>date</code></td>
+<td>datetime or None</td>
+<td>When the revision was made</td>
+</tr>
+<tr>
+<td><code>text</code></td>
+<td>str</td>
+<td>The inserted or deleted text</td>
+</tr>
+</tbody>
+</table>
+<h3 id="example_1">Example<a class="headerlink" href="#example_1" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">revisions = doc.list_revisions()
+for rev in revisions:
+    symbol = &quot;+&quot; if rev.type == &quot;insertion&quot; else &quot;-&quot;
+    print(f&quot;{symbol} {rev.text} (by {rev.author})&quot;)
+</code></pre>
+<hr />
+<h2 id="exceptions">Exceptions<a class="headerlink" href="#exceptions" title="Permanent link">&para;</a></h2>
+<h3 id="textnotfounderror"><code>TextNotFoundError</code><a class="headerlink" href="#textnotfounderror" title="Permanent link">&para;</a></h3>
+<p>Raised when the specified text is not found in the document.</p>
+<pre><code class="language-python">from docx_editor.exceptions import TextNotFoundError
+
+try:
+    doc.replace(&quot;nonexistent text&quot;, &quot;new text&quot;)
+except TextNotFoundError as e:
+    print(f&quot;Text not found: {e}&quot;)
+</code></pre>
+<h3 id="commenterror"><code>CommentError</code><a class="headerlink" href="#commenterror" title="Permanent link">&para;</a></h3>
+<p>Raised when a comment operation fails.</p>
+<pre><code class="language-python">from docx_editor.exceptions import CommentError
+
+try:
+    doc.reply_to_comment(999, &quot;reply&quot;)
+except CommentError as e:
+    print(f&quot;Comment error: {e}&quot;)
+</code></pre>
+<h3 id="revisionerror"><code>RevisionError</code><a class="headerlink" href="#revisionerror" title="Permanent link">&para;</a></h3>
+<p>Raised when a revision operation fails.</p>
+<pre><code class="language-python">from docx_editor.exceptions import RevisionError
+</code></pre>
+<h3 id="workspaceexistserror"><code>WorkspaceExistsError</code><a class="headerlink" href="#workspaceexistserror" title="Permanent link">&para;</a></h3>
+<p>Raised when attempting to create a workspace that already exists.</p>
+<pre><code class="language-python">from docx_editor.exceptions import WorkspaceExistsError
+</code></pre>
+<h3 id="workspacesyncerror"><code>WorkspaceSyncError</code><a class="headerlink" href="#workspacesyncerror" title="Permanent link">&para;</a></h3>
+<p>Raised when the workspace is out of sync with the source document.</p>
+<pre><code class="language-python">from docx_editor.exceptions import WorkspaceSyncError
+</code></pre>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Maintained by <a href="https://pablospe.com">pablospe</a>.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/pablospe/docx-editor" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://pypi.org/project/docx-editor" target="_blank" rel="noopener" title="pypi.org" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.8 200.5c-7.7-30.9-22.3-54.2-53.4-54.2h-40.1v47.4c0 36.8-31.2 67.8-66.8 67.8H172.7c-29.2 0-53.4 25-53.4 54.3v101.8c0 29 25.2 46 53.4 54.3 33.8 9.9 66.3 11.7 106.8 0 26.9-7.8 53.4-23.5 53.4-54.3v-40.7H226.2v-13.6h160.2c31.1 0 42.6-21.7 53.4-54.2 11.2-33.5 10.7-65.7 0-108.6M286.2 444.7a20.4 20.4 0 1 1 0-40.7 20.4 20.4 0 1 1 0 40.7M167.8 248.1h106.8c29.7 0 53.4-24.5 53.4-54.3V91.9c0-29-24.4-50.7-53.4-55.6-35.8-5.9-74.7-5.6-106.8.1-45.2 8-53.4 24.7-53.4 55.6v40.7h106.9v13.6h-147c-31.1 0-58.3 18.7-66.8 54.2-9.8 40.7-10.2 66.1 0 108.6 7.6 31.6 25.7 54.2 56.8 54.2H101v-48.8c0-35.3 30.5-66.4 66.8-66.4m-6.6-183.4a20.4 20.4 0 1 1 0 40.8 20.4 20.4 0 1 1 0-40.8"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": [], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
