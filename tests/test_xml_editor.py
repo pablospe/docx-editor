@@ -436,6 +436,30 @@ class TestDocxXMLEditorAttributeInjection:
         new_t = nodes[0].getElementsByTagName("w:t")[0]
         assert new_t.getAttribute("xml:space") == "preserve"
 
+    def test_inject_xml_space_for_split_text_nodes(self, docx_xml_file):
+        """Issue #9: whitespace in a non-first TEXT_NODE must still trigger preserve.
+
+        Simulates a w:t parsed into multiple TEXT_NODE children (as happens with
+        smart quotes on some minidom builds): the leading non-whitespace fragment
+        is followed by a trailing space fragment. Pre-fix this lost the preserve
+        attribute because only firstChild.data was inspected.
+        """
+        editor = DocxXMLEditor(docx_xml_file, rsid="00AABBCC", author="Test")
+        p_elem = editor.get_node("w:p", contains="Hello")
+
+        nodes = editor.insert_after(p_elem, "<w:p><w:r><w:t>placeholder</w:t></w:r></w:p>")
+        new_t = nodes[0].getElementsByTagName("w:t")[0]
+        # Replace the single TEXT_NODE with two siblings: "word" + " " (trailing space)
+        while new_t.firstChild:
+            new_t.removeChild(new_t.firstChild)
+        owner = new_t.ownerDocument
+        new_t.appendChild(owner.createTextNode("word"))
+        new_t.appendChild(owner.createTextNode(" "))
+        # Re-run injection on the wrapped run
+        editor._inject_attributes_to_nodes([nodes[0]])
+
+        assert new_t.getAttribute("xml:space") == "preserve"
+
     def test_inject_tracked_change_attrs(self, docx_xml_file):
         """Test w:ins gets proper attributes."""
         editor = DocxXMLEditor(docx_xml_file, rsid="00AABBCC", author="TestAuthor")

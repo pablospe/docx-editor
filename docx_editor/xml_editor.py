@@ -609,12 +609,14 @@ class DocxXMLEditor(XMLEditor):
                 elem.setAttribute("w16cex:dateUtc", timestamp)
 
         def add_xml_space_to_t(elem) -> None:
-            # Add xml:space="preserve" to w:t if text has leading/trailing whitespace
-            if elem.firstChild and elem.firstChild.nodeType == elem.firstChild.TEXT_NODE:
-                text = elem.firstChild.data
-                if text and (text[0].isspace() or text[-1].isspace()):
-                    if not elem.hasAttribute("xml:space"):
-                        elem.setAttribute("xml:space", "preserve")
+            # Add xml:space="preserve" to w:t if text has leading/trailing whitespace.
+            # Concatenate all TEXT_NODE children — minidom can split a single
+            # <w:t> across multiple text nodes (issue #9), so firstChild.data
+            # alone would miss whitespace that sits in a later fragment.
+            text = "".join(c.data for c in elem.childNodes if c.nodeType == c.TEXT_NODE)
+            if text and (text[0].isspace() or text[-1].isspace()):
+                if not elem.hasAttribute("xml:space"):
+                    elem.setAttribute("xml:space", "preserve")
 
         for node in nodes:
             if node.nodeType != node.ELEMENT_NODE:

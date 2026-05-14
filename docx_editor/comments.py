@@ -412,11 +412,12 @@ class CommentManager:
         except ValueError:
             date = None
 
-        # Extract text content from w:t elements
+        # Extract text content from w:t elements. Concatenate all TEXT_NODE
+        # children — minidom can split a single <w:t> across multiple text
+        # nodes (issue #9), so firstChild.data alone would truncate.
         text_parts = []
         for t_elem in comment_elem.getElementsByTagName("w:t"):
-            if t_elem.firstChild:
-                text_parts.append(t_elem.firstChild.data)
+            text_parts.append("".join(c.data for c in t_elem.childNodes if c.nodeType == c.TEXT_NODE))
 
         return Comment(
             id=int(comment_id),

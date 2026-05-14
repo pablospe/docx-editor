@@ -998,3 +998,35 @@ class TestAddCommentParentTraversal:
                                     assert isinstance(comment_id, int)
 
         doc.close()
+
+
+class TestSplitTextNodeComment:
+    """Issue #9: comments with multi-TEXT_NODE w:t must round-trip full text."""
+
+    def test_list_comments_full_text_with_split_w_t(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            doc.add_comment("fox", "Hello World")
+        except TextNotFoundError:
+            pytest.skip("Anchor text not found in document")
+
+        editor = doc._comment_manager._get_editor(doc._comment_manager.comments_path)
+        wts = editor.dom.getElementsByTagName("w:t")
+        target = None
+        for wt in wts:
+            full = "".join(c.data for c in wt.childNodes if c.nodeType == c.TEXT_NODE)
+            if "Hello World" in full:
+                target = wt
+                break
+        assert target is not None, "comment w:t not found"
+
+        while target.firstChild:
+            target.removeChild(target.firstChild)
+        owner = target.ownerDocument
+        target.appendChild(owner.createTextNode("Hello "))
+        target.appendChild(owner.createTextNode("World"))
+
+        comments = doc.list_comments()
+        texts = [c.text for c in comments]
+        assert "Hello World" in texts
+        doc.close()
