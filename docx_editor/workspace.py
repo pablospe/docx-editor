@@ -32,6 +32,9 @@ class Workspace:
     """
 
     WORKSPACE_DIR = ".docx"
+    # If you rename META_FILE, also update EXCLUDED_PATHS in ooxml/pack.py —
+    # otherwise the renamed file will be packed into the .docx and Word will
+    # flag it as "unreadable content" (issue #8).
     META_FILE = "meta.json"
 
     meta: dict[str, Any]
