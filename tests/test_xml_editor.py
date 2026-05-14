@@ -245,6 +245,24 @@ class TestXMLEditorGetElementText:
         text = editor._get_element_text(outer)
         assert text == "Hello World"
 
+    def test_get_element_text_preserves_split_whitespace(self, tmp_path):
+        """Issue #9: a whitespace fragment between two non-whitespace TEXT_NODEs
+        must be preserved (it's content, not pretty-print indentation)."""
+        xml_content = '<?xml version="1.0"?><root><item>placeholder</item></root>'
+        xml_path = tmp_path / "split.xml"
+        xml_path.write_text(xml_content)
+        editor = XMLEditor(xml_path)
+        item = editor.dom.getElementsByTagName("item")[0]
+        # Replace the single TEXT_NODE with three TEXT_NODE siblings
+        while item.firstChild:
+            item.removeChild(item.firstChild)
+        owner = item.ownerDocument
+        item.appendChild(owner.createTextNode("Library"))
+        item.appendChild(owner.createTextNode(" "))
+        item.appendChild(owner.createTextNode("Bookshelves"))
+
+        assert editor._get_element_text(item) == "Library Bookshelves"
+
 
 class TestXMLEditorGetNextRid:
     """Tests for XMLEditor.get_next_rid method."""

@@ -335,20 +335,28 @@ class XMLEditor:
     def _get_element_text(self, elem) -> str:
         """Recursively extract all text content from an element.
 
-        Skips text nodes that contain only whitespace (spaces, tabs, newlines).
+        Skips whitespace-only TEXT_NODEs only when they sit between element
+        siblings (i.e. pretty-print indentation). When an element holds only
+        TEXT_NODE children — as a ``<w:t>`` split across multiple text nodes
+        by minidom does (issue #9) — every fragment is preserved, including
+        ones that happen to be pure whitespace.
 
         Args:
             elem: DOM element to extract text from
 
         Returns:
-            Concatenated text from all non-whitespace text nodes
+            Concatenated text content
         """
+        # A whitespace-only TEXT_NODE is "real content" when it sits alongside
+        # a non-whitespace TEXT_NODE sibling (the smart-quote split case).
+        # Otherwise it's pretty-print indentation and should be skipped.
+        has_meaningful_text_sibling = any(n.nodeType == n.TEXT_NODE and n.data.strip() for n in elem.childNodes)
         text_parts = []
         for node in elem.childNodes:
             if node.nodeType == node.TEXT_NODE:
-                # Skip whitespace-only text nodes (XML formatting)
-                if node.data.strip():
-                    text_parts.append(node.data)
+                if not node.data.strip() and not has_meaningful_text_sibling:
+                    continue
+                text_parts.append(node.data)
             elif node.nodeType == node.ELEMENT_NODE:
                 text_parts.append(self._get_element_text(node))
         return "".join(text_parts)
