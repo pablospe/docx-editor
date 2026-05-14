@@ -372,7 +372,7 @@ class RevisionManager:
             ins_ancestor = self._find_ancestor(run, "w:ins")
             if ins_ancestor:
                 node_text = self._get_node_text(last_pos.node)
-                last_pos.node.firstChild.data = node_text + text
+                self._set_node_text(last_pos.node, node_text + text)
                 _set_xml_space_preserve(last_pos.node)
                 return
 
@@ -391,7 +391,7 @@ class RevisionManager:
         if ins_ancestor:
             node_text = self._get_node_text(pos.node)
             offset = pos.offset_in_node
-            pos.node.firstChild.data = node_text[:offset] + text + node_text[offset:]
+            self._set_node_text(pos.node, node_text[:offset] + text + node_text[offset:])
             _set_xml_space_preserve(pos.node)
             return
 
@@ -544,7 +544,7 @@ class RevisionManager:
             raise RevisionError("Could not find parent w:r element")
 
         # Get the full text content
-        full_text = elem.firstChild.data if elem.firstChild else ""
+        full_text = self._get_node_text(elem)
         start_idx = full_text.find(find)
 
         if start_idx == -1:
@@ -563,7 +563,7 @@ class RevisionManager:
 
         # Site A: If inside <w:ins>, edit text in-place (no del/ins wrappers)
         if self._find_ancestor(run, "w:ins"):
-            elem.firstChild.data = before_text + replace_with + after_text
+            self._set_node_text(elem, before_text + replace_with + after_text)
             _set_xml_space_preserve(elem)
             return -1
 
@@ -647,7 +647,7 @@ class RevisionManager:
             raise RevisionError("Could not find parent w:r element")
 
         # Get the full text content
-        full_text = elem.firstChild.data if elem.firstChild else ""
+        full_text = self._get_node_text(elem)
         start_idx = full_text.find(text)
 
         if start_idx == -1:
@@ -673,7 +673,7 @@ class RevisionManager:
         if ins_ancestor:
             remaining = before_text + after_text
             if remaining:
-                elem.firstChild.data = remaining
+                self._set_node_text(elem, remaining)
                 _set_xml_space_preserve(elem)
             else:
                 # Entire w:t text removed — check if other w:t nodes exist
@@ -735,12 +735,31 @@ class RevisionManager:
         return "".join(parts)
 
     def _get_node_text(self, node) -> str:
-        """Get text content of a w:t node."""
+        """Get text content of a w:t node by concatenating ALL child text nodes.
+
+        minidom may store the text of a single ``<w:t>`` element across
+        multiple TEXT_NODE children — e.g. when Word documents contain
+        smart quotes (U+2018/U+2019). Reading only ``firstChild.data``
+        would return just the first fragment (issue #9).
+        """
         text = ""
         for child in node.childNodes:
             if child.nodeType == child.TEXT_NODE:
                 text += child.data
         return text
+
+    def _set_node_text(self, node, text: str) -> None:
+        """Replace all text content of a w:t/w:delText element with ``text``.
+
+        Removes every existing TEXT_NODE child and appends a single new one
+        carrying the full content. Necessary because assigning to
+        ``firstChild.data`` would leave any sibling text nodes behind,
+        corrupting the document when the element holds split text (issue #9).
+        """
+        for child in list(node.childNodes):
+            if child.nodeType == child.TEXT_NODE:
+                node.removeChild(child)
+        node.appendChild(node.ownerDocument.createTextNode(text))
 
     def _build_cross_boundary_parts(self, match: TextMapMatch) -> list[tuple[Element, str, str, str, str, int]]:
         """Build per-node data for a cross-boundary match.
@@ -1049,12 +1068,12 @@ class RevisionManager:
                         # Other w:t nodes exist — remove just this w:t (and run if empty)
                         self._remove_wt_and_maybe_run(first_node)
             elif not before_text:
-                first_node.firstChild.data = after_text
+                self._set_node_text(first_node, after_text)
             elif not after_text:
-                first_node.firstChild.data = before_text
+                self._set_node_text(first_node, before_text)
             else:
                 # Middle split
-                first_node.firstChild.data = before_text
+                self._set_node_text(first_node, before_text)
                 run = self._find_ancestor(first_node, "w:r")
                 if ins_elem and run:
                     rPr_xml = ""
@@ -1068,13 +1087,13 @@ class RevisionManager:
             # remove intermediate nodes entirely.
             # Only remove the w:t node; remove the run only if no w:t children remain.
             if before:
-                first_node.firstChild.data = before
+                self._set_node_text(first_node, before)
                 _set_xml_space_preserve(first_node)
             else:
                 self._remove_wt_and_maybe_run(first_node)
 
             if after:
-                last_node.firstChild.data = after
+                self._set_node_text(last_node, after)
                 _set_xml_space_preserve(last_node)
             else:
                 self._remove_wt_and_maybe_run(last_node)
@@ -1386,7 +1405,7 @@ class RevisionManager:
             rPr_xml = rPr_elems[0].toxml()
 
         # Site C: If inside <w:ins>, edit text in-place (safe for multi-w:t)
-        full_text = elem.firstChild.data if elem.firstChild else ""
+        full_text = self._get_node_text(elem)
         anchor_idx = full_text.find(anchor)
 
         if anchor_idx == -1:
@@ -1397,9 +1416,9 @@ class RevisionManager:
 
         if self._find_ancestor(run, "w:ins"):
             if position == "before":
-                elem.firstChild.data = before_text + text + anchor + after_text
+                self._set_node_text(elem, before_text + text + anchor + after_text)
             else:
-                elem.firstChild.data = before_text + anchor + text + after_text
+                self._set_node_text(elem, before_text + anchor + text + after_text)
             _set_xml_space_preserve(elem)
             return -1
 
@@ -1528,10 +1547,7 @@ class RevisionManager:
         else:
             text_elems = elem.getElementsByTagName("w:delText")
 
-        text_parts = []
-        for t_elem in text_elems:
-            if t_elem.firstChild:
-                text_parts.append(t_elem.firstChild.data)
+        text_parts = [self._get_node_text(t_elem) for t_elem in text_elems]
 
         return Revision(
             id=int(rev_id),
