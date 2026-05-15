@@ -49,7 +49,73 @@ print(doc.source_path)  # Path("/path/to/contract.docx")
 
 ### Track Changes Methods
 
-#### `replace(find, replace_with)`
+#### `list_paragraphs(max_chars=80)`
+
+List paragraphs with hash-anchored references.
+
+**Parameters:**
+
+- `max_chars` (int): Maximum preview length. Use 0 for refs only.
+
+**Returns:** List of strings in the form `P{index}#{hash}| preview text`
+
+**Example:**
+
+```python
+refs = doc.list_paragraphs()
+for ref in refs:
+    print(ref)
+```
+
+#### `get_visible_text()`
+
+Get flattened visible document text. Inserted text is included and deleted text is excluded.
+
+**Returns:** Visible text with paragraphs separated by newlines (str)
+
+**Example:**
+
+```python
+text = doc.get_visible_text()
+```
+
+#### `find_text(text, occurrence=0)`
+
+Find text in the document, including text spanning XML element boundaries.
+
+**Parameters:**
+
+- `text` (str): Text to search for
+- `occurrence` (int): Which occurrence to return. Defaults to 0.
+
+**Returns:** Match information, or None if not found
+
+**Example:**
+
+```python
+match = doc.find_text("Aim: To")
+if match and match.spans_boundary:
+    print("Text spans multiple XML contexts")
+```
+
+#### `count_matches(text)`
+
+Count visible text matches across the document.
+
+**Parameters:**
+
+- `text` (str): Text to search for
+
+**Returns:** Number of occurrences found (int)
+
+**Example:**
+
+```python
+if doc.count_matches("Section 5") > 1:
+    print("Use paragraph refs and occurrence to target the intended match")
+```
+
+#### `replace(find, replace_with, *, paragraph, occurrence=0)`
 
 Replace text with tracked changes.
 
@@ -57,32 +123,37 @@ Replace text with tracked changes.
 
 - `find` (str): Text to find and replace
 - `replace_with` (str): Replacement text
+- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+- `occurrence` (int): Which occurrence within the paragraph. Defaults to 0.
 
-**Returns:** The change ID of the insertion (int)
+**Returns:** Updated paragraph reference (str)
 
 **Example:**
 
 ```python
-doc.replace("30 days", "60 days")
+ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+doc.replace("net", "gross", paragraph=ref)
 ```
 
-#### `delete(text)`
+#### `delete(text, *, paragraph, occurrence=0)`
 
 Mark text as deleted with tracked changes.
 
 **Parameters:**
 
 - `text` (str): Text to mark as deleted
+- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+- `occurrence` (int): Which occurrence within the paragraph. Defaults to 0.
 
-**Returns:** The change ID of the deletion (int)
+**Returns:** Updated paragraph reference (str)
 
 **Example:**
 
 ```python
-doc.delete("obsolete clause")
+ref = doc.delete("obsolete clause", paragraph="P5#d4e5")
 ```
 
-#### `insert_after(anchor, text)`
+#### `insert_after(anchor, text, *, paragraph, occurrence=0)`
 
 Insert text after anchor with tracked changes.
 
@@ -90,16 +161,18 @@ Insert text after anchor with tracked changes.
 
 - `anchor` (str): Text to find as insertion point
 - `text` (str): Text to insert after the anchor
+- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+- `occurrence` (int): Which occurrence within the paragraph. Defaults to 0.
 
-**Returns:** The change ID of the insertion (int)
+**Returns:** Updated paragraph reference (str)
 
 **Example:**
 
 ```python
-doc.insert_after("Section 5", " (as amended)")
+ref = doc.insert_after("Section 5", " (as amended)", paragraph="P3#b2c4")
 ```
 
-#### `insert_before(anchor, text)`
+#### `insert_before(anchor, text, *, paragraph, occurrence=0)`
 
 Insert text before anchor with tracked changes.
 
@@ -107,13 +180,72 @@ Insert text before anchor with tracked changes.
 
 - `anchor` (str): Text to find as insertion point
 - `text` (str): Text to insert before the anchor
+- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+- `occurrence` (int): Which occurrence within the paragraph. Defaults to 0.
 
-**Returns:** The change ID of the insertion (int)
+**Returns:** Updated paragraph reference (str)
 
 **Example:**
 
 ```python
-doc.insert_before("Section 6", "New clause: ")
+ref = doc.insert_before("Section 6", "New clause: ", paragraph="P4#a7b2")
+```
+
+#### `rewrite_paragraph(ref, new_text)`
+
+Rewrite a paragraph using tracked changes generated from a word-level diff.
+
+**Parameters:**
+
+- `ref` (str): Paragraph reference from `list_paragraphs()`
+- `new_text` (str): Desired paragraph text
+
+**Returns:** Updated paragraph reference (str)
+
+**Example:**
+
+```python
+ref = doc.rewrite_paragraph("P2#f3c1", "Payment is due within 60 days after invoice receipt.")
+```
+
+#### `batch_edit(operations)`
+
+Apply multiple edits after validating paragraph hashes up front.
+
+**Parameters:**
+
+- `operations` (list[EditOperation]): Edit operations to apply
+
+**Returns:** Updated paragraph references in input order (list[str])
+
+**Example:**
+
+```python
+from docx_editor import EditOperation
+
+new_refs = doc.batch_edit([
+    EditOperation(action="replace", find="old", replace_with="new", paragraph="P2#f3c1"),
+    EditOperation(action="delete", text="remove this", paragraph="P5#d4e5"),
+])
+```
+
+#### `batch_rewrite(rewrites)`
+
+Rewrite multiple paragraphs after validating paragraph hashes up front.
+
+**Parameters:**
+
+- `rewrites` (list[tuple[str, str]]): Pairs of paragraph ref and desired text
+
+**Returns:** Updated paragraph references in input order (list[str])
+
+**Example:**
+
+```python
+new_refs = doc.batch_rewrite([
+    ("P1#a7b2", "Updated first paragraph."),
+    ("P3#c3d4", "Updated third paragraph."),
+])
 ```
 
 ### Comment Methods
@@ -403,7 +535,7 @@ Raised when the specified text is not found in the document.
 from docx_editor.exceptions import TextNotFoundError
 
 try:
-    doc.replace("nonexistent text", "new text")
+    doc.replace("nonexistent text", "new text", paragraph="P2#f3c1")
 except TextNotFoundError as e:
     print(f"Text not found: {e}")
 ```

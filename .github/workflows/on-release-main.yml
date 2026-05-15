@@ -13,14 +13,55 @@ jobs:
 
       - name: Export tag
         id: vars
-        run: echo tag=${GITHUB_REF#refs/*/} >> $GITHUB_OUTPUT
+        run: |
+          release_version="${GITHUB_REF_NAME}"
+          if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must be a plain X.Y.Z version, for example 0.3.0. Do not use a v prefix." >&2
+            exit 1
+          fi
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+        if: ${{ github.event_name == 'release' }}
+
+      - name: Validate checked-in versions
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          expected = os.environ["RELEASE_VERSION"]
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          plugin = json.loads(Path(".claude-plugin/plugin.json").read_text())["version"]
+          lock = tomllib.loads(Path("uv.lock").read_text())
+          locked = next(
+              package["version"]
+              for package in lock["package"]
+              if package["name"] == "docx-editor"
+          )
+
+          versions = {
+              "release tag": expected,
+              "pyproject.toml": pyproject,
+              "uv.lock": locked,
+              ".claude-plugin/plugin.json": plugin,
+          }
+          mismatches = {name: version for name, version in versions.items() if version != expected}
+          if mismatches:
+              for name, version in versions.items():
+                  print(f"{name}: {version}", file=sys.stderr)
+              raise SystemExit("Release versions must all match before publishing.")
+          PY
+        env:
+          RELEASE_VERSION: ${{ steps.vars.outputs.version }}
         if: ${{ github.event_name == 'release' }}
 
       - name: Update project version
         run: |
           sed -i "s/^version = \".*\"/version = \"$RELEASE_VERSION\"/" pyproject.toml
         env:
-          RELEASE_VERSION: ${{ steps.vars.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.vars.outputs.version }}
         if: ${{ github.event_name == 'release' }}
 
       - name: Upload updated pyproject.toml

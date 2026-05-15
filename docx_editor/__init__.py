@@ -27,7 +27,12 @@ Example:
     doc.close()
 """
 
-__version__ = "0.0.1"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("docx-editor")
+except PackageNotFoundError:  # pragma: no cover - source tree without installation metadata
+    __version__ = "0.2.2"
 
 from .comments import Comment
 from .document import Document

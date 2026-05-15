@@ -4,86 +4,112 @@ This guide covers the essential usage patterns for docx-editor.
 
 ## Opening Documents
 
-### Basic Open
-
 ```python
 from docx_editor import Document
 
-doc = Document.open("contract.docx")
+doc = Document.open("contract.docx", author="Legal Team")
 # ... make changes ...
 doc.save()
 doc.close()
 ```
 
-### With Custom Author
-
-Track changes are attributed to the author name:
+The recommended approach is to use a context manager so the temporary workspace is cleaned up automatically:
 
 ```python
-doc = Document.open("contract.docx", author="Legal Team")
+from docx_editor import Document
+
+with Document.open("contract.docx", author="Legal Team") as doc:
+    # ... make changes ...
+    doc.save()
 ```
 
-### Force Recreate Workspace
-
-If you need a fresh workspace (discarding any pending changes):
+If you need a fresh workspace and are intentionally discarding pending workspace state, pass `force_recreate=True`:
 
 ```python
 doc = Document.open("contract.docx", force_recreate=True)
 ```
 
-### Using Context Manager
+## Paragraph References
 
-The recommended approach for automatic cleanup:
+Tracked edit methods are scoped to a hash-anchored paragraph reference. Start by listing paragraphs:
 
 ```python
-from docx_editor import Document
-
 with Document.open("contract.docx") as doc:
-    doc.replace("old term", "new term")
-    doc.save()
-# Workspace is automatically cleaned up
+    for paragraph in doc.list_paragraphs():
+        print(paragraph)
 ```
+
+Output looks like:
+
+```text
+P1#a7b2| Introduction to the contract...
+P2#f3c1| Payment is due within 30 days...
+P3#b2c4| Section 5 describes review obligations...
+```
+
+Use the `P{index}#{hash}` part as the `paragraph=` argument. Edit methods return a new paragraph ref after the hash changes, so keep the returned value when chaining edits in the same paragraph.
 
 ## Track Changes
 
 ### Replace Text
 
-Replace text with a tracked deletion and insertion:
-
 ```python
-doc.replace("30 days", "60 days")
+with Document.open("contract.docx") as doc:
+    ref = "P2#f3c1"
+    ref = doc.replace("30 days", "60 days", paragraph=ref)
+    doc.save()
 ```
 
-This creates:
-
-- A tracked deletion of "30 days"
-- A tracked insertion of "60 days"
+This creates a tracked deletion of `30 days` and a tracked insertion of `60 days`.
 
 ### Delete Text
 
-Mark text as deleted (strikethrough in Word):
-
 ```python
-doc.delete("obsolete clause")
+with Document.open("contract.docx") as doc:
+    ref = "P5#d4e5"
+    doc.delete("obsolete clause", paragraph=ref)
+    doc.save()
 ```
 
 ### Insert Text
 
-Insert new text after or before an anchor:
+```python
+with Document.open("contract.docx") as doc:
+    ref = "P3#b2c4"
+    ref = doc.insert_after("Section 5", " (as amended)", paragraph=ref)
+    doc.insert_before("review", "legal ", paragraph=ref)
+    doc.save()
+```
+
+### Rewrite a Paragraph
 
 ```python
-# Insert after a phrase
-doc.insert_after("Section 5", " (as amended)")
+with Document.open("contract.docx") as doc:
+    ref = "P2#f3c1"
+    doc.rewrite_paragraph(ref, "Payment is due within 60 days after invoice receipt.")
+    doc.save()
+```
 
-# Insert before a phrase
-doc.insert_before("Section 6", "New clause: ")
+`rewrite_paragraph()` compares the current paragraph text to the desired text and creates tracked changes from the diff.
+
+### Batch Edits
+
+```python
+from docx_editor import Document, EditOperation
+
+with Document.open("contract.docx") as doc:
+    new_refs = doc.batch_edit([
+        EditOperation(action="replace", find="30 days", replace_with="60 days", paragraph="P2#f3c1"),
+        EditOperation(action="delete", text="obsolete clause", paragraph="P5#d4e5"),
+        EditOperation(action="insert_after", anchor="Section 5", text=" (as amended)", paragraph="P3#b2c4"),
+    ])
+    print(new_refs)
+    doc.save()
 ```
 
 ## Comments
 
 ### Add a Comment
-
-Attach a comment to specific text in the document:
 
 ```python
 comment_id = doc.add_comment("Section 5", "Please review this section")
@@ -92,15 +118,11 @@ print(f"Created comment with ID: {comment_id}")
 
 ### Reply to a Comment
 
-Add a reply to an existing comment thread:
-
 ```python
 reply_id = doc.reply_to_comment(comment_id=0, reply="I agree with this change")
 ```
 
 ### List Comments
-
-Get all comments in the document:
 
 ```python
 comments = doc.list_comments()
@@ -109,7 +131,6 @@ for comment in comments:
     print(f"  Author: {comment.author}")
     print(f"  Resolved: {comment.resolved}")
 
-    # Check for replies
     for reply in comment.replies:
         print(f"  Reply: {reply.text}")
 ```
@@ -120,27 +141,16 @@ Filter by author:
 my_comments = doc.list_comments(author="Legal Team")
 ```
 
-### Resolve a Comment
-
-Mark a comment as resolved:
+### Resolve or Delete a Comment
 
 ```python
 doc.resolve_comment(comment_id=0)
-```
-
-### Delete a Comment
-
-Remove a comment from the document:
-
-```python
 doc.delete_comment(comment_id=0)
 ```
 
 ## Revision Management
 
 ### List Revisions
-
-Get all tracked changes:
 
 ```python
 revisions = doc.list_revisions()
@@ -154,68 +164,35 @@ Filter by author:
 my_revisions = doc.list_revisions(author="Legal Team")
 ```
 
-### Accept a Revision
-
-Accept a specific revision by ID:
+### Accept or Reject a Revision
 
 ```python
-# For insertions: keeps the inserted content
-# For deletions: permanently removes the deleted content
+# For insertions, accept keeps the inserted content.
+# For deletions, accept permanently removes the deleted content.
 doc.accept_revision(revision_id=1)
-```
 
-### Reject a Revision
-
-Reject a specific revision by ID:
-
-```python
-# For insertions: removes the inserted content
-# For deletions: restores the deleted content
+# For insertions, reject removes the inserted content.
+# For deletions, reject restores the deleted content.
 doc.reject_revision(revision_id=1)
 ```
 
-### Accept/Reject All
-
-Accept or reject all revisions at once:
+### Accept or Reject All
 
 ```python
-# Accept all revisions
 count = doc.accept_all()
 print(f"Accepted {count} revisions")
 
-# Reject all revisions by a specific author
 count = doc.reject_all(author="OtherUser")
 print(f"Rejected {count} revisions")
 ```
 
 ## Saving and Closing
 
-### Save to Original Path
-
 ```python
-doc.save()
-```
-
-### Save to New Path
-
-```python
-doc.save("contract_v2.docx")
-```
-
-### Close Without Cleanup
-
-Keep the workspace for inspection:
-
-```python
-doc.close(cleanup=False)
-```
-
-### Close With Cleanup (Default)
-
-Delete the workspace folder:
-
-```python
-doc.close()  # cleanup=True is the default
+doc.save()                  # Save to original path
+doc.save("contract_v2.docx") # Save to a new path
+doc.close()                 # Delete workspace
+doc.close(cleanup=False)    # Keep workspace for inspection
 ```
 
 ## Complete Example
@@ -223,23 +200,19 @@ doc.close()  # cleanup=True is the default
 ```python
 from docx_editor import Document
 
-# Open document with custom author
 with Document.open("contract.docx", author="Legal Review") as doc:
-    # Make tracked changes
-    doc.replace("30 days", "60 days")
-    doc.insert_after("payment terms", " (net 60)")
-    doc.delete("penalty clause")
+    for paragraph in doc.list_paragraphs():
+        print(paragraph)
 
-    # Add review comments
+    payment_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+    doc.insert_after("payment terms", " (net 60)", paragraph=payment_ref)
+    doc.delete("penalty clause", paragraph="P7#a10b")
+
     doc.add_comment("Section 5", "Needs legal review")
 
-    # Review existing changes
     for rev in doc.list_revisions():
         print(f"{rev.type}: {rev.text}")
 
-    # Accept changes from a trusted author
     doc.accept_all(author="Senior Counsel")
-
-    # Save changes
     doc.save()
 ```

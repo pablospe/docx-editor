@@ -96,7 +96,7 @@ Now, validate that all unit tests are passing:
 make test
 ```
 
-9. Before raising a pull request you should also run tox.
+8. Before raising a pull request you should also run tox.
    This will run the tests across different versions of Python:
 
 ```bash
@@ -106,15 +106,15 @@ tox
 This requires you to have multiple versions of python installed.
 This step is also triggered in the CI/CD pipeline, so you could also choose to skip this step locally.
 
-10. Commit your changes and push your branch to GitHub:
+9. Commit your changes and push your branch to GitHub:
 
 ```bash
-git add .
+git add <changed-files>
 git commit -m "Your detailed description of your changes."
 git push origin name-of-your-bugfix-or-feature
 ```
 
-11. Submit a pull request through the GitHub website.
+10. Submit a pull request through the GitHub website.
 
 # Pull Request Guidelines
 
@@ -136,16 +136,27 @@ This project uses GitHub Releases to trigger automated publishing to PyPI and do
    - `pyproject.toml` → `version = "X.Y.Z"`
    - `.claude-plugin/plugin.json` → `"version": "X.Y.Z"`
 
+   The release workflow also re-stamps `pyproject.toml` from the release
+   tag before building. The manual bump is still required so `main`,
+   `uv.lock`, and plugin metadata are consistent before the release starts.
+
 2. **Refresh `uv.lock`** so its pinned project version matches:
 
    ```bash
    uv lock
    ```
 
-   Skipping this makes `make check` (and the matching CI job) fail with
+   Skipping this makes `make check` and release validation fail with
    `The lockfile at 'uv.lock' needs to be updated, but '--locked' was provided.`
 
-3. **Commit and push** the version bump:
+3. **Run the local checks**:
+
+   ```bash
+   make check
+   make test
+   ```
+
+4. **Commit and push** the version bump:
 
    ```bash
    git add pyproject.toml .claude-plugin/plugin.json uv.lock
@@ -153,23 +164,30 @@ This project uses GitHub Releases to trigger automated publishing to PyPI and do
    git push origin main
    ```
 
-4. **Create a GitHub Release**:
+5. **Create a GitHub Release**:
 
    - Go to [Releases](https://github.com/pablospe/docx-editor/releases/new)
-   - Create a new tag matching the version: `X.Y.Z` (e.g., `0.3.0`)
+   - **Create a new tag matching the version: `X.Y.Z` (e.g., `0.3.0`). Do not use a `v` prefix.**
    - Set the target branch to `main`
    - Add release notes (use "Generate release notes" for a changelog)
    - Click **Publish release**
 
-5. **Automated CI** (`.github/workflows/on-release-main.yml`) will:
+6. **Automated CI** (`.github/workflows/on-release-main.yml`) will:
 
-   - Update `pyproject.toml` version from the release tag
+   - Validate that the release tag, `pyproject.toml`, `uv.lock`, and `.claude-plugin/plugin.json` versions match
+   - Update `pyproject.toml` version from the release tag before packaging
    - Build the package with `uv build`
    - Publish to [PyPI](https://pypi.org/project/docx-editor/) via trusted publishing
    - Deploy documentation to GitHub Pages with `mkdocs gh-deploy`
 
+7. **Verify the release**:
+
+   - Check that the release workflow completed successfully in GitHub Actions
+   - Confirm the new version appears on [PyPI](https://pypi.org/project/docx-editor/)
+   - Confirm the documentation was deployed to GitHub Pages
+
 ## Notes
 
-- The release tag **must** match the version format (e.g., `0.3.0`, no `v` prefix)
+- The release tag **must** match the version format exactly (e.g., `0.3.0`, no `v` prefix)
 - PyPI publishing uses [trusted publishing](https://docs.pypi.org/trusted-publishers/) (no API tokens needed)
 - If you need to build and publish manually, you can use `make build-and-publish`
