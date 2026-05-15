@@ -1069,11 +1069,14 @@ class RevisionManager:
                         self._remove_wt_and_maybe_run(first_node)
             elif not before_text:
                 self._set_node_text(first_node, after_text)
+                _set_xml_space_preserve(first_node)
             elif not after_text:
                 self._set_node_text(first_node, before_text)
+                _set_xml_space_preserve(first_node)
             else:
                 # Middle split
                 self._set_node_text(first_node, before_text)
+                _set_xml_space_preserve(first_node)
                 run = self._find_ancestor(first_node, "w:r")
                 if ins_elem and run:
                     rPr_xml = ""
