@@ -141,7 +141,7 @@ class TestCondenseXmlPreservesTextContent:
         pack_document(temp_dir / "unpacked", out)
         repacked = _read_doc_xml(out)
         # The space must survive condensation
-        assert "foo bar" in repacked or "foo</" not in repacked.replace(" ", "")
+        assert "foo bar" in repacked
 
     def test_condense_preserves_whitespace_in_instrText(self, simple_docx, temp_dir):
         unpack_document(simple_docx, temp_dir / "unpacked")
