@@ -48,21 +48,24 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
             for xml_file in temp_content_dir.rglob(pattern):
                 condense_xml(xml_file)
 
-        # Create final Office file as zip archive.
-        # Deterministic output: sorted entries, fixed timestamps, consistent compression.
-        # This minimises byte-level churn so cloud-sync tools (OneDrive, Dropbox, …)
-        # only need to transfer the blocks that actually changed.
+        # Deterministic ZIP: sorted POSIX names, fixed 1980 timestamps, pinned metadata - cross-platform byte stability.
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(output_file, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-            for f in sorted(temp_content_dir.rglob("*")):
-                if not f.is_file():
-                    continue
+        entries = sorted(
+            (f for f in temp_content_dir.rglob("*") if f.is_file()),
+            key=lambda f: f.relative_to(temp_content_dir).as_posix(),
+        )
+        with zipfile.ZipFile(output_file, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in entries:
                 rel = f.relative_to(temp_content_dir)
                 if rel in EXCLUDED_PATHS:
                     continue
-                info = zipfile.ZipInfo(str(rel), date_time=(1980, 1, 1, 0, 0, 0))
+                info = zipfile.ZipInfo(rel.as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
-                zf.writestr(info, f.read_bytes())
+                info.create_system = 3  # Unix, pinned for cross-platform byte stability
+                info.external_attr = 0o644 << 16
+                info._compresslevel = 6  # writestr(ZipInfo) ignores ZipFile.compresslevel
+                with f.open("rb") as src, zf.open(info, "w") as dst:
+                    shutil.copyfileobj(src, dst)
 
         # Validate if requested
         if validate:  # pragma: no cover
