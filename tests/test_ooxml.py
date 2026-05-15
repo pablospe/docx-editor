@@ -91,6 +91,39 @@ class TestPack:
         assert "meta.json" not in names
         assert "word/meta.json" in names
 
+    def test_pack_deterministic_output(self, simple_docx, temp_dir):
+        """Packing the same directory twice must produce byte-identical ZIPs."""
+        unpack_document(simple_docx, temp_dir / "unpacked")
+
+        out1 = temp_dir / "first.docx"
+        out2 = temp_dir / "second.docx"
+        pack_document(temp_dir / "unpacked", out1)
+        pack_document(temp_dir / "unpacked", out2)
+
+        assert out1.read_bytes() == out2.read_bytes()
+
+    def test_pack_zip_entries_sorted(self, simple_docx, temp_dir):
+        """ZIP entries must be in sorted order for deterministic output."""
+        unpack_document(simple_docx, temp_dir / "unpacked")
+
+        output_path = temp_dir / "output.docx"
+        pack_document(temp_dir / "unpacked", output_path)
+
+        with zipfile.ZipFile(output_path, "r") as zf:
+            names = zf.namelist()
+        assert names == sorted(names)
+
+    def test_pack_fixed_timestamps(self, simple_docx, temp_dir):
+        """All ZIP entries must have the fixed epoch timestamp."""
+        unpack_document(simple_docx, temp_dir / "unpacked")
+
+        output_path = temp_dir / "output.docx"
+        pack_document(temp_dir / "unpacked", output_path)
+
+        with zipfile.ZipFile(output_path, "r") as zf:
+            for info in zf.infolist():
+                assert info.date_time == (1980, 1, 1, 0, 0, 0)
+
 
 def _read_doc_xml(docx_path):
     """Open a packed .docx and return its word/document.xml content as text."""

@@ -48,16 +48,21 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
             for xml_file in temp_content_dir.rglob(pattern):
                 condense_xml(xml_file)
 
-        # Create final Office file as zip archive
+        # Create final Office file as zip archive.
+        # Deterministic output: sorted entries, fixed timestamps, consistent compression.
+        # This minimises byte-level churn so cloud-sync tools (OneDrive, Dropbox, …)
+        # only need to transfer the blocks that actually changed.
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(output_file, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in temp_content_dir.rglob("*"):
+        with zipfile.ZipFile(output_file, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            for f in sorted(temp_content_dir.rglob("*")):
                 if not f.is_file():
                     continue
                 rel = f.relative_to(temp_content_dir)
                 if rel in EXCLUDED_PATHS:
                     continue
-                zf.write(f, rel)
+                info = zipfile.ZipInfo(str(rel), date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                zf.writestr(info, f.read_bytes())
 
         # Validate if requested
         if validate:  # pragma: no cover
