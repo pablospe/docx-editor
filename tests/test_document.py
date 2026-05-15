@@ -1,5 +1,7 @@
 """Tests for the main Document class."""
 
+import zipfile
+
 import pytest
 from conftest import find_ref
 
@@ -64,6 +66,24 @@ class TestDocumentSave:
         assert clean_workspace.exists()  # Original unchanged
 
         doc.close()
+
+    def test_save_does_not_include_meta_json(self, clean_workspace, temp_dir):
+        """Regression for issue #8: meta.json must not be packed into output.
+
+        Word flags any non-OOXML entry in the ZIP as "unreadable content" on open.
+        Reproduces the issue end-to-end via Document.open + save.
+        """
+        doc = Document.open(clean_workspace, author="Test")
+        output_path = temp_dir / "output.docx"
+        doc.save(output_path)
+        doc.close()
+
+        with zipfile.ZipFile(output_path, "r") as zf:
+            names = zf.namelist()
+        assert "meta.json" not in names
+        # Sanity: real OOXML parts are still present.
+        assert "word/document.xml" in names
+        assert "[Content_Types].xml" in names
 
 
 class TestDocumentClose:

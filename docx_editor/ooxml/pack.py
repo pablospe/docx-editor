@@ -9,6 +9,12 @@ from pathlib import Path
 
 import defusedxml.minidom
 
+# Workspace-root paths that must not be packed into the output.
+# meta.json is workspace bookkeeping (see Workspace.META_FILE); packing it makes
+# Word flag the document as "unreadable content" on open. Paths are workspace-root
+# relative — a hypothetical subpart literally named "meta.json" is unaffected.
+EXCLUDED_PATHS = {Path("meta.json")}
+
 
 def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool = False) -> bool:
     """Pack a directory into an Office file (.docx/.pptx/.xlsx).
@@ -46,8 +52,12 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
         output_file.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(output_file, "w", zipfile.ZIP_DEFLATED) as zf:
             for f in temp_content_dir.rglob("*"):
-                if f.is_file():
-                    zf.write(f, f.relative_to(temp_content_dir))
+                if not f.is_file():
+                    continue
+                rel = f.relative_to(temp_content_dir)
+                if rel in EXCLUDED_PATHS:
+                    continue
+                zf.write(f, rel)
 
         # Validate if requested
         if validate:  # pragma: no cover

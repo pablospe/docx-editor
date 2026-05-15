@@ -1,5 +1,7 @@
 """Tests for ooxml pack and unpack functions."""
 
+import zipfile
+
 import pytest
 
 from docx_editor.exceptions import DocumentNotFoundError, InvalidDocumentError
@@ -70,3 +72,21 @@ class TestPack:
         assert result is True
         assert output_path.exists()
         assert output_path.stat().st_size > 0
+
+    def test_pack_excludes_root_meta_json(self, simple_docx, temp_dir):
+        """Root-level meta.json must not be packed (Word flags it as corrupt).
+
+        Scope is workspace-root only: a same-named file under a subpath stays.
+        """
+        unpacked = temp_dir / "unpacked"
+        unpack_document(simple_docx, unpacked)
+        (unpacked / "meta.json").write_text('{"author": "test"}')
+        (unpacked / "word" / "meta.json").write_text('{"unrelated": true}')
+
+        output_path = temp_dir / "output.docx"
+        pack_document(unpacked, output_path)
+
+        with zipfile.ZipFile(output_path, "r") as zf:
+            names = zf.namelist()
+        assert "meta.json" not in names
+        assert "word/meta.json" in names
