@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .exceptions import CommentError, TextNotFoundError
-from .xml_editor import DocxXMLEditor, _generate_hex_id
+from .xml_editor import DocxXMLEditor, _generate_hex_id, get_text_node_data
 
 # Path to template files
 TEMPLATE_DIR = Path(__file__).parent / "ooxml" / "templates"
@@ -412,12 +412,7 @@ class CommentManager:
         except ValueError:
             date = None
 
-        # Extract text content from w:t elements. Concatenate all TEXT_NODE
-        # children — minidom can split a single <w:t> across multiple text
-        # nodes (issue #9), so firstChild.data alone would truncate.
-        text_parts = []
-        for t_elem in comment_elem.getElementsByTagName("w:t"):
-            text_parts.append("".join(c.data for c in t_elem.childNodes if c.nodeType == c.TEXT_NODE))
+        text_parts = [get_text_node_data(t_elem) for t_elem in comment_elem.getElementsByTagName("w:t")]
 
         return Comment(
             id=int(comment_id),

@@ -131,6 +131,20 @@ def _is_inside_element(node, tag_name: str) -> bool:
     return False
 
 
+def get_text_node_data(elem) -> str:
+    """Concatenate all direct TEXT_NODE children of ``elem`` into one string.
+
+    minidom can split a single ``<w:t>``'s text across multiple TEXT_NODE
+    children — reproducibly when smart quotes (U+2018/U+2019) are present
+    (issue #9). Anywhere code naively read ``elem.firstChild.data`` would
+    only see the first fragment. This helper returns the complete string.
+
+    Does NOT recurse into element children. For recursive extraction across
+    a subtree see ``XMLEditor._get_element_text``.
+    """
+    return "".join(c.data for c in elem.childNodes if c.nodeType == c.TEXT_NODE)
+
+
 def build_text_map(paragraph) -> TextMap:
     """Build a text map for a paragraph element.
 
@@ -150,11 +164,7 @@ def build_text_map(paragraph) -> TextMap:
             continue
 
         inside_ins = _is_inside_element(node, "w:ins")
-        # Get text content from the text node
-        node_text = ""
-        for child in node.childNodes:
-            if child.nodeType == child.TEXT_NODE:
-                node_text += child.data
+        node_text = get_text_node_data(node)
 
         for i, char in enumerate(node_text):
             text_chars.append(char)
@@ -335,11 +345,14 @@ class XMLEditor:
     def _get_element_text(self, elem) -> str:
         """Recursively extract all text content from an element.
 
-        Skips whitespace-only TEXT_NODEs only when they sit between element
-        siblings (i.e. pretty-print indentation). When an element holds only
-        TEXT_NODE children — as a ``<w:t>`` split across multiple text nodes
-        by minidom does (issue #9) — every fragment is preserved, including
-        ones that happen to be pure whitespace.
+        A whitespace-only TEXT_NODE child is treated as content (rather than
+        pretty-print indentation) when any of:
+          * ``elem`` carries ``xml:space="preserve"`` — the document explicitly
+            marks its whitespace significant.
+          * Another TEXT_NODE sibling has non-whitespace content — the lone
+            whitespace is a fragment of a split text node (issue #9).
+        Otherwise the whitespace TEXT_NODE is discarded as inter-element
+        formatting.
 
         Args:
             elem: DOM element to extract text from
@@ -347,14 +360,13 @@ class XMLEditor:
         Returns:
             Concatenated text content
         """
-        # A whitespace-only TEXT_NODE is "real content" when it sits alongside
-        # a non-whitespace TEXT_NODE sibling (the smart-quote split case).
-        # Otherwise it's pretty-print indentation and should be skipped.
-        has_meaningful_text_sibling = any(n.nodeType == n.TEXT_NODE and n.data.strip() for n in elem.childNodes)
+        preserve_whitespace = elem.getAttribute("xml:space") == "preserve" or any(
+            n.nodeType == n.TEXT_NODE and n.data.strip() for n in elem.childNodes
+        )
         text_parts = []
         for node in elem.childNodes:
             if node.nodeType == node.TEXT_NODE:
-                if not node.data.strip() and not has_meaningful_text_sibling:
+                if not node.data.strip() and not preserve_whitespace:
                     continue
                 text_parts.append(node.data)
             elif node.nodeType == node.ELEMENT_NODE:
@@ -618,10 +630,7 @@ class DocxXMLEditor(XMLEditor):
 
         def add_xml_space_to_t(elem) -> None:
             # Add xml:space="preserve" to w:t if text has leading/trailing whitespace.
-            # Concatenate all TEXT_NODE children — minidom can split a single
-            # <w:t> across multiple text nodes (issue #9), so firstChild.data
-            # alone would miss whitespace that sits in a later fragment.
-            text = "".join(c.data for c in elem.childNodes if c.nodeType == c.TEXT_NODE)
+            text = get_text_node_data(elem)
             if text and (text[0].isspace() or text[-1].isspace()):
                 if not elem.hasAttribute("xml:space"):
                     elem.setAttribute("xml:space", "preserve")

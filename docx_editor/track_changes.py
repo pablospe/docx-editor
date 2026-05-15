@@ -27,6 +27,7 @@ from .xml_editor import (
     build_text_map,
     compute_paragraph_hash,
     find_in_text_map,
+    get_text_node_data,
 )
 
 
@@ -737,16 +738,10 @@ class RevisionManager:
     def _get_node_text(self, node) -> str:
         """Get text content of a w:t node by concatenating ALL child text nodes.
 
-        minidom may store the text of a single ``<w:t>`` element across
-        multiple TEXT_NODE children — e.g. when Word documents contain
-        smart quotes (U+2018/U+2019). Reading only ``firstChild.data``
-        would return just the first fragment (issue #9).
+        Thin wrapper around :func:`get_text_node_data` — kept as a method so
+        existing call sites (and external subclasses) don't have to change.
         """
-        text = ""
-        for child in node.childNodes:
-            if child.nodeType == child.TEXT_NODE:
-                text += child.data
-        return text
+        return get_text_node_data(node)
 
     def _set_node_text(self, node, text: str) -> None:
         """Replace all text content of a w:t/w:delText element with ``text``.

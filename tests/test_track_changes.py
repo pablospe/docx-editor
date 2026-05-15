@@ -1681,6 +1681,23 @@ class TestMultiTextNodeWtElements:
     # When paragraph= is passed, control routes through _replace_across_nodes
     # which uses _get_node_text and avoids the bug.
 
+    def test_set_node_text_consolidates_split_nodes(self, clean_workspace):
+        """Direct contract test for _set_node_text: starts from a multi-TEXT_NODE
+        state, ends with exactly one TEXT_NODE carrying the full new content.
+        Guards against future "simplifications" that would re-introduce the
+        firstChild.data assignment pattern."""
+        doc = Document.open(clean_workspace)
+        wt = _split_wt_text_nodes(doc, "quick brown fox")
+        text_nodes_before = [c for c in wt.childNodes if c.nodeType == c.TEXT_NODE]
+        assert len(text_nodes_before) > 1
+
+        doc._revision_manager._set_node_text(wt, "consolidated")
+
+        text_nodes_after = [c for c in wt.childNodes if c.nodeType == c.TEXT_NODE]
+        assert len(text_nodes_after) == 1
+        assert text_nodes_after[0].data == "consolidated"
+        doc.close()
+
     def test_replace_without_paragraph_arg_succeeds(self, clean_workspace):
         doc = Document.open(clean_workspace)
         wt = _split_wt_text_nodes(doc, "quick brown fox")

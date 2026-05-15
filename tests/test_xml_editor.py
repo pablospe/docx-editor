@@ -263,6 +263,22 @@ class TestXMLEditorGetElementText:
 
         assert editor._get_element_text(item) == "Library Bookshelves"
 
+    def test_get_element_text_honors_xml_space_preserve(self, tmp_path):
+        """A lone whitespace TEXT_NODE inside an element marked
+        xml:space="preserve" is significant content and must be returned.
+
+        Without the attribute it would be treated as pretty-print indent and
+        stripped — matching the pre-existing behavior."""
+        xml_content = '<?xml version="1.0"?><root><keep xml:space="preserve"> </keep><drop> </drop></root>'
+        xml_path = tmp_path / "preserve.xml"
+        xml_path.write_text(xml_content)
+        editor = XMLEditor(xml_path)
+
+        keep = editor.dom.getElementsByTagName("keep")[0]
+        drop = editor.dom.getElementsByTagName("drop")[0]
+        assert editor._get_element_text(keep) == " "
+        assert editor._get_element_text(drop) == ""
+
 
 class TestXMLEditorGetNextRid:
     """Tests for XMLEditor.get_next_rid method."""
