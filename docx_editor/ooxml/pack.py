@@ -48,16 +48,26 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
             for xml_file in temp_content_dir.rglob(pattern):
                 condense_xml(xml_file)
 
-        # Create final Office file as zip archive
+        # Deterministic ZIP: sorted POSIX names, fixed 1980 timestamps, pinned metadata - cross-platform byte stability.
         output_file.parent.mkdir(parents=True, exist_ok=True)
+        entries = sorted(
+            (f for f in temp_content_dir.rglob("*") if f.is_file()),
+            key=lambda f: f.relative_to(temp_content_dir).as_posix(),
+        )
         with zipfile.ZipFile(output_file, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in temp_content_dir.rglob("*"):
-                if not f.is_file():
-                    continue
+            for f in entries:
                 rel = f.relative_to(temp_content_dir)
                 if rel in EXCLUDED_PATHS:
                     continue
-                zf.write(f, rel)
+                info = zipfile.ZipInfo(rel.as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3  # Unix, pinned for cross-platform byte stability
+                info.external_attr = 0o644 << 16
+                # _compresslevel: stdlib's documented per-entry escape hatch (stable since 3.7);
+                # ZipFile.compresslevel is not propagated to ZipInfo entries.
+                info._compresslevel = 6  # ty: ignore[unresolved-attribute]
+                with f.open("rb") as src, zf.open(info, "w") as dst:
+                    shutil.copyfileobj(src, dst)
 
         # Validate if requested
         if validate:  # pragma: no cover
