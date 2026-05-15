@@ -63,7 +63,7 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.create_system = 3  # Unix, pinned for cross-platform byte stability
                 info.external_attr = 0o644 << 16
-                info._compresslevel = 6  # writestr(ZipInfo) ignores ZipFile.compresslevel
+                info._compresslevel = 6  # stdlib doesn't propagate ZipFile.compresslevel to ZipInfo entries
                 with f.open("rb") as src, zf.open(info, "w") as dst:
                     shutil.copyfileobj(src, dst)
 
