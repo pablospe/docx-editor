@@ -245,6 +245,40 @@ class TestXMLEditorGetElementText:
         text = editor._get_element_text(outer)
         assert text == "Hello World"
 
+    def test_get_element_text_preserves_split_whitespace(self, tmp_path):
+        """Issue #9: a whitespace fragment between two non-whitespace TEXT_NODEs
+        must be preserved (it's content, not pretty-print indentation)."""
+        xml_content = '<?xml version="1.0"?><root><item>placeholder</item></root>'
+        xml_path = tmp_path / "split.xml"
+        xml_path.write_text(xml_content)
+        editor = XMLEditor(xml_path)
+        item = editor.dom.getElementsByTagName("item")[0]
+        # Replace the single TEXT_NODE with three TEXT_NODE siblings
+        while item.firstChild:
+            item.removeChild(item.firstChild)
+        owner = item.ownerDocument
+        item.appendChild(owner.createTextNode("Library"))
+        item.appendChild(owner.createTextNode(" "))
+        item.appendChild(owner.createTextNode("Bookshelves"))
+
+        assert editor._get_element_text(item) == "Library Bookshelves"
+
+    def test_get_element_text_honors_xml_space_preserve(self, tmp_path):
+        """A lone whitespace TEXT_NODE inside an element marked
+        xml:space="preserve" is significant content and must be returned.
+
+        Without the attribute it would be treated as pretty-print indent and
+        stripped — matching the pre-existing behavior."""
+        xml_content = '<?xml version="1.0"?><root><keep xml:space="preserve"> </keep><drop> </drop></root>'
+        xml_path = tmp_path / "preserve.xml"
+        xml_path.write_text(xml_content)
+        editor = XMLEditor(xml_path)
+
+        keep = editor.dom.getElementsByTagName("keep")[0]
+        drop = editor.dom.getElementsByTagName("drop")[0]
+        assert editor._get_element_text(keep) == " "
+        assert editor._get_element_text(drop) == ""
+
 
 class TestXMLEditorGetNextRid:
     """Tests for XMLEditor.get_next_rid method."""
@@ -434,6 +468,30 @@ class TestDocxXMLEditorAttributeInjection:
         nodes = editor.insert_after(p_elem, "<w:p><w:r><w:t> spaced</w:t></w:r></w:p>")
 
         new_t = nodes[0].getElementsByTagName("w:t")[0]
+        assert new_t.getAttribute("xml:space") == "preserve"
+
+    def test_inject_xml_space_for_split_text_nodes(self, docx_xml_file):
+        """Issue #9: whitespace in a non-first TEXT_NODE must still trigger preserve.
+
+        Simulates a w:t parsed into multiple TEXT_NODE children (as happens with
+        smart quotes on some minidom builds): the leading non-whitespace fragment
+        is followed by a trailing space fragment. Pre-fix this lost the preserve
+        attribute because only firstChild.data was inspected.
+        """
+        editor = DocxXMLEditor(docx_xml_file, rsid="00AABBCC", author="Test")
+        p_elem = editor.get_node("w:p", contains="Hello")
+
+        nodes = editor.insert_after(p_elem, "<w:p><w:r><w:t>placeholder</w:t></w:r></w:p>")
+        new_t = nodes[0].getElementsByTagName("w:t")[0]
+        # Replace the single TEXT_NODE with two siblings: "word" + " " (trailing space)
+        while new_t.firstChild:
+            new_t.removeChild(new_t.firstChild)
+        owner = new_t.ownerDocument
+        new_t.appendChild(owner.createTextNode("word"))
+        new_t.appendChild(owner.createTextNode(" "))
+        # Re-run injection on the wrapped run
+        editor._inject_attributes_to_nodes([nodes[0]])
+
         assert new_t.getAttribute("xml:space") == "preserve"
 
     def test_inject_tracked_change_attrs(self, docx_xml_file):

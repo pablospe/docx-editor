@@ -11,6 +11,19 @@ from docx_editor.exceptions import RevisionError
 from docx_editor.track_changes import Revision, RevisionManager, _escape_xml
 
 
+def _attach_text_node(mock_elem, text):
+    """Configure a MagicMock to look like a w:t element with TEXT_NODE child.
+
+    Mirrors the real minidom structure so methods iterating ``childNodes``
+    and filtering by ``TEXT_NODE`` (e.g. ``_get_node_text``) work.
+    """
+    mock_elem.firstChild = MagicMock()
+    mock_elem.firstChild.data = text
+    # Make nodeType == TEXT_NODE evaluate True without depending on actual ints.
+    mock_elem.firstChild.nodeType = mock_elem.firstChild.TEXT_NODE
+    mock_elem.childNodes = [mock_elem.firstChild]
+
+
 class TestTrackedReplace:
     """Tests for tracked text replacement."""
 
@@ -799,8 +812,7 @@ class TestRevisionManagerWithMockedEditor:
 
         # Mock text element with content
         mock_text_elem = MagicMock()
-        mock_text_elem.firstChild = MagicMock()
-        mock_text_elem.firstChild.data = "test content"
+        _attach_text_node(mock_text_elem, "test content")
 
         mock_elem.getElementsByTagName.return_value = [mock_text_elem]
 
@@ -958,8 +970,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_intermediate
-        mock_elem.firstChild = MagicMock()
-        mock_elem.firstChild.data = "hello world"
+        _attach_text_node(mock_elem, "hello world")
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -994,8 +1005,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_intermediate
-        mock_elem.firstChild = MagicMock()
-        mock_elem.firstChild.data = "hello world"
+        _attach_text_node(mock_elem, "hello world")
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1030,7 +1040,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_intermediate
-        mock_elem.firstChild.data = "anchor"
+        _attach_text_node(mock_elem, "anchor")
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1064,8 +1074,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
-        mock_elem.firstChild = MagicMock()
-        mock_elem.firstChild.data = "hello world"
+        _attach_text_node(mock_elem, "hello world")
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1101,8 +1110,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
-        mock_elem.firstChild = MagicMock()
-        mock_elem.firstChild.data = "hello world"
+        _attach_text_node(mock_elem, "hello world")
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1146,7 +1154,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
-        mock_elem.firstChild.data = "anchor"
+        _attach_text_node(mock_elem, "anchor")
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1178,8 +1186,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
-        mock_elem.firstChild = MagicMock()
-        mock_elem.firstChild.data = "hello"
+        _attach_text_node(mock_elem, "hello")
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1208,8 +1215,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
-        mock_elem.firstChild = MagicMock()
-        mock_elem.firstChild.data = "hello"
+        _attach_text_node(mock_elem, "hello")
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1238,6 +1244,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
+        _attach_text_node(mock_elem, "anchor")
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1266,9 +1273,8 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
-        mock_elem.firstChild = MagicMock()
         # The matcher found "world" in this node, but actual content is different
-        mock_elem.firstChild.data = "different content"
+        _attach_text_node(mock_elem, "different content")
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1290,9 +1296,8 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
-        mock_elem.firstChild = MagicMock()
         # The matcher found "world" in this node, but actual content is different
-        mock_elem.firstChild.data = "different content"
+        _attach_text_node(mock_elem, "different content")
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1314,8 +1319,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
-        mock_elem.firstChild = MagicMock()
-        mock_elem.firstChild.data = "prefix hello"  # "hello" is at end
+        _attach_text_node(mock_elem, "prefix hello")  # "hello" is at end
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1347,8 +1351,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
-        mock_elem.firstChild = MagicMock()
-        mock_elem.firstChild.data = "prefix hello"  # "hello" is at end
+        _attach_text_node(mock_elem, "prefix hello")  # "hello" is at end
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1380,8 +1383,7 @@ class TestMockedEdgeCases:
 
         mock_elem.nodeName = "w:t"
         mock_elem.parentNode = mock_run
-        mock_elem.firstChild = MagicMock()
-        mock_elem.firstChild.data = "hello suffix"  # "hello" is at start
+        _attach_text_node(mock_elem, "hello suffix")  # "hello" is at start
 
         mock_editor.find_all_nodes.return_value = [mock_elem]
 
@@ -1643,3 +1645,216 @@ class TestRestoreDeletionAttributeCopying:
         assert len(r_elems) == 1
         assert r_elems[0].getAttribute("w:rsidR") == "00112233"
         assert not r_elems[0].hasAttribute("w:rsidDel")
+
+
+def _split_wt_text_nodes(doc, target_text, tag="w:t"):
+    """Reach into the DOM and split an element's TEXT_NODE into multiple siblings.
+
+    Simulates the minidom multi-child-text-node state reported in issue #9 —
+    Word documents with smart quotes (U+2018/U+2019) can land in this state.
+    Returns the modified element.
+    """
+    dom = doc._document_editor.dom
+    for wt in dom.getElementsByTagName(tag):
+        full = "".join(c.data for c in wt.childNodes if c.nodeType == c.TEXT_NODE)
+        if target_text not in full:
+            continue
+        while wt.firstChild:
+            wt.removeChild(wt.firstChild)
+        idx = full.find(target_text)
+        before, after = full[:idx], full[idx + len(target_text) :]
+        owner = wt.ownerDocument
+        if before:
+            wt.appendChild(owner.createTextNode(before))
+        wt.appendChild(owner.createTextNode(target_text))
+        if after:
+            wt.appendChild(owner.createTextNode(after))
+        return wt
+    raise AssertionError(f"No {tag} containing {target_text!r}")
+
+
+class TestMultiTextNodeWtElements:
+    """Issue #9: w:t elements with multiple TEXT_NODE children (smart-quote split)."""
+
+    # The buggy paths in replace_text/suggest_deletion/_insert_text (lines 547,
+    # 650, 1389) are only reached when paragraph=None (via _get_nth_match).
+    # When paragraph= is passed, control routes through _replace_across_nodes
+    # which uses _get_node_text and avoids the bug.
+
+    def test_set_node_text_consolidates_split_nodes(self, clean_workspace):
+        """Direct contract test for _set_node_text: starts from a multi-TEXT_NODE
+        state, ends with exactly one TEXT_NODE carrying the full new content.
+        Guards against future "simplifications" that would re-introduce the
+        firstChild.data assignment pattern."""
+        doc = Document.open(clean_workspace)
+        wt = _split_wt_text_nodes(doc, "quick brown fox")
+        text_nodes_before = [c for c in wt.childNodes if c.nodeType == c.TEXT_NODE]
+        assert len(text_nodes_before) > 1
+
+        doc._revision_manager._set_node_text(wt, "consolidated")
+
+        text_nodes_after = [c for c in wt.childNodes if c.nodeType == c.TEXT_NODE]
+        assert len(text_nodes_after) == 1
+        assert text_nodes_after[0].data == "consolidated"
+        doc.close()
+
+    def test_replace_without_paragraph_arg_succeeds(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        wt = _split_wt_text_nodes(doc, "quick brown fox")
+        assert len(wt.childNodes) > 1
+        doc._revision_manager.replace_text("quick brown fox", "slow red turtle")
+        paragraphs = doc.list_paragraphs()
+        assert any("slow red turtle" in p for p in paragraphs)
+        assert not any("quick brown fox" in p for p in paragraphs)
+        doc.close()
+
+    def test_delete_without_paragraph_arg_succeeds(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        _split_wt_text_nodes(doc, "quick brown fox")
+        doc._revision_manager.suggest_deletion("quick brown fox")
+        paragraphs = doc.list_paragraphs()
+        assert not any("quick brown fox" in p for p in paragraphs)
+        doc.close()
+
+    def test_insert_without_paragraph_arg_succeeds(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        ref = find_ref(doc, "lazy dog")
+        doc.insert_before("lazy dog", "INS_TARGET ", paragraph=ref)
+        _split_wt_text_nodes(doc, "INS_TARGET")
+        doc._revision_manager.insert_text_before("INS_TARGET", "X_")
+        paragraphs = doc.list_paragraphs()
+        assert any("X_INS_TARGET" in p for p in paragraphs)
+        doc.close()
+
+    def test_replace_inside_ins_writes_full_text(self, clean_workspace):
+        # Hits _replace_across_nodes' "all inside ins" path which previously
+        # used firstChild.data assignment.
+        doc = Document.open(clean_workspace)
+        ref = find_ref(doc, "lazy dog")
+        ref = doc.insert_before("lazy dog", "INS_TARGET ", paragraph=ref)
+        _split_wt_text_nodes(doc, "INS_TARGET")
+        doc.replace("INS_TARGET", "REPLACED", paragraph=ref)
+        paragraphs = doc.list_paragraphs()
+        assert any("REPLACED" in p for p in paragraphs)
+        assert not any("INS_TARGET" in p for p in paragraphs)
+        doc.close()
+
+    def test_list_revisions_with_multi_text_node_delText(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        ref = find_ref(doc, "quick brown fox")
+        doc.delete("quick brown fox", paragraph=ref)
+
+        dom = doc._document_editor.dom
+        del_texts = dom.getElementsByTagName("w:delText")
+        assert del_texts, "expected at least one w:delText after delete"
+        elem = del_texts[0]
+        full = "".join(c.data for c in elem.childNodes if c.nodeType == c.TEXT_NODE)
+        while elem.firstChild:
+            elem.removeChild(elem.firstChild)
+        mid = len(full) // 2
+        elem.appendChild(elem.ownerDocument.createTextNode(full[:mid]))
+        elem.appendChild(elem.ownerDocument.createTextNode(full[mid:]))
+
+        revisions = doc.list_revisions()
+        deletions = [r for r in revisions if r.type == "deletion"]
+        assert deletions
+        assert deletions[0].text == full
+        doc.close()
+
+    def test_save_load_roundtrip_after_multi_node_edit(self, clean_workspace, tmp_path):
+        doc = Document.open(clean_workspace)
+        _split_wt_text_nodes(doc, "quick brown fox")
+        doc._revision_manager.replace_text("quick brown fox", "slow red turtle")
+        out = tmp_path / "edited.docx"
+        doc.save(out)
+        doc.close()
+
+        doc2 = Document.open(out)
+        paragraphs = doc2.list_paragraphs()
+        assert any("slow red turtle" in p for p in paragraphs)
+        assert not any("quick brown fox" in p for p in paragraphs)
+        doc2.close()
+
+
+def _build_smart_quote_docx(simple_docx, dest):
+    """Build a real .docx containing smart-quote text in a single <w:t>.
+
+    Repacks ``simple_docx`` with the second paragraph rewritten to contain
+    U+2018/U+2019 smart quotes, simulating the structure reported in
+    GitHub issue #9.
+    """
+    import shutil
+
+    from docx_editor.ooxml.pack import pack_document
+    from docx_editor.ooxml.unpack import unpack_document
+
+    work = dest.parent / "_smart_quote_build"
+    if work.exists():
+        shutil.rmtree(work)
+    unpack_document(simple_docx, work)
+    doc_xml = work / "word" / "document.xml"
+    xml = doc_xml.read_text(encoding="utf-8")
+    # Replace "The quick brown fox..." paragraph's text with one carrying
+    # smart quotes. The surrounding <w:r><w:t>...</w:t></w:r> structure
+    # mirrors what Word emits.
+    target = "The quick brown fox jumps over the lazy dog."
+    replacement = "‘Library Bookshelves’ are in all Libraries."
+    assert target in xml, "fixture assumption broken: simple.docx changed"
+    xml = xml.replace(target, replacement)
+    doc_xml.write_text(xml, encoding="utf-8")
+    pack_document(work, dest)
+    shutil.rmtree(work)
+    return dest
+
+
+class TestSmartQuoteEndToEnd:
+    """End-to-end: real .docx with smart quotes, full open/edit/save/reopen."""
+
+    def test_replace_around_smart_quotes(self, simple_docx, tmp_path):
+        src = tmp_path / "with_smart_quotes.docx"
+        _build_smart_quote_docx(simple_docx, src)
+
+        doc = Document.open(src, force_recreate=True)
+        try:
+            # Force the multi-text-node state on the smart-quote w:t so we
+            # exercise the codepath issue #9 describes regardless of how
+            # the local minidom build represents the parsed text.
+            _split_wt_text_nodes(doc, "Library Bookshelves")
+
+            doc._revision_manager.replace_text("Library Bookshelves", "Reading Rooms")
+            out = tmp_path / "edited.docx"
+            doc.save(out)
+        finally:
+            doc.close()
+
+        doc2 = Document.open(out, force_recreate=True)
+        try:
+            paragraphs = doc2.list_paragraphs()
+            joined = " ".join(paragraphs)
+            assert "Reading Rooms" in joined
+            assert "Library Bookshelves" not in joined
+            # Smart quotes must survive the edit
+            assert "‘" in joined and "’" in joined
+        finally:
+            doc2.close()
+
+    def test_delete_around_smart_quotes(self, simple_docx, tmp_path):
+        src = tmp_path / "with_smart_quotes.docx"
+        _build_smart_quote_docx(simple_docx, src)
+
+        doc = Document.open(src, force_recreate=True)
+        try:
+            _split_wt_text_nodes(doc, "Library Bookshelves")
+            doc._revision_manager.suggest_deletion("Library Bookshelves")
+            out = tmp_path / "edited.docx"
+            doc.save(out)
+        finally:
+            doc.close()
+
+        doc2 = Document.open(out, force_recreate=True)
+        try:
+            joined = " ".join(doc2.list_paragraphs())
+            assert "Library Bookshelves" not in joined
+            assert "‘" in joined and "’" in joined
+        finally:
+            doc2.close()

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .exceptions import CommentError, TextNotFoundError
-from .xml_editor import DocxXMLEditor, _generate_hex_id
+from .xml_editor import DocxXMLEditor, _generate_hex_id, get_text_node_data
 
 # Path to template files
 TEMPLATE_DIR = Path(__file__).parent / "ooxml" / "templates"
@@ -412,11 +412,7 @@ class CommentManager:
         except ValueError:
             date = None
 
-        # Extract text content from w:t elements
-        text_parts = []
-        for t_elem in comment_elem.getElementsByTagName("w:t"):
-            if t_elem.firstChild:
-                text_parts.append(t_elem.firstChild.data)
+        text_parts = [get_text_node_data(t_elem) for t_elem in comment_elem.getElementsByTagName("w:t")]
 
         return Comment(
             id=int(comment_id),

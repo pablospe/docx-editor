@@ -131,6 +131,20 @@ def _is_inside_element(node, tag_name: str) -> bool:
     return False
 
 
+def get_text_node_data(elem) -> str:
+    """Concatenate all direct TEXT_NODE children of ``elem`` into one string.
+
+    minidom can split a single ``<w:t>``'s text across multiple TEXT_NODE
+    children — reproducibly when smart quotes (U+2018/U+2019) are present
+    (issue #9). Anywhere code naively read ``elem.firstChild.data`` would
+    only see the first fragment. This helper returns the complete string.
+
+    Does NOT recurse into element children. For recursive extraction across
+    a subtree see ``XMLEditor._get_element_text``.
+    """
+    return "".join(c.data for c in elem.childNodes if c.nodeType == c.TEXT_NODE)
+
+
 def build_text_map(paragraph) -> TextMap:
     """Build a text map for a paragraph element.
 
@@ -150,11 +164,7 @@ def build_text_map(paragraph) -> TextMap:
             continue
 
         inside_ins = _is_inside_element(node, "w:ins")
-        # Get text content from the text node
-        node_text = ""
-        for child in node.childNodes:
-            if child.nodeType == child.TEXT_NODE:
-                node_text += child.data
+        node_text = get_text_node_data(node)
 
         for i, char in enumerate(node_text):
             text_chars.append(char)
@@ -335,20 +345,30 @@ class XMLEditor:
     def _get_element_text(self, elem) -> str:
         """Recursively extract all text content from an element.
 
-        Skips text nodes that contain only whitespace (spaces, tabs, newlines).
+        A whitespace-only TEXT_NODE child is treated as content (rather than
+        pretty-print indentation) when any of:
+          * ``elem`` carries ``xml:space="preserve"`` — the document explicitly
+            marks its whitespace significant.
+          * Another TEXT_NODE sibling has non-whitespace content — the lone
+            whitespace is a fragment of a split text node (issue #9).
+        Otherwise the whitespace TEXT_NODE is discarded as inter-element
+        formatting.
 
         Args:
             elem: DOM element to extract text from
 
         Returns:
-            Concatenated text from all non-whitespace text nodes
+            Concatenated text content
         """
+        preserve_whitespace = elem.getAttribute("xml:space") == "preserve" or any(
+            n.nodeType == n.TEXT_NODE and n.data.strip() for n in elem.childNodes
+        )
         text_parts = []
         for node in elem.childNodes:
             if node.nodeType == node.TEXT_NODE:
-                # Skip whitespace-only text nodes (XML formatting)
-                if node.data.strip():
-                    text_parts.append(node.data)
+                if not node.data.strip() and not preserve_whitespace:
+                    continue
+                text_parts.append(node.data)
             elif node.nodeType == node.ELEMENT_NODE:
                 text_parts.append(self._get_element_text(node))
         return "".join(text_parts)
@@ -609,12 +629,11 @@ class DocxXMLEditor(XMLEditor):
                 elem.setAttribute("w16cex:dateUtc", timestamp)
 
         def add_xml_space_to_t(elem) -> None:
-            # Add xml:space="preserve" to w:t if text has leading/trailing whitespace
-            if elem.firstChild and elem.firstChild.nodeType == elem.firstChild.TEXT_NODE:
-                text = elem.firstChild.data
-                if text and (text[0].isspace() or text[-1].isspace()):
-                    if not elem.hasAttribute("xml:space"):
-                        elem.setAttribute("xml:space", "preserve")
+            # Add xml:space="preserve" to w:t if text has leading/trailing whitespace.
+            text = get_text_node_data(elem)
+            if text and (text[0].isspace() or text[-1].isspace()):
+                if not elem.hasAttribute("xml:space"):
+                    elem.setAttribute("xml:space", "preserve")
 
         for node in nodes:
             if node.nodeType != node.ELEMENT_NODE:

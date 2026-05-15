@@ -120,8 +120,10 @@ def condense_xml(xml_file: Path) -> None:
 
     # Process each element to remove whitespace and comments
     for element in dom.getElementsByTagName("*"):
-        # Skip w:t elements and their processing (preserve text content)
-        if element.tagName.endswith(":t"):
+        # Skip text-bearing OOXML elements: w:t, w:delText, w:instrText (and their
+        # namespace variants). Their content is significant — including whitespace
+        # fragments that minidom may split off as their own TEXT_NODE (issue #9).
+        if element.tagName.endswith((":t", ":delText", ":instrText")):
             continue
 
         # Remove whitespace-only text nodes and comment nodes
