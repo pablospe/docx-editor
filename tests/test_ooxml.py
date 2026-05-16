@@ -8,7 +8,7 @@ import pytest
 
 from docx_editor.exceptions import DocumentNotFoundError, InvalidDocumentError
 from docx_editor.ooxml.pack import pack_document
-from docx_editor.ooxml.unpack import unpack_document
+from docx_editor.ooxml.unpack import _is_symlink_entry, unpack_document
 
 
 def _build_zip(path, entries):
@@ -100,6 +100,35 @@ class TestUnpack:
         _build_zip(bad_zip, [("safe.txt", b"safe"), (".. /evil.txt", b"pwned")])
         with pytest.raises(InvalidDocumentError, match="Unsafe ZIP entry"):
             unpack_document(bad_zip, temp_dir / "output")
+
+    def test_unpack_rejects_drive_letter(self, temp_dir):
+        """Reject Windows drive-letter ZIP entry names like 'C:evil.txt'."""
+        bad_zip = temp_dir / "bad.docx"
+        _build_zip(bad_zip, [("safe.txt", b"safe"), ("C:evil.txt", b"pwned")])
+        with pytest.raises(InvalidDocumentError, match="Unsafe ZIP entry"):
+            unpack_document(bad_zip, temp_dir / "output")
+
+    def test_unpack_accepts_existing_empty_output_dir(self, temp_dir, simple_docx):
+        """Pre-existing empty output_dir is fine (no symlinks to reject)."""
+        output = temp_dir / "output"
+        output.mkdir()
+        rsid = unpack_document(simple_docx, output)
+        assert len(rsid) == 8
+
+    def test_unpack_accepts_existing_output_dir_without_symlinks(self, temp_dir, simple_docx):
+        """Pre-existing output_dir containing only regular files is accepted."""
+        output = temp_dir / "output"
+        output.mkdir()
+        (output / "leftover.txt").write_text("ok")
+        rsid = unpack_document(simple_docx, output)
+        assert len(rsid) == 8
+
+    def test_is_symlink_entry_skips_non_unix_creator(self):
+        """Non-Unix-created entries are not classified as symlinks even with S_IFLNK bits."""
+        info = zipfile.ZipInfo("foo")
+        info.create_system = 0  # MS-DOS / FAT
+        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        assert _is_symlink_entry(info) is False
 
     @pytest.mark.skipif(sys.platform == "win32", reason="symlinks require elevation on Windows")
     def test_unpack_rejects_symlinked_output_dir(self, temp_dir, simple_docx):
