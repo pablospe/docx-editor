@@ -18,9 +18,13 @@ Open a Word document for editing.
 
 - `path` (str | Path): Path to the .docx file
 - `author` (str, optional): Author name for tracked changes. Defaults to system username.
-- `force_recreate` (bool): If True, delete existing workspace and create fresh. Defaults to False.
+- `force_recreate` (bool): If True, delete any existing workspace (stale or in-sync) before opening — any unsaved edits in the workspace are discarded. Use this to recover from `WorkspaceSyncError`. Defaults to False.
 
 **Returns:** Document instance ready for editing
+
+**Raises:**
+
+- `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created. Pass `force_recreate=True` to discard the stale workspace and re-unpack from the current source. The workspace is never deleted silently.
 
 **Example:**
 

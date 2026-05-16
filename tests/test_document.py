@@ -173,20 +173,40 @@ class TestDocumentEdgeCases:
         # Second close should not raise
         doc.close()
 
-    def test_auto_recreate_on_sync_error(self, clean_workspace):
-        """Test that Document.open auto-recreates on WorkspaceSyncError."""
-        import time
+    def test_open_raises_on_sync_mismatch(self, clean_workspace):
+        """Document.open must raise WorkspaceSyncError instead of silently
+        deleting a workspace whose source .docx was modified out-of-band.
 
-        # Create workspace
+        Verifies both that the exception propagates AND that the workspace
+        survives on disk (a buggy implementation that deleted and then
+        re-raised would otherwise pass). Recovery is via the explicit
+        force_recreate=True opt-in.
+        """
+        import os
+
+        from docx_editor.exceptions import WorkspaceSyncError
+
+        # Create workspace, keep it on disk so the next open hits the sync check.
         doc1 = Document.open(clean_workspace)
         doc1.close(cleanup=False)
+        assert Workspace.exists(clean_workspace)
 
-        # Modify source to trigger sync error
-        time.sleep(0.1)
+        # Mutate source bytes and bump mtime explicitly (sleep-based mtime
+        # changes are unreliable on coarse-resolution filesystems).
+        original_mtime = clean_workspace.stat().st_mtime
         clean_workspace.write_bytes(clean_workspace.read_bytes() + b"\x00")
+        os.utime(clean_workspace, (original_mtime + 5, original_mtime + 5))
 
-        # Should auto-recreate without error
-        doc2 = Document.open(clean_workspace)
+        with pytest.raises(WorkspaceSyncError):
+            Document.open(clean_workspace)
+
+        # The whole point of this PR: workspace must survive the failed open.
+        assert Workspace.exists(clean_workspace), (
+            "workspace must remain on disk when Document.open raises WorkspaceSyncError"
+        )
+
+        # The documented escape hatch still works: discard and re-unpack.
+        doc2 = Document.open(clean_workspace, force_recreate=True)
         assert doc2.source_path == clean_workspace
         doc2.close()
 
@@ -245,10 +265,9 @@ class TestDocumentInternalMethods:
     """Tests for internal Document methods and edge cases."""
 
     def test_force_recreate_with_persistent_sync_error(self, clean_workspace):
-        """Test that force_recreate=True re-raises WorkspaceSyncError if it persists.
-
-        This tests line 102: the `raise` when force_recreate=True but WorkspaceSyncError
-        still occurs after deletion.
+        """Test that WorkspaceSyncError propagates from Workspace.__init__ even
+        when force_recreate=True (i.e. when the workspace constructor raises
+        sync errors for some reason other than a pre-existing stale workspace).
         """
         from unittest.mock import patch
 

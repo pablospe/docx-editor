@@ -23,7 +23,7 @@ with Document.open("contract.docx", author="Legal Team") as doc:
     doc.save()
 ```
 
-If you need a fresh workspace and are intentionally discarding pending workspace state, pass `force_recreate=True`:
+If the source `.docx` was modified outside this library since the workspace was created, `Document.open()` raises `WorkspaceSyncError` instead of silently discarding the workspace. Pass `force_recreate=True` to acknowledge the divergence and re-unpack from the current source:
 
 ```python
 doc = Document.open("contract.docx", force_recreate=True)

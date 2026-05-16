@@ -9,7 +9,6 @@ import shutil
 from pathlib import Path
 
 from .comments import Comment, CommentManager
-from .exceptions import WorkspaceSyncError
 from .track_changes import EditOperation, Revision, RevisionManager
 from .workspace import Workspace
 from .xml_editor import DocxXMLEditor, ParagraphRef, build_text_map, compute_paragraph_hash
@@ -80,10 +79,17 @@ class Document:
         Args:
             path: Path to the .docx file
             author: Author name for tracked changes (defaults to system username)
-            force_recreate: If True, delete existing workspace and create fresh
+            force_recreate: If True, delete any existing workspace (stale or
+                in-sync) before opening. Any unsaved edits in the workspace
+                are discarded. Use this to recover from WorkspaceSyncError.
 
         Returns:
             Document instance ready for editing
+
+        Raises:
+            WorkspaceSyncError: If the source document was modified since the
+                workspace was created. Pass force_recreate=True to discard the
+                stale workspace and re-unpack from the current source.
 
         Example:
             doc = Document.open("contract.docx")
@@ -94,15 +100,7 @@ class Document:
         if force_recreate:
             Workspace.delete(path)
 
-        try:
-            workspace = Workspace(path, author=author, create=True)
-        except WorkspaceSyncError:
-            # Document changed, offer to recreate
-            if force_recreate:
-                raise
-            Workspace.delete(path)
-            workspace = Workspace(path, author=author, create=True)
-
+        workspace = Workspace(path, author=author, create=True)
         return cls(workspace)
 
     @property
