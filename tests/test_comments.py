@@ -1203,3 +1203,33 @@ class TestCommentCrossBoundaryAnchor:
                 doc.add_comment("", "no anchor")
         finally:
             doc.close()
+
+    def test_anchor_spans_many_cjk_runs(self, clean_workspace):
+        """Regression: GitHub #14. CJK anchor spanning nine ``<w:t>`` runs.
+
+        Reporter's failing case: a 29-character Chinese anchor that
+        ``find_text``/``count_matches`` accepted but ``add_comment`` rejected
+        with ``TextNotFoundError`` because the old lookup only saw text inside
+        a single ``<w:t>`` element.
+        """
+        doc = Document.open(clean_workspace)
+        try:
+            para = _find_paragraph_with_text(doc, "brown fox")
+            segments = [
+                "息税前", "利润率", "，", "息税前利润率", "=",
+                "息税前利润", "/", "营业收入", "×100%",
+            ]
+            runs_xml = "".join(
+                f'<w:r><w:t xml:space="preserve">{seg}</w:t></w:r>' for seg in segments
+            )
+            run = para.getElementsByTagName("w:r")[0]
+            doc._document_editor.replace_node(run, runs_xml)
+
+            target = "".join(segments)
+            assert doc.count_matches(target) == 1
+            assert doc.find_text(target) is not None
+
+            comment_id = doc.add_comment(target, "issue-14 repro")
+            assert isinstance(comment_id, int)
+        finally:
+            doc.close()
