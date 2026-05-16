@@ -531,3 +531,34 @@ class TestBatchEditRollback:
         paragraphs_after = editor.dom.getElementsByTagName("w:p")
         assert paragraphs_after
         assert all(hasattr(p, "parse_position") for p in paragraphs_after)
+
+    def test_rollback_failure_surfaces_original_error(self, multi_para_doc, monkeypatch):
+        """If the rollback re-parse itself fails, the original edit error must
+        still propagate — not the rollback failure."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        editor = doc._document_editor
+
+        def boom(_xml_bytes):
+            raise RuntimeError("simulated rollback failure")
+
+        monkeypatch.setattr(editor, "_reload_dom_from_bytes", boom)
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 2",
+                replace_with="x",
+                paragraph=refs[1].split("|")[0],
+            ),
+            EditOperation(
+                action="replace",
+                find="MISSING",
+                replace_with="x",
+                paragraph=refs[5].split("|")[0],
+            ),
+        ]
+
+        # Original edit error wins over the rollback failure.
+        with pytest.raises(TextNotFoundError):
+            doc.batch_edit(ops)
