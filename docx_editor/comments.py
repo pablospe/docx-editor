@@ -258,10 +258,10 @@ class CommentManager:
         self._rebuild_run_with_markers(
             end_run,
             None,
-            None,
+            0,
             end_node,
             end_offset,
-            None,
+            "",
             end_marker,
         )
         self._rebuild_run_with_markers(
@@ -269,27 +269,28 @@ class CommentManager:
             start_node,
             start_offset,
             None,
-            None,
+            0,
             start_marker,
-            None,
+            "",
         )
 
     def _rebuild_run_with_markers(
         self,
         run: Element,
         start_node,
-        start_offset: int | None,
+        start_offset: int,
         end_node,
-        end_offset: int | None,
-        start_marker: str | None,
-        end_marker: str | None,
+        end_offset: int,
+        start_marker: str,
+        end_marker: str,
     ) -> None:
         """Rebuild ``run``'s XML, splitting ``w:t`` children to insert markers.
 
         ``start_marker`` / ``end_marker`` are inserted right before the
         character at ``start_offset`` of ``start_node`` and right after the
-        character at ``end_offset`` of ``end_node`` respectively. Pass ``None``
-        for an end whose marker lives in a different run.
+        character at ``end_offset`` of ``end_node`` respectively. Pass an
+        empty string (and any int offset, e.g. ``0``) when the corresponding
+        marker lives in a different run.
 
         Iterates *direct* children of ``run`` (not descendants) so non-``w:t``
         content like ``<w:tab/>``, ``<w:br/>``, ``<w:drawing/>``, and field
@@ -313,8 +314,8 @@ class CommentManager:
 
             wt = child
             wt_text = get_text_node_data(wt)
-            is_start_here = start_marker is not None and wt is start_node
-            is_end_here = end_marker is not None and wt is end_node
+            is_start_here = bool(start_marker) and wt is start_node
+            is_end_here = bool(end_marker) and wt is end_node
 
             if not is_start_here and not is_end_here:
                 if wt_text:
