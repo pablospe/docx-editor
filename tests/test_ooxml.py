@@ -1,5 +1,7 @@
 """Tests for ooxml pack and unpack functions."""
 
+import stat
+import sys
 import zipfile
 
 import pytest
@@ -7,6 +9,13 @@ import pytest
 from docx_editor.exceptions import DocumentNotFoundError, InvalidDocumentError
 from docx_editor.ooxml.pack import pack_document
 from docx_editor.ooxml.unpack import unpack_document
+
+
+def _build_zip(path, entries):
+    """Build a ZIP at path from a list of (name_or_zipinfo, data_bytes) tuples."""
+    with zipfile.ZipFile(path, "w") as zf:
+        for name_or_info, data in entries:
+            zf.writestr(name_or_info, data)
 
 
 class TestUnpack:
@@ -32,6 +41,88 @@ class TestUnpack:
         assert isinstance(rsid, str)
         assert len(rsid) == 8
         assert all(c in "0123456789ABCDEF" for c in rsid)
+
+    def test_unpack_rejects_path_traversal(self, temp_dir):
+        """Reject ZIP entries containing '..' segments before any extraction."""
+        bad_zip = temp_dir / "bad.docx"
+        _build_zip(
+            bad_zip,
+            [
+                ("safe.txt", b"safe"),
+                ("../evil.txt", b"pwned"),
+            ],
+        )
+        output = temp_dir / "output"
+        with pytest.raises(InvalidDocumentError, match="Unsafe ZIP entry"):
+            unpack_document(bad_zip, output)
+
+        # Nothing should have leaked outside output_dir.
+        assert not (temp_dir / "evil.txt").exists()
+
+    def test_unpack_rejects_absolute_path(self, temp_dir):
+        """Reject ZIP entries with absolute paths."""
+        bad_zip = temp_dir / "bad.docx"
+        _build_zip(
+            bad_zip,
+            [
+                ("safe.txt", b"safe"),
+                ("/tmp/evil.txt", b"pwned"),
+            ],
+        )
+        output = temp_dir / "output"
+        with pytest.raises(InvalidDocumentError, match="Unsafe ZIP entry"):
+            unpack_document(bad_zip, output)
+
+    def test_unpack_rejects_symlink_entry(self, temp_dir):
+        """Reject Unix symlink ZIP entries (create_system==3, mode S_IFLNK)."""
+        bad_zip = temp_dir / "bad.docx"
+        link_info = zipfile.ZipInfo("evil_link")
+        link_info.create_system = 3  # Unix
+        link_info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        _build_zip(
+            bad_zip,
+            [
+                ("safe.txt", b"safe"),
+                (link_info, b"/etc/passwd"),
+            ],
+        )
+        output = temp_dir / "output"
+        with pytest.raises(InvalidDocumentError, match="Symlink ZIP entry"):
+            unpack_document(bad_zip, output)
+
+        # Validation must happen before extraction — no symlink left behind.
+        assert not (output / "evil_link").exists()
+        assert not (output / "evil_link").is_symlink()
+
+    def test_unpack_rejects_dotdot_with_trailing_space(self, temp_dir):
+        """Reject '.. ' (Windows strips trailing space → '..' parent traversal)."""
+        bad_zip = temp_dir / "bad.docx"
+        _build_zip(bad_zip, [("safe.txt", b"safe"), (".. /evil.txt", b"pwned")])
+        with pytest.raises(InvalidDocumentError, match="Unsafe ZIP entry"):
+            unpack_document(bad_zip, temp_dir / "output")
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks require elevation on Windows")
+    def test_unpack_rejects_symlinked_output_dir(self, temp_dir, simple_docx):
+        """Refuse to unpack into an output_dir that is itself a symlink."""
+        real = temp_dir / "real"
+        real.mkdir()
+        linked = temp_dir / "linked"
+        linked.symlink_to(real, target_is_directory=True)
+
+        with pytest.raises(InvalidDocumentError, match="Output directory is a symlink"):
+            unpack_document(simple_docx, linked)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks require elevation on Windows")
+    def test_unpack_rejects_preexisting_symlink_inside_output_dir(self, temp_dir, simple_docx):
+        """Refuse to extract when output_dir already contains a symlink."""
+        output = temp_dir / "output"
+        output.mkdir()
+        external = temp_dir / "external"
+        external.mkdir()
+        (output / "word").symlink_to(external, target_is_directory=True)
+
+        with pytest.raises(InvalidDocumentError, match="Symlink inside output directory"):
+            unpack_document(simple_docx, output)
 
 
 class TestPack:
@@ -123,6 +214,60 @@ class TestPack:
         with zipfile.ZipFile(output_path, "r") as zf:
             for info in zf.infolist():
                 assert info.date_time == (1980, 1, 1, 0, 0, 0)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks require elevation on Windows")
+    def test_pack_skips_symlink_files(self, simple_docx, temp_dir):
+        """File symlinks in the workspace must not be packed (would leak host content)."""
+        unpacked = temp_dir / "unpacked"
+        unpack_document(simple_docx, unpacked)
+
+        # Create an external secret and replace word/document.xml with a symlink to it.
+        # Packing the workspace must NOT include the symlink (we'd rather break the doc
+        # than leak external content).
+        secret = temp_dir / "secret.txt"
+        secret.write_text("OUTSIDE")
+
+        doc_xml = unpacked / "word" / "document.xml"
+        doc_xml.unlink()
+        doc_xml.symlink_to(secret)
+
+        output_path = temp_dir / "output.docx"
+        pack_document(unpacked, output_path)
+
+        with zipfile.ZipFile(output_path, "r") as zf:
+            names = zf.namelist()
+        assert "word/document.xml" not in names
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks require elevation on Windows")
+    def test_pack_skips_symlink_directories(self, simple_docx, temp_dir):
+        """Directory symlinks must not be followed during pack."""
+        unpacked = temp_dir / "unpacked"
+        unpack_document(simple_docx, unpacked)
+
+        # Create an external directory with a recognizable file and symlink it in.
+        external = temp_dir / "external"
+        external.mkdir()
+        (external / "leaked.txt").write_text("LEAKED")
+        (unpacked / "leak").symlink_to(external, target_is_directory=True)
+
+        output_path = temp_dir / "output.docx"
+        pack_document(unpacked, output_path)
+
+        with zipfile.ZipFile(output_path, "r") as zf:
+            names = zf.namelist()
+        assert not any(n.startswith("leak/") for n in names)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks require elevation on Windows")
+    def test_pack_rejects_symlinked_input_dir(self, simple_docx, temp_dir):
+        """Refuse to pack when input_dir itself is a symlink to an external dir."""
+        unpacked = temp_dir / "unpacked"
+        unpack_document(simple_docx, unpacked)
+
+        link = temp_dir / "link"
+        link.symlink_to(unpacked, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="symlink"):
+            pack_document(link, temp_dir / "out.docx")
 
 
 def _read_doc_xml(docx_path):
