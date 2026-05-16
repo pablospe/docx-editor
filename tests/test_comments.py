@@ -2,7 +2,12 @@
 
 import pytest
 
-from docx_editor import CommentError, Document, TextNotFoundError
+from docx_editor import (
+    CommentError,
+    Document,
+    HashMismatchError,
+    TextNotFoundError,
+)
 
 
 class TestAddComment:
@@ -903,99 +908,14 @@ class TestAddCommentParentTraversal:
     """Tests for parent traversal in add_comment."""
 
     def test_add_comment_traverses_to_find_run(self, clean_workspace):
-        """Test add_comment when w:t parent is not immediately w:r.
-
-        This tests line 115 - traversing up to find w:r.
-        """
+        """Test add_comment when w:t parent is not immediately w:r."""
         doc = Document.open(clean_workspace)
 
-        # This is a normal case - the anchor should be found and
-        # the parent traversal logic should work
         try:
             comment_id = doc.add_comment("fox", "Test comment")
             assert isinstance(comment_id, int)
         except TextNotFoundError:
             pytest.skip("Anchor text not found in document")
-
-        doc.close()
-
-    def test_add_comment_no_parent_run_raises_error(self, clean_workspace):
-        """Test add_comment raises CommentError when no parent run found.
-
-        This tests line 122.
-        """
-        from unittest.mock import MagicMock, patch
-
-        doc = Document.open(clean_workspace)
-
-        # Mock get_node to return an element without proper parent hierarchy
-        mock_elem = MagicMock()
-        mock_elem.parentNode = None  # No parent
-
-        with patch.object(doc._document_editor, "get_node", return_value=mock_elem):
-            with pytest.raises(CommentError, match="Could not find parent"):
-                doc.add_comment("fox", "Test comment")
-
-        doc.close()
-
-    def test_add_comment_no_parent_para_raises_error(self, clean_workspace):
-        """Test add_comment raises CommentError when no parent paragraph found.
-
-        This tests line 122 - when run exists but para doesn't.
-        """
-        from unittest.mock import MagicMock, patch
-
-        doc = Document.open(clean_workspace)
-
-        # Mock get_node to return an element with run but no paragraph parent
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None  # No paragraph parent
-        mock_elem.parentNode = mock_run
-
-        with patch.object(doc._document_editor, "get_node", return_value=mock_elem):
-            with pytest.raises(CommentError, match="Could not find parent"):
-                doc.add_comment("fox", "Test comment")
-
-        doc.close()
-
-    def test_add_comment_intermediate_parent_traversal(self, clean_workspace):
-        """Test add_comment traverses through intermediate elements to find w:r.
-
-        This tests line 115 explicitly - the while loop that traverses up.
-        """
-        from unittest.mock import MagicMock, patch
-
-        doc = Document.open(clean_workspace)
-
-        # Mock get_node to return an element with an intermediate node before w:r
-        mock_elem = MagicMock()
-        mock_intermediate = MagicMock()
-        mock_run = MagicMock()
-        mock_para = MagicMock()
-
-        mock_intermediate.nodeName = "w:someOtherElement"  # Not w:r
-        mock_intermediate.parentNode = mock_run
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = mock_para
-
-        mock_para.nodeName = "w:p"
-        mock_para.parentNode = None
-
-        mock_elem.parentNode = mock_intermediate  # Not directly w:r
-
-        # Mock insert_before and append_to to do nothing
-        with patch.object(doc._document_editor, "get_node", return_value=mock_elem):
-            with patch.object(doc._document_editor, "insert_before"):
-                with patch.object(doc._document_editor, "append_to"):
-                    with patch.object(doc._comment_manager, "_add_to_comments_xml"):
-                        with patch.object(doc._comment_manager, "_add_to_comments_extended_xml"):
-                            with patch.object(doc._comment_manager, "_add_to_comments_ids_xml"):
-                                with patch.object(doc._comment_manager, "_add_to_comments_extensible_xml"):
-                                    comment_id = doc.add_comment("fox", "Test comment")
-                                    assert isinstance(comment_id, int)
 
         doc.close()
 
@@ -1030,3 +950,256 @@ class TestSplitTextNodeComment:
         texts = [c.text for c in comments]
         assert "Hello World" in texts
         doc.close()
+
+
+def _split_first_run_text(paragraph, split_at: int) -> None:
+    """Split the first ``<w:r>``'s single ``<w:t>`` text into two runs.
+
+    Useful for synthesizing a cross-run anchor: callers locate a paragraph
+    whose run contains the anchor entirely in one ``w:t``, then call this to
+    rebuild it as ``<w:r><w:t>head</w:t></w:r><w:r><w:t>tail</w:t></w:r>``.
+    """
+    run = paragraph.getElementsByTagName("w:r")[0]
+    wt = run.getElementsByTagName("w:t")[0]
+    full = "".join(c.data for c in wt.childNodes if c.nodeType == c.TEXT_NODE)
+    head, tail = full[:split_at], full[split_at:]
+    owner = paragraph.ownerDocument
+
+    new_run_2 = owner.createElement("w:r")
+    new_t_2 = owner.createElement("w:t")
+    new_t_2.setAttribute("xml:space", "preserve")
+    new_t_2.appendChild(owner.createTextNode(tail))
+    new_run_2.appendChild(new_t_2)
+
+    while wt.firstChild:
+        wt.removeChild(wt.firstChild)
+    wt.appendChild(owner.createTextNode(head))
+    wt.setAttribute("xml:space", "preserve")
+
+    parent = run.parentNode
+    next_sib = run.nextSibling
+    if next_sib:
+        parent.insertBefore(new_run_2, next_sib)
+    else:
+        parent.appendChild(new_run_2)
+
+
+def _find_paragraph_with_text(doc, text: str):
+    """Return the ``<w:p>`` element whose visible text contains ``text``."""
+    from docx_editor.xml_editor import build_text_map
+
+    for p in doc._document_editor.dom.getElementsByTagName("w:p"):
+        if text in build_text_map(p).text:
+            return p
+    raise AssertionError(f"No paragraph contains {text!r}")
+
+
+def _paragraph_ref(doc, text: str) -> str:
+    """Find ``P{i}#{hash}`` for the paragraph containing ``text``."""
+    for entry in doc.list_paragraphs():
+        if text in entry:
+            return entry.split("|", 1)[0]
+    raise AssertionError(f"No paragraph contains {text!r}")
+
+
+class TestCommentCrossBoundaryAnchor:
+    """Issue #5: ``add_comment`` must locate anchors that span run boundaries.
+
+    Mirrors the asymmetry fix between ``count_matches`` (text-map search) and
+    the old ``get_node(contains=...)`` lookup, which only saw text inside a
+    single ``<w:t>``.
+    """
+
+    def test_anchor_split_across_two_runs(self, clean_workspace):
+        """Regression: anchor spanning two ``<w:t>`` is found and commented."""
+        doc = Document.open(clean_workspace)
+        try:
+            para = _find_paragraph_with_text(doc, "brown fox")
+            full = "The quick brown fox jumps over the lazy dog."
+            _split_first_run_text(para, full.index("brown") + 2)  # split inside "brown"
+
+            assert doc.count_matches("brown fox") >= 1
+            comment_id = doc.add_comment("brown fox", "spans runs")
+            assert isinstance(comment_id, int)
+
+            # Marker pair must be present in document.xml
+            starts = doc._document_editor.dom.getElementsByTagName("w:commentRangeStart")
+            ends = doc._document_editor.dom.getElementsByTagName("w:commentRangeEnd")
+            assert any(s.getAttribute("w:id") == str(comment_id) for s in starts)
+            assert any(e.getAttribute("w:id") == str(comment_id) for e in ends)
+        finally:
+            doc.close()
+
+    def test_anchor_across_formatting_boundary(self, clean_workspace):
+        """Anchor splits across two runs with different ``rPr`` (bold + plain)."""
+        doc = Document.open(clean_workspace)
+        try:
+            para = _find_paragraph_with_text(doc, "quick brown")
+            # Build a paragraph with a bold "quick" run + plain " brown" run by
+            # replacing the existing single run.
+            run = para.getElementsByTagName("w:r")[0]
+            new_xml = (
+                '<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">quick</w:t></w:r>'
+                '<w:r><w:t xml:space="preserve"> brown fox jumps over the lazy dog.</w:t></w:r>'
+            )
+            doc._document_editor.replace_node(run, new_xml)
+
+            assert doc.count_matches("quick brown") == 1
+            comment_id = doc.add_comment("quick brown", "fmt boundary")
+            assert isinstance(comment_id, int)
+        finally:
+            doc.close()
+
+    def test_paragraph_scoped_lookup_finds_anchor(self, clean_workspace):
+        """``paragraph=`` scope restricts the search and accepts the anchor."""
+        doc = Document.open(clean_workspace)
+        try:
+            ref = _paragraph_ref(doc, "brown fox")
+            comment_id = doc.add_comment("fox", "scoped", paragraph=ref)
+            assert isinstance(comment_id, int)
+        finally:
+            doc.close()
+
+    def test_paragraph_scoped_lookup_anchor_not_in_paragraph(self, clean_workspace):
+        """Scoped search raises ``TextNotFoundError`` when anchor lives elsewhere."""
+        doc = Document.open(clean_workspace)
+        try:
+            other_ref = _paragraph_ref(doc, "sample document")
+            # "fox" exists in a different paragraph
+            with pytest.raises(TextNotFoundError) as exc_info:
+                doc.add_comment("fox", "wrong paragraph", paragraph=other_ref)
+            assert exc_info.value.paragraph_ref == other_ref
+        finally:
+            doc.close()
+
+    def test_stale_paragraph_hash_raises(self, clean_workspace):
+        """Passing a hash that no longer matches raises ``HashMismatchError``."""
+        doc = Document.open(clean_workspace)
+        try:
+            ref = _paragraph_ref(doc, "brown fox")
+            # Construct a stale ref: keep the index, mangle the hash
+            idx_part = ref.split("#")[0]
+            stale = f"{idx_part}#0000"
+            with pytest.raises(HashMismatchError):
+                doc.add_comment("fox", "stale", paragraph=stale)
+        finally:
+            doc.close()
+
+    def test_occurrence_index_selects_match(self, clean_workspace):
+        """``occurrence=N`` picks the Nth match within the scoped paragraph."""
+        doc = Document.open(clean_workspace)
+        try:
+            # Synthesize a paragraph with two copies of "abc"
+            para = _find_paragraph_with_text(doc, "brown fox")
+            run = para.getElementsByTagName("w:r")[0]
+            doc._document_editor.replace_node(
+                run,
+                '<w:r><w:t xml:space="preserve">abc middle abc tail</w:t></w:r>',
+            )
+            # Recompute ref since hash changed
+            ref = _paragraph_ref(doc, "abc middle")
+
+            id0 = doc.add_comment("abc", "first", paragraph=ref, occurrence=0)
+            # After adding a comment, the paragraph hash changes — recompute
+            ref2 = _paragraph_ref(doc, "abc middle")
+            id1 = doc.add_comment("abc", "second", paragraph=ref2, occurrence=1)
+            assert id0 != id1
+
+            # Third occurrence does not exist
+            ref3 = _paragraph_ref(doc, "abc middle")
+            with pytest.raises(TextNotFoundError) as exc_info:
+                doc.add_comment("abc", "missing", paragraph=ref3, occurrence=2)
+            assert exc_info.value.occurrence == 2
+            assert exc_info.value.total_occurrences == 2
+        finally:
+            doc.close()
+
+    def test_marker_placement_is_character_precise(self, clean_workspace):
+        """Markers bracket exactly the anchor text (no oversized range)."""
+        doc = Document.open(clean_workspace)
+        try:
+            comment_id = doc.add_comment("brown", "tight range")
+
+            para = _find_paragraph_with_text(doc, "quick")
+            # Collect children of w:p in document order; between
+            # commentRangeStart and commentRangeEnd, visible text must equal
+            # the anchor.
+            in_range = False
+            collected: list[str] = []
+            for child in para.childNodes:
+                if child.nodeType != child.ELEMENT_NODE:
+                    continue
+                if child.tagName == "w:commentRangeStart" and child.getAttribute("w:id") == str(comment_id):
+                    in_range = True
+                    continue
+                if child.tagName == "w:commentRangeEnd" and child.getAttribute("w:id") == str(comment_id):
+                    in_range = False
+                    continue
+                if in_range and child.tagName == "w:r":
+                    for wt in child.getElementsByTagName("w:t"):
+                        collected.append("".join(c.data for c in wt.childNodes if c.nodeType == c.TEXT_NODE))
+            assert "".join(collected) == "brown"
+        finally:
+            doc.close()
+
+    def test_anchor_inside_tracked_insertion(self, clean_workspace):
+        """Anchor text inside a ``<w:ins>`` is found and bracketed."""
+        doc = Document.open(clean_workspace)
+        try:
+            # Wrap the first run of a paragraph in <w:ins>
+            para = _find_paragraph_with_text(doc, "sample document")
+            run = para.getElementsByTagName("w:r")[0]
+            new_xml = (
+                '<w:ins w:id="999" w:author="Test" w:date="2026-01-01T00:00:00Z">'
+                '<w:r><w:t xml:space="preserve">This is a sample document for testing the editing features.</w:t></w:r>'
+                "</w:ins>"
+            )
+            doc._document_editor.replace_node(run, new_xml)
+
+            comment_id = doc.add_comment("sample", "anchor inside w:ins")
+            # Verify markers exist
+            starts = doc._document_editor.dom.getElementsByTagName("w:commentRangeStart")
+            ends = doc._document_editor.dom.getElementsByTagName("w:commentRangeEnd")
+            assert any(s.getAttribute("w:id") == str(comment_id) for s in starts)
+            assert any(e.getAttribute("w:id") == str(comment_id) for e in ends)
+        finally:
+            doc.close()
+
+    def test_non_text_children_preserved(self, clean_workspace):
+        """``<w:tab/>`` / ``<w:br/>`` in the anchor's run survive the split.
+
+        Regression guard: an earlier implementation iterated
+        ``getElementsByTagName("w:t")`` and silently dropped sibling tabs,
+        breaks, and drawings when rebuilding the run.
+        """
+        doc = Document.open(clean_workspace)
+        try:
+            para = _find_paragraph_with_text(doc, "brown fox")
+            run = para.getElementsByTagName("w:r")[0]
+            # Run with interleaved tab + break alongside the matched text
+            doc._document_editor.replace_node(
+                run,
+                '<w:r><w:t xml:space="preserve">The </w:t><w:tab/>'
+                '<w:t xml:space="preserve">quick brown fox</w:t><w:br/>'
+                '<w:t xml:space="preserve"> jumps</w:t></w:r>',
+            )
+
+            comment_id = doc.add_comment("brown", "preserves siblings")
+            assert isinstance(comment_id, int)
+
+            # The tab and break must still be in the paragraph after rebuild
+            tabs = para.getElementsByTagName("w:tab")
+            brs = para.getElementsByTagName("w:br")
+            assert len(tabs) == 1
+            assert len(brs) == 1
+        finally:
+            doc.close()
+
+    def test_empty_anchor_text_raises(self, clean_workspace):
+        """``add_comment("")`` raises ``CommentError`` rather than IndexError."""
+        doc = Document.open(clean_workspace)
+        try:
+            with pytest.raises(CommentError):
+                doc.add_comment("", "no anchor")
+        finally:
+            doc.close()

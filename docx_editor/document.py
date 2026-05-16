@@ -344,21 +344,37 @@ class Document:
 
     # ==================== Comments API ====================
 
-    def add_comment(self, anchor_text: str, comment: str) -> int:
+    def add_comment(
+        self,
+        anchor_text: str,
+        comment: str,
+        *,
+        paragraph: str | None = None,
+        occurrence: int = 0,
+    ) -> int:
         """Add a comment anchored to specific text.
 
+        Anchors are located with the same text-map search used by
+        :meth:`count_matches` and the tracked-change edit methods, so anchors
+        that span ``w:t`` run boundaries (formatting changes, smart-quote
+        splits, ``w:ins`` wrappers) are found.
+
         Args:
-            anchor_text: Text to attach the comment to
-            comment: The comment content
+            anchor_text: Text to attach the comment to.
+            comment: The comment content.
+            paragraph: Optional paragraph reference (e.g., ``"P3#a7b2"``) to
+                scope the search. ``None`` searches the whole document.
+            occurrence: Which occurrence to anchor to (0 = first).
 
         Returns:
-            The comment ID
+            The comment ID.
 
         Example:
             doc.add_comment("Section 5", "Please review this section")
+            doc.add_comment("foo", "Note", paragraph="P3#a7b2", occurrence=1)
         """
         self._ensure_open()
-        return self._comment_manager.add_comment(anchor_text, comment)
+        return self._comment_manager.add_comment(anchor_text, comment, paragraph=paragraph, occurrence=occurrence)
 
     def reply_to_comment(self, comment_id: int, reply: str) -> int:
         """Add a reply to an existing comment.

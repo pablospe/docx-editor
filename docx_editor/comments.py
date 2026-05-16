@@ -8,9 +8,24 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from xml.dom.minidom import Element
 
-from .exceptions import CommentError, TextNotFoundError
-from .xml_editor import DocxXMLEditor, _generate_hex_id, get_text_node_data
+from .exceptions import (
+    CommentError,
+    HashMismatchError,
+    ParagraphIndexError,
+    TextNotFoundError,
+)
+from .xml_editor import (
+    DocxXMLEditor,
+    ParagraphRef,
+    TextMapMatch,
+    _generate_hex_id,
+    build_text_map,
+    compute_paragraph_hash,
+    find_in_text_map,
+    get_text_node_data,
+)
 
 # Path to template files
 TEMPLATE_DIR = Path(__file__).parent / "ooxml" / "templates"
@@ -90,45 +105,48 @@ class CommentManager:
             )
         return self._editors[path_str]
 
-    def add_comment(self, anchor_text: str, comment_text: str) -> int:
+    def add_comment(
+        self,
+        anchor_text: str,
+        comment_text: str,
+        *,
+        paragraph: str | None = None,
+        occurrence: int = 0,
+    ) -> int:
         """Add a comment anchored to specific text.
 
+        The anchor lookup uses the same text-map search as ``count_matches`` and
+        the tracked-change edit methods, so anchors that span ``w:t`` run
+        boundaries (formatting changes, smart-quote splits, ``w:ins`` wrappers)
+        are found.
+
         Args:
-            anchor_text: Text to attach the comment to
-            comment_text: The comment content
+            anchor_text: Text to attach the comment to.
+            comment_text: The comment content.
+            paragraph: Optional paragraph reference (e.g., ``"P3#a7b2"``) to
+                scope the search. ``None`` searches the whole document.
+            occurrence: Which occurrence to anchor (0 = first).
 
         Returns:
-            The comment ID
+            The comment ID.
 
         Raises:
-            TextNotFoundError: If the anchor text is not found
+            TextNotFoundError: If the anchor text is not found.
+            HashMismatchError: If a paragraph reference's hash is stale.
+            ParagraphIndexError: If a paragraph reference's index is out of range.
+            CommentError: If ``anchor_text`` is empty.
         """
-        # Find the anchor element
-        try:
-            elem = self.document_editor.get_node(tag="w:t", contains=anchor_text)
-        except Exception:
-            raise TextNotFoundError(anchor_text) from None
-
-        # Get the parent run and paragraph
-        run = elem.parentNode
-        while run and run.nodeName != "w:r":
-            run = run.parentNode
-
-        para = run
-        while para and para.nodeName != "w:p":
-            para = para.parentNode
-
-        if not run or not para:
-            raise CommentError("Could not find parent run/paragraph")
+        if not anchor_text:
+            raise CommentError("anchor_text must not be empty")
+        _, match = self._find_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id
         para_id = _generate_hex_id()
         durable_id = _generate_hex_id()
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        # Add comment range markers to document.xml
-        self.document_editor.insert_before(run, self._comment_range_start_xml(comment_id))
-        self.document_editor.append_to(para, self._comment_range_end_xml(comment_id))
+        # Place range markers at character-precise positions in document.xml
+        self._place_markers(match, comment_id)
 
         # Add to all comment XML files
         self._add_to_comments_xml(comment_id, para_id, comment_text, timestamp)
@@ -141,6 +159,198 @@ class CommentManager:
         self.next_comment_id += 1
 
         return comment_id
+
+    def _find_anchor(self, anchor_text: str, paragraph: str | None, occurrence: int) -> tuple[Element, TextMapMatch]:
+        """Locate ``anchor_text`` and return its paragraph + text-map match.
+
+        Mirrors ``RevisionManager._find_in_paragraph`` /
+        ``_find_across_boundaries`` so comment anchors and edit anchors find
+        the same text.
+        """
+        if paragraph is not None:
+            ref = ParagraphRef.parse(paragraph)
+            paragraphs = self.document_editor.dom.getElementsByTagName("w:p")
+            if ref.index < 1 or ref.index > len(paragraphs):
+                raise ParagraphIndexError(ref.index, len(paragraphs))
+            p = paragraphs[ref.index - 1]
+            actual = compute_paragraph_hash(p)
+            if actual != ref.hash:
+                tm = build_text_map(p)
+                preview = tm.text[:80]
+                if len(tm.text) > 80:
+                    preview += "..."
+                raise HashMismatchError(ref.index, ref.hash, actual, preview)
+            text_map = build_text_map(p)
+            match = find_in_text_map(text_map, anchor_text, occurrence)
+            if match is not None:
+                return p, match
+            if occurrence > 0:
+                total = 0
+                while find_in_text_map(text_map, anchor_text, total) is not None:
+                    total += 1
+                if total > 0:
+                    raise TextNotFoundError(
+                        anchor_text,
+                        paragraph_ref=paragraph,
+                        paragraph_preview=text_map.text,
+                        occurrence=occurrence,
+                        total_occurrences=total,
+                    )
+            raise TextNotFoundError(
+                anchor_text,
+                paragraph_ref=paragraph,
+                paragraph_preview=text_map.text,
+            )
+
+        # Document-wide search
+        current = 0
+        for p in self.document_editor.dom.getElementsByTagName("w:p"):
+            text_map = build_text_map(p)
+            local = 0
+            while True:
+                m = find_in_text_map(text_map, anchor_text, local)
+                if m is None:
+                    break
+                if current == occurrence:
+                    return p, m
+                current += 1
+                local += 1
+        if occurrence > 0 and current > 0:
+            raise TextNotFoundError(
+                anchor_text,
+                occurrence=occurrence,
+                total_occurrences=current,
+            )
+        raise TextNotFoundError(anchor_text)
+
+    def _place_markers(self, match: TextMapMatch, comment_id: int) -> None:
+        """Insert range start/end markers at the precise match boundaries."""
+        start_pos = match.positions[0]
+        end_pos = match.positions[-1]
+        start_node = start_pos.node
+        start_offset = start_pos.offset_in_node
+        end_node = end_pos.node
+        end_offset = end_pos.offset_in_node
+
+        start_run = _find_ancestor_run(start_node)
+        end_run = _find_ancestor_run(end_node)
+        if start_run is None or end_run is None:
+            raise CommentError("Could not find parent run for comment anchor")
+
+        start_marker = self._comment_range_start_xml(comment_id)
+        end_marker = self._comment_range_end_xml(comment_id)
+
+        if start_run is end_run:
+            self._rebuild_run_with_markers(
+                start_run,
+                start_node,
+                start_offset,
+                end_node,
+                end_offset,
+                start_marker,
+                end_marker,
+            )
+            return
+
+        # Independent runs — place END first (after start_run in document order),
+        # then START. Either order works since the two runs are siblings, but
+        # this matches the plan and reads naturally.
+        self._rebuild_run_with_markers(
+            end_run,
+            None,
+            None,
+            end_node,
+            end_offset,
+            None,
+            end_marker,
+        )
+        self._rebuild_run_with_markers(
+            start_run,
+            start_node,
+            start_offset,
+            None,
+            None,
+            start_marker,
+            None,
+        )
+
+    def _rebuild_run_with_markers(
+        self,
+        run: Element,
+        start_node,
+        start_offset: int | None,
+        end_node,
+        end_offset: int | None,
+        start_marker: str | None,
+        end_marker: str | None,
+    ) -> None:
+        """Rebuild ``run``'s XML, splitting ``w:t`` children to insert markers.
+
+        ``start_marker`` / ``end_marker`` are inserted right before the
+        character at ``start_offset`` of ``start_node`` and right after the
+        character at ``end_offset`` of ``end_node`` respectively. Pass ``None``
+        for an end whose marker lives in a different run.
+
+        Iterates *direct* children of ``run`` (not descendants) so non-``w:t``
+        content like ``<w:tab/>``, ``<w:br/>``, ``<w:drawing/>``, and field
+        markers is preserved, and so ``w:t`` nodes nested inside a drawing's
+        text box are left untouched.
+        """
+        rPr_xml = _get_rPr_xml(run)
+        xml_parts: list[str] = []
+
+        for child in run.childNodes:
+            if child.nodeType != child.ELEMENT_NODE:
+                continue
+            tag = getattr(child, "tagName", "")
+            if tag == "w:rPr":
+                continue  # Already captured by rPr_xml
+            if tag != "w:t":
+                # Non-text content (w:tab, w:br, w:drawing, …) — preserve in
+                # its own run so document order is maintained.
+                xml_parts.append(f"<w:r>{rPr_xml}{child.toxml()}</w:r>")
+                continue
+
+            wt = child
+            wt_text = get_text_node_data(wt)
+            is_start_here = start_marker is not None and wt is start_node
+            is_end_here = end_marker is not None and wt is end_node
+
+            if not is_start_here and not is_end_here:
+                if wt_text:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                continue
+
+            if is_start_here and is_end_here:
+                before = wt_text[:start_offset]
+                matched = wt_text[start_offset : end_offset + 1]
+                after = wt_text[end_offset + 1 :]
+                if before:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                xml_parts.append(start_marker)
+                if matched:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(matched)}</w:t></w:r>")
+                xml_parts.append(end_marker)
+                if after:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+            elif is_start_here:
+                before = wt_text[:start_offset]
+                after = wt_text[start_offset:]
+                if before:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                xml_parts.append(start_marker)
+                if after:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+            else:  # is_end_here only
+                before = wt_text[: end_offset + 1]
+                after = wt_text[end_offset + 1 :]
+                if before:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                xml_parts.append(end_marker)
+                if after:
+                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+
+        self.document_editor.replace_node(run, "".join(xml_parts))
 
     def reply_to_comment(self, parent_comment_id: int, reply_text: str) -> int:
         """Add a reply to an existing comment.
@@ -497,3 +707,37 @@ class CommentManager:
   <w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>
   <w:commentReference w:id="{comment_id}"/>
 </w:r>"""
+
+
+def _find_ancestor_run(node) -> Element | None:
+    """Walk parents until reaching a ``w:r`` element, or ``None``."""
+    parent = node.parentNode
+    while parent:
+        if parent.nodeType == parent.ELEMENT_NODE and parent.tagName == "w:r":
+            return parent
+        parent = parent.parentNode
+    return None
+
+
+def _get_rPr_xml(run) -> str:
+    """Serialize ``run``'s direct ``w:rPr`` child, or empty string.
+
+    Iterates direct children so a nested ``w:rPr`` deep inside a ``w:drawing``
+    text-box descendant is not picked up by mistake.
+    """
+    for child in run.childNodes:
+        if child.nodeType == child.ELEMENT_NODE and getattr(child, "tagName", "") == "w:rPr":
+            return child.toxml()
+    return ""
+
+
+def _escape_xml(text: str) -> str:
+    """Escape text for safe XML inclusion."""
+    return (
+        text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
