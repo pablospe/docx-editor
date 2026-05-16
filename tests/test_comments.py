@@ -6,6 +6,7 @@ from docx_editor import (
     CommentError,
     Document,
     HashMismatchError,
+    ParagraphIndexError,
     TextNotFoundError,
 )
 
@@ -1216,12 +1217,17 @@ class TestCommentCrossBoundaryAnchor:
         try:
             para = _find_paragraph_with_text(doc, "brown fox")
             segments = [
-                "息税前", "利润率", "，", "息税前利润率", "=",
-                "息税前利润", "/", "营业收入", "×100%",
+                "息税前",
+                "利润率",
+                "，",
+                "息税前利润率",
+                "=",
+                "息税前利润",
+                "/",
+                "营业收入",
+                "×100%",
             ]
-            runs_xml = "".join(
-                f'<w:r><w:t xml:space="preserve">{seg}</w:t></w:r>' for seg in segments
-            )
+            runs_xml = "".join(f'<w:r><w:t xml:space="preserve">{seg}</w:t></w:r>' for seg in segments)
             run = para.getElementsByTagName("w:r")[0]
             doc._document_editor.replace_node(run, runs_xml)
 
@@ -1231,5 +1237,49 @@ class TestCommentCrossBoundaryAnchor:
 
             comment_id = doc.add_comment(target, "issue-14 repro")
             assert isinstance(comment_id, int)
+        finally:
+            doc.close()
+
+    def test_paragraph_index_out_of_range_raises(self, clean_workspace):
+        """``paragraph=`` with an out-of-range index raises ``ParagraphIndexError``."""
+        doc = Document.open(clean_workspace)
+        try:
+            with pytest.raises(ParagraphIndexError):
+                doc.add_comment("fox", "out of range", paragraph="P99#abcd")
+        finally:
+            doc.close()
+
+    def test_stale_hash_long_paragraph_truncates_preview(self, clean_workspace):
+        """``HashMismatchError.paragraph_preview`` truncates at 80 chars + '...'."""
+        doc = Document.open(clean_workspace)
+        try:
+            # Synthesize a >80-char paragraph so the truncation branch fires
+            para = _find_paragraph_with_text(doc, "brown fox")
+            run = para.getElementsByTagName("w:r")[0]
+            long_text = "a" * 100
+            doc._document_editor.replace_node(run, f"<w:r><w:t>{long_text}</w:t></w:r>")
+
+            ref = _paragraph_ref(doc, long_text[:20])
+            idx_part = ref.split("#")[0]
+            stale = f"{idx_part}#0000"
+
+            with pytest.raises(HashMismatchError) as exc_info:
+                doc.add_comment("aaa", "stale long", paragraph=stale)
+            assert exc_info.value.paragraph_preview.endswith("...")
+            # 80 chars of body + "..."
+            assert len(exc_info.value.paragraph_preview) == 83
+        finally:
+            doc.close()
+
+    def test_orphan_wt_raises_comment_error(self, clean_workspace):
+        """``<w:t>`` without a ``<w:r>`` ancestor → ``CommentError``, not IndexError."""
+        doc = Document.open(clean_workspace)
+        try:
+            para = _find_paragraph_with_text(doc, "brown fox")
+            run = para.getElementsByTagName("w:r")[0]
+            # Bare w:t as direct child of w:p — _find_ancestor_run will return None
+            doc._document_editor.replace_node(run, '<w:t xml:space="preserve">orphan anchor text</w:t>')
+            with pytest.raises(CommentError):
+                doc.add_comment("orphan", "no run wrapper")
         finally:
             doc.close()
