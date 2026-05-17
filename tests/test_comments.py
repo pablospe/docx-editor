@@ -1283,3 +1283,38 @@ class TestCommentCrossBoundaryAnchor:
                 doc.add_comment("orphan", "no run wrapper")
         finally:
             doc.close()
+
+    def test_document_wide_occurrence_skips_earlier_matches(self, clean_workspace):
+        """Unscoped search with ``occurrence>0`` walks past earlier hits."""
+        doc = Document.open(clean_workspace)
+        try:
+            # "the" appears in multiple paragraphs of simple.docx
+            assert doc.count_matches("the") >= 2
+            comment_id = doc.add_comment("the", "second occurrence", occurrence=1)
+            assert isinstance(comment_id, int)
+        finally:
+            doc.close()
+
+    def test_document_wide_occurrence_out_of_range(self, clean_workspace):
+        """Unscoped search with ``occurrence`` past last match reports ``total_occurrences``."""
+        doc = Document.open(clean_workspace)
+        try:
+            total = doc.count_matches("fox")
+            with pytest.raises(TextNotFoundError) as exc_info:
+                doc.add_comment("fox", "out of range", occurrence=99)
+            assert exc_info.value.occurrence == 99
+            assert exc_info.value.total_occurrences == total
+        finally:
+            doc.close()
+
+    def test_scoped_occurrence_when_anchor_absent(self, clean_workspace):
+        """Scoped search with ``occurrence>0`` and zero matches raises plain ``TextNotFoundError``."""
+        doc = Document.open(clean_workspace)
+        try:
+            ref = _paragraph_ref(doc, "brown fox")
+            with pytest.raises(TextNotFoundError) as exc_info:
+                doc.add_comment("nonexistent", "x", paragraph=ref, occurrence=1)
+            # total_occurrences must NOT be set (the 'if total > 0' fall-through path)
+            assert exc_info.value.total_occurrences is None
+        finally:
+            doc.close()
