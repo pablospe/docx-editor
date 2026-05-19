@@ -209,6 +209,8 @@ class TestParagraphLocationStaleRefs:
             assert exc.value.total_paragraphs == n
 
     def test_malformed_ref_raises_value_error(self, gridspan_docx):
-        with Document.open(gridspan_docx) as doc:
-            with pytest.raises(ValueError):
-                doc.get_paragraph_location("not-a-ref")
+        with (
+            Document.open(gridspan_docx) as doc,
+            pytest.raises(ValueError, match="Invalid paragraph reference"),
+        ):
+            doc.get_paragraph_location("not-a-ref")
