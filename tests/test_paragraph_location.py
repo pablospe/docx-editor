@@ -389,3 +389,153 @@ class TestParagraphLocationSdtWrappers:
             assert loc_1.table == TableCell(index=1, row=1, col=1, depth=1)
             assert loc_2.table == TableCell(index=1, row=1, col=2, depth=1)
             assert loc_3.table == TableCell(index=1, row=1, col=3, depth=1)
+
+
+class TestParagraphLocationNestedRowSkip:
+    """Outer-table walker must skip rows / cells that belong to nested tables.
+
+    These exercise the ``continue`` branches in ``_row_index_in_table`` and
+    ``_logical_col_in_row``. Distinct from the nested-table tests above:
+    here the *outer* row count / *outer* col count must be correct in spite
+    of an interposed nested table.
+    """
+
+    @staticmethod
+    def _doc_with_nested_between_outer_rows() -> str:
+        """Outer table with 2 rows; the first row's cell contains a nested table.
+
+        Looking up a paragraph in row 2 of the outer table forces the walker
+        to visit (and skip) the nested table's row before reaching row 2.
+        """
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            "<w:tbl>"
+            # Row 1 — its only cell contains a nested table.
+            "<w:tr><w:tc>"
+            "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+            "</w:tc></w:tr>"
+            # Row 2 — the target.
+            "<w:tr><w:tc><w:p><w:r><w:t>Outer R2</w:t></w:r></w:p></w:tc></w:tr>"
+            "</w:tbl>"
+            "</w:body>"
+            "</w:document>"
+        )
+
+    @staticmethod
+    def _doc_with_nested_inside_first_cell() -> str:
+        """Single outer row whose first cell contains a nested table; second
+        cell is the target. Forces the column walker to skip a nested ``w:tc``.
+        """
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            "<w:tbl><w:tr>"
+            # Cell 1 contains an entire nested table.
+            "<w:tc>"
+            "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+            "</w:tc>"
+            # Cell 2 — target.
+            "<w:tc><w:p><w:r><w:t>Outer C2</w:t></w:r></w:p></w:tc>"
+            "</w:tr></w:tbl>"
+            "</w:body>"
+            "</w:document>"
+        )
+
+    def test_row_walker_skips_nested_rows(self, simple_docx, tmp_path):
+        dest = tmp_path / "nested-rows.docx"
+        _replace_document_xml(simple_docx, dest, self._doc_with_nested_between_outer_rows())
+        with Document.open(dest) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Outer R2"))
+            # Without the continue branch, the nested-table tr would be
+            # counted and "Outer R2" would land at row=3 (or raise).
+            assert loc.table == TableCell(index=1, row=2, col=1, depth=1)
+
+    def test_col_walker_skips_nested_cells(self, simple_docx, tmp_path):
+        dest = tmp_path / "nested-cells.docx"
+        _replace_document_xml(simple_docx, dest, self._doc_with_nested_inside_first_cell())
+        with Document.open(dest) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Outer C2"))
+            # Without the continue branch, the nested-table tc would be
+            # counted and "Outer C2" would land at col=3.
+            assert loc.table == TableCell(index=1, row=1, col=2, depth=1)
+
+
+class TestParagraphLocationDefensiveFallbacks:
+    """The remaining defensive paths in ``_initial_grid_offset`` and
+    ``_compute_paragraph_location`` — exercised on malformed-ish XML that
+    minidom still parses (no schema validation).
+    """
+
+    @staticmethod
+    def test_tr_pr_without_grid_before_falls_back_to_zero(simple_docx, tmp_path):
+        """``<w:trPr>`` exists with other props but no ``<w:gridBefore>`` → offset 0."""
+        body = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            "<w:tbl>"
+            "<w:tr><w:trPr><w:cantSplit/></w:trPr>"
+            "<w:tc><w:p><w:r><w:t>NoGridBefore</w:t></w:r></w:p></w:tc>"
+            "</w:tr>"
+            "</w:tbl>"
+            "</w:body>"
+            "</w:document>"
+        )
+        dest = tmp_path / "tr-pr-no-gb.docx"
+        _replace_document_xml(simple_docx, dest, body)
+        with Document.open(dest) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "NoGridBefore"))
+            assert loc.table is not None
+            assert loc.table.col == 1
+
+    @staticmethod
+    def test_tc_outside_tr_returns_table_none(simple_docx, tmp_path):
+        """A ``<w:tc>`` not nested under a ``<w:tr>`` is treated as body content."""
+        body = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            # Orphan: tc directly under tbl, skipping the tr layer.
+            "<w:tbl>"
+            "<w:tc><w:p><w:r><w:t>Orphan tc</w:t></w:r></w:p></w:tc>"
+            "</w:tbl>"
+            "</w:body>"
+            "</w:document>"
+        )
+        dest = tmp_path / "orphan-tc.docx"
+        _replace_document_xml(simple_docx, dest, body)
+        with Document.open(dest) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Orphan tc"))
+            # Malformed structure — falls back to body content, no raise.
+            assert loc.in_table is False
+            assert loc.table is None
+
+
+class TestParagraphLocationLongPreview:
+    """Cover the >80-char preview truncation in the ``HashMismatchError`` path."""
+
+    @staticmethod
+    def test_stale_ref_on_long_paragraph_truncates_preview(simple_docx, tmp_path):
+        long_text = "x" * 200
+        body = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            f"<w:p><w:r><w:t>{long_text}</w:t></w:r></w:p>"
+            "</w:body>"
+            "</w:document>"
+        )
+        dest = tmp_path / "long-para.docx"
+        _replace_document_xml(simple_docx, dest, body)
+        with Document.open(dest) as doc:
+            ref = _ref_for_text(doc, "xxxxx")
+            index_part, _ = ref.split("#")
+            stale_ref = f"{index_part}#0000"
+            with pytest.raises(HashMismatchError) as exc:
+                doc.get_paragraph_location(stale_ref)
+            # Preview should be truncated to 80 chars + "..."
+            assert exc.value.paragraph_preview.endswith("...")
+            assert len(exc.value.paragraph_preview) == 83  # 80 + "..."
