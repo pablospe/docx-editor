@@ -214,3 +214,57 @@ class TestParagraphLocationStaleRefs:
             pytest.raises(ValueError, match="Invalid paragraph reference"),
         ):
             doc.get_paragraph_location("not-a-ref")
+
+
+class TestParagraphLocationMalformedGridSpan:
+    """Defensive paths in ``_direct_grid_span`` must default to span=1.
+
+    A malformed ``w:gridSpan`` shouldn't blow up location lookup; the cell
+    is treated as if it spans a single column. Verified end-to-end by
+    checking the *next* cell in the row lands at ``col=2`` regardless of
+    the broken first-cell metadata.
+    """
+
+    def _doc_with_first_cell_tc_pr(self, tc_pr_xml: str) -> str:
+        """Build a doc whose first table row has two cells; the first
+        carries ``tc_pr_xml`` (the ``<w:tcPr>...</w:tcPr>`` block under test)."""
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            "<w:tbl><w:tr>"
+            f"<w:tc>{tc_pr_xml}<w:p><w:r><w:t>First</w:t></w:r></w:p></w:tc>"
+            "<w:tc><w:p><w:r><w:t>Second</w:t></w:r></w:p></w:tc>"
+            "</w:tr></w:tbl>"
+            "</w:body>"
+            "</w:document>"
+        )
+
+    def _open(self, simple_docx: Path, tmp_path: Path, body_xml: str) -> Document:
+        dest = tmp_path / "malformed.docx"
+        _replace_document_xml(simple_docx, dest, body_xml)
+        return Document.open(dest)
+
+    def test_non_integer_grid_span_falls_back_to_one(self, simple_docx, tmp_path):
+        """``<w:gridSpan w:val="abc"/>`` is unparseable; treat as span=1."""
+        body = self._doc_with_first_cell_tc_pr('<w:tcPr><w:gridSpan w:val="abc"/></w:tcPr>')
+        with self._open(simple_docx, tmp_path, body) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Second"))
+            assert loc.table is not None
+            assert loc.table.col == 2
+
+    def test_grid_span_without_val_attribute_falls_back_to_one(self, simple_docx, tmp_path):
+        """``<w:gridSpan/>`` (no ``w:val``) is treated as span=1."""
+        body = self._doc_with_first_cell_tc_pr("<w:tcPr><w:gridSpan/></w:tcPr>")
+        with self._open(simple_docx, tmp_path, body) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Second"))
+            assert loc.table is not None
+            assert loc.table.col == 2
+
+    def test_tc_pr_without_grid_span_falls_back_to_one(self, simple_docx, tmp_path):
+        """``<w:tcPr>`` carrying other properties but no ``w:gridSpan`` → span=1."""
+        body = self._doc_with_first_cell_tc_pr('<w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr>')
+        with self._open(simple_docx, tmp_path, body) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Second"))
+            assert loc.table is not None
+            assert loc.table.col == 2

@@ -157,7 +157,7 @@ class ParagraphLocation:
 
 def _innermost_ancestor(node, tag_name: str):
     """Return the closest ancestor element with ``tag_name``, or None."""
-    if node is None:
+    if node is None:  # pragma: no cover - defensive; callers guard against None
         return None
     parent = node.parentNode
     while parent is not None:
@@ -197,7 +197,7 @@ def _row_index_in_table(tbl, target_tr) -> int:
             n += 1
             if child is target_tr:
                 return n
-    raise ValueError("target_tr is not a direct child of tbl")
+    raise ValueError("target_tr is not a direct child of tbl")  # pragma: no cover
 
 
 def _logical_col_in_row(tr, target_tc) -> int:
@@ -209,7 +209,7 @@ def _logical_col_in_row(tr, target_tc) -> int:
         if child is target_tc:
             return col
         col += _direct_grid_span(child)
-    raise ValueError("target_tc is not a direct child of tr")
+    raise ValueError("target_tc is not a direct child of tr")  # pragma: no cover
 
 
 def _doc_wide_table_index(dom, target_tbl) -> int:
@@ -217,7 +217,7 @@ def _doc_wide_table_index(dom, target_tbl) -> int:
     for i, tbl in enumerate(dom.getElementsByTagName("w:tbl"), start=1):
         if tbl is target_tbl:
             return i
-    raise ValueError("target_tbl not found in document")
+    raise ValueError("target_tbl not found in document")  # pragma: no cover
 
 
 def _table_depth(tbl) -> int:
