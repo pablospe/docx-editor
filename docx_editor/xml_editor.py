@@ -265,7 +265,7 @@ def _table_depth(tbl) -> int:
     return depth
 
 
-def compute_paragraph_location(paragraph) -> ParagraphLocation:
+def _compute_paragraph_location(paragraph) -> ParagraphLocation:
     """Compute the structural location of a ``<w:p>`` element.
 
     Reports the innermost enclosing ``<w:tc>`` (and its table), or

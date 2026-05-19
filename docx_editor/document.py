@@ -16,9 +16,9 @@ from .xml_editor import (
     DocxXMLEditor,
     ParagraphLocation,
     ParagraphRef,
+    _compute_paragraph_location,
     build_text_map,
     compute_paragraph_hash,
-    compute_paragraph_location,
 )
 
 
@@ -232,7 +232,7 @@ class Document:
             if len(tm.text) > 80:
                 preview += "..."
             raise HashMismatchError(parsed.index, parsed.hash, actual_hash, preview)
-        return compute_paragraph_location(p)
+        return _compute_paragraph_location(p)
 
     def get_visible_text(self) -> str:
         """Get the visible text of the document.

@@ -225,7 +225,8 @@ class TestParagraphLocationMalformedGridSpan:
     the broken first-cell metadata.
     """
 
-    def _doc_with_first_cell_tc_pr(self, tc_pr_xml: str) -> str:
+    @staticmethod
+    def _doc_with_first_cell_tc_pr(tc_pr_xml: str) -> str:
         """Build a doc whose first table row has two cells; the first
         carries ``tc_pr_xml`` (the ``<w:tcPr>...</w:tcPr>`` block under test)."""
         return (
@@ -240,7 +241,8 @@ class TestParagraphLocationMalformedGridSpan:
             "</w:document>"
         )
 
-    def _open(self, simple_docx: Path, tmp_path: Path, body_xml: str) -> Document:
+    @staticmethod
+    def _open(simple_docx: Path, tmp_path: Path, body_xml: str) -> Document:
         dest = tmp_path / "malformed.docx"
         _replace_document_xml(simple_docx, dest, body_xml)
         return Document.open(dest)
