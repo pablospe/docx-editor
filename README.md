@@ -16,6 +16,7 @@ Pure Python library for Word document track changes and comments, without requir
 ## Features
 
 - **Hash-Anchored Paragraph References**: `list_paragraphs()` returns stable, hash-based paragraph IDs for safe, unambiguous targeting
+- **Paragraph Location**: `get_paragraph_location(ref)` reports whether a paragraph lives in the body or inside a table cell — with `w:gridSpan`-aware logical column, row, table index, and nesting depth
 - **Batch Editing**: Atomic `batch_edit()` with upfront hash validation across all operations
 - **Paragraph Rewrite**: `rewrite_paragraph()` with automatic word-level diffing — specify desired text, get fine-grained tracked changes
 - **Track Changes**: Replace, delete, and insert text with revision tracking

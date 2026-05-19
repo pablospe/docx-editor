@@ -9,9 +9,17 @@ import shutil
 from pathlib import Path
 
 from .comments import Comment, CommentManager
+from .exceptions import HashMismatchError, ParagraphIndexError
 from .track_changes import EditOperation, Revision, RevisionManager
 from .workspace import Workspace
-from .xml_editor import DocxXMLEditor, ParagraphRef, build_text_map, compute_paragraph_hash
+from .xml_editor import (
+    DocxXMLEditor,
+    ParagraphLocation,
+    ParagraphRef,
+    build_text_map,
+    compute_paragraph_hash,
+    compute_paragraph_location,
+)
 
 
 class Document:
@@ -174,6 +182,57 @@ class Document:
                 preview += "..."
             result.append(f"P{i}#{h}| {preview}")
         return result
+
+    def get_paragraph_location(self, ref: str) -> ParagraphLocation:
+        """Return the structural location of the paragraph identified by ``ref``.
+
+        Tells the caller whether a paragraph lives in the document body or
+        inside a table cell, and — when in a table — gives its 1-based
+        coordinates (table index, row, logical column, depth).
+
+        ``location.table.col`` is the *logical-grid* column, accounting for
+        ``w:gridSpan`` of preceding cells in the same row. A cell that
+        visually sits in column 4 reports ``col=4`` even when an earlier
+        cell in the row spans 2 grid columns.
+
+        Args:
+            ref: Paragraph reference from :meth:`list_paragraphs` (e.g.,
+                ``"P3#a7b2"``).
+
+        Returns:
+            :class:`ParagraphLocation`. ``location.in_table`` is ``False``
+            for body paragraphs; ``True`` when the paragraph is inside a
+            ``<w:tc>`` cell (in which case ``location.table`` is populated).
+
+        Raises:
+            ValueError: If ``ref`` has an invalid format.
+            ParagraphIndexError: If the paragraph index is out of range.
+            HashMismatchError: If the hash no longer matches current
+                paragraph content (paragraph was modified after the ref
+                was captured).
+
+        Example:
+            for entry in doc.list_paragraphs():
+                ref = entry.split("|")[0]
+                loc = doc.get_paragraph_location(ref)
+                if loc.in_table:
+                    cell = loc.table
+                    print(f"{ref}: table {cell.index} r{cell.row} c{cell.col}")
+        """
+        self._ensure_open()
+        parsed = ParagraphRef.parse(ref)
+        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        if parsed.index < 1 or parsed.index > len(paragraphs):
+            raise ParagraphIndexError(parsed.index, len(paragraphs))
+        p = paragraphs[parsed.index - 1]
+        actual_hash = compute_paragraph_hash(p)
+        if actual_hash != parsed.hash:
+            tm = build_text_map(p)
+            preview = tm.text[:80]
+            if len(tm.text) > 80:
+                preview += "..."
+            raise HashMismatchError(parsed.index, parsed.hash, actual_hash, preview)
+        return compute_paragraph_location(p)
 
     def get_visible_text(self) -> str:
         """Get the visible text of the document.
