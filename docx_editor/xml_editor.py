@@ -121,6 +121,141 @@ def compute_paragraph_hash(paragraph) -> str:
     return f"{zlib.crc32(text.encode('utf-8')) & 0xFFFF:04x}"
 
 
+@dataclass(frozen=True)
+class TableCell:
+    """Position of a paragraph's enclosing table cell.
+
+    Coordinates are 1-based. ``col`` is the logical-grid column accounting
+    for ``w:gridSpan`` of preceding cells in the same row, so a cell that
+    visually sits in column 4 reports ``col=4`` even when earlier cells
+    in the row are merged.
+    """
+
+    index: int  # 1-based, doc-wide, depth-first order of <w:tbl>
+    row: int  # 1-based
+    col: int  # 1-based logical grid (accounts for w:gridSpan)
+    depth: int  # 1 = outermost, >1 = nested table
+
+
+@dataclass(frozen=True)
+class ParagraphLocation:
+    """Structural location of a paragraph within the document body.
+
+    Currently reports only table membership. The shape is intentionally
+    extensible: future releases may add other container kinds (header,
+    footer, footnote), section index, list position, etc., as plain
+    optional field additions.
+    """
+
+    table: TableCell | None
+
+    @property
+    def in_table(self) -> bool:
+        """True iff the paragraph lives inside a ``<w:tc>`` cell."""
+        return self.table is not None
+
+
+def _innermost_ancestor(node, tag_name: str):
+    """Return the closest ancestor element with ``tag_name``, or None."""
+    if node is None:
+        return None
+    parent = node.parentNode
+    while parent is not None:
+        if parent.nodeType == parent.ELEMENT_NODE and parent.tagName == tag_name:
+            return parent
+        parent = parent.parentNode
+    return None
+
+
+def _direct_grid_span(tc) -> int:
+    """Return the ``w:gridSpan`` value of ``tc`` (1 if absent or malformed).
+
+    Only inspects ``tc``'s direct ``w:tcPr`` child, so nested tables inside
+    the cell never leak their own gridSpan values.
+    """
+    for child in tc.childNodes:
+        if child.nodeType != child.ELEMENT_NODE or child.tagName != "w:tcPr":
+            continue
+        for gs in child.childNodes:
+            if gs.nodeType == gs.ELEMENT_NODE and gs.tagName == "w:gridSpan":
+                val = gs.getAttribute("w:val")
+                if val:
+                    try:
+                        return max(1, int(val))
+                    except ValueError:
+                        return 1
+                return 1
+        return 1
+    return 1
+
+
+def _row_index_in_table(tbl, target_tr) -> int:
+    """1-based index of ``target_tr`` among ``tbl``'s direct ``w:tr`` children."""
+    n = 0
+    for child in tbl.childNodes:
+        if child.nodeType == child.ELEMENT_NODE and child.tagName == "w:tr":
+            n += 1
+            if child is target_tr:
+                return n
+    raise ValueError("target_tr is not a direct child of tbl")
+
+
+def _logical_col_in_row(tr, target_tc) -> int:
+    """1-based logical column (gridSpan-aware) of ``target_tc`` in ``tr``."""
+    col = 1
+    for child in tr.childNodes:
+        if child.nodeType != child.ELEMENT_NODE or child.tagName != "w:tc":
+            continue
+        if child is target_tc:
+            return col
+        col += _direct_grid_span(child)
+    raise ValueError("target_tc is not a direct child of tr")
+
+
+def _doc_wide_table_index(dom, target_tbl) -> int:
+    """1-based depth-first index of ``target_tbl`` among all ``<w:tbl>``."""
+    for i, tbl in enumerate(dom.getElementsByTagName("w:tbl"), start=1):
+        if tbl is target_tbl:
+            return i
+    raise ValueError("target_tbl not found in document")
+
+
+def _table_depth(tbl) -> int:
+    """1 = outermost table; +1 for each enclosing ``<w:tbl>`` ancestor."""
+    depth = 1
+    parent = tbl.parentNode
+    while parent is not None:
+        if parent.nodeType == parent.ELEMENT_NODE and parent.tagName == "w:tbl":
+            depth += 1
+        parent = parent.parentNode
+    return depth
+
+
+def compute_paragraph_location(paragraph) -> ParagraphLocation:
+    """Compute the structural location of a ``<w:p>`` element.
+
+    Reports the innermost enclosing ``<w:tc>`` (and its table), or
+    ``ParagraphLocation(table=None)`` if the paragraph is not inside any
+    table cell.
+    """
+    tc = _innermost_ancestor(paragraph, "w:tc")
+    if tc is None:
+        return ParagraphLocation(table=None)
+    tr = _innermost_ancestor(tc, "w:tr")
+    tbl = _innermost_ancestor(tr, "w:tbl") if tr is not None else None
+    if tr is None or tbl is None:
+        # Malformed table structure — tolerate by treating as body content.
+        return ParagraphLocation(table=None)
+    return ParagraphLocation(
+        table=TableCell(
+            index=_doc_wide_table_index(paragraph.ownerDocument, tbl),
+            row=_row_index_in_table(tbl, tr),
+            col=_logical_col_in_row(tr, tc),
+            depth=_table_depth(tbl),
+        )
+    )
+
+
 def _is_inside_element(node, tag_name: str) -> bool:
     """Check if a node is inside an element with the given tag."""
     parent = node.parentNode
