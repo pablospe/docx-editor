@@ -268,3 +268,122 @@ class TestParagraphLocationMalformedGridSpan:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Second"))
             assert loc.table is not None
             assert loc.table.col == 2
+
+
+class TestParagraphLocationGridBefore:
+    """``<w:trPr>/<w:gridBefore w:val="N"/>`` shifts the row's first cell to
+    logical column ``N+1`` (ragged row). The walker must honour it.
+    """
+
+    @staticmethod
+    def _doc_with_grid_before(grid_before_val: str | None) -> str:
+        gb = f'<w:gridBefore w:val="{grid_before_val}"/>' if grid_before_val is not None else ""
+        tr_pr = f"<w:trPr>{gb}</w:trPr>" if gb else ""
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            "<w:tbl>"
+            f"<w:tr>{tr_pr}"
+            "<w:tc><w:p><w:r><w:t>First cell</w:t></w:r></w:p></w:tc>"
+            "<w:tc><w:p><w:r><w:t>Second cell</w:t></w:r></w:p></w:tc>"
+            "</w:tr>"
+            "</w:tbl>"
+            "</w:body>"
+            "</w:document>"
+        )
+
+    def test_grid_before_shifts_first_cell(self, simple_docx, tmp_path):
+        """``gridBefore=2`` → first ``<w:tc>`` is at logical col 3."""
+        dest = tmp_path / "gridbefore.docx"
+        _replace_document_xml(simple_docx, dest, self._doc_with_grid_before("2"))
+        with Document.open(dest) as doc:
+            loc_a = doc.get_paragraph_location(_ref_for_text(doc, "First cell"))
+            loc_b = doc.get_paragraph_location(_ref_for_text(doc, "Second cell"))
+            assert loc_a.table is not None
+            assert loc_b.table is not None
+            assert (loc_a.table.col, loc_b.table.col) == (3, 4)
+
+    def test_grid_before_with_non_integer_val_falls_back_to_zero(self, simple_docx, tmp_path):
+        """``gridBefore w:val="abc"/`` is unparseable; treat offset as 0."""
+        dest = tmp_path / "gb-bad.docx"
+        _replace_document_xml(simple_docx, dest, self._doc_with_grid_before("abc"))
+        with Document.open(dest) as doc:
+            loc_a = doc.get_paragraph_location(_ref_for_text(doc, "First cell"))
+            assert loc_a.table is not None
+            assert loc_a.table.col == 1
+
+    def test_grid_before_missing_val_falls_back_to_zero(self, simple_docx, tmp_path):
+        """Bare ``<w:gridBefore/>`` (no ``w:val``) → offset 0."""
+        dest = tmp_path / "gb-empty.docx"
+        _replace_document_xml(simple_docx, dest, self._doc_with_grid_before(""))
+        with Document.open(dest) as doc:
+            loc_a = doc.get_paragraph_location(_ref_for_text(doc, "First cell"))
+            assert loc_a.table is not None
+            assert loc_a.table.col == 1
+
+
+class TestParagraphLocationSdtWrappers:
+    """Word templates often wrap rows and cells in
+    ``<w:sdt><w:sdtContent>...</w:sdtContent></w:sdt>`` (structured document
+    tags). The location walker must treat these wrappers transparently
+    rather than raising ``ValueError`` on the previous "direct child" walk.
+    """
+
+    @staticmethod
+    def _doc_with_sdt_row() -> str:
+        """Two-row table; the second row is wrapped in an ``<w:sdt>``."""
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            "<w:tbl>"
+            "<w:tr><w:tc><w:p><w:r><w:t>R1</w:t></w:r></w:p></w:tc></w:tr>"
+            # Row 2 wrapped in sdt/sdtContent (legal under CT_SdtRow):
+            "<w:sdt><w:sdtContent>"
+            "<w:tr><w:tc><w:p><w:r><w:t>R2-sdt</w:t></w:r></w:p></w:tc></w:tr>"
+            "</w:sdtContent></w:sdt>"
+            "</w:tbl>"
+            "</w:body>"
+            "</w:document>"
+        )
+
+    @staticmethod
+    def _doc_with_sdt_cell() -> str:
+        """Single row whose second cell is wrapped in an ``<w:sdt>``."""
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            "<w:tbl><w:tr>"
+            "<w:tc><w:p><w:r><w:t>C1</w:t></w:r></w:p></w:tc>"
+            "<w:sdt><w:sdtContent>"
+            "<w:tc><w:p><w:r><w:t>C2-sdt</w:t></w:r></w:p></w:tc>"
+            "</w:sdtContent></w:sdt>"
+            "<w:tc><w:p><w:r><w:t>C3</w:t></w:r></w:p></w:tc>"
+            "</w:tr></w:tbl>"
+            "</w:body>"
+            "</w:document>"
+        )
+
+    def test_sdt_wrapped_row_does_not_raise(self, simple_docx, tmp_path):
+        dest = tmp_path / "sdt-row.docx"
+        _replace_document_xml(simple_docx, dest, self._doc_with_sdt_row())
+        with Document.open(dest) as doc:
+            loc_1 = doc.get_paragraph_location(_ref_for_text(doc, "R1"))
+            loc_2 = doc.get_paragraph_location(_ref_for_text(doc, "R2-sdt"))
+            assert loc_1.table == TableCell(index=1, row=1, col=1, depth=1)
+            # The SDT-wrapped row is still row 2 of the same table.
+            assert loc_2.table == TableCell(index=1, row=2, col=1, depth=1)
+
+    def test_sdt_wrapped_cell_does_not_raise(self, simple_docx, tmp_path):
+        dest = tmp_path / "sdt-cell.docx"
+        _replace_document_xml(simple_docx, dest, self._doc_with_sdt_cell())
+        with Document.open(dest) as doc:
+            loc_1 = doc.get_paragraph_location(_ref_for_text(doc, "C1"))
+            loc_2 = doc.get_paragraph_location(_ref_for_text(doc, "C2-sdt"))
+            loc_3 = doc.get_paragraph_location(_ref_for_text(doc, "C3"))
+            # SDT is transparent — cells keep contiguous logical columns.
+            assert loc_1.table == TableCell(index=1, row=1, col=1, depth=1)
+            assert loc_2.table == TableCell(index=1, row=1, col=2, depth=1)
+            assert loc_3.table == TableCell(index=1, row=1, col=3, depth=1)

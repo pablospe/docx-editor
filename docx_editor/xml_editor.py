@@ -11,6 +11,7 @@ import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from xml.dom.minidom import Element
 
 import defusedxml.minidom
 import defusedxml.sax
@@ -155,7 +156,7 @@ class ParagraphLocation:
         return self.table is not None
 
 
-def _innermost_ancestor(node, tag_name: str):
+def _innermost_ancestor(node, tag_name: str) -> Element | None:
     """Return the closest ancestor element with ``tag_name``, or None."""
     if node is None:  # pragma: no cover - defensive; callers guard against None
         return None
@@ -190,26 +191,59 @@ def _direct_grid_span(tc) -> int:
 
 
 def _row_index_in_table(tbl, target_tr) -> int:
-    """1-based index of ``target_tr`` among ``tbl``'s direct ``w:tr`` children."""
+    """1-based index of ``target_tr`` among ``tbl``'s rows.
+
+    Walks descendant ``w:tr`` elements but filters to those whose innermost
+    enclosing ``w:tbl`` is ``tbl`` — so rows nested inside child tables are
+    skipped, and ``<w:sdt><w:sdtContent>`` wrappers are transparent.
+    """
     n = 0
-    for child in tbl.childNodes:
-        if child.nodeType == child.ELEMENT_NODE and child.tagName == "w:tr":
-            n += 1
-            if child is target_tr:
-                return n
-    raise ValueError("target_tr is not a direct child of tbl")  # pragma: no cover
+    for tr in tbl.getElementsByTagName("w:tr"):
+        if _innermost_ancestor(tr, "w:tbl") is not tbl:
+            continue
+        n += 1
+        if tr is target_tr:
+            return n
+    raise ValueError("target_tr not found in tbl")  # pragma: no cover
+
+
+def _initial_grid_offset(tr) -> int:
+    """``<w:trPr>/<w:gridBefore w:val="N"/>`` — grid columns skipped at row start.
+
+    Returns 0 when absent. A row that opens with ``gridBefore=2`` makes its
+    first ``w:tc`` land at logical column 3.
+    """
+    for child in tr.childNodes:
+        if child.nodeType != child.ELEMENT_NODE or child.tagName != "w:trPr":
+            continue
+        for gb in child.childNodes:
+            if gb.nodeType == gb.ELEMENT_NODE and gb.tagName == "w:gridBefore":
+                val = gb.getAttribute("w:val")
+                if val:
+                    try:
+                        return max(0, int(val))
+                    except ValueError:
+                        return 0
+                return 0
+        return 0
+    return 0
 
 
 def _logical_col_in_row(tr, target_tc) -> int:
-    """1-based logical column (gridSpan-aware) of ``target_tc`` in ``tr``."""
-    col = 1
-    for child in tr.childNodes:
-        if child.nodeType != child.ELEMENT_NODE or child.tagName != "w:tc":
+    """1-based logical column (gridSpan- and gridBefore-aware) of ``target_tc``.
+
+    Walks descendant ``w:tc`` elements filtered to those whose innermost
+    enclosing ``w:tr`` is ``tr`` — so cells nested inside child tables are
+    skipped, and ``<w:sdt><w:sdtContent>`` cell wrappers are transparent.
+    """
+    col = 1 + _initial_grid_offset(tr)
+    for tc in tr.getElementsByTagName("w:tc"):
+        if _innermost_ancestor(tc, "w:tr") is not tr:
             continue
-        if child is target_tc:
+        if tc is target_tc:
             return col
-        col += _direct_grid_span(child)
-    raise ValueError("target_tc is not a direct child of tr")  # pragma: no cover
+        col += _direct_grid_span(tc)
+    raise ValueError("target_tc not found in tr")  # pragma: no cover
 
 
 def _doc_wide_table_index(dom, target_tbl) -> int:
