@@ -396,3 +396,169 @@ class TestStructuredBatchOperationError:
         ops = [EditOperation(action="replace", find="a", replace_with="b", paragraph="")]
         with pytest.raises(DocxEditError):
             doc.batch_edit(ops)
+
+
+class TestBatchEditRollback:
+    """Mid-batch failure must leave the document untouched (atomic contract)."""
+
+    def test_rollback_on_text_not_found_mid_batch(self, multi_para_doc):
+        """First op applies, second op's find text doesn't exist — DOM must roll back."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+
+        before_text = doc.get_visible_text()
+        before_revisions = len(doc.list_revisions())
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 3",
+                replace_with="ITEM_THREE",
+                paragraph=refs[2].split("|")[0],
+            ),
+            EditOperation(
+                action="replace",
+                find="DOES_NOT_EXIST_IN_P7",
+                replace_with="x",
+                paragraph=refs[6].split("|")[0],
+            ),
+            EditOperation(
+                action="replace",
+                find="item 9",
+                replace_with="ITEM_NINE",
+                paragraph=refs[8].split("|")[0],
+            ),
+        ]
+
+        with pytest.raises(TextNotFoundError):
+            doc.batch_edit(ops)
+
+        # Reverse-paragraph order means P9 applied before P7 failed; full-text
+        # equality proves P9's mutation was rolled back.
+        assert doc.get_visible_text() == before_text
+        assert len(doc.list_revisions()) == before_revisions
+
+    def test_rollback_on_structural_error_mid_batch(self, multi_para_doc):
+        """First op is valid; second op has replace_with=None — DOM must roll back."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+
+        before_text = doc.get_visible_text()
+        before_revisions = len(doc.list_revisions())
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 2",
+                replace_with="SECOND",
+                paragraph=refs[1].split("|")[0],
+            ),
+            EditOperation(
+                action="replace",
+                find="item 4",
+                replace_with=None,
+                paragraph=refs[3].split("|")[0],
+            ),
+        ]
+
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_edit(ops)
+        assert exc.value.operation_index == 1
+
+        assert doc.get_visible_text() == before_text
+        assert len(doc.list_revisions()) == before_revisions
+
+    def test_rollback_preserves_hash_anchored_refs(self, multi_para_doc):
+        """After a failed batch, pre-batch paragraph refs still resolve cleanly."""
+        doc, _ = multi_para_doc
+        refs_before = doc.list_paragraphs()
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 2",
+                replace_with="WILL_ROLLBACK",
+                paragraph=refs_before[1].split("|")[0],
+            ),
+            EditOperation(
+                action="replace",
+                find="MISSING",
+                replace_with="x",
+                paragraph=refs_before[5].split("|")[0],
+            ),
+        ]
+
+        with pytest.raises(TextNotFoundError):
+            doc.batch_edit(ops)
+
+        # The pre-batch P2 ref must still resolve — proves hashes did not drift.
+        doc.replace("item 2", "POST_ROLLBACK", paragraph=refs_before[1].split("|")[0])
+        assert "POST_ROLLBACK" in doc.get_visible_text()
+        assert "WILL_ROLLBACK" not in doc.get_visible_text()
+
+    def test_rollback_preserves_parse_position_metadata(self, multi_para_doc):
+        """After rollback, parse_position attributes on elements must survive,
+        so XMLEditor.get_node(line_number=...) keeps working."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        editor = doc._document_editor
+
+        # Sanity: parse_position is set on every element before any batch.
+        paragraphs_before = editor.dom.getElementsByTagName("w:p")
+        assert paragraphs_before
+        assert all(hasattr(p, "parse_position") for p in paragraphs_before)
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 2",
+                replace_with="x",
+                paragraph=refs[1].split("|")[0],
+            ),
+            EditOperation(
+                action="replace",
+                find="MISSING",
+                replace_with="x",
+                paragraph=refs[5].split("|")[0],
+            ),
+        ]
+
+        with pytest.raises(TextNotFoundError):
+            doc.batch_edit(ops)
+
+        # After rollback, parse_position must still be present on every element
+        # — proves the line-tracking parser was used for the restore.
+        paragraphs_after = editor.dom.getElementsByTagName("w:p")
+        assert paragraphs_after
+        assert all(hasattr(p, "parse_position") for p in paragraphs_after)
+
+    def test_rollback_failure_surfaces_original_error(self, multi_para_doc, monkeypatch):
+        """If the rollback re-parse itself fails, the original edit error must
+        still propagate — not the rollback failure."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        editor = doc._document_editor
+
+        def boom(_xml_bytes):
+            raise RuntimeError("simulated rollback failure")
+
+        monkeypatch.setattr(editor, "_reload_dom_from_bytes", boom)
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 2",
+                replace_with="x",
+                paragraph=refs[1].split("|")[0],
+            ),
+            EditOperation(
+                action="replace",
+                find="MISSING",
+                replace_with="x",
+                paragraph=refs[5].split("|")[0],
+            ),
+        ]
+
+        # Original edit error wins over the rollback failure.
+        with pytest.raises(TextNotFoundError):
+            doc.batch_edit(ops)

@@ -147,16 +147,27 @@ class RevisionManager:
         # Stable sort preserves original order for same-paragraph edits
         parsed.sort(key=lambda x: x[1].index, reverse=True)
 
-        # Apply edits in reverse paragraph order
-        results = [0] * len(operations)
-        for original_idx, _ref, op in parsed:
-            try:
-                change_id = self._apply_single_edit(op)
-            except ValueError as e:
-                raise BatchOperationError(original_idx, str(e)) from e
-            results[original_idx] = change_id
+        # Snapshot DOM before any mutation so we can roll back on partial failure.
+        snapshot = self.editor.dom.toxml(encoding=self.editor.encoding)
 
-        return results
+        try:
+            results = [0] * len(operations)
+            for original_idx, _ref, op in parsed:
+                try:
+                    change_id = self._apply_single_edit(op)
+                except ValueError as e:
+                    raise BatchOperationError(original_idx, str(e)) from e
+                results[original_idx] = change_id
+            return results
+        except Exception:
+            # Restore via the line-tracking parser so parse_position is preserved.
+            # If rollback itself fails, surface the original edit error — it is
+            # the actionable one; a rollback failure is a secondary symptom.
+            try:
+                self.editor._reload_dom_from_bytes(snapshot)
+            except Exception:
+                pass
+            raise
 
     def _apply_single_edit(self, op: EditOperation) -> int:
         """Apply a single edit operation. Paragraph hash was already validated."""
