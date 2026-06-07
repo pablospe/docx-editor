@@ -254,6 +254,18 @@ def _doc_wide_table_index(dom, target_tbl) -> int:
     raise ValueError("target_tbl not found in document")  # pragma: no cover
 
 
+def _build_table_index(dom) -> dict:
+    """Map every ``<w:tbl>`` element to its 1-based depth-first index.
+
+    One ``getElementsByTagName("w:tbl")`` walk produces the same indices
+    ``_doc_wide_table_index`` would return per call, so callers processing
+    many paragraphs avoid rescanning the whole document for each one.
+
+    minidom Elements are identity-hashable, so the node itself is the key.
+    """
+    return {tbl: i for i, tbl in enumerate(dom.getElementsByTagName("w:tbl"), start=1)}
+
+
 def _table_depth(tbl) -> int:
     """1 = outermost table; +1 for each enclosing ``<w:tbl>`` ancestor."""
     depth = 1
@@ -265,12 +277,18 @@ def _table_depth(tbl) -> int:
     return depth
 
 
-def _compute_paragraph_location(paragraph) -> ParagraphLocation:
+def _compute_paragraph_location(paragraph, table_index: dict | None = None) -> ParagraphLocation:
     """Compute the structural location of a ``<w:p>`` element.
 
     Reports the innermost enclosing ``<w:tc>`` (and its table), or
     ``ParagraphLocation(table=None)`` if the paragraph is not inside any
     table cell.
+
+    ``table_index`` is an optional ``{tbl_node: 1-based-index}`` map (see
+    :func:`_build_table_index`). When supplied, the enclosing table's index
+    is looked up there instead of via a whole-document rescan — the batch
+    fast path. The result is identical to the ``None`` (per-call) path; a
+    table missing from the map falls back to the rescan defensively.
     """
     tc = _innermost_ancestor(paragraph, "w:tc")
     if tc is None:
@@ -280,9 +298,13 @@ def _compute_paragraph_location(paragraph) -> ParagraphLocation:
     if tr is None or tbl is None:
         # Malformed table structure — tolerate by treating as body content.
         return ParagraphLocation(table=None)
+    if table_index is not None and tbl in table_index:
+        index = table_index[tbl]
+    else:
+        index = _doc_wide_table_index(paragraph.ownerDocument, tbl)
     return ParagraphLocation(
         table=TableCell(
-            index=_doc_wide_table_index(paragraph.ownerDocument, tbl),
+            index=index,
             row=_row_index_in_table(tbl, tr),
             col=_logical_col_in_row(tr, tc),
             depth=_table_depth(tbl),

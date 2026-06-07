@@ -71,6 +71,40 @@ for ref in refs:
     print(ref)
 ```
 
+#### `get_paragraph_location(ref)`
+
+Report whether a paragraph lives in the document body or inside a table cell.
+
+**Parameters:**
+
+- `ref` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+
+**Returns:** `ParagraphLocation`. `location.in_table` is `False` for body paragraphs; `True` when the paragraph is inside a `<w:tc>` cell, in which case `location.table` carries the 1-based table index, row, `w:gridSpan`-aware logical column, and nesting depth.
+
+**Example:**
+
+```python
+loc = doc.get_paragraph_location("P3#a7b2")
+if loc.in_table:
+    cell = loc.table
+    print(f"table {cell.index} r{cell.row} c{cell.col} (depth {cell.depth})")
+```
+
+#### `list_paragraph_locations()`
+
+Batch counterpart to `get_paragraph_location()`: pair every paragraph with its structural location in one pass, precomputing table indices once instead of rescanning the table hierarchy per ref.
+
+**Returns:** List of `(ref, ParagraphLocation)` tuples in document order, where `ref` is the same `P{index}#{hash}` token emitted by `list_paragraphs()`.
+
+**Example:**
+
+```python
+for ref, loc in doc.list_paragraph_locations():
+    if loc.in_table:
+        cell = loc.table
+        print(f"{ref}: table {cell.index} r{cell.row} c{cell.col} (depth {cell.depth})")
+```
+
 #### `get_visible_text()`
 
 Get flattened visible document text. Inserted text is included and deleted text is excluded.

@@ -539,3 +539,62 @@ class TestParagraphLocationLongPreview:
             # Preview should be truncated to 80 chars + "..."
             assert exc.value.paragraph_preview.endswith("...")
             assert len(exc.value.paragraph_preview) == 83  # 80 + "..."
+
+
+class TestListParagraphLocations:
+    """:meth:`Document.list_paragraph_locations` — the batch accessor.
+
+    The defining contract: each ``(ref, loc)`` entry must be byte-identical
+    to what ``get_paragraph_location(ref)`` returns per-call. The batch path
+    only swaps the whole-DOM table rescan for a prebuilt index, so the two
+    must never disagree.
+    """
+
+    def test_returns_one_entry_per_paragraph(self, gridspan_docx):
+        with Document.open(gridspan_docx) as doc:
+            entries = doc.list_paragraph_locations()
+            assert len(entries) == len(doc.list_paragraphs())
+            assert len(entries) == 11  # P1–P11 from the fixture
+
+    def test_refs_match_list_paragraphs_tokens(self, gridspan_docx):
+        with Document.open(gridspan_docx) as doc:
+            batch_refs = [ref for ref, _ in doc.list_paragraph_locations()]
+            expected_refs = [entry.split("|")[0] for entry in doc.list_paragraphs()]
+            assert batch_refs == expected_refs
+
+    def test_equivalence_with_per_call_accessor(self, gridspan_docx):
+        """Every batch entry equals the per-call ``get_paragraph_location``.
+
+        Covers body (P1/P8/P11), gridSpan row (P2–P4), plain row (P5–P7),
+        and nested table (P9/P10) — the full fixture.
+        """
+        with Document.open(gridspan_docx) as doc:
+            for ref, loc in doc.list_paragraph_locations():
+                assert loc == doc.get_paragraph_location(ref)
+
+    def test_returns_paragraph_location_dataclass(self, gridspan_docx):
+        with Document.open(gridspan_docx) as doc:
+            for ref, loc in doc.list_paragraph_locations():
+                assert isinstance(ref, str)
+                assert isinstance(loc, ParagraphLocation)
+
+    def test_body_paragraphs_report_no_table(self, gridspan_docx):
+        with Document.open(gridspan_docx) as doc:
+            by_ref = dict(doc.list_paragraph_locations())
+            body_ref = _ref_for_text(doc, "Body paragraph 1")
+            assert by_ref[body_ref].in_table is False
+            assert by_ref[body_ref].table is None
+
+    def test_nested_table_coordinates(self, gridspan_docx):
+        with Document.open(gridspan_docx) as doc:
+            by_ref = dict(doc.list_paragraph_locations())
+            inner_ref = _ref_for_text(doc, "Inner cell")
+            assert by_ref[inner_ref].table == TableCell(index=3, row=1, col=1, depth=2)
+
+    def test_table_free_document_all_body(self, simple_docx):
+        """A document with no tables returns a non-empty all-body list."""
+        with Document.open(simple_docx) as doc:
+            entries = doc.list_paragraph_locations()
+            assert entries  # simple.docx has at least one paragraph
+            assert all(loc.table is None for _, loc in entries)
+            assert all(loc.in_table is False for _, loc in entries)

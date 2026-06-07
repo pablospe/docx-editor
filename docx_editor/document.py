@@ -16,6 +16,7 @@ from .xml_editor import (
     DocxXMLEditor,
     ParagraphLocation,
     ParagraphRef,
+    _build_table_index,
     _compute_paragraph_location,
     build_text_map,
     compute_paragraph_hash,
@@ -233,6 +234,36 @@ class Document:
                 preview += "..."
             raise HashMismatchError(parsed.index, parsed.hash, actual_hash, preview)
         return _compute_paragraph_location(p)
+
+    def list_paragraph_locations(self) -> list[tuple[str, ParagraphLocation]]:
+        """List every paragraph paired with its structural location.
+
+        Batch counterpart to :meth:`get_paragraph_location`: precomputes
+        table indices once instead of re-scanning the table hierarchy per
+        ref. Each entry is ``(ref, location)`` where
+        ``ref`` is the same ``"P{i}#{hash}"`` token emitted by
+        :meth:`list_paragraphs` (the part before ``|``) and accepted by
+        :meth:`get_paragraph_location` and the editing methods.
+
+        Returns:
+            List of ``(ref, ParagraphLocation)`` tuples in document order.
+            ``location.in_table`` is ``False`` for body paragraphs; ``True``
+            when the paragraph is inside a ``<w:tc>`` cell.
+
+        Example:
+            for ref, loc in doc.list_paragraph_locations():
+                if loc.in_table:
+                    cell = loc.table
+                    print(f"{ref}: table {cell.index} r{cell.row} c{cell.col}")
+        """
+        self._ensure_open()
+        dom = self._document_editor.dom
+        table_index = _build_table_index(dom)
+        result = []
+        for i, p in enumerate(dom.getElementsByTagName("w:p"), start=1):
+            ref = f"P{i}#{compute_paragraph_hash(p)}"
+            result.append((ref, _compute_paragraph_location(p, table_index)))
+        return result
 
     def get_visible_text(self) -> str:
         """Get the visible text of the document.
