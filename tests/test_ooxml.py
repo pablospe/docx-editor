@@ -108,6 +108,13 @@ class TestUnpack:
         with pytest.raises(InvalidDocumentError, match="Unsafe ZIP entry"):
             unpack_document(bad_zip, temp_dir / "output")
 
+    def test_unpack_rejects_colon_ads(self, temp_dir):
+        """Reject mid-path colons (NTFS alternate data stream, e.g. 'word/a.xml:s')."""
+        bad_zip = temp_dir / "bad.docx"
+        _build_zip(bad_zip, [("safe.txt", b"safe"), ("word/document.xml:stream", b"pwned")])
+        with pytest.raises(InvalidDocumentError, match="Unsafe ZIP entry"):
+            unpack_document(bad_zip, temp_dir / "output")
+
     def test_unpack_accepts_existing_empty_output_dir(self, temp_dir, simple_docx):
         """Pre-existing empty output_dir is fine (no symlinks to reject)."""
         output = temp_dir / "output"
@@ -122,6 +129,13 @@ class TestUnpack:
         (output / "leftover.txt").write_text("ok")
         rsid = unpack_document(simple_docx, output)
         assert len(rsid) == 8
+
+    def test_unpack_rejects_output_path_that_is_a_file(self, temp_dir, simple_docx):
+        """Refuse to unpack when output_dir already exists as a regular file."""
+        output = temp_dir / "output"
+        output.write_text("i am a file")
+        with pytest.raises(InvalidDocumentError, match="Output path is not a directory"):
+            unpack_document(simple_docx, output)
 
     def test_is_symlink_entry_skips_non_unix_creator(self):
         """Non-Unix-created entries are not classified as symlinks even with S_IFLNK bits."""

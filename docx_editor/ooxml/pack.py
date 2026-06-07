@@ -34,7 +34,8 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
         bool: True if successful, False if validation failed
 
     Raises:
-        ValueError: If input_dir doesn't exist or output_file has wrong extension
+        ValueError: If input_dir is a symlink, doesn't exist, or output_file has
+            the wrong extension
     """
     input_dir = Path(input_dir)
     output_file = Path(output_file)

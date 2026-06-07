@@ -11,10 +11,12 @@ from docx_editor.exceptions import DocumentNotFoundError, InvalidDocumentError
 
 
 def _is_unsafe_zip_path(name: str) -> bool:
-    """Reject absolute paths, drive letters, and '..' traversal segments."""
+    """Reject absolute paths, colons, and '..' traversal segments."""
     if not name or name.startswith(("/", "\\")):
         return True
-    if len(name) >= 2 and name[1] == ":":  # Windows drive letter, e.g. C:\
+    # Reject any colon: covers Windows drive letters (C:\) and NTFS alternate
+    # data streams (foo.xml:stream). OOXML part names never contain a colon.
+    if ":" in name:
         return True
     for seg in name.replace("\\", "/").split("/"):
         # Reject literal "..", and any segment composed only of dots/spaces:
@@ -45,7 +47,9 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
 
     Raises:
         DocumentNotFoundError: If the input file doesn't exist
-        InvalidDocumentError: If the file is not a valid zip/docx
+        InvalidDocumentError: If the file is not a valid zip/docx, contains an
+            unsafe entry path or a symlink entry, or the output directory is
+            (or contains) a symlink or is an existing non-directory.
     """
     input_path = Path(input_file)
     output_path = Path(output_dir)
@@ -57,6 +61,8 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
     if output_path.is_symlink():
         raise InvalidDocumentError(f"Output directory is a symlink: {output_dir}")
     if output_path.exists():
+        if not output_path.is_dir():
+            raise InvalidDocumentError(f"Output path is not a directory: {output_dir}")
         for entry in output_path.rglob("*"):
             if entry.is_symlink():
                 raise InvalidDocumentError(f"Symlink inside output directory: {entry}")
