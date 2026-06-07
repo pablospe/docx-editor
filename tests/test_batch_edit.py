@@ -538,8 +538,9 @@ class TestBatchEditRollback:
         doc, _ = multi_para_doc
         refs = doc.list_paragraphs()
         editor = doc._document_editor
+        before_text = doc.get_visible_text()
 
-        def boom(_xml_bytes):
+        def boom(xml_bytes):
             raise RuntimeError("simulated rollback failure")
 
         monkeypatch.setattr(editor, "_reload_dom_from_bytes", boom)
@@ -562,3 +563,8 @@ class TestBatchEditRollback:
         # Original edit error wins over the rollback failure.
         with pytest.raises(TextNotFoundError):
             doc.batch_edit(ops)
+
+        # Reverse-paragraph order means the failing P6 op runs first and
+        # raises before any mutation, so visible text is still unchanged
+        # even though the rollback re-parse itself was swallowed.
+        assert doc.get_visible_text() == before_text

@@ -215,13 +215,16 @@ class XMLEditor:
         self.dom = defusedxml.minidom.parse(str(self.xml_path), parser)
 
     def _reload_dom_from_bytes(self, xml_bytes: bytes) -> None:
-        """Replace ``self.dom`` by re-parsing ``xml_bytes`` with line tracking.
+        """Replace self.dom by re-parsing xml_bytes with line tracking.
 
-        Used to restore a snapshot (e.g., rollback after a failed batch edit)
-        while preserving the ``parse_position`` invariant that ``get_node``
-        with ``line_number`` relies on. Parses via ``BytesIO`` because
-        ``defusedxml.minidom.parseString`` does not accept bytes when a
-        custom parser is supplied.
+        Used to restore a snapshot (e.g., rollback after a failed batch
+        edit) while preserving the parse_position invariant that get_node
+        with line_number relies on. Parses via BytesIO because
+        defusedxml.minidom.parseString does not accept bytes when a custom
+        parser is supplied.
+
+        Args:
+            xml_bytes: Raw XML bytes to parse as the new DOM.
         """
         parser = _create_line_tracking_parser()
         self.dom = defusedxml.minidom.parse(io.BytesIO(xml_bytes), parser)
