@@ -84,10 +84,12 @@ refs = doc.list_paragraphs()
 for ref in refs:
     print(ref)
 
-# Page through a large document
+# Page through a large document — you pick the page size; refs stay
+# globally indexed (with size 50, page 2 starts at P51)
 count = doc.paragraph_count()
-page1 = doc.list_paragraphs(start=1, limit=50)
-page2 = doc.list_paragraphs(start=51, limit=50)
+page_size = 50
+for start in range(1, count + 1, page_size):
+    page = doc.list_paragraphs(start=start, limit=page_size)
 ```
 
 #### `get_visible_text()`

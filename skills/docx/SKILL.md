@@ -399,11 +399,12 @@ with Document.open("file.docx", author=author) as doc:
     doc.save()
 ```
 
-Refs are **1-based** global indexes (`P1`, not `P0`). For large documents, page through paragraphs to save tokens — `paragraph_count()` gives the total for bounds, and `start`/`limit` return a slice whose refs keep their global index (page 2 starts at `P51`, not `P1`). Pass `max_chars=0` to get bare refs (`P1#a7b2`) with no preview text or `| ` separator:
+Refs are **1-based** global indexes (`P1`, not `P0`). For large documents, page through paragraphs to save tokens — `paragraph_count()` gives the total for bounds, and `start`/`limit` return a slice whose refs keep their global index. You pick the page size (there's no built-in limit); with `limit=N` the next page starts at `start + N`. Pass `max_chars=0` to get bare refs (`P1#a7b2`) with no preview text or `| ` separator:
 
 ```python
-total = doc.paragraph_count()                       # cheap bounds check
-page2 = doc.list_paragraphs(start=51, limit=50)      # refs P51..P100
+total = doc.paragraph_count()                        # cheap bounds check
+page_size = 50                                        # caller's choice
+page2 = doc.list_paragraphs(start=1 + page_size, limit=page_size)  # refs P51..P100
 refs_only = doc.list_paragraphs(max_chars=0)         # "P1#a7b2", no preview
 ```
 

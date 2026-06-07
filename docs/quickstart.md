@@ -47,13 +47,15 @@ P2#f3c1| Payment is due within 30 days...
 P3#b2c4| Section 5 describes review obligations...
 ```
 
-For large documents, page through paragraphs with `start`/`limit`. Refs keep their global 1-based index (page 2 starts at `P51`, not `P1`):
+For large documents, page through paragraphs with `start`/`limit`. You choose the page size; refs keep their global 1-based index (with a page size of 50, page 2 starts at `P51`, not `P1`):
 
 ```python
 with Document.open("contract.docx") as doc:
     total = doc.paragraph_count()
-    for paragraph in doc.list_paragraphs(start=51, limit=50):
-        print(paragraph)
+    page_size = 50
+    for start in range(1, total + 1, page_size):
+        for paragraph in doc.list_paragraphs(start=start, limit=page_size):
+            print(paragraph)
 ```
 
 Use the `P{index}#{hash}` part as the `paragraph=` argument. Edit methods return a new paragraph ref after the hash changes, so keep the returned value when chaining edits in the same paragraph.

@@ -196,9 +196,11 @@ class Document:
             ValueError: If ``start`` < 1 or ``limit`` < 0.
 
         Example:
+            # Caller chooses the page size; ``start`` walks forward by it.
             count = doc.paragraph_count()
-            page1 = doc.list_paragraphs(start=1, limit=50)
-            page2 = doc.list_paragraphs(start=51, limit=50)
+            page_size = 50
+            for start in range(1, count + 1, page_size):
+                page = doc.list_paragraphs(start=start, limit=page_size)
         """
         self._ensure_open()
         if start < 1:
