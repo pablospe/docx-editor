@@ -170,7 +170,7 @@ class Document:
         self._ensure_open()
         return len(self._document_editor.dom.getElementsByTagName("w:p"))
 
-    def list_paragraphs(self, max_chars: int = 80, start: int = 1, limit: int | None = None) -> list[str]:
+    def list_paragraphs(self, max_chars: int = 80, *, start: int = 1, limit: int | None = None) -> list[str]:
         """List paragraphs with hash-anchored references.
 
         Returns a list of strings like "P1#a7b2| Introduction to the..."
@@ -180,8 +180,8 @@ class Document:
 
         Args:
             max_chars: Maximum characters for the preview text (default 80).
-                Use 0 to get only the hash refs (e.g. "P1#a7b2"), with no
-                preview or "| " separator.
+                Must be >= 0. Use 0 to get only the hash refs (e.g. "P1#a7b2"),
+                with no preview or "| " separator.
             start: 1-based index of the first paragraph to return (default 1).
                 Must be >= 1. A ``start`` beyond the last paragraph yields an
                 empty list.
@@ -193,16 +193,19 @@ class Document:
             List of hash-tagged paragraph preview strings.
 
         Raises:
-            ValueError: If ``start`` < 1 or ``limit`` < 0.
+            ValueError: If ``max_chars`` < 0, ``start`` < 1, or ``limit`` < 0.
 
         Example:
             # Caller chooses the page size; ``start`` walks forward by it.
             count = doc.paragraph_count()
             page_size = 50
             for start in range(1, count + 1, page_size):
-                page = doc.list_paragraphs(start=start, limit=page_size)
+                for ref in doc.list_paragraphs(start=start, limit=page_size):
+                    print(ref)
         """
         self._ensure_open()
+        if max_chars < 0:
+            raise ValueError(f"max_chars must be >= 0, got {max_chars}")
         if start < 1:
             raise ValueError(f"start must be >= 1, got {start}")
         if limit is not None and limit < 0:

@@ -122,7 +122,8 @@ with Document.open("reviewed.docx", author="Editor") as doc:
     total = doc.paragraph_count()
     page_size = 50
     for start in range(1, total + 1, page_size):
-        page = doc.list_paragraphs(start=start, limit=page_size)
+        for ref in doc.list_paragraphs(start=start, limit=page_size):
+            print(ref)  # process this page of refs
 
     # Find text across element boundaries
     match = doc.find_text("Aim: To")

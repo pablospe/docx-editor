@@ -259,6 +259,14 @@ class TestListParagraphs:
         finally:
             doc.close()
 
+    def test_negative_max_chars_raises(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            with pytest.raises(ValueError, match="max_chars must be >= 0"):
+                doc.list_paragraphs(max_chars=-1)
+        finally:
+            doc.close()
+
 
 # ==================== Scoped Operations Tests ====================
 
