@@ -235,6 +235,30 @@ class TestListParagraphs:
         finally:
             doc.close()
 
+    def test_pagination_limit_zero_returns_empty(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            assert doc.list_paragraphs(limit=0) == []
+        finally:
+            doc.close()
+
+    def test_pagination_invalid_start_raises(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            for bad in (0, -1):
+                with pytest.raises(ValueError, match="start must be >= 1"):
+                    doc.list_paragraphs(start=bad)
+        finally:
+            doc.close()
+
+    def test_pagination_negative_limit_raises(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            with pytest.raises(ValueError, match="limit must be >= 0"):
+                doc.list_paragraphs(limit=-1)
+        finally:
+            doc.close()
+
 
 # ==================== Scoped Operations Tests ====================
 

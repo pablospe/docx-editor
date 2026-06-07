@@ -183,31 +183,38 @@ class Document:
                 Use 0 to get only the hash refs (e.g. "P1#a7b2"), with no
                 preview or "| " separator.
             start: 1-based index of the first paragraph to return (default 1).
-                A ``start`` beyond the last paragraph yields an empty list.
+                Must be >= 1. A ``start`` beyond the last paragraph yields an
+                empty list.
             limit: Maximum number of paragraphs to return, or ``None`` for all
-                paragraphs from ``start`` onward (default ``None``).
+                paragraphs from ``start`` onward (default ``None``). Must be
+                >= 0 when given; ``0`` yields an empty list.
 
         Returns:
             List of hash-tagged paragraph preview strings.
 
-        Example:
-            Page through a large document::
+        Raises:
+            ValueError: If ``start`` < 1 or ``limit`` < 0.
 
-                count = doc.paragraph_count()
-                page1 = doc.list_paragraphs(start=1, limit=50)
-                page2 = doc.list_paragraphs(start=51, limit=50)
+        Example:
+            count = doc.paragraph_count()
+            page1 = doc.list_paragraphs(start=1, limit=50)
+            page2 = doc.list_paragraphs(start=51, limit=50)
         """
         self._ensure_open()
+        if start < 1:
+            raise ValueError(f"start must be >= 1, got {start}")
+        if limit is not None and limit < 0:
+            raise ValueError(f"limit must be >= 0, got {limit}")
         paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
-        begin = max(0, start - 1)  # guard 0/negative start; keep refs correct
+        begin = start - 1
         end = begin + limit if limit is not None else None
         result = []
         for i, p in enumerate(paragraphs[begin:end], start=begin + 1):
             h = compute_paragraph_hash(p)
-            tm = build_text_map(p)
             if max_chars == 0:
                 result.append(f"P{i}#{h}")
                 continue
+            tm = build_text_map(p)
             preview = tm.text[:max_chars]
             if len(tm.text) > max_chars:
                 preview += "..."
