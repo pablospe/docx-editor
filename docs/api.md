@@ -53,13 +53,27 @@ print(doc.source_path)  # Path("/path/to/contract.docx")
 
 ### Track Changes Methods
 
-#### `list_paragraphs(max_chars=80)`
+#### `paragraph_count()`
 
-List paragraphs with hash-anchored references.
+Return the total number of paragraphs in the document. A cheap bounds check for pagination — avoids building the full `list_paragraphs()` result just to learn the count.
+
+**Returns:** Total number of paragraphs (the highest valid 1-based ref index) (int)
+
+**Example:**
+
+```python
+count = doc.paragraph_count()
+```
+
+#### `list_paragraphs(max_chars=80, start=1, limit=None)`
+
+List paragraphs with hash-anchored references. Refs are **1-based global** indexes (`P1`, `P2`, …) and stay correct across pages — a slice starting at paragraph 51 emits `P51#…`, not `P1#…`.
 
 **Parameters:**
 
-- `max_chars` (int): Maximum preview length. Use 0 for refs only.
+- `max_chars` (int): Maximum preview length. Use `0` for refs only (e.g. `P1#a7b2`), with no preview or `| ` separator.
+- `start` (int): 1-based index of the first paragraph to return (default 1). A `start` beyond the last paragraph yields an empty list.
+- `limit` (int | None): Maximum number of paragraphs to return, or `None` for all paragraphs from `start` onward (default `None`).
 
 **Returns:** List of strings in the form `P{index}#{hash}| preview text`
 
@@ -69,6 +83,11 @@ List paragraphs with hash-anchored references.
 refs = doc.list_paragraphs()
 for ref in refs:
     print(ref)
+
+# Page through a large document
+count = doc.paragraph_count()
+page1 = doc.list_paragraphs(start=1, limit=50)
+page2 = doc.list_paragraphs(start=51, limit=50)
 ```
 
 #### `get_visible_text()`

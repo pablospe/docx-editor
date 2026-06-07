@@ -47,6 +47,15 @@ P2#f3c1| Payment is due within 30 days...
 P3#b2c4| Section 5 describes review obligations...
 ```
 
+For large documents, page through paragraphs with `start`/`limit`. Refs keep their global 1-based index (page 2 starts at `P51`, not `P1`):
+
+```python
+with Document.open("contract.docx") as doc:
+    total = doc.paragraph_count()
+    for paragraph in doc.list_paragraphs(start=51, limit=50):
+        print(paragraph)
+```
+
 Use the `P{index}#{hash}` part as the `paragraph=` argument. Edit methods return a new paragraph ref after the hash changes, so keep the returned value when chaining edits in the same paragraph.
 
 ## Track Changes

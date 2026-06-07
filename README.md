@@ -117,6 +117,10 @@ with Document.open("reviewed.docx", author="Editor") as doc:
     # List paragraphs to find hash-anchored references
     refs = doc.list_paragraphs()
 
+    # Page through large documents (refs stay globally indexed: P51, P52, ...)
+    total = doc.paragraph_count()
+    page = doc.list_paragraphs(start=51, limit=50)
+
     # Find text across element boundaries
     match = doc.find_text("Aim: To")
     if match and match.spans_boundary:

@@ -158,25 +158,56 @@ class Document:
         new_hash = compute_paragraph_hash(p)
         return f"P{ref.index}#{new_hash}"
 
-    def list_paragraphs(self, max_chars: int = 80) -> list[str]:
-        """List all paragraphs with hash-anchored references.
+    def paragraph_count(self) -> int:
+        """Return the total number of paragraphs in the document.
+
+        Cheap bounds check for pagination — avoids building the full
+        :meth:`list_paragraphs` result just to learn the count.
+
+        Returns:
+            Total number of paragraphs (the highest valid 1-based ref index).
+        """
+        self._ensure_open()
+        return len(self._document_editor.dom.getElementsByTagName("w:p"))
+
+    def list_paragraphs(self, max_chars: int = 80, start: int = 1, limit: int | None = None) -> list[str]:
+        """List paragraphs with hash-anchored references.
 
         Returns a list of strings like "P1#a7b2| Introduction to the..."
-        for use as stable paragraph references in editing operations.
+        for use as stable paragraph references in editing operations. Refs
+        are **1-based global** indexes (P1, P2, …) and stay correct across
+        pages — a slice starting at paragraph 51 emits "P51#…", not "P1#…".
 
         Args:
             max_chars: Maximum characters for the preview text (default 80).
-                Use 0 to get only hash refs without preview text.
+                Use 0 to get only the hash refs (e.g. "P1#a7b2"), with no
+                preview or "| " separator.
+            start: 1-based index of the first paragraph to return (default 1).
+                A ``start`` beyond the last paragraph yields an empty list.
+            limit: Maximum number of paragraphs to return, or ``None`` for all
+                paragraphs from ``start`` onward (default ``None``).
 
         Returns:
-            List of hash-tagged paragraph preview strings
+            List of hash-tagged paragraph preview strings.
+
+        Example:
+            Page through a large document::
+
+                count = doc.paragraph_count()
+                page1 = doc.list_paragraphs(start=1, limit=50)
+                page2 = doc.list_paragraphs(start=51, limit=50)
         """
         self._ensure_open()
         paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        begin = max(0, start - 1)  # guard 0/negative start; keep refs correct
+        end = begin + limit if limit is not None else None
         result = []
-        for i, p in enumerate(paragraphs, start=1):
+        for i, p in enumerate(paragraphs[begin:end], start=begin + 1):
             h = compute_paragraph_hash(p)
             tm = build_text_map(p)
+            if max_chars == 0:
+                result.append(f"P{i}#{h}")
+                continue
             preview = tm.text[:max_chars]
             if len(tm.text) > max_chars:
                 preview += "..."

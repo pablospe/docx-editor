@@ -176,6 +176,65 @@ class TestListParagraphs:
         finally:
             doc.close()
 
+    def test_paragraph_count_matches_list_len(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            count = doc.paragraph_count()
+            assert isinstance(count, int)
+            assert count == len(doc.list_paragraphs())
+        finally:
+            doc.close()
+
+    def test_pagination_slice(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            full = doc.list_paragraphs()
+            assert len(full) >= 3, "fixture needs >=3 paragraphs for this test"
+            page = doc.list_paragraphs(start=2, limit=2)
+            assert len(page) == 2
+            # Global 1-based indexing preserved across pages
+            assert page[0].startswith("P2#")
+            assert page[1].startswith("P3#")
+            assert page == full[1:3]
+        finally:
+            doc.close()
+
+    def test_pagination_start_only(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            full = doc.list_paragraphs()
+            assert doc.list_paragraphs(start=2) == full[1:]
+        finally:
+            doc.close()
+
+    def test_pagination_start_beyond_total_returns_empty(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            beyond = doc.paragraph_count() + 5
+            assert doc.list_paragraphs(start=beyond) == []
+        finally:
+            doc.close()
+
+    def test_max_chars_zero_refs_only(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            refs_only = doc.list_paragraphs(max_chars=0)
+            default = doc.list_paragraphs()
+            for entry, default_entry in zip(refs_only, default, strict=True):
+                # Bare ref: no separator, no trailing space
+                assert re.match(r"^P\d+#[0-9a-f]{4}$", entry), f"Bad format: {entry}"
+                # Ref matches the prefix of the default listing
+                assert default_entry.startswith(entry + "| ")
+        finally:
+            doc.close()
+
+    def test_default_behavior_unchanged(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            assert doc.list_paragraphs() == doc.list_paragraphs(start=1, limit=None)
+        finally:
+            doc.close()
+
 
 # ==================== Scoped Operations Tests ====================
 
