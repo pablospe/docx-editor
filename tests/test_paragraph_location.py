@@ -554,7 +554,7 @@ class TestListParagraphLocations:
         with Document.open(gridspan_docx) as doc:
             entries = doc.list_paragraph_locations()
             assert len(entries) == len(doc.list_paragraphs())
-            assert len(entries) == 11  # P1–P11 from the fixture
+            assert len(entries) == 11  # P1-P11 from the fixture
 
     def test_refs_match_list_paragraphs_tokens(self, gridspan_docx):
         with Document.open(gridspan_docx) as doc:
@@ -565,7 +565,7 @@ class TestListParagraphLocations:
     def test_equivalence_with_per_call_accessor(self, gridspan_docx):
         """Every batch entry equals the per-call ``get_paragraph_location``.
 
-        Covers body (P1/P8/P11), gridSpan row (P2–P4), plain row (P5–P7),
+        Covers body (P1/P8/P11), gridSpan row (P2-P4), plain row (P5-P7),
         and nested table (P9/P10) — the full fixture.
         """
         with Document.open(gridspan_docx) as doc:
