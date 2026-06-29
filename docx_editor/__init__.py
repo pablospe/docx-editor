@@ -55,6 +55,7 @@ from .exceptions import (
 )
 from .track_changes import EditOperation, Revision
 from .xml_editor import (
+    ParagraphInfo,
     ParagraphLocation,
     ParagraphRef,
     TableCell,
@@ -93,6 +94,7 @@ __all__ = [
     "TextMap",
     "TextMapMatch",
     "ParagraphRef",
+    "ParagraphInfo",
     "build_text_map",
     "compute_paragraph_hash",
     "find_in_text_map",
