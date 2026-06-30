@@ -6,7 +6,9 @@ and comments.
 
 import html
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
+from xml.dom.minidom import Element
 
 from .comments import Comment, CommentManager
 from .exceptions import HashMismatchError, ParagraphIndexError
@@ -221,7 +223,7 @@ class Document:
             result.append(f"P{i}#{h}| {preview}")
         return result
 
-    def _iter_paragraph_slice(self, start: int, limit: int | None):
+    def _iter_paragraph_slice(self, start: int, limit: int | None) -> Iterator[tuple[int, Element]]:
         """Yield ``(index, paragraph_element)`` pairs for a 1-based slice.
 
         Shared pagination logic for :meth:`list_paragraphs` and
@@ -247,8 +249,11 @@ class Document:
         Like :meth:`list_paragraphs`, but returns named records (index, ref,
         full text) instead of pipe-delimited preview strings. The ``text``
         field is always the full, untruncated paragraph text — there is no
-        ``max_chars`` parameter. ``str(info)`` reproduces the pipe-delimited
-        format emitted by :meth:`list_paragraphs` (``"P{i}#{hash}| {text}"``).
+        ``max_chars`` parameter. ``str(info)`` uses the same
+        ``"P{i}#{hash}| {text}"`` delimiter format as :meth:`list_paragraphs`,
+        but always with the full text (it matches :meth:`list_paragraphs`
+        output only when that call's ``max_chars`` is large enough to avoid
+        truncation).
 
         Refs are **1-based global** indexes (P1, P2, …) and stay correct
         across slices, with the same ``start``/``limit`` semantics as
@@ -267,6 +272,13 @@ class Document:
 
         Raises:
             ValueError: If ``start`` < 1, or ``limit`` < 0.
+
+        Example:
+            # Caller chooses the page size; ``start`` walks forward by it.
+            page_size = 50
+            for start in range(1, doc.paragraph_count() + 1, page_size):
+                for info in doc.list_paragraphs_structured(start=start, limit=page_size):
+                    print(info.ref, info.text)
         """
         self._ensure_open()
         result = []

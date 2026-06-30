@@ -337,7 +337,6 @@ class TestListParagraphsStructured:
             unlimited = doc.list_paragraphs(max_chars=10**9)
             for info, entry in zip(structured, unlimited, strict=True):
                 preview = entry.split("| ", 1)[1]
-                assert "..." not in info.text or info.text == preview
                 assert info.text == preview
         finally:
             doc.close()

@@ -116,11 +116,10 @@ class ParagraphRef:
 
 @dataclass(frozen=True)
 class ParagraphInfo:
-    """Structured record for one paragraph: 1-based index, hash-anchored
-    ref, and full (untruncated) visible text.
+    """Structured record for a paragraph: 1-based index, hash-anchored ref, and full visible text.
 
-    ``str(info)`` reproduces the pipe-delimited format emitted by
-    :meth:`Document.list_paragraphs` (``"P{i}#{hash}| {text}"``).
+    ``str(info)`` uses the same ``"P{i}#{hash}| {text}"`` delimiter format as
+    :meth:`Document.list_paragraphs`, always with the full, untruncated text.
     """
 
     index: int  # 1-based paragraph index
