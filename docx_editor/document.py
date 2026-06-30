@@ -224,12 +224,13 @@ class Document:
         return result
 
     def _iter_paragraph_slice(self, start: int, limit: int | None) -> Iterator[tuple[int, Element]]:
-        """Yield ``(index, paragraph_element)`` pairs for a 1-based slice.
+        """Return ``(index, paragraph_element)`` pairs for a 1-based slice.
 
         Shared pagination logic for :meth:`list_paragraphs` and
         :meth:`list_paragraphs_structured`. ``index`` is the 1-based global
         paragraph index, preserved across slices. Callers handle
-        ``_ensure_open()`` themselves.
+        ``_ensure_open()`` themselves. Argument validation is eager so callers
+        get a ``ValueError`` immediately, not on first iteration.
 
         Raises:
             ValueError: If ``start`` < 1, or ``limit`` < 0 when given.
@@ -241,7 +242,7 @@ class Document:
         paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
         begin = start - 1
         end = begin + limit if limit is not None else None
-        yield from enumerate(paragraphs[begin:end], start=begin + 1)
+        return enumerate(paragraphs[begin:end], start=begin + 1)
 
     def list_paragraphs_structured(self, *, start: int = 1, limit: int | None = None) -> list[ParagraphInfo]:
         """List paragraphs as structured :class:`ParagraphInfo` records.
@@ -287,6 +288,36 @@ class Document:
             text = build_text_map(p).text
             result.append(ParagraphInfo(index=i, ref=f"P{i}#{h}", text=text))
         return result
+
+    def get_paragraph(self, index: int) -> ParagraphInfo:
+        """Return one paragraph as a structured :class:`ParagraphInfo` record.
+
+        Single-item counterpart to :meth:`list_paragraphs_structured`. The
+        returned record (index, hash-anchored ref, full untruncated text) is
+        identical to the one that method would emit for the same paragraph.
+
+        Args:
+            index: 1-based paragraph index (P1 is ``index=1``). Must be in
+                ``1 .. paragraph_count()``.
+
+        Returns:
+            :class:`ParagraphInfo` for the paragraph at ``index``.
+
+        Raises:
+            ParagraphIndexError: If ``index`` is out of range (``< 1`` or
+                greater than :meth:`paragraph_count`).
+
+        Example:
+            info = doc.get_paragraph(1)
+            print(info.ref, info.text)
+        """
+        self._ensure_open()
+        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        if index < 1 or index > len(paragraphs):
+            raise ParagraphIndexError(index, len(paragraphs))
+        p = paragraphs[index - 1]
+        h = compute_paragraph_hash(p)
+        return ParagraphInfo(index=index, ref=f"P{index}#{h}", text=build_text_map(p).text)
 
     def get_paragraph_location(self, ref: str) -> ParagraphLocation:
         """Return the structural location of the paragraph identified by ``ref``.

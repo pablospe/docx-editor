@@ -382,15 +382,16 @@ class TestListParagraphsStructured:
         finally:
             doc.close()
 
-    def test_invalid_start_raises(self, temp_docx):
+    def test_pagination_invalid_start_raises(self, temp_docx):
         doc = Document.open(temp_docx)
         try:
-            with pytest.raises(ValueError, match="start must be >= 1"):
-                doc.list_paragraphs_structured(start=0)
+            for bad in (0, -1):
+                with pytest.raises(ValueError, match="start must be >= 1"):
+                    doc.list_paragraphs_structured(start=bad)
         finally:
             doc.close()
 
-    def test_negative_limit_raises(self, temp_docx):
+    def test_pagination_negative_limit_raises(self, temp_docx):
         doc = Document.open(temp_docx)
         try:
             with pytest.raises(ValueError, match="limit must be >= 0"):
@@ -403,6 +404,78 @@ class TestListParagraphsStructured:
         try:
             structured = doc.list_paragraphs_structured()
             assert len(structured) == len(doc.list_paragraphs())
+        finally:
+            doc.close()
+
+
+# ==================== get_paragraph Tests ====================
+
+
+class TestGetParagraph:
+    @pytest.fixture
+    def temp_docx(self):
+        test_data = Path(__file__).parent / "test_data" / "simple.docx"
+        temp = tempfile.mkdtemp(prefix="docx_hash_test_")
+        dest = Path(temp) / "test.docx"
+        shutil.copy(test_data, dest)
+        yield dest
+        shutil.rmtree(temp, ignore_errors=True)
+
+    def test_valid_index_returns_paragraph_info(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            info = doc.get_paragraph(1)
+            assert isinstance(info, ParagraphInfo)
+            assert info.index == 1
+            assert re.match(r"^P1#[0-9a-f]{4}$", info.ref), f"Bad ref: {info.ref}"
+            assert isinstance(info.text, str)
+        finally:
+            doc.close()
+
+    def test_index_1_matches_first_structured(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            assert doc.get_paragraph(1) == doc.list_paragraphs_structured()[0]
+        finally:
+            doc.close()
+
+    def test_last_index_matches_last_structured(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            last = doc.paragraph_count()
+            assert doc.get_paragraph(last) == doc.list_paragraphs_structured()[-1]
+        finally:
+            doc.close()
+
+    def test_str_reproduces_pipe_format(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            info = doc.get_paragraph(1)
+            assert str(info) == f"{info.ref}| {info.text}"
+        finally:
+            doc.close()
+
+    def test_index_zero_raises(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            with pytest.raises(ParagraphIndexError):
+                doc.get_paragraph(0)
+        finally:
+            doc.close()
+
+    def test_negative_index_raises(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            with pytest.raises(ParagraphIndexError):
+                doc.get_paragraph(-1)
+        finally:
+            doc.close()
+
+    def test_index_past_end_raises(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            with pytest.raises(ParagraphIndexError):
+                doc.get_paragraph(doc.paragraph_count() + 1)
         finally:
             doc.close()
 
