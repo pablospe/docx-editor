@@ -45,6 +45,16 @@ class EditOperation:
 
 
 @dataclass
+class EditValidationResult:
+    """Outcome of validating one EditOperation in a dry-run batch."""
+
+    index: int  # 0-based position in the input operations list
+    paragraph: str | None  # the operation's paragraph ref (None if it was missing)
+    valid: bool  # True if the op would apply cleanly
+    error: str | None = None  # human-readable reason when not valid
+
+
+@dataclass
 class Revision:
     """Represents a tracked change (insertion or deletion)."""
 
@@ -213,6 +223,87 @@ class RevisionManager:
 
         else:
             raise ValueError(f"Unknown action: {op.action}")
+
+    def validate_batch(self, operations: list[EditOperation]) -> list[EditValidationResult]:
+        """Validate a batch of edits without applying any of them.
+
+        Mirrors the checks in ``batch_edit`` / ``_apply_single_edit`` (paragraph
+        ref format, hash freshness, per-action argument requirements, and target
+        text existence) but never raises and never mutates the document. Each
+        operation gets its own result so the caller sees the full picture even
+        when some ops are valid and others are not.
+
+        Limitation: each operation is validated independently against the
+        *current* document state; sequential effects are not simulated. A batch
+        with multiple operations on the same paragraph (where one op's edit
+        changes what a later op would see) may validate differently than it
+        applies. Cross-paragraph batches are unaffected, since edits never
+        change the paragraph count.
+
+        Args:
+            operations: List of EditOperation objects (each should have paragraph set)
+
+        Returns:
+            One EditValidationResult per operation, in input order.
+        """
+        results = []
+        for i, op in enumerate(operations):
+            error = self._validate_single(op)
+            results.append(
+                EditValidationResult(
+                    index=i,
+                    paragraph=op.paragraph,
+                    valid=error is None,
+                    error=error,
+                )
+            )
+        return results
+
+    def _validate_single(self, op: EditOperation) -> str | None:
+        """Return an error message if ``op`` would fail, or None if it is valid.
+
+        Reuses ``_resolve_paragraph`` and ``_find_in_paragraph`` so dry-run
+        validation cannot drift from real application semantics. Reads only.
+        """
+        if not op.paragraph:
+            return "paragraph reference is required for batch mode"
+
+        try:
+            ref = ParagraphRef.parse(op.paragraph)
+        except ValueError as e:
+            return str(e)
+
+        try:
+            p = self._resolve_paragraph(ref)
+        except (ParagraphIndexError, HashMismatchError) as e:
+            return str(e)
+
+        # Resolve the per-action argument requirements and the text this op must
+        # locate. Mirrors _apply_single_edit so validation cannot drift.
+        if op.action == "replace":
+            if not op.find or op.replace_with is None:
+                return "replace requires 'find' and 'replace_with'"
+            target = op.find
+        elif op.action == "delete":
+            if not op.text:
+                return "delete requires 'text'"
+            target = op.text
+        elif op.action in ("insert_after", "insert_before"):
+            if not op.anchor or op.text is None:
+                return f"{op.action} requires 'anchor' and 'text'"
+            target = op.anchor
+        else:
+            return f"Unknown action: {op.action}"
+
+        # The find never raises for well-formed input, but a dry-run must not
+        # throw for any input (e.g. a negative ``occurrence``); report instead.
+        try:
+            if self._find_in_paragraph(p, target, op.occurrence) is None:
+                return f"text {target!r} not found in paragraph {op.paragraph} ({self._paragraph_preview(p)!r})"
+        except Exception as e:
+            return f"could not validate operation: {e}"
+
+        return None
 
     def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> None:
         """Rewrite multiple paragraphs with upfront hash validation."""

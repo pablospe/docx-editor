@@ -10,6 +10,7 @@ from docx_editor import (
     BatchOperationError,
     Document,
     EditOperation,
+    EditValidationResult,
     HashMismatchError,
     TextNotFoundError,
 )
@@ -324,6 +325,180 @@ class TestBatchEdit:
         ops = [EditOperation(action="unknown", paragraph=ref)]  # type: ignore[arg-type]
         with pytest.raises(BatchOperationError, match="Unknown action"):
             doc.batch_edit(ops)
+
+
+class TestBatchEditDryRun:
+    """dry_run=True validates every op without mutating the document."""
+
+    def test_all_valid(self, multi_para_doc):
+        """All-matching ops report valid=True, in input order, doc unchanged."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        before = doc.get_visible_text()
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 3",
+                replace_with="ITEM_THREE",
+                paragraph=refs[2].split("|")[0],
+            ),
+            EditOperation(
+                action="delete",
+                text="item 5",
+                paragraph=refs[4].split("|")[0],
+            ),
+            EditOperation(
+                action="insert_after",
+                anchor="item 8",
+                text=" [APPENDED]",
+                paragraph=refs[7].split("|")[0],
+            ),
+        ]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert len(results) == len(ops)
+        assert all(isinstance(r, EditValidationResult) for r in results)
+        assert all(r.valid for r in results)
+        assert all(r.error is None for r in results)
+        assert [r.index for r in results] == [0, 1, 2]
+        assert [r.paragraph for r in results] == [op.paragraph for op in ops]
+
+        # No edits applied.
+        assert doc.get_visible_text() == before
+
+    def test_stale_hash(self, multi_para_doc):
+        """A stale-hash op reports invalid with a hash-mismatch error; doc unchanged."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+
+        # Make P5's hash stale by editing it.
+        p5_ref = refs[4].split("|")[0]
+        doc.replace("item 5", "CHANGED", paragraph=p5_ref)
+        before = doc.get_visible_text()
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="CHANGED",
+                replace_with="EDIT_5",
+                paragraph=p5_ref,  # STALE hash
+            ),
+        ]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert len(results) == 1
+        assert results[0].valid is False
+        assert "hash" in results[0].error.lower()
+        assert doc.get_visible_text() == before
+
+    def test_missing_text(self, multi_para_doc):
+        """A valid ref but non-existent find/text reports invalid; doc unchanged."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        before = doc.get_visible_text()
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="NONEXISTENT",
+                replace_with="x",
+                paragraph=ref,
+            ),
+        ]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert results[0].valid is False
+        assert "not found" in results[0].error.lower()
+        assert doc.get_visible_text() == before
+
+    def test_mixed_valid_invalid(self, multi_para_doc):
+        """Valid + stale-hash + missing-text ops report per-op; order preserved; doc unchanged."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+
+        # Make P5 stale.
+        p5_ref = refs[4].split("|")[0]
+        doc.replace("item 5", "CHANGED", paragraph=p5_ref)
+        before = doc.get_visible_text()
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 3",
+                replace_with="ITEM_THREE",
+                paragraph=refs[2].split("|")[0],  # valid
+            ),
+            EditOperation(
+                action="replace",
+                find="CHANGED",
+                replace_with="x",
+                paragraph=p5_ref,  # stale hash
+            ),
+            EditOperation(
+                action="delete",
+                text="NONEXISTENT",
+                paragraph=refs[7].split("|")[0],  # missing text
+            ),
+        ]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert [r.index for r in results] == [0, 1, 2]
+        assert results[0].valid is True
+        assert results[0].error is None
+        assert results[1].valid is False
+        assert "hash" in results[1].error.lower()
+        assert results[2].valid is False
+        assert "not found" in results[2].error.lower()
+
+        assert doc.get_visible_text() == before
+
+    def test_empty_batch(self, multi_para_doc):
+        """Empty dry-run batch returns an empty list."""
+        doc, _ = multi_para_doc
+        assert doc.batch_edit([], dry_run=True) == []
+
+    def test_not_found_error_includes_preview(self, multi_para_doc):
+        """A not-found error carries the paragraph preview for easier debugging."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+
+        ops = [
+            EditOperation(action="replace", find="NONEXISTENT", replace_with="x", paragraph=ref),
+        ]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert results[0].valid is False
+        # The paragraph's real text ("item 1") should appear in the error preview.
+        assert "item 1" in results[0].error
+
+    def test_bad_occurrence_reports_instead_of_raising(self, multi_para_doc):
+        """A malformed op (negative occurrence) is reported, never raised; doc unchanged."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        before = doc.get_visible_text()
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 1",
+                replace_with="x",
+                paragraph=ref,
+                occurrence=-1,  # malformed
+            ),
+        ]
+
+        # Must not raise despite the malformed occurrence.
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert results[0].valid is False
+        assert results[0].error
+        assert doc.get_visible_text() == before
 
 
 class TestStructuredBatchOperationError:

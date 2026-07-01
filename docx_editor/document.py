@@ -8,11 +8,12 @@ import html
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal, overload
 from xml.dom.minidom import Element
 
 from .comments import Comment, CommentManager
 from .exceptions import HashMismatchError, ParagraphIndexError
-from .track_changes import EditOperation, Revision, RevisionManager
+from .track_changes import EditOperation, EditValidationResult, Revision, RevisionManager
 from .workspace import Workspace
 from .xml_editor import (
     DocxXMLEditor,
@@ -496,7 +497,15 @@ class Document:
         self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
         return self._compute_new_ref(paragraph)
 
-    def batch_edit(self, operations: list[EditOperation]) -> list[str]:
+    @overload
+    def batch_edit(self, operations: list[EditOperation], *, dry_run: Literal[False] = ...) -> list[str]: ...
+
+    @overload
+    def batch_edit(self, operations: list[EditOperation], *, dry_run: Literal[True]) -> list[EditValidationResult]: ...
+
+    def batch_edit(
+        self, operations: list[EditOperation], *, dry_run: bool = False
+    ) -> list[str] | list[EditValidationResult]:
         """Apply multiple edits atomically with upfront hash validation.
 
         All paragraph hashes are validated before any edits are applied.
@@ -506,17 +515,34 @@ class Document:
 
         Args:
             operations: List of EditOperation objects
+            dry_run: If True, validate every operation without applying any
+                edits and return a list of EditValidationResult (one per
+                operation, in input order). The document is left unchanged.
+                Each operation is validated independently against the current
+                document; sequential effects between multiple operations on the
+                same paragraph are not simulated (see
+                RevisionManager.validate_batch).
 
         Returns:
-            List of new paragraph references with updated hashes, in input order.
+            When dry_run is False: list of new paragraph references with updated
+            hashes, in input order.
+            When dry_run is True: list of EditValidationResult, one per operation.
 
         Example:
             new_refs = doc.batch_edit([
                 EditOperation(action="replace", find="old", replace_with="new", paragraph="P20#a7b2"),
                 EditOperation(action="delete", text="remove", paragraph="P15#f3c1"),
             ])
+
+            # Pre-flight the batch (note: same-paragraph sequential effects are
+            # not simulated — see the dry_run note above):
+            results = doc.batch_edit(ops, dry_run=True)
+            if all(r.valid for r in results):
+                doc.batch_edit(ops)
         """
         self._ensure_open()
+        if dry_run:
+            return self._revision_manager.validate_batch(operations)
         self._revision_manager.batch_edit(operations)
         return [self._compute_new_ref(op.paragraph) for op in operations]
 
