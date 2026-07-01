@@ -348,7 +348,7 @@ class TestListParagraphsStructured:
         try:
             info = doc.list_paragraphs_structured()[0]
             with pytest.raises(dataclasses.FrozenInstanceError):
-                info.text = "mutated"
+                info.text = "mutated"  # ty: ignore[invalid-assignment]
         finally:
             doc.close()
 
