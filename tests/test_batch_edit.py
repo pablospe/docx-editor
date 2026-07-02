@@ -500,6 +500,65 @@ class TestBatchEditDryRun:
         assert results[0].error
         assert doc.get_visible_text() == before
 
+    def test_missing_paragraph_ref(self, multi_para_doc):
+        """An op without a paragraph ref is invalid, with paragraph=None on the result."""
+        doc, _ = multi_para_doc
+
+        ops = [EditOperation(action="replace", find="item 1", replace_with="x", paragraph="")]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert results[0].valid is False
+        assert results[0].paragraph == ""
+        assert "paragraph" in results[0].error.lower()
+
+    def test_malformed_paragraph_ref(self, multi_para_doc):
+        """An unparseable paragraph ref is reported invalid, never raised."""
+        doc, _ = multi_para_doc
+
+        ops = [EditOperation(action="replace", find="x", replace_with="y", paragraph="not-a-ref")]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert results[0].valid is False
+        assert results[0].error
+
+    def test_missing_action_arguments(self, multi_para_doc):
+        """Each action reports its missing-argument error without raising."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        r0 = refs[0].split("|")[0]
+        r1 = refs[1].split("|")[0]
+        r2 = refs[2].split("|")[0]
+
+        ops = [
+            # replace without find/replace_with
+            EditOperation(action="replace", paragraph=r0),
+            # delete without text
+            EditOperation(action="delete", paragraph=r1),
+            # insert_after without anchor/text
+            EditOperation(action="insert_after", paragraph=r2),
+        ]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert all(r.valid is False for r in results)
+        assert "replace requires" in results[0].error
+        assert "delete requires" in results[1].error
+        assert "insert_after requires" in results[2].error
+
+    def test_unknown_action(self, multi_para_doc):
+        """An unrecognized action is reported invalid, never raised."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+
+        ops = [EditOperation(action="frobnicate", paragraph=ref)]  # type: ignore[arg-type]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert results[0].valid is False
+        assert "Unknown action" in results[0].error
+
 
 class TestStructuredBatchOperationError:
     def test_predispatch_missing_paragraph_has_operation_index(self, multi_para_doc):
