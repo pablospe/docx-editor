@@ -45,6 +45,16 @@ class EditOperation:
 
 
 @dataclass
+class EditValidationResult:
+    """Outcome of validating one EditOperation in a dry-run batch."""
+
+    index: int  # 0-based position in the input operations list
+    paragraph: str | None  # the operation's paragraph ref (None if it was missing)
+    valid: bool  # True if the op would apply cleanly
+    error: str | None = None  # human-readable reason when not valid
+
+
+@dataclass
 class Revision:
     """Represents a tracked change (insertion or deletion)."""
 
@@ -169,50 +179,129 @@ class RevisionManager:
                 pass
             raise
 
+    def _resolve_action_target(self, op: EditOperation) -> str:
+        """Validate op's required args and return the text this op must locate.
+
+        Shared by ``_apply_single_edit`` and ``_validate_single`` so the two
+        paths cannot drift out of sync. Rejects a negative ``occurrence`` up
+        front (the one non-well-formed input ``_find_in_paragraph`` chokes on)
+        so both paths fail cleanly before the search.
+
+        Raises:
+            ValueError: If ``occurrence`` is negative, required arguments for
+                op.action are missing, or the action is unrecognized.
+        """
+        if op.occurrence < 0:
+            raise ValueError(f"occurrence must be >= 0, got {op.occurrence}")
+
+        if op.action == "replace":
+            if not op.find or op.replace_with is None:
+                raise ValueError("replace requires 'find' and 'replace_with'")
+            return op.find
+        elif op.action == "delete":
+            if not op.text:
+                raise ValueError("delete requires 'text'")
+            return op.text
+        elif op.action in ("insert_after", "insert_before"):
+            if not op.anchor or op.text is None:
+                raise ValueError(f"{op.action} requires 'anchor' and 'text'")
+            return op.anchor
+        else:
+            raise ValueError(f"Unknown action: {op.action}")
+
     def _apply_single_edit(self, op: EditOperation) -> int:
         """Apply a single edit operation. Paragraph hash was already validated."""
         ref = ParagraphRef.parse(op.paragraph)
         p = self.editor.dom.getElementsByTagName("w:p")[ref.index - 1]
 
+        target = self._resolve_action_target(op)
+        match = self._find_in_paragraph(p, target, op.occurrence)
+        if match is None:
+            raise TextNotFoundError(
+                target,
+                paragraph_ref=op.paragraph,
+                paragraph_preview=self._paragraph_preview(p),
+            )
+
         if op.action == "replace":
-            if not op.find or op.replace_with is None:
-                raise ValueError("replace requires 'find' and 'replace_with'")
-            match = self._find_in_paragraph(p, op.find, op.occurrence)
-            if match is None:
-                raise TextNotFoundError(
-                    op.find,
-                    paragraph_ref=op.paragraph,
-                    paragraph_preview=self._paragraph_preview(p),
-                )
+            assert op.replace_with is not None  # guaranteed by _resolve_action_target
             return self._replace_across_nodes(match, op.replace_with)
-
         elif op.action == "delete":
-            if not op.text:
-                raise ValueError("delete requires 'text'")
-            match = self._find_in_paragraph(p, op.text, op.occurrence)
-            if match is None:
-                raise TextNotFoundError(
-                    op.text,
-                    paragraph_ref=op.paragraph,
-                    paragraph_preview=self._paragraph_preview(p),
-                )
             return self._delete_across_nodes(match)
-
-        elif op.action in ("insert_after", "insert_before"):
-            if not op.anchor or op.text is None:
-                raise ValueError(f"{op.action} requires 'anchor' and 'text'")
-            match = self._find_in_paragraph(p, op.anchor, op.occurrence)
-            if match is None:
-                raise TextNotFoundError(
-                    op.anchor,
-                    paragraph_ref=op.paragraph,
-                    paragraph_preview=self._paragraph_preview(p),
-                )
+        else:  # insert_after / insert_before
+            assert op.text is not None  # guaranteed by _resolve_action_target
             position = "after" if op.action == "insert_after" else "before"
             return self._insert_near_match(match, op.text, position)
 
-        else:
-            raise ValueError(f"Unknown action: {op.action}")
+    def validate_batch(self, operations: list[EditOperation]) -> list[EditValidationResult]:
+        """Validate a batch of edits without applying any of them.
+
+        Mirrors the checks in ``batch_edit`` / ``_apply_single_edit`` (paragraph
+        ref format, hash freshness, per-action argument requirements, and target
+        text existence) but never raises and never mutates the document. Each
+        operation gets its own result so the caller sees the full picture even
+        when some ops are valid and others are not.
+
+        Limitation: each operation is validated independently against the
+        *current* document state; sequential effects are not simulated. A batch
+        with multiple operations on the same paragraph (where one op's edit
+        changes what a later op would see) may validate differently than it
+        applies. Cross-paragraph batches are unaffected, since edits never
+        change the paragraph count.
+
+        Args:
+            operations: List of EditOperation objects (each should have paragraph set)
+
+        Returns:
+            One EditValidationResult per operation, in input order.
+        """
+        results = []
+        for i, op in enumerate(operations):
+            error = self._validate_single(op)
+            results.append(
+                EditValidationResult(
+                    index=i,
+                    paragraph=op.paragraph,
+                    valid=error is None,
+                    error=error,
+                )
+            )
+        return results
+
+    def _validate_single(self, op: EditOperation) -> str | None:
+        """Return an error message if ``op`` would fail, or None if it is valid.
+
+        Reuses ``_resolve_paragraph``, ``_resolve_action_target``, and
+        ``_find_in_paragraph`` — the same helpers ``_apply_single_edit`` uses —
+        so dry-run validation cannot drift from real application semantics.
+        Reads only.
+        """
+        if not op.paragraph:
+            return "paragraph reference is required for batch mode"
+
+        try:
+            ref = ParagraphRef.parse(op.paragraph)
+        except ValueError as e:
+            return str(e)
+
+        try:
+            p = self._resolve_paragraph(ref)
+        except (ParagraphIndexError, HashMismatchError) as e:
+            return str(e)
+
+        # Resolve required args + the text this op must locate via the same
+        # helper _apply_single_edit uses (which also rejects a negative
+        # occurrence), so validation cannot drift from application semantics and
+        # the find below never raises.
+        try:
+            target = self._resolve_action_target(op)
+        except ValueError as e:
+            return str(e)
+
+        if self._find_in_paragraph(p, target, op.occurrence) is None:
+            return f"text {target!r} not found in paragraph {op.paragraph} ({self._paragraph_preview(p)!r})"
+
+        return None
 
     def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> None:
         """Rewrite multiple paragraphs with upfront hash validation."""
