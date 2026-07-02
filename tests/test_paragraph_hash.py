@@ -12,6 +12,7 @@ from docx_editor import (
     Document,
     HashMismatchError,
     ParagraphIndexError,
+    ParagraphInfo,
     ParagraphRef,
     TextNotFoundError,
 )
@@ -264,6 +265,144 @@ class TestListParagraphs:
         try:
             with pytest.raises(ValueError, match="max_chars must be >= 0"):
                 doc.list_paragraphs(max_chars=-1)
+        finally:
+            doc.close()
+
+
+# ==================== list_paragraphs_structured Tests ====================
+
+
+class TestListParagraphsStructured:
+    @pytest.fixture
+    def temp_docx(self):
+        test_data = Path(__file__).parent / "test_data" / "simple.docx"
+        temp = tempfile.mkdtemp(prefix="docx_hash_test_")
+        dest = Path(temp) / "test.docx"
+        shutil.copy(test_data, dest)
+        yield dest
+        shutil.rmtree(temp, ignore_errors=True)
+
+    @pytest.fixture
+    def empty_docx(self):
+        test_data = Path(__file__).parent / "test_data" / "empty.docx"
+        temp = tempfile.mkdtemp(prefix="docx_hash_test_")
+        dest = Path(temp) / "test.docx"
+        shutil.copy(test_data, dest)
+        yield dest
+        shutil.rmtree(temp, ignore_errors=True)
+
+    def test_importable_from_top_level(self):
+        from docx_editor import ParagraphInfo  # noqa: F401
+
+    def test_returns_list_of_paragraph_info(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            result = doc.list_paragraphs_structured()
+            assert isinstance(result, list)
+            assert len(result) > 0
+            for info in result:
+                assert isinstance(info, ParagraphInfo)
+                assert isinstance(info.index, int)
+                assert isinstance(info.text, str)
+                assert re.match(r"^P\d+#[0-9a-f]{4}$", info.ref), f"Bad ref: {info.ref}"
+        finally:
+            doc.close()
+
+    def test_str_reproduces_pipe_format(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            result = doc.list_paragraphs_structured()
+            for info in result:
+                assert str(info) == f"{info.ref}| {info.text}"
+        finally:
+            doc.close()
+
+    def test_ref_matches_index_and_bare_ref(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            structured = doc.list_paragraphs_structured()
+            bare_refs = doc.list_paragraphs(max_chars=0)
+            assert len(structured) == len(bare_refs)
+            for info, bare in zip(structured, bare_refs, strict=True):
+                assert info.ref == bare
+                assert info.ref.startswith(f"P{info.index}#")
+        finally:
+            doc.close()
+
+    def test_text_is_full_untruncated(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            structured = doc.list_paragraphs_structured()
+            # Compare against an effectively-unlimited preview: full text, no "..."
+            unlimited = doc.list_paragraphs(max_chars=10**9)
+            for info, entry in zip(structured, unlimited, strict=True):
+                preview = entry.split("| ", 1)[1]
+                assert info.text == preview
+        finally:
+            doc.close()
+
+    def test_frozen(self, temp_docx):
+        import dataclasses
+
+        doc = Document.open(temp_docx)
+        try:
+            info = doc.list_paragraphs_structured()[0]
+            with pytest.raises(dataclasses.FrozenInstanceError):
+                info.text = "mutated"  # ty: ignore[invalid-assignment]
+        finally:
+            doc.close()
+
+    def test_pagination_slice(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            full = doc.list_paragraphs_structured()
+            assert len(full) >= 3, "fixture needs >=3 paragraphs for this test"
+            page = doc.list_paragraphs_structured(start=2, limit=2)
+            assert len(page) == 2
+            assert page[0].index == 2
+            assert page[1].index == 3
+            assert page[0].ref.startswith("P2#")
+            assert page[1].ref.startswith("P3#")
+            assert page == full[1:3]
+        finally:
+            doc.close()
+
+    def test_pagination_start_beyond_total_returns_empty(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            beyond = doc.paragraph_count() + 5
+            assert doc.list_paragraphs_structured(start=beyond) == []
+        finally:
+            doc.close()
+
+    def test_pagination_limit_zero_returns_empty(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            assert doc.list_paragraphs_structured(limit=0) == []
+        finally:
+            doc.close()
+
+    def test_invalid_start_raises(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            with pytest.raises(ValueError, match="start must be >= 1"):
+                doc.list_paragraphs_structured(start=0)
+        finally:
+            doc.close()
+
+    def test_negative_limit_raises(self, temp_docx):
+        doc = Document.open(temp_docx)
+        try:
+            with pytest.raises(ValueError, match="limit must be >= 0"):
+                doc.list_paragraphs_structured(limit=-1)
+        finally:
+            doc.close()
+
+    def test_empty_doc_matches_list_paragraphs_len(self, empty_docx):
+        doc = Document.open(empty_docx)
+        try:
+            structured = doc.list_paragraphs_structured()
+            assert len(structured) == len(doc.list_paragraphs())
         finally:
             doc.close()
 

@@ -6,7 +6,9 @@ and comments.
 
 import html
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
+from xml.dom.minidom import Element
 
 from .comments import Comment, CommentManager
 from .exceptions import HashMismatchError, ParagraphIndexError
@@ -14,6 +16,7 @@ from .track_changes import EditOperation, Revision, RevisionManager
 from .workspace import Workspace
 from .xml_editor import (
     DocxXMLEditor,
+    ParagraphInfo,
     ParagraphLocation,
     ParagraphRef,
     _build_table_index,
@@ -207,15 +210,8 @@ class Document:
         self._ensure_open()
         if max_chars < 0:
             raise ValueError(f"max_chars must be >= 0, got {max_chars}")
-        if start < 1:
-            raise ValueError(f"start must be >= 1, got {start}")
-        if limit is not None and limit < 0:
-            raise ValueError(f"limit must be >= 0, got {limit}")
-        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
-        begin = start - 1
-        end = begin + limit if limit is not None else None
         result = []
-        for i, p in enumerate(paragraphs[begin:end], start=begin + 1):
+        for i, p in self._iter_paragraph_slice(start, limit):
             h = compute_paragraph_hash(p)
             if max_chars == 0:
                 result.append(f"P{i}#{h}")
@@ -225,6 +221,71 @@ class Document:
             if len(tm.text) > max_chars:
                 preview += "..."
             result.append(f"P{i}#{h}| {preview}")
+        return result
+
+    def _iter_paragraph_slice(self, start: int, limit: int | None) -> Iterator[tuple[int, Element]]:
+        """Yield ``(index, paragraph_element)`` pairs for a 1-based slice.
+
+        Shared pagination logic for :meth:`list_paragraphs` and
+        :meth:`list_paragraphs_structured`. ``index`` is the 1-based global
+        paragraph index, preserved across slices. Callers handle
+        ``_ensure_open()`` themselves.
+
+        Raises:
+            ValueError: If ``start`` < 1, or ``limit`` < 0 when given.
+        """
+        if start < 1:
+            raise ValueError(f"start must be >= 1, got {start}")
+        if limit is not None and limit < 0:
+            raise ValueError(f"limit must be >= 0, got {limit}")
+        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        begin = start - 1
+        end = begin + limit if limit is not None else None
+        yield from enumerate(paragraphs[begin:end], start=begin + 1)
+
+    def list_paragraphs_structured(self, *, start: int = 1, limit: int | None = None) -> list[ParagraphInfo]:
+        """List paragraphs as structured :class:`ParagraphInfo` records.
+
+        Like :meth:`list_paragraphs`, but returns named records (index, ref,
+        full text) instead of pipe-delimited preview strings. The ``text``
+        field is always the full, untruncated paragraph text — there is no
+        ``max_chars`` parameter. ``str(info)`` uses the same
+        ``"P{i}#{hash}| {text}"`` delimiter format as :meth:`list_paragraphs`,
+        but always with the full text (it matches :meth:`list_paragraphs`
+        output only when that call's ``max_chars`` is large enough to avoid
+        truncation).
+
+        Refs are **1-based global** indexes (P1, P2, …) and stay correct
+        across slices, with the same ``start``/``limit`` semantics as
+        :meth:`list_paragraphs`.
+
+        Args:
+            start: 1-based index of the first paragraph to return (default 1).
+                Must be >= 1. A ``start`` beyond the last paragraph yields an
+                empty list.
+            limit: Maximum number of paragraphs to return, or ``None`` for all
+                paragraphs from ``start`` onward (default ``None``). Must be
+                >= 0 when given; ``0`` yields an empty list.
+
+        Returns:
+            List of :class:`ParagraphInfo` records.
+
+        Raises:
+            ValueError: If ``start`` < 1, or ``limit`` < 0.
+
+        Example:
+            # Caller chooses the page size; ``start`` walks forward by it.
+            page_size = 50
+            for start in range(1, doc.paragraph_count() + 1, page_size):
+                for info in doc.list_paragraphs_structured(start=start, limit=page_size):
+                    print(info.ref, info.text)
+        """
+        self._ensure_open()
+        result = []
+        for i, p in self._iter_paragraph_slice(start, limit):
+            h = compute_paragraph_hash(p)
+            text = build_text_map(p).text
+            result.append(ParagraphInfo(index=i, ref=f"P{i}#{h}", text=text))
         return result
 
     def get_paragraph_location(self, ref: str) -> ParagraphLocation:

@@ -114,6 +114,22 @@ class ParagraphRef:
         return cls(index=int(m.group(1)), hash=m.group(2))
 
 
+@dataclass(frozen=True)
+class ParagraphInfo:
+    """Structured record for a paragraph: 1-based index, hash-anchored ref, and full visible text.
+
+    ``str(info)`` uses the same ``"P{i}#{hash}| {text}"`` delimiter format as
+    :meth:`Document.list_paragraphs`, always with the full, untruncated text.
+    """
+
+    index: int  # 1-based paragraph index
+    ref: str  # "P{index}#{hash}"
+    text: str  # full visible text, untruncated
+
+    def __str__(self) -> str:
+        return f"{self.ref}| {self.text}"
+
+
 def compute_paragraph_hash(paragraph) -> str:
     """Compute a 4-char hex content hash for a paragraph element.
 
