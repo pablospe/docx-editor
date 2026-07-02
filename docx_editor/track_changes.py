@@ -292,13 +292,14 @@ class RevisionManager:
         except ValueError as e:
             return str(e)
 
-        # The find never raises for well-formed input, but a dry-run must not
-        # throw for any input (e.g. a negative ``occurrence``); report instead.
-        try:
-            if self._find_in_paragraph(p, target, op.occurrence) is None:
-                return f"text {target!r} not found in paragraph {op.paragraph} ({self._paragraph_preview(p)!r})"
-        except Exception as e:
-            return f"could not validate operation: {e}"
+        # A negative occurrence is the one non-well-formed input the find would
+        # choke on; reject it up front with a clear message so the dry-run never
+        # raises (and so we needn't catch broadly and mask unrelated bugs).
+        if op.occurrence < 0:
+            return f"occurrence must be >= 0, got {op.occurrence}"
+
+        if self._find_in_paragraph(p, target, op.occurrence) is None:
+            return f"text {target!r} not found in paragraph {op.paragraph} ({self._paragraph_preview(p)!r})"
 
         return None
 

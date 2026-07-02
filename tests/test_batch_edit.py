@@ -497,7 +497,7 @@ class TestBatchEditDryRun:
         results = doc.batch_edit(ops, dry_run=True)
 
         assert results[0].valid is False
-        assert results[0].error
+        assert "occurrence" in results[0].error
         assert doc.get_visible_text() == before
 
     def test_missing_paragraph_ref(self, multi_para_doc):
