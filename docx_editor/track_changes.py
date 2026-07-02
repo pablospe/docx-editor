@@ -180,15 +180,20 @@ class RevisionManager:
             raise
 
     def _resolve_action_target(self, op: EditOperation) -> str:
-        """Validate op's action-specific required args and return the search target.
+        """Validate op's required args and return the text this op must locate.
 
         Shared by ``_apply_single_edit`` and ``_validate_single`` so the two
-        paths cannot drift out of sync.
+        paths cannot drift out of sync. Rejects a negative ``occurrence`` up
+        front (the one non-well-formed input ``_find_in_paragraph`` chokes on)
+        so both paths fail cleanly before the search.
 
         Raises:
-            ValueError: If required arguments for op.action are missing, or the
-                action is unrecognized.
+            ValueError: If ``occurrence`` is negative, required arguments for
+                op.action are missing, or the action is unrecognized.
         """
+        if op.occurrence < 0:
+            raise ValueError(f"occurrence must be >= 0, got {op.occurrence}")
+
         if op.action == "replace":
             if not op.find or op.replace_with is None:
                 raise ValueError("replace requires 'find' and 'replace_with'")
@@ -284,19 +289,14 @@ class RevisionManager:
         except (ParagraphIndexError, HashMismatchError) as e:
             return str(e)
 
-        # Resolve the per-action argument requirements and the text this op must
-        # locate via the same helper _apply_single_edit uses, so validation
-        # cannot drift from application semantics.
+        # Resolve required args + the text this op must locate via the same
+        # helper _apply_single_edit uses (which also rejects a negative
+        # occurrence), so validation cannot drift from application semantics and
+        # the find below never raises.
         try:
             target = self._resolve_action_target(op)
         except ValueError as e:
             return str(e)
-
-        # A negative occurrence is the one non-well-formed input the find would
-        # choke on; reject it up front with a clear message so the dry-run never
-        # raises (and so we needn't catch broadly and mask unrelated bugs).
-        if op.occurrence < 0:
-            return f"occurrence must be >= 0, got {op.occurrence}"
 
         if self._find_in_paragraph(p, target, op.occurrence) is None:
             return f"text {target!r} not found in paragraph {op.paragraph} ({self._paragraph_preview(p)!r})"

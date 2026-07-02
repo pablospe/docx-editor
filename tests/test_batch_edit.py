@@ -616,6 +616,28 @@ class TestStructuredBatchOperationError:
         assert err.operation_index == 1
         assert "Unknown action" in err.reason
 
+    def test_inner_negative_occurrence_has_operation_index(self, multi_para_doc):
+        """A negative occurrence fails cleanly on the apply path (no internal error)."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        before = doc.get_visible_text()
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 1",
+                replace_with="x",
+                paragraph=refs[0].split("|")[0],
+                occurrence=-1,
+            ),
+        ]
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_edit(ops)
+        err = exc.value
+        assert err.operation_index == 0
+        assert "occurrence" in err.reason
+        # Rejected before any mutation.
+        assert doc.get_visible_text() == before
+
     def test_non_batch_value_error_unchanged(self):
         """Malformed paragraph refs outside batch paths still raise plain ValueError."""
         from docx_editor import ParagraphRef
