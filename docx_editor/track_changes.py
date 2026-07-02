@@ -179,50 +179,54 @@ class RevisionManager:
                 pass
             raise
 
+    def _resolve_action_target(self, op: EditOperation) -> str:
+        """Validate op's action-specific required args and return the search target.
+
+        Shared by ``_apply_single_edit`` and ``_validate_single`` so the two
+        paths cannot drift out of sync.
+
+        Raises:
+            ValueError: If required arguments for op.action are missing, or the
+                action is unrecognized.
+        """
+        if op.action == "replace":
+            if not op.find or op.replace_with is None:
+                raise ValueError("replace requires 'find' and 'replace_with'")
+            return op.find
+        elif op.action == "delete":
+            if not op.text:
+                raise ValueError("delete requires 'text'")
+            return op.text
+        elif op.action in ("insert_after", "insert_before"):
+            if not op.anchor or op.text is None:
+                raise ValueError(f"{op.action} requires 'anchor' and 'text'")
+            return op.anchor
+        else:
+            raise ValueError(f"Unknown action: {op.action}")
+
     def _apply_single_edit(self, op: EditOperation) -> int:
         """Apply a single edit operation. Paragraph hash was already validated."""
         ref = ParagraphRef.parse(op.paragraph)
         p = self.editor.dom.getElementsByTagName("w:p")[ref.index - 1]
 
+        target = self._resolve_action_target(op)
+        match = self._find_in_paragraph(p, target, op.occurrence)
+        if match is None:
+            raise TextNotFoundError(
+                target,
+                paragraph_ref=op.paragraph,
+                paragraph_preview=self._paragraph_preview(p),
+            )
+
         if op.action == "replace":
-            if not op.find or op.replace_with is None:
-                raise ValueError("replace requires 'find' and 'replace_with'")
-            match = self._find_in_paragraph(p, op.find, op.occurrence)
-            if match is None:
-                raise TextNotFoundError(
-                    op.find,
-                    paragraph_ref=op.paragraph,
-                    paragraph_preview=self._paragraph_preview(p),
-                )
+            assert op.replace_with is not None  # guaranteed by _resolve_action_target
             return self._replace_across_nodes(match, op.replace_with)
-
         elif op.action == "delete":
-            if not op.text:
-                raise ValueError("delete requires 'text'")
-            match = self._find_in_paragraph(p, op.text, op.occurrence)
-            if match is None:
-                raise TextNotFoundError(
-                    op.text,
-                    paragraph_ref=op.paragraph,
-                    paragraph_preview=self._paragraph_preview(p),
-                )
             return self._delete_across_nodes(match)
-
-        elif op.action in ("insert_after", "insert_before"):
-            if not op.anchor or op.text is None:
-                raise ValueError(f"{op.action} requires 'anchor' and 'text'")
-            match = self._find_in_paragraph(p, op.anchor, op.occurrence)
-            if match is None:
-                raise TextNotFoundError(
-                    op.anchor,
-                    paragraph_ref=op.paragraph,
-                    paragraph_preview=self._paragraph_preview(p),
-                )
+        else:  # insert_after / insert_before
+            assert op.text is not None  # guaranteed by _resolve_action_target
             position = "after" if op.action == "insert_after" else "before"
             return self._insert_near_match(match, op.text, position)
-
-        else:
-            raise ValueError(f"Unknown action: {op.action}")
 
     def validate_batch(self, operations: list[EditOperation]) -> list[EditValidationResult]:
         """Validate a batch of edits without applying any of them.
@@ -262,8 +266,10 @@ class RevisionManager:
     def _validate_single(self, op: EditOperation) -> str | None:
         """Return an error message if ``op`` would fail, or None if it is valid.
 
-        Reuses ``_resolve_paragraph`` and ``_find_in_paragraph`` so dry-run
-        validation cannot drift from real application semantics. Reads only.
+        Reuses ``_resolve_paragraph``, ``_resolve_action_target``, and
+        ``_find_in_paragraph`` — the same helpers ``_apply_single_edit`` uses —
+        so dry-run validation cannot drift from real application semantics.
+        Reads only.
         """
         if not op.paragraph:
             return "paragraph reference is required for batch mode"
@@ -279,21 +285,12 @@ class RevisionManager:
             return str(e)
 
         # Resolve the per-action argument requirements and the text this op must
-        # locate. Mirrors _apply_single_edit so validation cannot drift.
-        if op.action == "replace":
-            if not op.find or op.replace_with is None:
-                return "replace requires 'find' and 'replace_with'"
-            target = op.find
-        elif op.action == "delete":
-            if not op.text:
-                return "delete requires 'text'"
-            target = op.text
-        elif op.action in ("insert_after", "insert_before"):
-            if not op.anchor or op.text is None:
-                return f"{op.action} requires 'anchor' and 'text'"
-            target = op.anchor
-        else:
-            return f"Unknown action: {op.action}"
+        # locate via the same helper _apply_single_edit uses, so validation
+        # cannot drift from application semantics.
+        try:
+            target = self._resolve_action_target(op)
+        except ValueError as e:
+            return str(e)
 
         # The find never raises for well-formed input, but a dry-run must not
         # throw for any input (e.g. a negative ``occurrence``); report instead.
