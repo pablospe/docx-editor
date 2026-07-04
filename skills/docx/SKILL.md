@@ -556,6 +556,34 @@ with Document.open("contract.docx", author=author) as doc:
 
 4. **Verify** with `list_revisions()` if needed
 
+### Session Mode (persistent Python for multi-step editing)
+
+For 3+ operations on the same document — iterative review conversations, large
+documents, exploratory editing — use a persistent session instead of one-off
+scripts. The document (and all your variables) stays open between commands:
+
+```bash
+# Requires: pip install docx-editor[session]
+docx-session start
+
+docx-session exec "from docx_editor import Document; doc = Document.open('contract.docx', author='Reviewer')"
+docx-session exec "paras = doc.list_paragraphs(); print('\n'.join(str(p) for p in paras[:20]))"
+docx-session exec "ref = doc.replace('30 days', '45 days', paragraph='P2#f3c1'); ref"
+docx-session exec "doc.add_comment('45 days', 'Extended per negotiation.', paragraph=ref)"
+docx-session exec "doc.save(); doc.close()"
+
+docx-session stop
+```
+
+Rules:
+
+- **Always `docx-session stop` when the editing task is done** — don't leave kernels running.
+- Exit code 1 means the code raised: the traceback is on stderr, the session survives — fix the call and continue (introspect with `docx-session exec "import inspect; print(inspect.signature(doc.replace))"` when unsure).
+- Exit code 2 means timeout, 3 means no session is running.
+- Variables persist between `exec` calls: keep refs returned by edits in Python variables instead of re-running `list_paragraphs()`.
+- `doc.save()` raises `WorkspaceSyncError` if the file changed on disk while the session held it open (e.g. the user edited it in Word). Ask the user before retrying with `doc.save(force=True)` — force overwrites their changes.
+- For a single edit, a one-off script is still fine — session mode pays off with repeated operations.
+
 ### Complementary Tools
 
 | Task                    | Tool                                            |
