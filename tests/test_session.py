@@ -1,5 +1,8 @@
 """Tests for the persistent session module (docx_editor/session.py)."""
 
+import subprocess
+import sys
+
 import pytest
 
 pytest.importorskip("jupyter_client")
@@ -8,6 +11,7 @@ pytest.importorskip("ipykernel")
 from docx_editor.session import (  # noqa: E402
     exec_code,
     is_session_running,
+    main,
     start_session,
     stop_session,
 )
@@ -106,3 +110,40 @@ def test_exec_docx_editing_workflow(session_conn, temp_docx):
     assert int(r2.result) > 0
     r3 = exec_code("doc.close()", connection_file=session_conn)
     assert r3.status == "ok"
+
+
+def test_main_full_lifecycle(tmp_path, capsys):
+    conn = tmp_path / "kernel.json"
+    sf = ["--session-file", str(conn)]
+
+    assert main(["start", *sf]) == 0
+    assert "Session started" in capsys.readouterr().out
+
+    assert main(["status", *sf]) == 0
+    assert "running" in capsys.readouterr().out
+
+    assert main(["exec", "print('via cli'); 10 * 2", *sf]) == 0
+    out = capsys.readouterr().out
+    assert "via cli" in out
+    assert "20" in out
+
+    assert main(["exec", "1 / 0", *sf]) == 1
+    assert "ZeroDivisionError" in capsys.readouterr().err
+
+    assert main(["stop", *sf]) == 0
+    assert main(["status", *sf]) == 3
+
+
+def test_main_exec_without_session(tmp_path, capsys):
+    assert main(["exec", "1 + 1", "--session-file", str(tmp_path / "nope.json")]) == 3
+    assert "docx-session start" in capsys.readouterr().err
+
+
+def test_module_entrypoint_runs():
+    proc = subprocess.run(
+        [sys.executable, "-m", "docx_editor.session", "--help"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert "exec" in proc.stdout

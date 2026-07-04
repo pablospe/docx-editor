@@ -9,6 +9,7 @@ CLI (see main()):
     docx-session start | exec "code" | status | stop
 """
 
+import argparse
 import os
 import re
 import signal
@@ -33,7 +34,12 @@ def _client(connection_file: Path):
 
     kc = BlockingKernelClient(connection_file=str(connection_file))
     kc.load_connection_file()
-    kc.start_channels()
+    # Skip the heartbeat channel: we open a fresh short-lived client per call, and
+    # its background thread races with channel teardown, spraying "Too many open
+    # files" ZMQError tracebacks to stderr on every invocation. wait_for_ready()
+    # falls back to the shell kernel_info handshake when _hb_channel is None, which
+    # still detects a dead/absent kernel (times out -> RuntimeError).
+    kc.start_channels(hb=False)
     return kc
 
 
@@ -201,3 +207,84 @@ def exec_code(code: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
         )
     finally:
         kc.stop_channels()
+
+
+EXIT_OK = 0
+EXIT_ERROR = 1
+EXIT_TIMEOUT = 2
+EXIT_NO_SESSION = 3
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for docx-session."""
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--session-file",
+        type=Path,
+        default=DEFAULT_CONNECTION_FILE,
+        help=f"Kernel connection file (default: {DEFAULT_CONNECTION_FILE})",
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="docx-session",
+        description="Persistent Python session for multi-step .docx editing.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("start", parents=[common], help="Start a background kernel")
+    p_exec = sub.add_parser("exec", parents=[common], help="Execute code in the running kernel")
+    p_exec.add_argument("code", help="Python code to execute")
+    p_exec.add_argument("--timeout", type=float, default=120.0, help="Seconds to wait (default: 120)")
+    sub.add_parser("status", parents=[common], help="Check whether the kernel is answering")
+    sub.add_parser("stop", parents=[common], help="Shut the kernel down")
+    args = parser.parse_args(argv)
+
+    if args.command == "start":
+        try:
+            pid = start_session(args.session_file)
+        except RuntimeError as e:
+            print(e, file=sys.stderr)
+            return EXIT_ERROR
+        print(f"Session started (pid {pid}, connection file: {args.session_file})")
+        return EXIT_OK
+
+    if args.command == "status":
+        if is_session_running(args.session_file):
+            print("running")
+            return EXIT_OK
+        print("not running")
+        return EXIT_NO_SESSION
+
+    if args.command == "stop":
+        if stop_session(args.session_file):
+            print("stopped")
+            return EXIT_OK
+        print("no session")
+        return EXIT_NO_SESSION
+
+    # exec
+    try:
+        res = exec_code(args.code, connection_file=args.session_file, timeout=args.timeout)
+    except FileNotFoundError as e:
+        print(e, file=sys.stderr)
+        return EXIT_NO_SESSION
+
+    if res.stdout:
+        print(res.stdout, end="")
+    if res.stderr:
+        print(res.stderr, end="", file=sys.stderr)
+    if res.result is not None:
+        print(res.result)
+    if res.status == "error":
+        print(res.traceback, file=sys.stderr)
+        return EXIT_ERROR
+    if res.status == "timeout":
+        print(
+            f"Timed out after {args.timeout}s (kernel still running; the command may still finish).",
+            file=sys.stderr,
+        )
+        return EXIT_TIMEOUT
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
