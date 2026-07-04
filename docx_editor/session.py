@@ -10,11 +10,14 @@ CLI (see main()):
 """
 
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from queue import Empty
 
 DEFAULT_CONNECTION_FILE = Path.home() / ".cache" / "docx-editor" / "kernel.json"
 
@@ -128,3 +131,73 @@ def stop_session(connection_file: Path = DEFAULT_CONNECTION_FILE) -> bool:
     connection_file.unlink(missing_ok=True)
     pid_file.unlink(missing_ok=True)
     return True
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+@dataclass
+class ExecResult:
+    """Outcome of one exec_code() call against the session kernel."""
+
+    status: str  # "ok" | "error" | "timeout"
+    stdout: str = ""
+    stderr: str = ""
+    result: str | None = None  # repr of the last expression, if any
+    traceback: str | None = None  # ANSI-stripped traceback when status == "error"
+
+
+def exec_code(code: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: float = 120.0) -> ExecResult:
+    """Execute code in the session kernel and collect its output.
+
+    Raises:
+        FileNotFoundError: If no session connection file exists.
+    """
+    if not connection_file.exists():
+        raise FileNotFoundError(f"No session found ({connection_file} missing). Run 'docx-session start' first.")
+
+    kc = _client(connection_file)
+    try:
+        kc.wait_for_ready(timeout=10.0)
+        msg_id = kc.execute(code)
+
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        result: str | None = None
+        traceback: str | None = None
+        status = "ok"
+        deadline = time.monotonic() + timeout
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return ExecResult(status="timeout", stdout="".join(stdout_parts), stderr="".join(stderr_parts))
+            try:
+                msg = kc.get_iopub_msg(timeout=min(remaining, 1.0))
+            except Empty:
+                continue
+            if msg.get("parent_header", {}).get("msg_id") != msg_id:
+                continue
+
+            msg_type = msg["msg_type"]
+            content = msg["content"]
+            if msg_type == "stream":
+                target = stdout_parts if content["name"] == "stdout" else stderr_parts
+                target.append(content["text"])
+            elif msg_type in ("execute_result", "display_data"):
+                result = content.get("data", {}).get("text/plain", result)
+            elif msg_type == "error":
+                status = "error"
+                traceback = _ANSI_RE.sub("", "\n".join(content["traceback"]))
+            elif msg_type == "status" and content["execution_state"] == "idle":
+                break
+
+        return ExecResult(
+            status=status,
+            stdout="".join(stdout_parts),
+            stderr="".join(stderr_parts),
+            result=result,
+            traceback=traceback,
+        )
+    finally:
+        kc.stop_channels()
