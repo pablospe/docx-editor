@@ -599,3 +599,38 @@ class TestWorkspaceLocationHardening:
             Workspace(victim)
 
         Workspace.delete(victim)
+
+
+class TestSaveStaleness:
+    def test_save_raises_when_source_changed_externally(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        # Simulate an external edit: bump the source file's mtime.
+        stat = temp_docx.stat()
+        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        try:
+            with pytest.raises(WorkspaceSyncError, match="changed on disk"):
+                ws.save()
+        finally:
+            ws.close()
+
+    def test_save_force_overwrites_changed_source(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        stat = temp_docx.stat()
+        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        try:
+            result = ws.save(force=True)
+            assert result == temp_docx.resolve()
+            # meta was refreshed: a follow-up save must not raise.
+            ws.save()
+        finally:
+            ws.close()
+
+    def test_save_to_other_destination_ignores_stale_source(self, temp_docx, temp_dir):
+        ws = Workspace(temp_docx, author="Test")
+        stat = temp_docx.stat()
+        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        try:
+            out = ws.save(destination=temp_dir / "elsewhere.docx")
+            assert out.exists()
+        finally:
+            ws.close()

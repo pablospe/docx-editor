@@ -826,15 +826,21 @@ class Document:
 
     # ==================== Save/Close API ====================
 
-    def save(self, path: str | Path | None = None, validate: bool = False) -> Path:
+    def save(self, path: str | Path | None = None, validate: bool = False, force: bool = False) -> Path:
         """Save the document.
 
         Args:
             path: Output path (defaults to original source path)
             validate: If True, validate with LibreOffice before saving
+            force: If True, overwrite the source even if it changed on disk
 
         Returns:
             Path to the saved document
+
+        Raises:
+            WorkspaceSyncError: If the source document changed on disk since
+                it was opened (protects long-lived sessions from overwriting
+                edits made in Word). Pass force=True to overwrite anyway.
 
         Example:
             doc.save()  # Save to original path
@@ -851,7 +857,7 @@ class Document:
         self._comment_manager.save_all()
 
         # Pack and save
-        return self._workspace.save(destination=path, validate=validate)
+        return self._workspace.save(destination=path, validate=validate, force=force)
 
     def close(self, cleanup: bool = True) -> None:
         """Close the document and clean up workspace.

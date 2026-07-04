@@ -611,3 +611,20 @@ class TestDocumentFindText:
         doc.close()
         with pytest.raises(ValueError, match="closed"):
             doc.find_text("test")
+
+
+class TestDocumentSaveStaleness:
+    def test_document_save_raises_on_external_change(self, temp_docx):
+        import os
+
+        from docx_editor.exceptions import WorkspaceSyncError
+
+        doc = Document.open(temp_docx, author="Test")
+        stat = temp_docx.stat()
+        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        try:
+            with pytest.raises(WorkspaceSyncError):
+                doc.save()
+            doc.save(force=True)  # explicit override still works
+        finally:
+            doc.close()

@@ -305,20 +305,35 @@ class Workspace:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(self.meta, f, indent=2)
 
-    def save(self, destination: str | Path | None = None, validate: bool = False) -> Path:
+    def save(
+        self,
+        destination: str | Path | None = None,
+        validate: bool = False,
+        force: bool = False,
+    ) -> Path:
         """Pack workspace back to a .docx file.
 
         Args:
             destination: Output path (defaults to original source path)
             validate: If True, validate with LibreOffice
+            force: If True, overwrite the source even if it changed on disk
 
         Returns:
             Path to the saved document
 
         Raises:
+            WorkspaceSyncError: If saving to the original path and the source
+                document changed on disk since the workspace was created
             WorkspaceError: If packing fails
         """
-        output_path = Path(destination) if destination else self.source_path
+        output_path = Path(destination).resolve() if destination else self.source_path
+
+        if not force and output_path == self.source_path and self.source_path.exists() and not self.sync_check():
+            raise WorkspaceSyncError(
+                f"Source document changed on disk since the workspace was created: {self.source_path}. "
+                f"Saving would overwrite those changes. Use save(force=True) to overwrite anyway, "
+                f"or save(destination=...) to write elsewhere."
+            )
 
         # Update metadata before saving
         self.meta["last_saved"] = datetime.now(timezone.utc).isoformat()
@@ -333,6 +348,7 @@ class Workspace:
         # Update source_mtime if saving to original location
         if output_path == self.source_path:
             self.meta["source_mtime"] = output_path.stat().st_mtime
+            self.meta["source_size"] = output_path.stat().st_size
             self._save_meta()
 
         return output_path
