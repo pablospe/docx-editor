@@ -107,6 +107,7 @@ def test_exec_docx_editing_workflow(session_conn, temp_docx):
     assert r1.status == "ok", r1.traceback
     r2 = exec_code("paras = doc.list_paragraphs(); len(paras)", connection_file=session_conn)
     assert r2.status == "ok"
+    assert r2.result is not None
     assert int(r2.result) > 0
     r3 = exec_code("doc.close()", connection_file=session_conn)
     assert r3.status == "ok"
