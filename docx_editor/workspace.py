@@ -76,10 +76,10 @@ def _default_cache_dir() -> Path:
 def owner_file_candidates(path: str | Path) -> list[Path]:
     """Return the ``~$`` owner (lock) file paths Word may use for ``path``.
 
-    Word writes a hidden ``~$`` owner file next to any document it has open. The
-    name is derived from the document's: Word drops the first two characters of
-    the filename when the stem is longer than two characters (``Report.docx`` →
-    ``~$port.docx``), and keeps the name in full for very short stems
+    Word writes a hidden ``~$`` owner file next to any document it has open. Its
+    name is derived from the document's filename: Word drops the first two
+    characters when the stem is longer than two characters (``Report.docx`` →
+    ``~$port.docx``), and keeps the filename in full for very short stems
     (``ab.docx`` → ``~$ab.docx``).
 
     Both forms are returned as a deliberately conservative superset — checking a
@@ -377,11 +377,14 @@ class Workspace:
         # source is open is fine. force=True skips this (and any other save-time
         # safety check) for confirmed-stale locks from a crashed session.
         #
-        # Check next to the *resolved* destination: pack_document() promotes into
-        # the symlink target, so that is where Word's stub would sit.
+        # Check next to BOTH the given path and the resolved one. Word writes its
+        # stub beside the name the user opened — the symlink, if that is what they
+        # double-clicked — while pack_document() promotes into the resolved file.
+        # Checking only one of the two misses a genuinely open document.
         if not force:
             resolved = Path(os.path.realpath(output_path))
-            owner_file = next((c for c in owner_file_candidates(resolved) if os.path.lexists(c)), None)
+            candidates = dict.fromkeys(owner_file_candidates(output_path) + owner_file_candidates(resolved))
+            owner_file = next((c for c in candidates if os.path.lexists(c)), None)
             if owner_file is not None:
                 raise DocumentOpenError(
                     f"{output_path} appears to be open in Word (found owner file "

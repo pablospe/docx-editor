@@ -20,6 +20,10 @@ from ..exceptions import DocumentOpenError
 # relative — a hypothetical subpart literally named "meta.json" is unaffected.
 EXCLUDED_PATHS = {Path("meta.json")}
 
+# Bytes left for the destination's name inside the promotion temp file's name, whose
+# shape is ".<name>.<8 random chars>.tmp" against a 255-byte NAME_MAX.
+_TEMP_NAME_BUDGET = 255 - len(".") - len(".") - 8 - len(".tmp")
+
 
 def _ignore_symlinks(directory: str, names: list[str]) -> list[str]:
     """Skip symlinks so they cannot leak external host content into the archive."""
@@ -82,9 +86,14 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
         # observed half-written (safe inside cloud-synced folders), and any failure
         # — a write error or a failed validation — leaves the existing destination
         # untouched. Same directory ⇒ same volume ⇒ os.replace() is a true atomic
-        # rename (no cross-device error). The name is clamped so a long destination
-        # name cannot push the temp name past the filesystem's limit.
-        fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name[:200]}.", suffix=".tmp")
+        # rename (no cross-device error).
+        #
+        # mkstemp builds "<prefix><8 random chars><suffix>", and NAME_MAX is a *byte*
+        # budget (255), not a character count — so clamp the encoded name. Slicing
+        # characters would still overflow on a non-ASCII destination, whose name can
+        # run to 4 bytes per character.
+        stem = target.name.encode()[:_TEMP_NAME_BUDGET].decode(errors="ignore")
+        fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{stem}.", suffix=".tmp")
         os.close(fd)
         tmp_path = Path(tmp_name)
         try:
@@ -106,8 +115,10 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
             # Validate the temp file, never the destination, so a failure cannot
             # destroy the original (historic data-loss bug: unlink of output_file).
             # Pass the real extension: the temp file is named .tmp, and soffice's
-            # export filter is chosen from the suffix.
-            if validate and not validate_document(tmp_path, suffix=target.suffix):
+            # export filter is chosen from the suffix. Use output_file's suffix, not
+            # target's — output_file is what the extension check above accepted, and
+            # a symlink may point at a name with any extension at all.
+            if validate and not validate_document(tmp_path, suffix=output_file.suffix):
                 return False
 
             _promote(tmp_path, target)
@@ -125,11 +136,28 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
 def _promote(tmp_path: Path, target: Path) -> None:
     """Atomically move the finished archive onto the destination.
 
-    os.replace() swaps in the temp file's inode wholesale, so anything that rides
-    on the destination's inode must be carried over first — most importantly its
-    permissions, since mkstemp() creates the temp file 0600 and would otherwise
-    silently strip group/world access from every saved document.
+    Three things happen here, in an order that matters:
+
+    1. The archive is flushed to disk. os.replace() is atomic with respect to other
+       processes, but without an fsync a crash could leave the destination name
+       pointing at an inode whose data blocks were never written.
+    2. The destination's permissions are carried over. os.replace() swaps in the
+       temp file's inode wholesale, and mkstemp() creates that file 0600, so without
+       this every save would silently strip group/world access from the document.
+       Only the mode is carried — ownership, ACLs, xattrs and hardlinks belong to
+       the replaced inode and cannot survive an atomic rename (see README).
+    3. The rename itself is persisted, so a crash cannot undo it.
+
+    A PermissionError from the rename is mapped to DocumentOpenError on Windows,
+    where a destination held open by Word is exactly what it means.
     """
+    # Fsync BEFORE chmod: the temp file is still 0600 (owner-writable) here. Doing it
+    # after would make reopening a read-only destination's mode (0444) fail outright.
+    # Opened "rb+", not "rb": on Windows os.fsync() maps to FlushFileBuffers, which
+    # needs write access on the handle and fails on a read-only one.
+    with open(tmp_path, "rb+") as f:
+        os.fsync(f.fileno())
+
     if target.exists():
         os.chmod(tmp_path, stat.S_IMODE(target.stat().st_mode))
     else:
@@ -138,27 +166,23 @@ def _promote(tmp_path: Path, target: Path) -> None:
         os.umask(umask)
         os.chmod(tmp_path, 0o666 & ~umask)
 
-    # Flush the archive before promoting it. os.replace() is atomic with respect to
-    # other processes, but without this a crash could leave the destination name
-    # pointing at an inode whose data blocks were never written to disk.
-    with open(tmp_path, "rb") as f:
-        os.fsync(f.fileno())
-
     try:
         os.replace(tmp_path, target)
     except PermissionError as e:
-        # The destination is held open by another program — on Windows this is
-        # exactly what Word does. Map only *this* step: a PermissionError from
-        # anywhere earlier (e.g. a non-writable directory) is a genuine
-        # filesystem problem and must not be reported as "close the document".
+        # On Windows a destination locked by another program (Word) surfaces here as
+        # PermissionError. On POSIX it cannot: rename(2) over a file another process
+        # holds open always succeeds. A denial there means something else entirely —
+        # a sticky-bit directory, an immutable file, an SELinux denial — and calling
+        # that "the document is open" would send the caller down a dead end.
+        if sys.platform != "win32":
+            raise
         raise DocumentOpenError(
             f"{target} could not be replaced (permission denied); it is likely open "
             f"in another program. Close it and retry.",
             path=target,
         ) from e
 
-    # Persist the rename itself, so a crash cannot undo it. Directory fsync is not
-    # supported on Windows, where it is also unnecessary.
+    # Persist the rename. Directory fsync is unsupported on Windows, and unnecessary.
     with contextlib.suppress(OSError):
         dir_fd = os.open(target.parent, os.O_RDONLY)
         try:

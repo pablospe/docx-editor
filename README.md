@@ -170,6 +170,12 @@ Google Drive, iCloud) and while Word is running.
   permission on the **containing directory**, not just on the document itself. If
   the directory is read-only, `save()` raises `PermissionError`.
 
+  An atomic rename replaces the file's inode, so state bound to the *old* inode
+  does not survive it: the saved document keeps its **permissions**, but its
+  ownership, POSIX ACLs, extended attributes, and any hardlinks to it do not carry
+  over. This is inherent to atomic saving (every editor that writes this way behaves
+  the same). If a document depends on an ACL or a hardlink, save to a new path.
+
 - **Open-in-Word guard.** Before writing, `save()` checks for the `~$` owner
   (lock) file Word places next to any open document. If the destination looks
   open, it raises `DocumentOpenError` rather than racing Word's writes:
