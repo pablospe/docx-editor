@@ -138,14 +138,15 @@ class Workspace:
                 existing_meta = self._load_meta()
                 if existing_meta:
                     self._check_provenance(existing_meta)
-                    source_mtime = self.source_path.stat().st_mtime
-                    if existing_meta.get("source_mtime") != source_mtime:
+                    self.meta = existing_meta
+                    # Same staleness predicate as save(), so a workspace can never
+                    # open clean here and then fail sync_check() later at save time.
+                    if not self.sync_check():
                         raise WorkspaceSyncError(
                             f"Document has changed since workspace was created. "
                             f"Delete {self.workspace_path} or use force_recreate=True"
                         )
                     # Workspace is valid, just load it
-                    self.meta = existing_meta
                     return
                 else:
                     raise WorkspaceExistsError(f"Workspace already exists: {self.workspace_path}")
@@ -326,9 +327,14 @@ class Workspace:
                 document changed on disk since the workspace was created
             WorkspaceError: If packing fails
         """
-        output_path = Path(destination).resolve() if destination else self.source_path
+        # Keep the caller's path for packing and for the return value; resolution is
+        # only needed to decide whether we are about to overwrite our own source.
+        output_path = Path(destination) if destination else self.source_path
+        overwrites_source = self._is_source(output_path)
 
-        if not force and output_path == self.source_path and self.source_path.exists() and not self.sync_check():
+        # A missing source has no external edits to lose, so recreating it is safe
+        # and must not be blocked — only an existing, changed source is protected.
+        if not force and overwrites_source and self.source_path.exists() and not self.sync_check():
             raise WorkspaceSyncError(
                 f"Source document changed on disk since the workspace was created: {self.source_path}. "
                 f"Saving would overwrite those changes. Use save(force=True) to overwrite anyway, "
@@ -346,12 +352,24 @@ class Workspace:
             raise WorkspaceError(f"Failed to pack document to {output_path}")
 
         # Update source_mtime if saving to original location
-        if output_path == self.source_path:
-            self.meta["source_mtime"] = output_path.stat().st_mtime
-            self.meta["source_size"] = output_path.stat().st_size
+        if overwrites_source:
+            saved_stat = output_path.stat()
+            self.meta["source_mtime"] = saved_stat.st_mtime
+            self.meta["source_size"] = saved_stat.st_size
             self._save_meta()
 
         return output_path
+
+    def _is_source(self, output_path: Path) -> bool:
+        """True if output_path names the same file as the workspace source.
+
+        samefile() where possible: on case-insensitive filesystems (macOS, Windows)
+        and through symlinks/hardlinks, a plain path comparison misses the match and
+        would skip the staleness check entirely.
+        """
+        if output_path.exists() and self.source_path.exists():
+            return os.path.samefile(output_path, self.source_path)
+        return output_path.resolve() == self.source_path
 
     def close(self, cleanup: bool = True) -> None:
         """Close the workspace.
