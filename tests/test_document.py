@@ -507,6 +507,54 @@ class TestDocumentGetVisibleText:
             doc.get_visible_text()
 
 
+class TestDocumentGetOriginalText:
+    """Tests for get_original_text()."""
+
+    def test_recovers_pre_revision_text(self, clean_workspace):
+        """Original text equals the pre-edit baseline; visible is the inverse."""
+        doc = Document.open(clean_workspace)
+        baseline = doc.get_visible_text()
+        doc.insert_after("fox", " INSERTED", paragraph=find_ref(doc, "fox"))
+        doc.delete("dog", paragraph=find_ref(doc, "dog"))
+        assert doc.get_original_text() == baseline
+        visible = doc.get_visible_text()
+        assert "INSERTED" in visible
+        assert "dog" not in visible
+        doc.close()
+
+    def test_matches_visible_text_after_reject_all(self, clean_workspace):
+        """Acceptance criterion: original view == post-reject_all visible text."""
+        doc = Document.open(clean_workspace)
+        doc.replace("fox", "cat", paragraph=find_ref(doc, "fox"))
+        original = doc.get_original_text()
+        doc.reject_all()
+        assert doc.get_visible_text() == original
+        doc.close()
+
+    def test_no_revisions_equals_visible(self, clean_workspace):
+        """Without tracked changes both views are identical."""
+        doc = Document.open(clean_workspace)
+        assert doc.get_original_text() == doc.get_visible_text()
+        doc.close()
+
+    def test_read_only_refs_stay_valid(self, clean_workspace):
+        """Reading the original view does not invalidate paragraph refs."""
+        doc = Document.open(clean_workspace)
+        ref = find_ref(doc, "fox")
+        doc.get_original_text()
+        new_ref = doc.replace("fox", "cat", paragraph=ref)
+        assert new_ref != ref
+        assert "cat" in doc.get_visible_text()
+        doc.close()
+
+    def test_get_original_text_after_close_raises(self, clean_workspace):
+        """Should raise ValueError after document is closed."""
+        doc = Document.open(clean_workspace)
+        doc.close()
+        with pytest.raises(ValueError, match="closed"):
+            doc.get_original_text()
+
+
 class TestDocumentFindText:
     """Tests for find_text()."""
 

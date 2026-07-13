@@ -12,6 +12,7 @@ import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 from xml.dom.minidom import Element
 
 import defusedxml.minidom
@@ -353,38 +354,70 @@ def get_text_node_data(elem) -> str:
     return "".join(c.data for c in elem.childNodes if c.nodeType == c.TEXT_NODE)
 
 
-def build_text_map(paragraph) -> TextMap:
+def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted") -> TextMap:
     """Build a text map for a paragraph element.
 
-    Walks all <w:t> elements in the paragraph, concatenating visible text
-    (excluding <w:delText>) and recording the source node and offset for
-    each character position.
+    Two views are supported:
 
-    Text inside <w:ins> is included (it's visible) with is_inside_ins=True.
-    Text inside <w:del>/<w:delText> is excluded from visible text.
+    - ``"accepted"`` (default): the visible text — text inside <w:ins> is
+      included (with is_inside_ins=True), text inside <w:del>/<w:delText>
+      is excluded. Paragraph hashes and all editing operations use this view.
+    - ``"original"``: the pre-revision text — <w:ins> and <w:moveTo> subtrees
+      are excluded, <w:delText> is included, and text inside <w:del> or
+      <w:moveFrom> is flagged with is_inside_del=True.
+
+    Records the source node and offset for each character position.
     """
+    if view not in ("accepted", "original"):
+        raise ValueError(f"Unknown view: {view!r} (expected 'accepted' or 'original')")
+
     text_chars: list[str] = []
     positions: list[TextPosition] = []
 
-    for node in paragraph.getElementsByTagName("w:t"):
-        # Skip w:t inside w:del (deleted text uses w:delText, but be safe)
-        if _is_inside_element(node, "w:del"):
-            continue
+    if view == "accepted":
+        for node in paragraph.getElementsByTagName("w:t"):
+            # Skip w:t inside w:del (deleted text uses w:delText, but be safe)
+            if _is_inside_element(node, "w:del"):
+                continue
 
-        inside_ins = _is_inside_element(node, "w:ins")
-        node_text = get_text_node_data(node)
+            inside_ins = _is_inside_element(node, "w:ins")
+            node_text = get_text_node_data(node)
 
-        for i, char in enumerate(node_text):
-            text_chars.append(char)
-            positions.append(
-                TextPosition(
-                    node=node,
-                    offset_in_node=i,
-                    is_inside_ins=inside_ins,
-                    is_inside_del=False,
+            for i, char in enumerate(node_text):
+                text_chars.append(char)
+                positions.append(
+                    TextPosition(
+                        node=node,
+                        offset_in_node=i,
+                        is_inside_ins=inside_ins,
+                        is_inside_del=False,
+                    )
                 )
-            )
 
+        return TextMap(text="".join(text_chars), positions=positions)
+
+    def collect_original(node, inside_del: bool) -> None:
+        for child in node.childNodes:
+            if child.nodeType != child.ELEMENT_NODE:
+                continue
+            if child.tagName in ("w:ins", "w:moveTo"):
+                continue
+            if child.tagName in ("w:t", "w:delText"):
+                node_text = get_text_node_data(child)
+                for i, char in enumerate(node_text):
+                    text_chars.append(char)
+                    positions.append(
+                        TextPosition(
+                            node=child,
+                            offset_in_node=i,
+                            is_inside_ins=False,
+                            is_inside_del=inside_del,
+                        )
+                    )
+            else:
+                collect_original(child, inside_del or child.tagName in ("w:del", "w:moveFrom"))
+
+    collect_original(paragraph, False)
     return TextMap(text="".join(text_chars), positions=positions)
 
 

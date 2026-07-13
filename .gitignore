@@ -213,3 +213,9 @@ __marimo__/
 
 .worktree/
 .worktrees/
+
+# Local agent tooling
+.agtx/
+.claude/commands/agtx/
+.claude/commands/openspec/
+.mcp.json

@@ -418,6 +418,29 @@ class Document:
             parts.append(tm.text)
         return "\n".join(parts)
 
+    def get_original_text(self) -> str:
+        """Get the original (pre-revision) text of the document.
+
+        Returns flattened text with paragraphs separated by newlines.
+        Deleted text is included, inserted text is excluded — the inverse
+        of get_visible_text().
+
+        For intra-paragraph revisions this equals what get_visible_text()
+        would return after reject_all(), without modifying the document.
+        Read-only: paragraph references, hashes, and all editing operations
+        keep working on the accepted (visible) view.
+
+        Returns:
+            The original text content
+        """
+        self._ensure_open()
+        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        parts = []
+        for p in paragraphs:
+            tm = build_text_map(p, view="original")
+            parts.append(tm.text)
+        return "\n".join(parts)
+
     def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int = 0) -> str:
         """Replace text with tracked changes.
 
