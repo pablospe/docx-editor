@@ -19,6 +19,7 @@ from typing import Any
 
 from .exceptions import (
     DocumentNotFoundError,
+    DocumentOpenError,
     InvalidDocumentError,
     WorkspaceError,
     WorkspaceExistsError,
@@ -72,6 +73,31 @@ def _default_cache_dir() -> Path:
     return root / "docx-editor"
 
 
+def owner_file_candidates(path: str | Path) -> list[Path]:
+    """Return the ``~$`` owner (lock) file paths Word may use for ``path``.
+
+    Word writes a hidden ``~$`` owner file next to any document it has open. Its
+    name is derived from the document's filename: Word drops the first two
+    characters when the stem is longer than two characters (``Report.docx`` →
+    ``~$port.docx``), and keeps the filename in full for very short stems
+    (``ab.docx`` → ``~$ab.docx``).
+
+    Both forms are returned as a deliberately conservative superset — checking a
+    stub that Word would not have written costs a false positive (recoverable via
+    ``force=True``), while missing one risks saving over a live document. The
+    truncated form is inherently ambiguous: ``01_intro.docx`` and
+    ``02_intro.docx`` share the stub ``~$_intro.docx``. That ambiguity is Word's
+    own — it uses the same owner file for both, and the stub records the *user*
+    who holds the lock, not the document — so it cannot be disambiguated here.
+    """
+    path = Path(path)
+    candidates = [path.parent / f"~${path.name}"]
+    # Guard on the stem so short names don't yield junk like "~$.docx".
+    if len(path.stem) > 2:
+        candidates.append(path.parent / f"~${path.name[2:]}")
+    return candidates
+
+
 class Workspace:
     """Manages the per-document workspace folder.
 
@@ -118,6 +144,13 @@ class Workspace:
             InvalidDocumentError: If the file is not a .docx file
             WorkspaceExistsError: If workspace exists and create=True
         """
+        # Keep the name the caller actually opened. If they opened a symlink, that is
+        # the name Word was told to open — and therefore the name its ~$ owner file
+        # sits beside. save() needs it to find that stub. Made absolute but NOT
+        # resolved: resolving would collapse the symlink and lose the very name we are
+        # keeping, while leaving it relative would break if the cwd moves before save().
+        given = Path(source_path)
+        self._given_path = given if given.is_absolute() else Path.cwd() / given
         self.source_path = Path(source_path).resolve()
 
         if not self.source_path.exists():
@@ -306,6 +339,40 @@ class Workspace:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(self.meta, f, indent=2)
 
+    def _check_not_open(self, output_path: Path, *, saving_in_place: bool) -> None:
+        """Raise DocumentOpenError if Word appears to have the destination open.
+
+        Word writes its ``~$`` owner file beside the name it was told to open, which
+        is not necessarily the name we are about to write. So check beside every name
+        this destination is known by: the path given, the path it resolves to (which
+        is where the archive actually lands), and — when saving in place — the
+        possibly-symlinked path the caller originally opened.
+
+        A destination that does not exist yet is never guarded: a stale stub beside a
+        name with no document behind it has nothing to protect.
+        """
+        if not os.path.lexists(output_path):
+            return
+
+        names = [output_path, Path(os.path.realpath(output_path))]
+        if saving_in_place:
+            names.append(self._given_path)
+
+        candidates = dict.fromkeys(c for name in names for c in owner_file_candidates(name))
+        owner_file = next((c for c in candidates if os.path.lexists(c)), None)
+        if owner_file is None:
+            return
+
+        raise DocumentOpenError(
+            f"{output_path} appears to be open in Word (found owner file "
+            f"{owner_file.name}). Close the document in Word, or pass force=True if "
+            f"this is a stale lock from a crashed session. Note the stub name is "
+            f"ambiguous: Word derives it by dropping the first two characters, so it "
+            f"may belong to a different document in the same folder.",
+            path=output_path,
+            owner_file=owner_file,
+        )
+
     def save(
         self,
         destination: str | Path | None = None,
@@ -317,7 +384,8 @@ class Workspace:
         Args:
             destination: Output path (defaults to original source path)
             validate: If True, validate with LibreOffice
-            force: If True, overwrite the source even if it changed on disk
+            force: If True, skip save-time safety checks (the source-changed-on-disk
+                check and the open-in-Word guard)
 
         Returns:
             Path to the saved document
@@ -325,6 +393,9 @@ class Workspace:
         Raises:
             WorkspaceSyncError: If saving to the original path and the source
                 document changed on disk since the workspace was created
+            DocumentOpenError: If the destination appears open in Word (a ``~$``
+                owner file exists) and ``force`` is False, or if the OS denies the
+                final replace because another program holds the destination open.
             WorkspaceError: If packing fails
         """
         # Keep the caller's path for packing and for the return value; resolution is
@@ -341,17 +412,32 @@ class Workspace:
                 f"or save(destination=...) to write elsewhere."
             )
 
+        # Refuse to overwrite a document Word currently has open. Saving into
+        # Word's live file races its own writes and can corrupt the document.
+        # Guard the destination only — saving a copy to a fresh path while the
+        # source is open is fine. force=True skips this (and any other save-time
+        # safety check) for confirmed-stale locks from a crashed session.
+        if not force:
+            self._check_not_open(output_path, saving_in_place=destination is None)
+
         # Update metadata before saving
         self.meta["last_saved"] = datetime.now(timezone.utc).isoformat()
         self._save_meta()
 
-        # Pack the document
+        # Pack the document. pack_document() maps a PermissionError from the final
+        # replace to DocumentOpenError itself; any other PermissionError (e.g. a
+        # non-writable directory) is a genuine filesystem error and propagates
+        # unchanged rather than being mislabeled as "the document is open".
         success = pack_document(self.workspace_path, output_path, validate=validate)
 
         if not success:
             raise WorkspaceError(f"Failed to pack document to {output_path}")
 
-        # Update source_mtime if saving to original location
+        # Update source_mtime/source_size if saving to the original location.
+        # overwrites_source uses os.path.samefile (see _is_source), so a different
+        # name for the same file — including through a symlink — still refreshes the
+        # workspace's stat, or the next open() would report a stale workspace. Both
+        # mtime and size are updated because sync_check() compares both.
         if overwrites_source:
             saved_stat = output_path.stat()
             self.meta["source_mtime"] = saved_stat.st_mtime

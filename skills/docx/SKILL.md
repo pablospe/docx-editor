@@ -451,6 +451,7 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `TextNotFoundError`    | `search_text`, `paragraph_ref`, `paragraph_preview`, `occurrence`, `total_occurrences`  | Use `paragraph_preview` to pick a substring that actually appears; if `total_occurrences` is set, retry with an `occurrence` < `total_occurrences`. |
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` or call `list_paragraphs()` to pick a valid ref.                 |
 | `BatchOperationError`  | `operation_index`, `reason`                                                             | Fix the op at `operations[operation_index]` (or drop it) and retry the batch.                    |
+| `DocumentOpenError`    | `path`, `owner_file`                                                                    | **Do not retry blindly.** The destination is open in Word. Stop and tell the user to close it. Only pass `force=True` if the user confirms the `~$` lock is stale (crashed session). |
 
 ```python
 from docx_editor import (
@@ -479,6 +480,27 @@ except BatchOperationError as e:
     ops.pop(e.operation_index)
     doc.batch_edit(ops)
 ```
+
+**Saving safely (`DocumentOpenError`).** `save()` is atomic — it writes to a temp
+file in the destination's directory and renames, so a failed save (including
+`validate=True`) never corrupts or deletes the existing document, and the saved
+file keeps its original permissions. Before writing it also checks for Word's `~$`
+lock file next to the destination and raises `DocumentOpenError` if the document
+looks open. This one is **not** an in-loop retry: it means a human has the file
+open, so stop and tell the user to close it in Word. Use `e.path` and
+`e.owner_file` to tell them exactly which file. `force=True` bypasses the guard and
+is only for a confirmed-stale lock left by a crashed session — never reach for it
+just to make the error go away.
+
+Two limits worth knowing: the guard sees only *local* locks, so remote co-authoring
+in OneDrive/SharePoint or Word-for-the-web leaves no local file and cannot be
+detected; and because the save writes a temp file next to the destination, it needs
+**write permission on the containing directory**, not just on the document.
+
+A directory-permission problem surfaces as a plain `PermissionError`, not
+`DocumentOpenError` — do not tell the user to close Word for that one. So does a
+**write-protected document**: `save()` refuses it rather than replacing it, so offer
+to save under a new path instead.
 
 ### Paragraph Rewrite (Fallback for Structural Edits)
 

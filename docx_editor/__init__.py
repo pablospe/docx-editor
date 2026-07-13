@@ -40,6 +40,7 @@ from .exceptions import (
     BatchOperationError,
     CommentError,
     DocumentNotFoundError,
+    DocumentOpenError,
     DocxEditError,
     HashMismatchError,
     InvalidDocumentError,
@@ -77,6 +78,7 @@ __all__ = [
     # Exceptions
     "DocxEditError",
     "DocumentNotFoundError",
+    "DocumentOpenError",
     "InvalidDocumentError",
     "WorkspaceError",
     "WorkspaceExistsError",

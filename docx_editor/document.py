@@ -125,7 +125,11 @@ class Document:
             doc = Document.open("contract.docx")
             doc = Document.open("contract.docx", author="Legal Team")
         """
-        path = Path(path).resolve()
+        # Deliberately not resolved: Workspace resolves internally for source_path,
+        # but it also needs the name the caller actually opened. If that is a symlink,
+        # it is the name Word was told to open, and therefore the name its ~$ owner
+        # file sits beside — the save-time guard has no other way to find that stub.
+        path = Path(path)
 
         if force_recreate:
             Workspace.delete(path, workspace_dir=workspace_dir)
@@ -832,7 +836,12 @@ class Document:
         Args:
             path: Output path (defaults to original source path)
             validate: If True, validate with LibreOffice before saving
-            force: If True, overwrite the source even if it changed on disk
+            force: If True, skip save-time safety checks. By default save()
+                refuses to overwrite the source if it changed on disk since it
+                was opened (raising WorkspaceSyncError) or if the destination
+                appears open in Word — a ``~$`` owner file exists next to it
+                (raising DocumentOpenError). Pass force=True only for a
+                confirmed-stale lock left by a crashed session.
 
         Returns:
             Path to the saved document
@@ -841,6 +850,11 @@ class Document:
             WorkspaceSyncError: If the source document changed on disk since
                 it was opened (protects long-lived sessions from overwriting
                 edits made in Word). Pass force=True to overwrite anyway.
+            DocumentOpenError: If the destination appears open in Word (a ``~$``
+                owner file exists) and force is False, or if the OS denies the
+                final replace because another program holds the destination open.
+                force=True skips the ``~$`` check but cannot suppress the latter —
+                the OS still refuses the write.
 
         Example:
             doc.save()  # Save to original path

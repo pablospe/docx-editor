@@ -152,3 +152,53 @@ with Document.open("contract.docx", author="Editor") as doc:
     ])
     doc.save()
 ```
+
+### Saving into synced folders
+
+`docx-editor` is safe to use inside cloud-synced folders (OneDrive, Dropbox,
+Google Drive, iCloud) and while Word is running.
+
+- **Atomic save.** `save()` writes the new document to a temporary file in the
+  destination's own directory and promotes it with a single atomic rename, flushed
+  to disk. The destination is never observed half-written, so a sync client can
+  never upload a torn file. If the write (or `validate=True`) fails, the original
+  is left exactly as it was — a failed validation can no longer destroy your
+  document. The saved file keeps the original's permissions, and a symlinked
+  destination is followed to the file it points at.
+
+  Because the temp file is created next to the destination, saving needs write
+  permission on the **containing directory**, not just on the document itself. If
+  the directory is read-only, `save()` raises `PermissionError`.
+
+  A **write-protected document is refused**, not silently replaced: `save()` raises
+  `PermissionError` if the destination is read-only, even though the rename itself
+  would have been permitted by the directory.
+
+  An atomic rename replaces the file's inode, so state bound to the *old* inode
+  does not survive it: the saved document keeps its **permissions**, but its
+  ownership, POSIX ACLs, extended attributes, and any hardlinks to it do not carry
+  over. This is inherent to atomic saving (every editor that writes this way behaves
+  the same). If a document depends on an ACL or a hardlink, save to a new path.
+
+- **Open-in-Word guard.** Before writing, `save()` checks for the `~$` owner
+  (lock) file Word places next to any open document. If the destination looks
+  open, it raises `DocumentOpenError` rather than racing Word's writes:
+
+  ```python
+  from docx_editor import Document, DocumentOpenError
+
+  try:
+      doc.save()
+  except DocumentOpenError:
+      # Someone has this document open in Word — close it and retry.
+      ...
+  ```
+
+  If you are certain the `~$` file is a stale lock left by a crashed session, pass
+  `force=True` to save anyway: `doc.save(force=True)`.
+
+- **Limitation — remote co-authoring is undetectable.** The guard only sees a
+  *local* `~$` file. A document being edited remotely (OneDrive/SharePoint
+  co-authoring, or Word for the web) leaves **no local lock file**, so it cannot
+  be detected from the filesystem. In that case, rely on the cloud provider's
+  version history to recover if edits collide.
