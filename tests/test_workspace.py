@@ -1,6 +1,11 @@
 """Tests for workspace management."""
 
+import hashlib
 import json
+import os
+import re
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -9,7 +14,7 @@ from docx_editor.exceptions import (
     InvalidDocumentError,
     WorkspaceSyncError,
 )
-from docx_editor.workspace import Workspace
+from docx_editor.workspace import Workspace, _default_cache_dir
 
 
 class TestWorkspaceCreation:
@@ -190,8 +195,8 @@ class TestWorkspaceEdgeCases:
         from docx_editor.exceptions import WorkspaceExistsError
 
         # Create workspace directory without meta.json
-        workspace_dir = clean_workspace.parent / ".docx" / clean_workspace.stem
-        workspace_dir.mkdir(parents=True)
+        workspace_path = Workspace._resolve_workspace_path(clean_workspace.resolve(), None)
+        workspace_path.mkdir(parents=True)
 
         with pytest.raises(WorkspaceExistsError):
             Workspace(clean_workspace)
@@ -199,7 +204,7 @@ class TestWorkspaceEdgeCases:
         # Cleanup
         import shutil
 
-        shutil.rmtree(clean_workspace.parent / ".docx")
+        shutil.rmtree(workspace_path)
 
     def test_workspace_create_false_not_found(self, clean_workspace):
         """Test error when workspace not found with create=False."""
@@ -213,8 +218,8 @@ class TestWorkspaceEdgeCases:
         from docx_editor.exceptions import WorkspaceError
 
         # Create workspace directory without meta.json
-        workspace_dir = clean_workspace.parent / ".docx" / clean_workspace.stem
-        workspace_dir.mkdir(parents=True)
+        workspace_path = Workspace._resolve_workspace_path(clean_workspace.resolve(), None)
+        workspace_path.mkdir(parents=True)
 
         with pytest.raises(WorkspaceError, match="Invalid workspace"):
             Workspace(clean_workspace, create=False)
@@ -222,7 +227,7 @@ class TestWorkspaceEdgeCases:
         # Cleanup
         import shutil
 
-        shutil.rmtree(clean_workspace.parent / ".docx")
+        shutil.rmtree(workspace_path)
 
     def test_load_meta_corrupt_json(self, clean_workspace):
         """Test that corrupt meta.json returns None in _load_meta."""
@@ -285,8 +290,7 @@ class TestWorkspaceEdgeCases:
         workspace2 = Workspace.__new__(Workspace)
         workspace2.source_path = clean_workspace.resolve()
         workspace2._author = "test"
-        workspace_dir = clean_workspace.parent / ".docx"
-        workspace2.workspace_path = workspace_dir / clean_workspace.stem
+        workspace2.workspace_path = Workspace._resolve_workspace_path(clean_workspace.resolve(), None)
         workspace2.meta = workspace2._load_meta()
 
         assert workspace2.sync_check() is False
@@ -367,3 +371,122 @@ class TestWorkspaceEdgeCases:
         assert workspace2.meta is not None
 
         workspace2.close()
+
+
+class TestDefaultCacheDir:
+    """Tests for the _default_cache_dir platform helper."""
+
+    def test_linux_with_xdg_cache_home(self, monkeypatch):
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("XDG_CACHE_HOME", "/custom/cache")
+        assert _default_cache_dir() == Path("/custom/cache") / "docx-editor"
+
+    def test_linux_without_xdg_cache_home(self, monkeypatch):
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        assert _default_cache_dir() == Path.home() / ".cache" / "docx-editor"
+
+    def test_macos(self, monkeypatch):
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setattr(sys, "platform", "darwin")
+        assert _default_cache_dir() == Path.home() / "Library" / "Caches" / "docx-editor"
+
+    # The Windows branch constructs pathlib.Path, which resolves to WindowsPath
+    # only when os.name == "nt". Patching os.name on a POSIX host makes Path
+    # raise UnsupportedOperation, so these run for real only on Windows.
+    @pytest.mark.skipif(os.name != "nt", reason="requires a Windows host")
+    def test_windows_with_localappdata(self, monkeypatch):
+        monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\x\AppData\Local")
+        assert _default_cache_dir() == Path(r"C:\Users\x\AppData\Local") / "docx-editor"
+
+    @pytest.mark.skipif(os.name != "nt", reason="requires a Windows host")
+    def test_windows_without_localappdata(self, monkeypatch):
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+        assert _default_cache_dir() == Path.home() / "AppData" / "Local" / "docx-editor"
+
+
+class TestWorkspaceLocation:
+    """Tests for workspace location resolution (cache dir, env var, override)."""
+
+    @staticmethod
+    def _expected_subdir(source_path):
+        return hashlib.sha256(str(source_path.resolve()).encode()).hexdigest()[:16]
+
+    def test_default_lands_in_platform_cache(self, temp_docx, monkeypatch, tmp_path):
+        """With no override, workspace lands under the platform cache base."""
+        monkeypatch.delenv("DOCX_EDITOR_WORKSPACE_DIR", raising=False)
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+        workspace = Workspace(temp_docx)
+        expected = tmp_path / "docx-editor" / self._expected_subdir(temp_docx)
+        assert workspace.workspace_path == expected
+        assert workspace.workspace_path.exists()
+        workspace.close()
+
+    def test_env_var_used_when_no_param(self, temp_docx, tmp_path, monkeypatch):
+        """DOCX_EDITOR_WORKSPACE_DIR is used as the base when no param is given."""
+        monkeypatch.setenv("DOCX_EDITOR_WORKSPACE_DIR", str(tmp_path))
+        workspace = Workspace(temp_docx)
+        assert workspace.workspace_path == tmp_path / self._expected_subdir(temp_docx)
+        workspace.close()
+
+    def test_explicit_param_overrides_env_var(self, temp_docx, tmp_path, monkeypatch):
+        """The workspace_dir param wins over the env var."""
+        env_base = tmp_path / "env_base"
+        param_base = tmp_path / "param_base"
+        monkeypatch.setenv("DOCX_EDITOR_WORKSPACE_DIR", str(env_base))
+
+        workspace = Workspace(temp_docx, workspace_dir=param_base)
+        assert workspace.workspace_path == param_base / self._expected_subdir(temp_docx)
+        # The env-var base must not have been touched.
+        assert not (env_base / self._expected_subdir(temp_docx)).exists()
+        workspace.close()
+
+    def test_relative_workspace_dir_next_to_source(self, temp_docx):
+        """A relative workspace_dir resolves against the source directory."""
+        workspace = Workspace(temp_docx, workspace_dir=".docx")
+        expected = temp_docx.parent / ".docx" / self._expected_subdir(temp_docx)
+        assert workspace.workspace_path == expected
+        assert workspace.workspace_path.exists()
+        workspace.close()
+
+    def test_distinct_sources_get_distinct_dirs(self, simple_docx, temp_dir, tmp_path, monkeypatch):
+        """Two different source files map to different hash subdirs, same base."""
+        import shutil
+
+        monkeypatch.setenv("DOCX_EDITOR_WORKSPACE_DIR", str(tmp_path))
+        doc_a = temp_dir / "a.docx"
+        doc_b = temp_dir / "b.docx"
+        shutil.copy(simple_docx, doc_a)
+        shutil.copy(simple_docx, doc_b)
+
+        ws_a = Workspace(doc_a)
+        ws_b = Workspace(doc_b)
+        assert ws_a.workspace_path != ws_b.workspace_path
+        assert ws_a.workspace_path.parent == tmp_path
+        assert ws_b.workspace_path.parent == tmp_path
+
+        ws_a.close()
+        ws_b.close()
+
+    def test_sync_error_message_contains_workspace_path(self, temp_docx, tmp_path, monkeypatch):
+        """WorkspaceSyncError from the cache location prints the workspace path."""
+        import time
+
+        monkeypatch.setenv("DOCX_EDITOR_WORKSPACE_DIR", str(tmp_path))
+        workspace = Workspace(temp_docx)
+        workspace_path = workspace.workspace_path
+        workspace.close(cleanup=False)
+
+        # Modify the source so the mtime check fails on reopen.
+        time.sleep(0.1)
+        temp_docx.write_bytes(temp_docx.read_bytes() + b"\x00")
+
+        with pytest.raises(WorkspaceSyncError, match=re.escape(str(workspace_path))):
+            Workspace(temp_docx)
+
+        Workspace.delete(temp_docx)

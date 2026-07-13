@@ -39,6 +39,26 @@ class TestDocumentOpen:
         doc2 = Document.open(clean_workspace, force_recreate=True)
         doc2.close()
 
+    def test_open_with_workspace_dir(self, clean_workspace, tmp_path):
+        """Test that workspace_dir is threaded through to the Workspace."""
+        doc = Document.open(clean_workspace, workspace_dir=tmp_path)
+
+        assert doc._workspace.workspace_path.parent == tmp_path
+        assert doc._workspace.workspace_path.exists()
+        assert Workspace.exists(clean_workspace, workspace_dir=tmp_path)
+
+        doc.close()
+
+    def test_open_force_recreate_with_workspace_dir(self, clean_workspace, tmp_path):
+        """Test force_recreate deletes the workspace under the given workspace_dir."""
+        doc1 = Document.open(clean_workspace, workspace_dir=tmp_path)
+        doc1.close(cleanup=False)
+        assert Workspace.exists(clean_workspace, workspace_dir=tmp_path)
+
+        doc2 = Document.open(clean_workspace, force_recreate=True, workspace_dir=tmp_path)
+        assert doc2._workspace.workspace_path.parent == tmp_path
+        doc2.close()
+
 
 class TestDocumentSave:
     """Tests for saving documents."""
@@ -276,7 +296,7 @@ class TestDocumentInternalMethods:
         # Make Workspace always raise WorkspaceSyncError
         with patch("docx_editor.document.Workspace") as mock_workspace_cls:
             mock_workspace_cls.side_effect = WorkspaceSyncError("Persistent error")
-            mock_workspace_cls.delete = lambda p: True
+            mock_workspace_cls.delete = lambda p, workspace_dir=None: True
 
             with pytest.raises(WorkspaceSyncError):
                 Document.open(clean_workspace, force_recreate=True)

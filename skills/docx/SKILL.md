@@ -188,7 +188,8 @@ with Document.open("contract.docx", author=author) as doc:
     doc.save()  # Overwrites original
     # or doc.save("reviewed.docx")  # Save to new file
 # Workspace is cleaned up automatically on normal exit
-# On exception, workspace is preserved for inspection
+# On exception, the workspace is preserved for inspection in the user cache
+# dir (~/.cache/docx-editor/<hash>/ on Linux; error messages print the exact path)
 ```
 
 Without context manager:
@@ -606,7 +607,7 @@ Benefits:
 
 If unsure, ask the user: "Should I use Opus (best), Sonnet (recommended) or Haiku (faster/cheaper) for this task?"
 
-**Editing in parallel**: NOT safe for the same document. docx_editor uses a shared workspace - concurrent edits will overwrite each other. Edit documents sequentially, or use different files.
+**Editing in parallel**: NOT safe for the same document. The workspace is keyed by the document's absolute path in the user cache dir, so two processes editing the same file share one workspace and will overwrite each other. Edit the same document sequentially. Different files never collide (each gets its own workspace), so editing distinct documents in parallel is fine.
 
 ### Limitations
 
