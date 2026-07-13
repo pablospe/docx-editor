@@ -15,10 +15,10 @@ The fixture is built by swapping ``word/document.xml`` inside a copy of
 another binary and don't pull in ``python-docx``.
 """
 
-import zipfile
 from pathlib import Path
 
 import pytest
+from conftest import replace_document_xml
 
 from docx_editor import (
     Document,
@@ -92,22 +92,11 @@ def _build_document_xml() -> str:
     )
 
 
-def _replace_document_xml(src: Path, dest: Path, new_doc_xml: str) -> None:
-    """Copy ``src`` to ``dest``, swapping ``word/document.xml`` for ``new_doc_xml``."""
-    with (
-        zipfile.ZipFile(src, "r") as z_in,
-        zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z_out,
-    ):
-        for item in z_in.infolist():
-            data = new_doc_xml.encode("utf-8") if item.filename == "word/document.xml" else z_in.read(item.filename)
-            z_out.writestr(item, data)
-
-
 @pytest.fixture
 def gridspan_docx(simple_docx, tmp_path) -> Path:
     """A .docx whose body contains a gridSpan row and a nested table."""
     dest = tmp_path / "gridspan.docx"
-    _replace_document_xml(simple_docx, dest, _build_document_xml())
+    replace_document_xml(simple_docx, dest, _build_document_xml())
     return dest
 
 
@@ -244,7 +233,7 @@ class TestParagraphLocationMalformedGridSpan:
     @staticmethod
     def _open(simple_docx: Path, tmp_path: Path, body_xml: str) -> Document:
         dest = tmp_path / "malformed.docx"
-        _replace_document_xml(simple_docx, dest, body_xml)
+        replace_document_xml(simple_docx, dest, body_xml)
         return Document.open(dest)
 
     def test_non_integer_grid_span_falls_back_to_one(self, simple_docx, tmp_path):
@@ -298,7 +287,7 @@ class TestParagraphLocationGridBefore:
     def test_grid_before_shifts_first_cell(self, simple_docx, tmp_path):
         """``gridBefore=2`` → first ``<w:tc>`` is at logical col 3."""
         dest = tmp_path / "gridbefore.docx"
-        _replace_document_xml(simple_docx, dest, self._doc_with_grid_before("2"))
+        replace_document_xml(simple_docx, dest, self._doc_with_grid_before("2"))
         with Document.open(dest) as doc:
             loc_a = doc.get_paragraph_location(_ref_for_text(doc, "First cell"))
             loc_b = doc.get_paragraph_location(_ref_for_text(doc, "Second cell"))
@@ -309,7 +298,7 @@ class TestParagraphLocationGridBefore:
     def test_grid_before_with_non_integer_val_falls_back_to_zero(self, simple_docx, tmp_path):
         """``gridBefore w:val="abc"/`` is unparseable; treat offset as 0."""
         dest = tmp_path / "gb-bad.docx"
-        _replace_document_xml(simple_docx, dest, self._doc_with_grid_before("abc"))
+        replace_document_xml(simple_docx, dest, self._doc_with_grid_before("abc"))
         with Document.open(dest) as doc:
             loc_a = doc.get_paragraph_location(_ref_for_text(doc, "First cell"))
             assert loc_a.table is not None
@@ -318,7 +307,7 @@ class TestParagraphLocationGridBefore:
     def test_grid_before_missing_val_falls_back_to_zero(self, simple_docx, tmp_path):
         """Bare ``<w:gridBefore/>`` (no ``w:val``) → offset 0."""
         dest = tmp_path / "gb-empty.docx"
-        _replace_document_xml(simple_docx, dest, self._doc_with_grid_before(""))
+        replace_document_xml(simple_docx, dest, self._doc_with_grid_before(""))
         with Document.open(dest) as doc:
             loc_a = doc.get_paragraph_location(_ref_for_text(doc, "First cell"))
             assert loc_a.table is not None
@@ -370,7 +359,7 @@ class TestParagraphLocationSdtWrappers:
 
     def test_sdt_wrapped_row_does_not_raise(self, simple_docx, tmp_path):
         dest = tmp_path / "sdt-row.docx"
-        _replace_document_xml(simple_docx, dest, self._doc_with_sdt_row())
+        replace_document_xml(simple_docx, dest, self._doc_with_sdt_row())
         with Document.open(dest) as doc:
             loc_1 = doc.get_paragraph_location(_ref_for_text(doc, "R1"))
             loc_2 = doc.get_paragraph_location(_ref_for_text(doc, "R2-sdt"))
@@ -380,7 +369,7 @@ class TestParagraphLocationSdtWrappers:
 
     def test_sdt_wrapped_cell_does_not_raise(self, simple_docx, tmp_path):
         dest = tmp_path / "sdt-cell.docx"
-        _replace_document_xml(simple_docx, dest, self._doc_with_sdt_cell())
+        replace_document_xml(simple_docx, dest, self._doc_with_sdt_cell())
         with Document.open(dest) as doc:
             loc_1 = doc.get_paragraph_location(_ref_for_text(doc, "C1"))
             loc_2 = doc.get_paragraph_location(_ref_for_text(doc, "C2-sdt"))
@@ -446,7 +435,7 @@ class TestParagraphLocationNestedRowSkip:
 
     def test_row_walker_skips_nested_rows(self, simple_docx, tmp_path):
         dest = tmp_path / "nested-rows.docx"
-        _replace_document_xml(simple_docx, dest, self._doc_with_nested_between_outer_rows())
+        replace_document_xml(simple_docx, dest, self._doc_with_nested_between_outer_rows())
         with Document.open(dest) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Outer R2"))
             # Without the continue branch, the nested-table tr would be
@@ -455,7 +444,7 @@ class TestParagraphLocationNestedRowSkip:
 
     def test_col_walker_skips_nested_cells(self, simple_docx, tmp_path):
         dest = tmp_path / "nested-cells.docx"
-        _replace_document_xml(simple_docx, dest, self._doc_with_nested_inside_first_cell())
+        replace_document_xml(simple_docx, dest, self._doc_with_nested_inside_first_cell())
         with Document.open(dest) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Outer C2"))
             # Without the continue branch, the nested-table tc would be
@@ -485,7 +474,7 @@ class TestParagraphLocationDefensiveFallbacks:
             "</w:document>"
         )
         dest = tmp_path / "tr-pr-no-gb.docx"
-        _replace_document_xml(simple_docx, dest, body)
+        replace_document_xml(simple_docx, dest, body)
         with Document.open(dest) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "NoGridBefore"))
             assert loc.table is not None
@@ -506,7 +495,7 @@ class TestParagraphLocationDefensiveFallbacks:
             "</w:document>"
         )
         dest = tmp_path / "orphan-tc.docx"
-        _replace_document_xml(simple_docx, dest, body)
+        replace_document_xml(simple_docx, dest, body)
         with Document.open(dest) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Orphan tc"))
             # Malformed structure — falls back to body content, no raise.
@@ -529,7 +518,7 @@ class TestParagraphLocationLongPreview:
             "</w:document>"
         )
         dest = tmp_path / "long-para.docx"
-        _replace_document_xml(simple_docx, dest, body)
+        replace_document_xml(simple_docx, dest, body)
         with Document.open(dest) as doc:
             ref = _ref_for_text(doc, "xxxxx")
             index_part, _ = ref.split("#")
