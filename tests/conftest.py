@@ -57,6 +57,20 @@ def temp_dir():
     shutil.rmtree(temp, ignore_errors=True)
 
 
+@pytest.fixture(autouse=True)
+def isolated_workspace_base(monkeypatch):
+    """Isolate every test's workspace base from the real user cache.
+
+    Points DOCX_EDITOR_WORKSPACE_DIR at a throwaway per-test directory so tests
+    never write to ~/.cache/docx-editor/ and implicitly exercise the env-var
+    resolution path.
+    """
+    base = tempfile.mkdtemp(prefix="docx_editor_ws_")
+    monkeypatch.setenv("DOCX_EDITOR_WORKSPACE_DIR", base)
+    yield Path(base)
+    shutil.rmtree(base, ignore_errors=True)
+
+
 @pytest.fixture
 def temp_docx(simple_docx, temp_dir) -> Path:
     """Copy simple.docx to a temp location for testing."""
@@ -67,11 +81,9 @@ def temp_docx(simple_docx, temp_dir) -> Path:
 
 @pytest.fixture
 def clean_workspace(temp_docx):
-    """Ensure no workspace exists for the test document."""
-    workspace_dir = temp_docx.parent / ".docx"
-    if workspace_dir.exists():
-        shutil.rmtree(workspace_dir)
-    yield temp_docx
-    # Cleanup after test
-    if workspace_dir.exists():
-        shutil.rmtree(workspace_dir)
+    """Alias for temp_docx, kept for backwards compatibility.
+
+    Workspace isolation is handled by the autouse isolated_workspace_base
+    fixture, so no manual cleanup is needed here.
+    """
+    return temp_docx

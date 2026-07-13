@@ -10,7 +10,7 @@ from docx_editor import Document
 
 ### Opening Documents
 
-#### `Document.open(path, author=None, force_recreate=False)`
+#### `Document.open(path, author=None, force_recreate=False, workspace_dir=None)`
 
 Open a Word document for editing.
 
@@ -18,13 +18,15 @@ Open a Word document for editing.
 
 - `path` (str | Path): Path to the .docx file
 - `author` (str, optional): Author name for tracked changes. Defaults to system username.
-- `force_recreate` (bool): If True, delete any existing workspace (stale or in-sync) before opening — any unsaved edits in the workspace are discarded. Use this to recover from `WorkspaceSyncError`. Defaults to False.
+- `force_recreate` (bool): If True, delete any existing workspace (stale or in-sync) before opening — whatever XML it holds is discarded — and re-unpack from the current source. Use this to recover from `WorkspaceSyncError`. Defaults to False.
+- `workspace_dir` (str | Path, optional): Base directory for the workspace. Overrides the `DOCX_EDITOR_WORKSPACE_DIR` environment variable and the platform cache default (see [Workspace location](#workspace-location)). A relative path resolves against the document's directory, so `workspace_dir=".docx"` keeps the workspace next to the file. Defaults to None.
 
 **Returns:** Document instance ready for editing
 
 **Raises:**
 
-- `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created. Pass `force_recreate=True` to discard the stale workspace and re-unpack from the current source. The workspace is never deleted silently.
+- `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created. Pass `force_recreate=True` to discard the stale workspace and re-unpack from the current source. The workspace is never deleted silently. The error message includes the workspace path.
+- `WorkspaceError`: If the workspace directory cannot be created (e.g. the base is not writable), the home directory backing the default cache cannot be determined, or an existing workspace was unpacked from a different document. The message names the override to set.
 
 **Example:**
 
@@ -32,6 +34,29 @@ Open a Word document for editing.
 doc = Document.open("contract.docx")
 doc = Document.open("contract.docx", author="Legal Team")
 ```
+
+#### Workspace location
+
+When you open a document, its unpacked OOXML contents are stored in a workspace directory. By default this lives under the platform user cache, in a subfolder `docx-editor/<hash>` where `<hash>` is derived from the document's absolute path:
+
+| Platform | Default base directory |
+| --- | --- |
+| Linux | `$XDG_CACHE_HOME/docx-editor` (falls back to `~/.cache/docx-editor`) |
+| macOS | `~/Library/Caches/docx-editor` |
+| Windows | `%LOCALAPPDATA%\docx-editor` (falls back to `~\AppData\Local\docx-editor`) |
+
+To override the location:
+
+- Set the `DOCX_EDITOR_WORKSPACE_DIR` environment variable to a base directory, or
+- Pass `workspace_dir=` to `Document.open()` (takes precedence over the environment variable).
+
+Both overrides are tilde-expanded, and an empty value counts as unset. A **relative** override resolves against the document's directory, so `workspace_dir=".docx"` reproduces the old next-to-file layout (handy for debugging). An **absolute** override is used as-is. (A relative `XDG_CACHE_HOME` / `%LOCALAPPDATA%` is ignored, per the XDG spec.)
+
+Cleanup semantics are unchanged: the workspace persists until `close()` is called, and `close(cleanup=False)` preserves it for inspection. `close()` removes only the document's own workspace folder — the base directory is shared and is never deleted, so it is safe to point `workspace_dir` at a directory you also use for other things.
+
+The workspace directory is created with owner-only permissions (`0o700`), since it holds the document's plaintext in a shared cache location. Use `doc.workspace_path` to locate it.
+
+> **Note:** The default location moved from the old `.docx/<stem>/` folder next to the document to the platform cache. Workspaces created by older versions are no longer found and are simply ignored. Delete leftover `.docx/` folders, or pass `workspace_dir=".docx"` to keep using the old layout.
 
 ### Properties
 
@@ -49,6 +74,14 @@ Get the path to the source document.
 
 ```python
 print(doc.source_path)  # Path("/path/to/contract.docx")
+```
+
+#### `workspace_path`
+
+Get the path to this document's workspace folder. Since the workspace lives in the user cache by default, this is how you locate the unpacked XML — for example after `close(cleanup=False)`, or when a workspace was preserved because an exception was raised.
+
+```python
+print(doc.workspace_path)  # Path("/home/you/.cache/docx-editor/0bebafb463a87cfa")
 ```
 
 ### Track Changes Methods

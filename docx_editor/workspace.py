@@ -1,10 +1,18 @@
 """Workspace management for docx_editor.
 
-Manages the .docx/ workspace folder that contains unpacked document contents.
+Manages the workspace folder that holds a document's unpacked OOXML contents.
+By default the workspace lives under the platform user cache directory (see
+:func:`_default_cache_dir`); the location can be overridden with the
+``DOCX_EDITOR_WORKSPACE_DIR`` environment variable or an explicit
+``workspace_dir`` argument.
 """
 
 import getpass
+import hashlib
 import json
+import os
+import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,19 +27,67 @@ from .exceptions import (
 from .ooxml import pack_document, unpack_document
 
 
-class Workspace:
-    """Manages the .docx/ workspace folder for a document.
+def _cache_root_from_env(name: str) -> Path | None:
+    """Return ``$name`` as a cache root, or None if it is unusable.
 
-    The workspace is stored in a hidden .docx/ folder in the same directory
-    as the source document, with a subfolder named after the document stem.
+    Per the XDG base directory spec, a relative value "must be ignored and a
+    default equivalent [...] used instead" — the same rule is applied to
+    %LOCALAPPDATA%. Without it a relative value would later be joined to the
+    source document's directory, silently scattering caches next to documents.
+    """
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return None
+    root = Path(os.path.expanduser(value))
+    return root if root.is_absolute() else None
+
+
+def _home() -> Path:
+    """Return the user's home directory as a WorkspaceError-domain failure."""
+    try:
+        return Path.home()
+    except RuntimeError as exc:  # no HOME and no passwd entry (slim containers)
+        raise WorkspaceError(
+            "Cannot determine the home directory for the default workspace cache. "
+            "Set DOCX_EDITOR_WORKSPACE_DIR to an absolute path, or pass workspace_dir=."
+        ) from exc
+
+
+def _default_cache_dir() -> Path:
+    """Return the platform-appropriate user cache base for workspaces.
+
+    - Windows: ``%LOCALAPPDATA%\\docx-editor`` (``~/AppData/Local`` fallback)
+    - macOS: ``~/Library/Caches/docx-editor``
+    - Linux/other: ``$XDG_CACHE_HOME/docx-editor`` (``~/.cache`` fallback)
+
+    A relative ``%LOCALAPPDATA%``/``$XDG_CACHE_HOME`` is ignored (see
+    :func:`_cache_root_from_env`).
+    """
+    if os.name == "nt":
+        root = _cache_root_from_env("LOCALAPPDATA") or _home() / "AppData" / "Local"
+        return root / "docx-editor"
+    if sys.platform == "darwin":
+        return _home() / "Library" / "Caches" / "docx-editor"
+    root = _cache_root_from_env("XDG_CACHE_HOME") or _home() / ".cache"
+    return root / "docx-editor"
+
+
+class Workspace:
+    """Manages the per-document workspace folder.
+
+    The workspace holds the unpacked OOXML contents of a single document. It is
+    stored in a subdirectory named ``sha256(source_path)[:16]`` under a base
+    directory resolved (in order) from an explicit ``workspace_dir`` argument,
+    the ``DOCX_EDITOR_WORKSPACE_DIR`` environment variable, or the platform user
+    cache directory. Pass ``workspace_dir=".docx"`` to keep the workspace next
+    to the source file for debugging.
 
     Attributes:
         source_path: Path to the original .docx file
-        workspace_path: Path to the workspace folder (.docx/{stem}/)
+        workspace_path: Path to this document's workspace folder
         meta: Dictionary containing workspace metadata
     """
 
-    WORKSPACE_DIR = ".docx"
     # If you rename META_FILE, also update EXCLUDED_PATHS in ooxml/pack.py —
     # otherwise the renamed file will be packed into the .docx and Word will
     # flag it as "unreadable content" (issue #8).
@@ -44,6 +100,7 @@ class Workspace:
         source_path: str | Path,
         author: str | None = None,
         create: bool = True,
+        workspace_dir: str | Path | None = None,
     ):
         """Initialize workspace for a document.
 
@@ -51,6 +108,10 @@ class Workspace:
             source_path: Path to the .docx file
             author: Author name for tracked changes (defaults to system user)
             create: If True, create workspace if it doesn't exist
+            workspace_dir: Base directory for the workspace. Overrides the
+                DOCX_EDITOR_WORKSPACE_DIR environment variable and the platform
+                cache default. A relative path resolves against the source
+                document's directory (e.g. ".docx" keeps it next to the file).
 
         Raises:
             DocumentNotFoundError: If the source document doesn't exist
@@ -66,8 +127,7 @@ class Workspace:
             raise InvalidDocumentError(f"Not a .docx file: {source_path}")
 
         # Determine workspace path
-        workspace_dir = self.source_path.parent / self.WORKSPACE_DIR
-        self.workspace_path = workspace_dir / self.source_path.stem
+        self.workspace_path = self._resolve_workspace_path(self.source_path, workspace_dir)
 
         # Set author (default to system user)
         self._author = author or getpass.getuser()
@@ -77,6 +137,7 @@ class Workspace:
                 # Check if it's stale or matches current document
                 existing_meta = self._load_meta()
                 if existing_meta:
+                    self._check_provenance(existing_meta)
                     source_mtime = self.source_path.stat().st_mtime
                     if existing_meta.get("source_mtime") != source_mtime:
                         raise WorkspaceSyncError(
@@ -97,7 +158,72 @@ class Workspace:
             loaded_meta = self._load_meta()
             if not loaded_meta:
                 raise WorkspaceError(f"Invalid workspace (no meta.json): {self.workspace_path}")
+            self._check_provenance(loaded_meta)
             self.meta = loaded_meta
+
+    def _check_provenance(self, meta: dict[str, Any]) -> None:
+        """Refuse to adopt a workspace that was unpacked from a different document.
+
+        The workspace directory is keyed by a hash of the source path, so a
+        mismatch here means either a hash collision or a directory planted by
+        something else. Adopting it would let a later save() pack that other
+        document's XML over this one's source file.
+        """
+        recorded = meta.get("source_path")
+        # Compare with the same folding the workspace key uses (see
+        # _resolve_workspace_path), or two spellings that map to one workspace on
+        # a case-insensitive filesystem would be rejected as different documents.
+        if recorded is None or os.path.normcase(recorded) != os.path.normcase(str(self.source_path)):
+            raise WorkspaceError(
+                f"Workspace {self.workspace_path} belongs to a different document "
+                f"({recorded!r}, expected {str(self.source_path)!r}). "
+                f"Delete it or use force_recreate=True."
+            )
+
+    @classmethod
+    def _resolve_workspace_path(cls, source_path: Path, workspace_dir: str | Path | None) -> Path:
+        """Resolve the workspace directory for a source document.
+
+        Precedence for the base directory:
+          1. the explicit ``workspace_dir`` argument
+          2. the ``DOCX_EDITOR_WORKSPACE_DIR`` environment variable
+          3. the platform user cache (see :func:`_default_cache_dir`)
+
+        Both overrides are tilde-expanded, and an empty/whitespace-only value
+        counts as unset. A relative base resolves against ``source_path.parent``
+        (so ``workspace_dir=".docx"`` reproduces the old next-to-file layout for
+        debugging); an absolute base is used as-is.
+
+        The per-document subdirectory is ``sha256(normcase(source_path))[:16]``,
+        hashed via :func:`os.fsencode` so undecodable filename bytes (which
+        ``str(Path)`` carries as surrogates) do not raise UnicodeEncodeError.
+        ``normcase`` folds case on Windows, so one file cannot map to two
+        workspaces there; it is a no-op on POSIX.
+
+        Args:
+            source_path: Resolved (absolute) path to the .docx file.
+            workspace_dir: Explicit base override, or None.
+        """
+        base = None
+        for override in (workspace_dir, os.environ.get("DOCX_EDITOR_WORKSPACE_DIR")):
+            if override is None:
+                continue
+            # A str override (including the env var) is stripped — stray whitespace
+            # there is config noise, not part of a real path. A Path is used
+            # verbatim, so an exotic path really ending in a space still works.
+            text = override.strip() if isinstance(override, str) else os.fspath(override)
+            if not text:  # empty/whitespace override falls through to the next level
+                continue
+            base = Path(os.path.expanduser(text))
+            break
+        if base is None:
+            base = _default_cache_dir()
+
+        if not base.is_absolute():
+            base = source_path.parent / base
+
+        key = os.fsencode(os.path.normcase(source_path))
+        return base / hashlib.sha256(key).hexdigest()[:16]
 
     @property
     def author(self) -> str:
@@ -126,8 +252,19 @@ class Workspace:
 
     def _create_workspace(self) -> None:
         """Create the workspace by unpacking the document."""
-        # Create workspace directory
-        self.workspace_path.mkdir(parents=True, exist_ok=True)
+        # Create workspace directory. The workspace holds the document's
+        # plaintext in a shared, predictably-named cache base, so restrict it to
+        # the owner. mkdir(parents=True, mode=...) applies the mode to the leaf
+        # only, so the base is created separately to keep it 0o700 too.
+        try:
+            self.workspace_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+            self.workspace_path.mkdir(mode=0o700, exist_ok=True)
+        except OSError as exc:
+            raise WorkspaceError(
+                f"Cannot create workspace at {self.workspace_path}: {exc}. "
+                f"Set DOCX_EDITOR_WORKSPACE_DIR to a writable absolute path, "
+                f"or pass workspace_dir=."
+            ) from exc
 
         # Unpack document
         rsid = unpack_document(self.source_path, self.workspace_path)
@@ -206,15 +343,12 @@ class Workspace:
         Args:
             cleanup: If True, delete the workspace folder
         """
+        # Only this document's workspace is removed. The base directory is
+        # shared (and may be a caller-supplied one via workspace_dir=/
+        # DOCX_EDITOR_WORKSPACE_DIR), so it is left alone even when empty —
+        # _create_workspace() recreates it on demand.
         if cleanup and self.workspace_path.exists():
-            import shutil
-
             shutil.rmtree(self.workspace_path)
-
-            # Remove .docx parent if empty
-            workspace_dir = self.workspace_path.parent
-            if workspace_dir.exists() and not any(workspace_dir.iterdir()):
-                workspace_dir.rmdir()
 
     def get_xml_path(self, relative_path: str) -> Path:
         """Get the full path to an XML file in the workspace.
@@ -243,43 +377,37 @@ class Workspace:
         )
 
     @classmethod
-    def exists(cls, source_path: str | Path) -> bool:
+    def exists(cls, source_path: str | Path, workspace_dir: str | Path | None = None) -> bool:
         """Check if a workspace exists for a document.
 
         Args:
             source_path: Path to the .docx file
+            workspace_dir: Base directory override (see __init__)
 
         Returns:
             True if workspace exists
         """
         source_path = Path(source_path).resolve()
-        workspace_dir = source_path.parent / cls.WORKSPACE_DIR
-        workspace_path = workspace_dir / source_path.stem
+        workspace_path = cls._resolve_workspace_path(source_path, workspace_dir)
         return workspace_path.exists()
 
     @classmethod
-    def delete(cls, source_path: str | Path) -> bool:
+    def delete(cls, source_path: str | Path, workspace_dir: str | Path | None = None) -> bool:
         """Delete workspace for a document if it exists.
 
         Args:
             source_path: Path to the .docx file
+            workspace_dir: Base directory override (see __init__)
 
         Returns:
             True if workspace was deleted, False if it didn't exist
         """
-        import shutil
-
         source_path = Path(source_path).resolve()
-        workspace_dir = source_path.parent / cls.WORKSPACE_DIR
-        workspace_path = workspace_dir / source_path.stem
+        workspace_path = cls._resolve_workspace_path(source_path, workspace_dir)
 
         if not workspace_path.exists():
             return False
 
+        # As in close(), the shared base directory is left in place.
         shutil.rmtree(workspace_path)
-
-        # Remove .docx parent if empty
-        if workspace_dir.exists() and not any(workspace_dir.iterdir()):
-            workspace_dir.rmdir()
-
         return True

@@ -83,26 +83,43 @@ class Document:
         path: str | Path,
         author: str | None = None,
         force_recreate: bool = False,
+        workspace_dir: str | Path | None = None,
     ) -> "Document":
         """Open a Word document for editing.
 
-        Creates a workspace in .docx/{document_stem}/ alongside the document.
-        The workspace persists until close() is called.
+        Creates a workspace holding the document's unpacked contents. By
+        default the workspace lives under the platform user cache directory
+        (Linux: ``$XDG_CACHE_HOME`` or ``~/.cache``; macOS:
+        ``~/Library/Caches``; Windows: ``%LOCALAPPDATA%``), in a subfolder
+        named ``docx-editor/<hash>`` where ``<hash>`` is derived from the
+        document's absolute path. The workspace persists until close() is
+        called.
 
         Args:
             path: Path to the .docx file
             author: Author name for tracked changes (defaults to system username)
             force_recreate: If True, delete any existing workspace (stale or
-                in-sync) before opening. Any unsaved edits in the workspace
-                are discarded. Use this to recover from WorkspaceSyncError.
+                in-sync) before opening, discarding whatever XML it holds, and
+                re-unpack from the current source. Use this to recover from
+                WorkspaceSyncError.
+            workspace_dir: Base directory for the workspace. Overrides the
+                DOCX_EDITOR_WORKSPACE_DIR environment variable and the platform
+                cache default. Tilde-expanded; an empty value counts as unset.
+                A relative path resolves against the document's directory, so
+                ``workspace_dir=".docx"`` keeps the workspace next to the file
+                (handy for debugging).
 
         Returns:
             Document instance ready for editing
 
         Raises:
+            WorkspaceError: If the workspace cannot be created (unwritable base,
+                undeterminable home directory) or an existing workspace was
+                unpacked from a different document.
             WorkspaceSyncError: If the source document was modified since the
-                workspace was created. Pass force_recreate=True to discard the
-                stale workspace and re-unpack from the current source.
+                workspace was created. The message includes the workspace path.
+                Pass force_recreate=True to discard the stale workspace and
+                re-unpack from the current source.
 
         Example:
             doc = Document.open("contract.docx")
@@ -111,9 +128,9 @@ class Document:
         path = Path(path).resolve()
 
         if force_recreate:
-            Workspace.delete(path)
+            Workspace.delete(path, workspace_dir=workspace_dir)
 
-        workspace = Workspace(path, author=author, create=True)
+        workspace = Workspace(path, author=author, create=True, workspace_dir=workspace_dir)
         return cls(workspace)
 
     @property
@@ -125,6 +142,16 @@ class Document:
     def source_path(self) -> Path:
         """Get the path to the source document."""
         return self._workspace.source_path
+
+    @property
+    def workspace_path(self) -> Path:
+        """Get the path to this document's workspace folder.
+
+        The workspace lives under the user cache by default, so this is the
+        only way to locate the unpacked XML — e.g. after close(cleanup=False)
+        or when a workspace is preserved because an exception was raised.
+        """
+        return self._workspace.workspace_path
 
     # ==================== Track Changes API ====================
 

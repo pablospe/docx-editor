@@ -32,7 +32,7 @@ docx_editor/
 ├── xml_editor.py     # Core XML manipulation (XMLEditor, DocxXMLEditor)
 ├── track_changes.py  # RevisionManager - track changes operations
 ├── comments.py       # CommentManager - comment operations
-├── workspace.py      # Workspace management (.docx/{stem}/ folders)
+├── workspace.py      # Workspace management (user cache dir, <hash>/ folders)
 ├── exceptions.py     # Custom exception hierarchy
 └── ooxml/           # OOXML utilities (pack/unpack)
 ```

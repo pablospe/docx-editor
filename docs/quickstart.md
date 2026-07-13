@@ -23,11 +23,25 @@ with Document.open("contract.docx", author="Legal Team") as doc:
     doc.save()
 ```
 
-If the source `.docx` was modified outside this library since the workspace was created, `Document.open()` raises `WorkspaceSyncError` instead of silently discarding the workspace. Pass `force_recreate=True` to acknowledge the divergence and re-unpack from the current source:
+If the source `.docx` was modified outside this library since the workspace was created, `Document.open()` raises `WorkspaceSyncError` instead of silently discarding the workspace. The error message includes the workspace path. Pass `force_recreate=True` to acknowledge the divergence and re-unpack from the current source:
 
 ```python
 doc = Document.open("contract.docx", force_recreate=True)
 ```
+
+## Workspace location
+
+Opening a document unpacks it into a workspace directory. By default this lives under the platform user cache — `~/.cache/docx-editor/` on Linux (or `$XDG_CACHE_HOME`), `~/Library/Caches/docx-editor/` on macOS, `%LOCALAPPDATA%\docx-editor\` on Windows — in a subfolder named after a hash of the document's absolute path.
+
+Override the base directory with the `DOCX_EDITOR_WORKSPACE_DIR` environment variable, or per-call with `workspace_dir=`:
+
+```python
+# Keep the workspace next to the document (relative path → resolved against
+# the document's directory); useful for inspecting the unpacked XML.
+doc = Document.open("contract.docx", workspace_dir=".docx")
+```
+
+The default location moved from the old `.docx/<stem>/` folder next to the document. Leftover `.docx/` folders from older versions are no longer used and can be deleted.
 
 ## Paragraph References
 
@@ -203,7 +217,7 @@ print(f"Rejected {count} revisions")
 doc.save()                  # Save to original path
 doc.save("contract_v2.docx") # Save to a new path
 doc.close()                 # Delete workspace
-doc.close(cleanup=False)    # Keep workspace for inspection
+doc.close(cleanup=False)    # Keep workspace (in the cache dir) for inspection
 ```
 
 ## Complete Example
