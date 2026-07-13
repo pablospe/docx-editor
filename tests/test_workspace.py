@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import pytest
 from docx_editor.exceptions import (
     DocumentNotFoundError,
     InvalidDocumentError,
+    WorkspaceError,
     WorkspaceSyncError,
 )
 from docx_editor.workspace import Workspace, _default_cache_dir
@@ -298,26 +300,30 @@ class TestWorkspaceEdgeCases:
         # Cleanup
         Workspace.delete(clean_workspace)
 
-    def test_close_removes_empty_parent_dir(self, clean_workspace):
-        """Test that close removes empty .docx parent directory."""
+    def test_close_keeps_shared_base_dir(self, clean_workspace):
+        """close() removes only this workspace, never the shared base directory.
+
+        The base may be a caller-supplied directory (workspace_dir= /
+        DOCX_EDITOR_WORKSPACE_DIR), so the library must not delete it.
+        """
         workspace = Workspace(clean_workspace)
-        parent_dir = workspace.workspace_path.parent
+        base_dir = workspace.workspace_path.parent
 
         workspace.close(cleanup=True)
 
-        # Parent .docx dir should be removed if empty
-        assert not parent_dir.exists()
+        assert not workspace.workspace_path.exists()
+        assert base_dir.exists()
 
-    def test_delete_removes_empty_parent_dir(self, clean_workspace):
-        """Test that delete removes empty .docx parent directory."""
+    def test_delete_keeps_shared_base_dir(self, clean_workspace):
+        """delete() removes only this workspace, never the shared base directory."""
         workspace = Workspace(clean_workspace)
-        parent_dir = workspace.workspace_path.parent
+        base_dir = workspace.workspace_path.parent
         workspace.close(cleanup=False)
 
-        Workspace.delete(clean_workspace)
+        assert Workspace.delete(clean_workspace) is True
 
-        # Parent .docx dir should be removed if empty
-        assert not parent_dir.exists()
+        assert not workspace.workspace_path.exists()
+        assert base_dir.exists()
 
     def test_load_meta_returns_existing(self, clean_workspace):
         """Test that existing valid meta.json is returned by _load_meta.
@@ -490,3 +496,100 @@ class TestWorkspaceLocation:
             Workspace(temp_docx)
 
         Workspace.delete(temp_docx)
+
+
+class TestWorkspaceLocationHardening:
+    """Regression tests for workspace path resolution edge cases."""
+
+    def test_non_utf8_source_filename(self, simple_docx, temp_dir, tmp_path, monkeypatch):
+        """A source path with undecodable bytes must not raise UnicodeEncodeError.
+
+        str(Path) carries such bytes as surrogates, which strict UTF-8 .encode()
+        rejects; the hash key goes through os.fsencode instead.
+        """
+        import shutil
+
+        monkeypatch.setenv("DOCX_EDITOR_WORKSPACE_DIR", str(tmp_path))
+        # "café.docx" in latin-1 — undecodable as UTF-8, so it round-trips as a surrogate.
+        weird = temp_dir / os.fsdecode(b"caf\xe9.docx")
+        shutil.copy(simple_docx, weird)
+
+        workspace = Workspace(weird)
+        assert workspace.workspace_path.exists()
+        assert workspace.workspace_path.parent == tmp_path
+        workspace.close()
+
+    def test_env_var_is_tilde_expanded(self, temp_docx, tmp_path, monkeypatch):
+        """A ~ in the env var is expanded, not taken as a literal directory name."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("DOCX_EDITOR_WORKSPACE_DIR", "~/ws")
+
+        workspace = Workspace(temp_docx)
+        assert workspace.workspace_path.parent == tmp_path / "ws"
+        assert "~" not in str(workspace.workspace_path)
+        workspace.close()
+
+    def test_empty_workspace_dir_is_treated_as_unset(self, temp_docx, tmp_path, monkeypatch):
+        """workspace_dir="" must not rebase the workspace onto the document's own dir."""
+        monkeypatch.setenv("DOCX_EDITOR_WORKSPACE_DIR", str(tmp_path))
+
+        workspace = Workspace(temp_docx, workspace_dir="")
+        assert workspace.workspace_path.parent == tmp_path
+        assert workspace.workspace_path.parent != temp_docx.parent
+        workspace.close()
+
+    def test_relative_xdg_cache_home_is_ignored(self, monkeypatch, tmp_path):
+        """Per the XDG spec, a relative XDG_CACHE_HOME is ignored, not honored."""
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("XDG_CACHE_HOME", "relative-cache")
+
+        assert _default_cache_dir() == tmp_path / ".cache" / "docx-editor"
+
+    def test_workspace_dir_is_owner_only(self, temp_docx, tmp_path, monkeypatch):
+        """The workspace holds document plaintext — it must not be group/world readable."""
+        monkeypatch.setenv("DOCX_EDITOR_WORKSPACE_DIR", str(tmp_path / "base"))
+
+        workspace = Workspace(temp_docx)
+        assert stat.S_IMODE(workspace.workspace_path.stat().st_mode) == 0o700
+        assert stat.S_IMODE(workspace.workspace_path.parent.stat().st_mode) == 0o700
+        workspace.close()
+
+    @pytest.mark.skipif(os.getuid() == 0, reason="root ignores directory permissions")
+    def test_unwritable_base_raises_workspace_error(self, temp_docx, tmp_path, monkeypatch):
+        """A filesystem failure surfaces as WorkspaceError, not a raw PermissionError."""
+        readonly = tmp_path / "readonly"
+        readonly.mkdir(mode=0o500)
+        monkeypatch.setenv("DOCX_EDITOR_WORKSPACE_DIR", str(readonly / "nested"))
+
+        with pytest.raises(WorkspaceError, match="DOCX_EDITOR_WORKSPACE_DIR"):
+            Workspace(temp_docx)
+
+    def test_adopting_another_documents_workspace_is_refused(self, simple_docx, temp_dir, tmp_path, monkeypatch):
+        """A workspace whose meta names a different source must not be adopted.
+
+        The workspace dir is keyed by a hash of the source path, so a mismatch
+        means a collision or a planted directory; adopting it would let save()
+        pack the other document's XML over this one's source.
+        """
+        import shutil
+
+        monkeypatch.setenv("DOCX_EDITOR_WORKSPACE_DIR", str(tmp_path))
+        victim = temp_dir / "victim.docx"
+        shutil.copy(simple_docx, victim)
+
+        workspace = Workspace(victim)
+        workspace_path = workspace.workspace_path
+        workspace.close(cleanup=False)
+
+        # Rewrite meta.json so it claims to belong to a different document.
+        meta_path = workspace_path / Workspace.META_FILE
+        meta = json.loads(meta_path.read_text())
+        meta["source_path"] = str(temp_dir / "other.docx")
+        meta_path.write_text(json.dumps(meta))
+
+        with pytest.raises(WorkspaceError, match="different document"):
+            Workspace(victim)
+
+        Workspace.delete(victim)
