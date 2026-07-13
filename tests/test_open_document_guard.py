@@ -59,7 +59,7 @@ class TestOpenDocumentGuard:
         assert clean_workspace.read_bytes() == original_bytes  # destination untouched
         doc.close()
 
-    def test_guard_sees_stub_beside_a_symlinked_destination(self, clean_workspace, temp_dir):
+    def test_guard_sees_stub_beside_an_explicit_symlink_destination(self, clean_workspace, temp_dir):
         """Word writes its stub next to the name the user opened — the symlink.
 
         The save resolves the symlink to promote into the real file, so the guard has
@@ -74,6 +74,41 @@ class TestOpenDocumentGuard:
         doc = Document.open(clean_workspace)
         with pytest.raises(DocumentOpenError):
             doc.save(link)
+        doc.close()
+
+    def test_guard_sees_stub_when_the_opened_path_is_a_symlink(self, clean_workspace, temp_dir):
+        """The realistic case: the user *opens* the symlink Word has open, then saves in place.
+
+        Workspace resolves source_path, so the destination is already the real file by
+        save() time and the stub beside the symlink is invisible unless the originally
+        opened name is remembered.
+        """
+        link_dir = temp_dir / "links"
+        link_dir.mkdir()
+        link = link_dir / "link.docx"
+        link.symlink_to(clean_workspace)
+        (link_dir / "~$link.docx").write_bytes(b"")  # stub beside the symlink only
+        original_bytes = clean_workspace.read_bytes()
+
+        doc = Document.open(link)  # opened *through* the symlink
+        ref = find_ref(doc, "fox")
+        doc.replace("fox", "cat", paragraph=ref)
+
+        with pytest.raises(DocumentOpenError):
+            doc.save()
+
+        assert clean_workspace.read_bytes() == original_bytes
+        doc.close()
+
+    def test_stale_stub_does_not_block_a_new_destination(self, clean_workspace, temp_dir):
+        """A stub beside a name with no document behind it guards nothing."""
+        fresh = temp_dir / "brandnew.docx"
+        (temp_dir / "~$brandnew.docx").write_bytes(b"")  # stale stub, no such document
+
+        doc = Document.open(clean_workspace)
+        saved = doc.save(fresh)
+        assert saved == fresh
+        assert fresh.exists()
         doc.close()
 
     def test_force_overrides_guard(self, clean_workspace):
@@ -166,7 +201,7 @@ class TestPermissionErrorMapping:
         def deny(*args, **kwargs):
             raise PermissionError("cannot create temp file in read-only directory")
 
-        monkeypatch.setattr(pack.tempfile, "mkstemp", deny)
+        monkeypatch.setattr(pack, "_create_temp", deny)
 
         doc = Document.open(clean_workspace)
         with pytest.raises(PermissionError):

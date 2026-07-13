@@ -2,6 +2,7 @@
 
 import contextlib
 import os
+import secrets
 import shutil
 import stat
 import subprocess
@@ -20,9 +21,10 @@ from ..exceptions import DocumentOpenError
 # relative — a hypothetical subpart literally named "meta.json" is unaffected.
 EXCLUDED_PATHS = {Path("meta.json")}
 
-# Bytes left for the destination's name inside the promotion temp file's name, whose
-# shape is ".<name>.<8 random chars>.tmp" against a 255-byte NAME_MAX.
-_TEMP_NAME_BUDGET = 255 - len(".") - len(".") - 8 - len(".tmp")
+# The promotion temp file is named ".<destination name>.<8 random chars>.tmp"; this
+# is everything in that shape except the destination's own name.
+_TEMP_NAME_OVERHEAD = len(".") + len(".") + 8 + len(".tmp")
+_TEMP_NAME_ATTEMPTS = 100
 
 
 def _ignore_symlinks(directory: str, names: list[str]) -> list[str]:
@@ -87,30 +89,40 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
         # — a write error or a failed validation — leaves the existing destination
         # untouched. Same directory ⇒ same volume ⇒ os.replace() is a true atomic
         # rename (no cross-device error).
-        #
-        # mkstemp builds "<prefix><8 random chars><suffix>", and NAME_MAX is a *byte*
-        # budget (255), not a character count — so clamp the encoded name. Slicing
-        # characters would still overflow on a non-ASCII destination, whose name can
-        # run to 4 bytes per character.
-        stem = target.name.encode()[:_TEMP_NAME_BUDGET].decode(errors="ignore")
-        fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{stem}.", suffix=".tmp")
-        os.close(fd)
-        tmp_path = Path(tmp_name)
+        fd, tmp_path = _create_temp(target)
         try:
-            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for f in entries:
-                    rel = f.relative_to(temp_content_dir)
-                    if rel in EXCLUDED_PATHS:
-                        continue
-                    info = zipfile.ZipInfo(rel.as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
-                    info.compress_type = zipfile.ZIP_DEFLATED
-                    info.create_system = 3  # Unix, pinned for cross-platform byte stability
-                    info.external_attr = 0o644 << 16
-                    # _compresslevel: stdlib's documented per-entry escape hatch (stable since 3.7);
-                    # ZipFile.compresslevel is not propagated to ZipInfo entries.
-                    info._compresslevel = 6  # ty: ignore[unresolved-attribute]
-                    with f.open("rb") as src, zf.open(info, "w") as dst:
-                        shutil.copyfileobj(src, dst)
+            # Write through the temp file's own fd rather than reopening it by name.
+            # Reopening would fail wherever the created file is not owner-writable —
+            # a directory with a restrictive default POSIX ACL masks the new file down
+            # to 0400 — and it would leave a window in which the name could be swapped
+            # under us.
+            with os.fdopen(fd, "w+b") as tmp_file:
+                # Take the destination's permissions *before* writing any content, so
+                # the document is never briefly more readable than the file it replaces.
+                if target.exists():
+                    _chmod(tmp_file, tmp_path, stat.S_IMODE(target.stat().st_mode))
+
+                with zipfile.ZipFile(tmp_file, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for f in entries:
+                        rel = f.relative_to(temp_content_dir)
+                        if rel in EXCLUDED_PATHS:
+                            continue
+                        info = zipfile.ZipInfo(rel.as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
+                        info.compress_type = zipfile.ZIP_DEFLATED
+                        info.create_system = 3  # Unix, pinned for cross-platform byte stability
+                        info.external_attr = 0o644 << 16
+                        # _compresslevel: stdlib's documented per-entry escape hatch (stable since 3.7);
+                        # ZipFile.compresslevel is not propagated to ZipInfo entries.
+                        info._compresslevel = 6  # ty: ignore[unresolved-attribute]
+                        with f.open("rb") as src, zf.open(info, "w") as dst:
+                            shutil.copyfileobj(src, dst)
+
+                # Flush contents and mode to disk before promoting. os.replace() is
+                # atomic with respect to other processes, but without this a crash
+                # could leave the destination name pointing at an inode whose data
+                # blocks were never written.
+                tmp_file.flush()
+                os.fsync(tmp_file.fileno())
 
             # Validate the temp file, never the destination, so a failure cannot
             # destroy the original (historic data-loss bug: unlink of output_file).
@@ -121,7 +133,7 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
             if validate and not validate_document(tmp_path, suffix=output_file.suffix):
                 return False
 
-            _promote(tmp_path, target)
+            _replace(tmp_path, target)
         finally:
             # Remove the temp file on every failure path (write error, validation
             # failure). On success os.replace() consumed it, so this is a no-op.
@@ -133,39 +145,49 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
     return True
 
 
-def _promote(tmp_path: Path, target: Path) -> None:
-    """Atomically move the finished archive onto the destination.
+def _create_temp(target: Path) -> tuple[int, Path]:
+    """Create the promotion temp file next to ``target``; return its fd and path.
 
-    Three things happen here, in an order that matters:
-
-    1. The archive is flushed to disk. os.replace() is atomic with respect to other
-       processes, but without an fsync a crash could leave the destination name
-       pointing at an inode whose data blocks were never written.
-    2. The destination's permissions are carried over. os.replace() swaps in the
-       temp file's inode wholesale, and mkstemp() creates that file 0600, so without
-       this every save would silently strip group/world access from the document.
-       Only the mode is carried — ownership, ACLs, xattrs and hardlinks belong to
-       the replaced inode and cannot survive an atomic rename (see README).
-    3. The rename itself is persisted, so a crash cannot undo it.
-
-    A PermissionError from the rename is mapped to DocumentOpenError on Windows,
-    where a destination held open by Word is exactly what it means.
+    Deliberately not tempfile.mkstemp(): that forces mode 0600, which for a
+    brand-new destination would then have to be corrected back to the process
+    default — and the only stdlib way to read the umask (set it to 0, then restore)
+    mutates global state a concurrent thread can observe. Creating the file 0666
+    lets the kernel apply the umask (and any default ACL) itself, so a new
+    destination lands on exactly the mode a plain open() would have produced, with
+    no race. O_EXCL keeps the name ours alone.
     """
-    # Fsync BEFORE chmod: the temp file is still 0600 (owner-writable) here. Doing it
-    # after would make reopening a read-only destination's mode (0444) fail outright.
-    # Opened "rb+", not "rb": on Windows os.fsync() maps to FlushFileBuffers, which
-    # needs write access on the handle and fails on a read-only one.
-    with open(tmp_path, "rb+") as f:
-        os.fsync(f.fileno())
+    # NAME_MAX is a *byte* budget, not a character count, so clamp the encoded name —
+    # slicing characters would still overflow for a non-ASCII name at up to 4 bytes
+    # each. Go through os.fsencode/os.fsdecode, not str.encode: Linux filenames are
+    # bytes, and an undecodable one arrives here as surrogates that strict UTF-8
+    # encoding would reject.
+    try:
+        name_max = os.pathconf(target.parent, "PC_NAME_MAX")
+    except (AttributeError, OSError, ValueError):  # pragma: no cover - platform-dependent
+        name_max = 255
+    budget = max(8, name_max - _TEMP_NAME_OVERHEAD)
+    stem = os.fsdecode(os.fsencode(target.name)[:budget])
 
-    if target.exists():
-        os.chmod(tmp_path, stat.S_IMODE(target.stat().st_mode))
-    else:
-        # New file: match what a plain open() would have produced under the umask.
-        umask = os.umask(0)
-        os.umask(umask)
-        os.chmod(tmp_path, 0o666 & ~umask)
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    for _ in range(_TEMP_NAME_ATTEMPTS):
+        candidate = target.parent / f".{stem}.{secrets.token_hex(4)}.tmp"
+        try:
+            return os.open(candidate, flags, 0o666), candidate
+        except FileExistsError:  # pragma: no cover - requires a name collision
+            continue
+    raise OSError(f"Could not create a unique temp file next to {target}")  # pragma: no cover
 
+
+def _chmod(tmp_file: object, tmp_path: Path, mode: int) -> None:
+    """Set the temp file's mode, preferring the fd so no path race is possible."""
+    if hasattr(os, "fchmod"):
+        os.fchmod(tmp_file.fileno(), mode)  # ty: ignore[unresolved-attribute]
+    else:  # pragma: no cover - Windows has no fchmod
+        os.chmod(tmp_path, mode)
+
+
+def _replace(tmp_path: Path, target: Path) -> None:
+    """Atomically move the finished archive onto the destination, and persist it."""
     try:
         os.replace(tmp_path, target)
     except PermissionError as e:
@@ -174,7 +196,11 @@ def _promote(tmp_path: Path, target: Path) -> None:
         # holds open always succeeds. A denial there means something else entirely —
         # a sticky-bit directory, an immutable file, an SELinux denial — and calling
         # that "the document is open" would send the caller down a dead end.
-        if sys.platform != "win32":
+        #
+        # A read-only destination on Windows also lands here (MoveFileEx refuses to
+        # replace a FILE_ATTRIBUTE_READONLY file), and that is not an open document
+        # either — so only claim "open" when the destination is otherwise writable.
+        if sys.platform != "win32" or (target.exists() and not os.access(target, os.W_OK)):
             raise
         raise DocumentOpenError(
             f"{target} could not be replaced (permission denied); it is likely open "

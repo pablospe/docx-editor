@@ -144,6 +144,10 @@ class Workspace:
             InvalidDocumentError: If the file is not a .docx file
             WorkspaceExistsError: If workspace exists and create=True
         """
+        # Keep the name the caller actually opened, unresolved. If they opened a
+        # symlink, that is the name Word was told to open — and therefore the name
+        # its ~$ owner file sits beside. save() needs it to find that stub.
+        self._given_path = Path(source_path)
         self.source_path = Path(source_path).resolve()
 
         if not self.source_path.exists():
@@ -332,6 +336,40 @@ class Workspace:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(self.meta, f, indent=2)
 
+    def _check_not_open(self, output_path: Path, *, saving_in_place: bool) -> None:
+        """Raise DocumentOpenError if Word appears to have the destination open.
+
+        Word writes its ``~$`` owner file beside the name it was told to open, which
+        is not necessarily the name we are about to write. So check beside every name
+        this destination is known by: the path given, the path it resolves to (which
+        is where the archive actually lands), and — when saving in place — the
+        possibly-symlinked path the caller originally opened.
+
+        A destination that does not exist yet is never guarded: a stale stub beside a
+        name with no document behind it has nothing to protect.
+        """
+        if not os.path.lexists(output_path):
+            return
+
+        names = [output_path, Path(os.path.realpath(output_path))]
+        if saving_in_place:
+            names.append(self._given_path)
+
+        candidates = dict.fromkeys(c for name in names for c in owner_file_candidates(name))
+        owner_file = next((c for c in candidates if os.path.lexists(c)), None)
+        if owner_file is None:
+            return
+
+        raise DocumentOpenError(
+            f"{output_path} appears to be open in Word (found owner file "
+            f"{owner_file.name}). Close the document in Word, or pass force=True if "
+            f"this is a stale lock from a crashed session. Note the stub name is "
+            f"ambiguous: Word derives it by dropping the first two characters, so it "
+            f"may belong to a different document in the same folder.",
+            path=output_path,
+            owner_file=owner_file,
+        )
+
     def save(
         self,
         destination: str | Path | None = None,
@@ -376,25 +414,8 @@ class Workspace:
         # Guard the destination only — saving a copy to a fresh path while the
         # source is open is fine. force=True skips this (and any other save-time
         # safety check) for confirmed-stale locks from a crashed session.
-        #
-        # Check next to BOTH the given path and the resolved one. Word writes its
-        # stub beside the name the user opened — the symlink, if that is what they
-        # double-clicked — while pack_document() promotes into the resolved file.
-        # Checking only one of the two misses a genuinely open document.
         if not force:
-            resolved = Path(os.path.realpath(output_path))
-            candidates = dict.fromkeys(owner_file_candidates(output_path) + owner_file_candidates(resolved))
-            owner_file = next((c for c in candidates if os.path.lexists(c)), None)
-            if owner_file is not None:
-                raise DocumentOpenError(
-                    f"{output_path} appears to be open in Word (found owner file "
-                    f"{owner_file.name}; note Word shares one owner file between "
-                    f"documents whose names differ only in the first two characters). "
-                    f"Close the document in Word, or pass force=True if this is a "
-                    f"stale lock from a crashed session.",
-                    path=output_path,
-                    owner_file=owner_file,
-                )
+            self._check_not_open(output_path, saving_in_place=destination is None)
 
         # Update metadata before saving
         self.meta["last_saved"] = datetime.now(timezone.utc).isoformat()

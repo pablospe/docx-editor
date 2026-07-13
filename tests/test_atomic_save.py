@@ -17,6 +17,7 @@ destination's permissions and the handling of a symlinked destination.
 import os
 import shutil
 import stat
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -155,6 +156,18 @@ class TestAtomicPromotion:
         with zipfile.ZipFile(dest) as zf:
             assert zf.testzip() is None
 
+    def test_undecodable_destination_filename(self, unpacked_dir, temp_dir):
+        """Linux filenames are bytes; an undecodable one arrives as surrogates.
+
+        Deriving the temp name with str.encode() (strict UTF-8) would reject those and
+        make the document unsaveable.
+        """
+        dest = temp_dir / os.fsdecode(b"caf\xe9.docx")
+        pack_document(unpacked_dir, dest)
+
+        with zipfile.ZipFile(dest) as zf:
+            assert zf.testzip() is None
+
 
 class TestAtomicInodeState:
     """os.replace swaps the inode — what rides on it must be carried over."""
@@ -194,6 +207,26 @@ class TestAtomicInodeState:
             os.umask(old_umask)
 
         assert stat.S_IMODE(dest.stat().st_mode) == 0o644
+
+    @pytest.mark.skipif(shutil.which("setfacl") is None, reason="setfacl not available")
+    def test_saves_into_a_directory_with_a_restrictive_default_acl(self, unpacked_dir, simple_docx, temp_dir):
+        """A default ACL can mask a newly created file down to 0400.
+
+        Reopening the temp file by name to write or fsync it would then fail, breaking
+        a save that worked before this feature existed.
+        """
+        acl_dir = temp_dir / "acl"
+        acl_dir.mkdir()
+        subprocess.run(["setfacl", "-d", "-m", "u::r--", str(acl_dir)], check=True)
+        dest = acl_dir / "doc.docx"
+        shutil.copy(simple_docx, dest)
+        original_bytes = dest.read_bytes()
+
+        pack_document(unpacked_dir, dest)
+
+        assert dest.read_bytes() != original_bytes
+        with zipfile.ZipFile(dest) as zf:
+            assert zf.testzip() is None
 
     def test_symlinked_destination_is_followed(self, unpacked_dir, simple_docx, temp_dir):
         """Saving to a symlink must update the file it points at, not replace the link."""

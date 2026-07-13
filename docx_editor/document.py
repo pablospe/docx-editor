@@ -125,7 +125,11 @@ class Document:
             doc = Document.open("contract.docx")
             doc = Document.open("contract.docx", author="Legal Team")
         """
-        path = Path(path).resolve()
+        # Deliberately not resolved: Workspace resolves internally for source_path,
+        # but it also needs the name the caller actually opened. If that is a symlink,
+        # it is the name Word was told to open, and therefore the name its ~$ owner
+        # file sits beside — the save-time guard has no other way to find that stub.
+        path = Path(path)
 
         if force_recreate:
             Workspace.delete(path, workspace_dir=workspace_dir)
