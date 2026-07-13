@@ -1586,62 +1586,175 @@ class TestAcceptRejectLoops:
         assert count == 2
 
 
+def _make_revision_manager(body_xml):
+    """Build a RevisionManager over a real minidom DOM from a body snippet."""
+    import defusedxml.minidom
+
+    xml = (
+        '<?xml version="1.0"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"{body_xml}"
+        "</w:document>"
+    )
+    mock_editor = MagicMock()
+    mock_editor.dom = defusedxml.minidom.parseString(xml)
+    return RevisionManager(mock_editor)
+
+
+class TestNestedForeignRevisions:
+    """Tests for accept_all/reject_all on nested revisions from Word-authored files.
+
+    Word produces nested markup when one reviewer edits another's tracked
+    change, e.g. a w:del inside a w:ins. The fixed-point loop in
+    accept_all/reject_all must fully resolve such nesting and still terminate
+    when an author filter legitimately leaves other authors' revisions behind.
+    """
+
+    NESTED_DEL_INSIDE_INS = """
+        <w:ins w:id="5" w:author="A" w:date="2026-01-01T00:00:00Z">
+            <w:r><w:t>kept</w:t></w:r>
+            <w:del w:id="3" w:author="B" w:date="2026-01-02T00:00:00Z">
+                <w:r><w:delText>gone</w:delText></w:r>
+            </w:del>
+        </w:ins>"""
+
+    def test_accept_all_nested_del_inside_ins(self):
+        """accept_all resolves a w:del nested inside a w:ins completely."""
+        manager = _make_revision_manager(self.NESTED_DEL_INSIDE_INS)
+        dom = manager.editor.dom
+
+        count = manager.accept_all()
+
+        assert count == 2
+        assert manager.list_revisions() == []
+        assert dom.getElementsByTagName("w:delText") == []
+        texts = [t.firstChild.data for t in dom.getElementsByTagName("w:t")]
+        assert texts == ["kept"]
+
+    def test_reject_all_nested_outer_processed_first(self):
+        """Rejecting the outer w:ins discards the nested w:del with it."""
+        manager = _make_revision_manager(self.NESTED_DEL_INSIDE_INS)
+        dom = manager.editor.dom
+
+        # Outer ins id=5 > nested del id=3: reverse-id order hits the outer
+        # first, so the nested deletion vanishes with it and is never itself
+        # rejected — only one per-id rejection executes.
+        count = manager.reject_all()
+
+        assert count == 1
+        assert manager.list_revisions() == []
+        assert dom.getElementsByTagName("w:t") == []
+        assert dom.getElementsByTagName("w:delText") == []
+
+    def test_reject_all_nested_inner_processed_first(self):
+        """Rejecting the nested w:del first still converges to the same document."""
+        body = """
+        <w:ins w:id="3" w:author="A" w:date="2026-01-01T00:00:00Z">
+            <w:r><w:t>kept</w:t></w:r>
+            <w:del w:id="5" w:author="B" w:date="2026-01-02T00:00:00Z">
+                <w:r><w:delText>gone</w:delText></w:r>
+            </w:del>
+        </w:ins>"""
+        manager = _make_revision_manager(body)
+        dom = manager.editor.dom
+
+        # Nested del id=5 > outer ins id=3: the deletion is rejected first
+        # (restoring its text inside the insertion), then rejecting the outer
+        # insertion removes everything.
+        count = manager.reject_all()
+
+        assert count == 2
+        assert manager.list_revisions() == []
+        assert dom.getElementsByTagName("w:t") == []
+        assert dom.getElementsByTagName("w:delText") == []
+
+    def test_accept_all_author_filter_duplicate_ids_converges(self):
+        """accept_all(author=...) converges when w:id values collide across authors."""
+        # Word does not guarantee unique w:id across w:ins/w:del. The per-id
+        # lookup checks w:ins first, so accepting B's deletion by id hits A's
+        # insertion instead; only re-listing until no progress resolves B.
+        body = """
+        <w:ins w:id="7" w:author="A" w:date="2026-01-01T00:00:00Z">
+            <w:r><w:t>alpha</w:t></w:r>
+        </w:ins>
+        <w:del w:id="7" w:author="B" w:date="2026-01-02T00:00:00Z">
+            <w:r><w:delText>beta</w:delText></w:r>
+        </w:del>"""
+        manager = _make_revision_manager(body)
+
+        manager.accept_all(author="B")
+
+        assert manager.list_revisions(author="B") == []
+
+    def test_accept_all_author_filter_terminates_with_foreign_revisions(self):
+        """accept_all(author=...) returns promptly while other authors' revisions remain."""
+        manager = _make_revision_manager(self.NESTED_DEL_INSIDE_INS)
+
+        count = manager.accept_all(author="B")
+
+        assert count == 1
+        assert manager.list_revisions(author="B") == []
+        remaining = manager.list_revisions(author="A")
+        assert len(remaining) == 1
+        assert remaining[0].type == "insertion"
+
+    def test_reject_all_author_filter_terminates_with_foreign_revisions(self):
+        """reject_all(author=...) returns promptly while other authors' revisions remain."""
+        manager = _make_revision_manager(self.NESTED_DEL_INSIDE_INS)
+        dom = manager.editor.dom
+
+        count = manager.reject_all(author="B")
+
+        assert count == 1
+        assert manager.list_revisions(author="B") == []
+        remaining = manager.list_revisions(author="A")
+        assert len(remaining) == 1
+        assert remaining[0].type == "insertion"
+        # B's rejected deletion restored its text inside A's insertion.
+        texts = [t.firstChild.data for t in dom.getElementsByTagName("w:t")]
+        assert texts == ["kept", "gone"]
+
+
 class TestRestoreDeletionAttributeCopying:
     """Tests for _restore_deletion attribute copying edge cases."""
 
     def test_restore_deletion_copies_deltext_attributes(self):
         """Test that _restore_deletion copies attributes from w:delText to w:t."""
-        import defusedxml.minidom
-
-        # Create a minimal document with w:del containing w:delText with attributes
-        xml = """<?xml version="1.0"?>
-        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        manager = _make_revision_manager(
+            """
             <w:del w:id="1" w:author="Test">
                 <w:r>
                     <w:delText xml:space="preserve">test text</w:delText>
                 </w:r>
-            </w:del>
-        </w:document>"""
+            </w:del>"""
+        )
+        dom = manager.editor.dom
 
-        mock_editor = MagicMock()
-        mock_editor.dom = defusedxml.minidom.parseString(xml)
-
-        manager = RevisionManager(mock_editor)
-
-        # Get the w:del element
-        del_elem = mock_editor.dom.getElementsByTagName("w:del")[0]
-
-        # Restore the deletion
+        del_elem = dom.getElementsByTagName("w:del")[0]
         manager._restore_deletion(del_elem)
 
         # Verify w:t was created with xml:space attribute
-        t_elems = mock_editor.dom.getElementsByTagName("w:t")
+        t_elems = dom.getElementsByTagName("w:t")
         assert len(t_elems) == 1
         assert t_elems[0].getAttribute("xml:space") == "preserve"
 
     def test_restore_deletion_converts_rsiddel_to_rsidr(self):
         """Test that _restore_deletion converts w:rsidDel to w:rsidR on runs."""
-        import defusedxml.minidom
-
-        xml = """<?xml version="1.0"?>
-        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        manager = _make_revision_manager(
+            """
             <w:del w:id="1" w:author="Test">
                 <w:r w:rsidDel="00112233">
                     <w:delText>text</w:delText>
                 </w:r>
-            </w:del>
-        </w:document>"""
+            </w:del>"""
+        )
+        dom = manager.editor.dom
 
-        mock_editor = MagicMock()
-        mock_editor.dom = defusedxml.minidom.parseString(xml)
-
-        manager = RevisionManager(mock_editor)
-
-        del_elem = mock_editor.dom.getElementsByTagName("w:del")[0]
+        del_elem = dom.getElementsByTagName("w:del")[0]
         manager._restore_deletion(del_elem)
 
         # Verify w:rsidDel was converted to w:rsidR
-        r_elems = mock_editor.dom.getElementsByTagName("w:r")
+        r_elems = dom.getElementsByTagName("w:r")
         assert len(r_elems) == 1
         assert r_elems[0].getAttribute("w:rsidR") == "00112233"
         assert not r_elems[0].hasAttribute("w:rsidDel")

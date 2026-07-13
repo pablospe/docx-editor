@@ -1721,6 +1721,11 @@ class RevisionManager:
     def accept_all(self, author: str | None = None) -> int:
         """Accept all revisions, optionally filtered by author.
 
+        Repeated passes are made until no listed revision can be processed, so
+        nested revisions in Word-authored files (e.g. a w:del inside a w:ins)
+        are fully resolved; with an author filter, other authors' revisions are
+        left untouched.
+
         Args:
             author: If provided, only accept revisions by this author
 
@@ -1728,15 +1733,23 @@ class RevisionManager:
             Number of revisions accepted
         """
         count = 0
-        revisions = self.list_revisions(author=author)
-        # Process in reverse order by ID to avoid index issues
-        for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
-            if self.accept_revision(rev.id):
-                count += 1
-        return count
+        while True:
+            progressed = False
+            # Process in reverse order by ID to avoid index issues
+            for rev in sorted(self.list_revisions(author=author), key=lambda r: r.id, reverse=True):
+                if self.accept_revision(rev.id):
+                    count += 1
+                    progressed = True
+            if not progressed:
+                return count
 
     def reject_all(self, author: str | None = None) -> int:
         """Reject all revisions, optionally filtered by author.
+
+        Repeated passes are made until no listed revision can be processed, so
+        nested revisions in Word-authored files (e.g. a w:del inside a w:ins)
+        are fully resolved; with an author filter, other authors' revisions are
+        left untouched.
 
         Args:
             author: If provided, only reject revisions by this author
@@ -1745,12 +1758,15 @@ class RevisionManager:
             Number of revisions rejected
         """
         count = 0
-        revisions = self.list_revisions(author=author)
-        # Process in reverse order by ID to avoid index issues
-        for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
-            if self.reject_revision(rev.id):
-                count += 1
-        return count
+        while True:
+            progressed = False
+            # Process in reverse order by ID to avoid index issues
+            for rev in sorted(self.list_revisions(author=author), key=lambda r: r.id, reverse=True):
+                if self.reject_revision(rev.id):
+                    count += 1
+                    progressed = True
+            if not progressed:
+                return count
 
     def _unwrap_element(self, elem) -> None:
         """Remove an element's wrapper, keeping its children in place."""
