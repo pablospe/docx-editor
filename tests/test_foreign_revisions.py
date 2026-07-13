@@ -11,13 +11,14 @@ Fixtures (see ``tests/test_data/THIRD_PARTY_NOTICES``):
   (``w:proofErr``, bookmarks, ``w:lastRenderedPageBreak``, formatting splits)
   that exercise cross-run text search the way real Word output does.
 
-Each fixture paragraph ends with a bracketed note run that quotes the expected
-accept/reject outcomes verbatim, so text assertions go through ``_body_text``
-(which strips the notes) — matching against the full visible text would let a
-note satisfy an assertion about the body.  The double spaces in several
-expected strings are load-bearing: the separator run between a ``w:del`` and
-its paired ``w:ins`` is untouched by accept/reject, so the library correctly
-yields two spaces where the fixture's normalized notes show one.
+Each fixture paragraph ends with a bracketed note run describing the expected
+accept/reject outcomes (approximately — some notes normalize spacing or drop
+punctuation), so text assertions go through ``_body_text`` (which strips the
+notes) — matching against the full visible text would let a note satisfy an
+assertion about the body. The double spaces in several expected strings are
+load-bearing: they come from adjacent runs the revisions never touch (e.g. the
+separator run between the colour→color ``w:del``/``w:ins`` pair), so a "fix"
+that collapses them would be wrong.
 """
 
 import shutil
@@ -32,14 +33,62 @@ from docx_editor import Document, Revision
 
 # Ground truth for OXML_TrackChanges_Test.docx.
 EXPECTED_REVISIONS = [
-    Revision(1001, "insertion", "Test Author", datetime(2026, 1, 29, 16, 55, tzinfo=timezone.utc), "inserted"),
-    Revision(1002, "deletion", "Test Author", datetime(2026, 1, 29, 16, 56, tzinfo=timezone.utc), "old "),
-    Revision(1003, "deletion", "Editor A", datetime(2026, 1, 29, 16, 57, tzinfo=timezone.utc), "colour"),
-    Revision(1004, "insertion", "Editor A", datetime(2026, 1, 29, 16, 57, 1, tzinfo=timezone.utc), "color"),
-    Revision(1005, "deletion", "Reviewer", datetime(2026, 1, 29, 16, 58, tzinfo=timezone.utc), "reenter"),
-    Revision(1006, "insertion", "Reviewer B", datetime(2026, 1, 29, 16, 59, tzinfo=timezone.utc), "— or is it?"),
-    Revision(1007, "insertion", "Author A", datetime(2026, 1, 29, 17, 0, tzinfo=timezone.utc), "DRAFT "),
-    Revision(1008, "deletion", "Author B", datetime(2026, 1, 29, 17, 0, 10, tzinfo=timezone.utc), "DRAFT "),
+    Revision(
+        id=1001,
+        type="insertion",
+        author="Test Author",
+        date=datetime(2026, 1, 29, 16, 55, tzinfo=timezone.utc),
+        text="inserted",
+    ),
+    Revision(
+        id=1002,
+        type="deletion",
+        author="Test Author",
+        date=datetime(2026, 1, 29, 16, 56, tzinfo=timezone.utc),
+        text="old ",
+    ),
+    Revision(
+        id=1003,
+        type="deletion",
+        author="Editor A",
+        date=datetime(2026, 1, 29, 16, 57, tzinfo=timezone.utc),
+        text="colour",
+    ),
+    Revision(
+        id=1004,
+        type="insertion",
+        author="Editor A",
+        date=datetime(2026, 1, 29, 16, 57, 1, tzinfo=timezone.utc),
+        text="color",
+    ),
+    Revision(
+        id=1005,
+        type="deletion",
+        author="Reviewer",
+        date=datetime(2026, 1, 29, 16, 58, tzinfo=timezone.utc),
+        text="reenter",
+    ),
+    Revision(
+        id=1006,
+        type="insertion",
+        author="Reviewer B",
+        date=datetime(2026, 1, 29, 16, 59, tzinfo=timezone.utc),
+        text="— or is it?",
+    ),
+    Revision(
+        id=1007,
+        type="insertion",
+        author="Author A",
+        date=datetime(2026, 1, 29, 17, 0, tzinfo=timezone.utc),
+        text="DRAFT ",
+    ),
+    Revision(
+        id=1008,
+        type="deletion",
+        author="Author B",
+        date=datetime(2026, 1, 29, 17, 0, 10, tzinfo=timezone.utc),
+        text="DRAFT ",
+    ),
 ]
 
 AUTHOR_REVISION_COUNTS = {
@@ -71,9 +120,9 @@ def tricky_docx(test_data_dir, tmp_path) -> Path:
 def _body_text(doc: Document) -> str:
     """Visible text with each paragraph's trailing bracketed note run stripped.
 
-    The fixture's notes quote the expected outcomes verbatim, so an assertion
-    against the full visible text could be satisfied by a note instead of the
-    body it is meant to check.
+    The fixture's notes spell out expected outcomes, so an assertion against
+    the full visible text could be satisfied by a note instead of the body it
+    is meant to check.
     """
     return "\n".join(line.split("[")[0] for line in doc.get_visible_text().splitlines())
 
@@ -97,7 +146,7 @@ class TestForeignRevisionParsing:
         with Document.open(foreign_docx, author="Test Editor") as doc:
             rev_1006 = next(r for r in doc.list_revisions() if r.id == 1006)
             assert rev_1006.text == "— or is it?"
-            assert "It’s complicated." in doc.get_visible_text()
+            assert "It’s complicated." in _body_text(doc)
 
 
 class TestForeignAcceptReject:
@@ -141,7 +190,7 @@ class TestForeignAcceptReject:
         with Document.open(foreign_docx, author="Test Editor") as doc:
             assert doc.reject_all(author="Test Author") == 2
             assert len(doc.list_revisions()) == 6
-            # Discriminating: before the reject the body reads "This  sentence
+            # Discriminating: before the reject the body reads "This sentence
             # remains." — "old " only returns if the deletion was restored.
             assert "This old sentence remains." in _body_text(doc)
 
@@ -153,6 +202,7 @@ class TestForeignAcceptReject:
         with Document.open(foreign_docx, author="Test Editor") as doc:
             assert doc.accept_revision(1007) is True
             assert doc.accept_revision(1008) is True
+            assert {r.id for r in doc.list_revisions()}.isdisjoint({1007, 1008})
             text = _body_text(doc)
             assert "DRAFT Specification follows." in text
             assert "DRAFT DRAFT" not in text
@@ -228,7 +278,7 @@ class TestRejectDeletionXmlSpace:
         """The fixture's delText lacks xml:space; text still survives save/reopen."""
         with Document.open(foreign_docx, author="Test Editor") as doc:
             assert doc.reject_revision(1002) is True
-            # Discriminating: the body reads "This  sentence remains." until
+            # Discriminating: the body reads "This sentence remains." until
             # the deleted "old " (trailing space and all) is restored.
             assert "This old sentence remains." in _body_text(doc)
             doc.save()
@@ -317,7 +367,7 @@ class TestTrickyFixtureSearch:
         ],
     )
     def test_count_matches_across_fragmented_runs(self, tricky_docx, needle, count):
-        """Each term occurs fragmented once, plus once inside a note run."""
+        """Each term occurs fragmented once in the body; most (not "Quick Brown") also once inside a note run."""
         with Document.open(tricky_docx, author="Test Editor") as doc:
             assert doc.count_matches(needle) == count
 
@@ -328,4 +378,4 @@ class TestTrickyFixtureSearch:
             doc.replace("reenter", "login", paragraph=ref, occurrence=0)
             # Cross-run replace deletes both fragments and inserts once.
             assert doc.accept_all() == 3
-            assert "login your password." in doc.get_visible_text()
+            assert "login your password." in _body_text(doc)
