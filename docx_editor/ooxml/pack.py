@@ -1,5 +1,6 @@
 """Pack a directory back into a .docx, .pptx, or .xlsx file."""
 
+import os
 import shutil
 import subprocess
 import sys
@@ -63,26 +64,43 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
             (f for f in temp_content_dir.rglob("*") if f.is_file()),
             key=lambda f: f.relative_to(temp_content_dir).as_posix(),
         )
-        with zipfile.ZipFile(output_file, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in entries:
-                rel = f.relative_to(temp_content_dir)
-                if rel in EXCLUDED_PATHS:
-                    continue
-                info = zipfile.ZipInfo(rel.as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
-                info.create_system = 3  # Unix, pinned for cross-platform byte stability
-                info.external_attr = 0o644 << 16
-                # _compresslevel: stdlib's documented per-entry escape hatch (stable since 3.7);
-                # ZipFile.compresslevel is not propagated to ZipInfo entries.
-                info._compresslevel = 6  # ty: ignore[unresolved-attribute]
-                with f.open("rb") as src, zf.open(info, "w") as dst:
-                    shutil.copyfileobj(src, dst)
 
-        # Validate if requested
-        if validate:  # pragma: no cover
-            if not validate_document(output_file):
-                output_file.unlink()  # Delete the corrupt file
+        # Atomic write: build the archive in a temp file in the destination's own
+        # directory, then promote it with os.replace(). The destination is never
+        # observed half-written (safe inside cloud-synced folders), and any failure
+        # — a write error or a failed validation — leaves the existing destination
+        # untouched. Same directory ⇒ same volume ⇒ os.replace() is a true atomic
+        # rename (no cross-device error). Leading '.' + '.tmp' keeps sync clients
+        # from ingesting the transient file.
+        fd, tmp_name = tempfile.mkstemp(dir=output_file.parent, prefix=f".{output_file.name}.", suffix=".tmp")
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        try:
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for f in entries:
+                    rel = f.relative_to(temp_content_dir)
+                    if rel in EXCLUDED_PATHS:
+                        continue
+                    info = zipfile.ZipInfo(rel.as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    info.create_system = 3  # Unix, pinned for cross-platform byte stability
+                    info.external_attr = 0o644 << 16
+                    # _compresslevel: stdlib's documented per-entry escape hatch (stable since 3.7);
+                    # ZipFile.compresslevel is not propagated to ZipInfo entries.
+                    info._compresslevel = 6  # ty: ignore[unresolved-attribute]
+                    with f.open("rb") as src, zf.open(info, "w") as dst:
+                        shutil.copyfileobj(src, dst)
+
+            # Validate the temp file, never the destination, so a failure cannot
+            # destroy the original (historic data-loss bug: unlink of output_file).
+            if validate and not validate_document(tmp_path):
                 return False
+
+            os.replace(tmp_path, output_file)
+        finally:
+            # Remove the temp file on every failure path (write error, validation
+            # failure). On success os.replace() consumed it, so this is a no-op.
+            tmp_path.unlink(missing_ok=True)
 
     return True
 

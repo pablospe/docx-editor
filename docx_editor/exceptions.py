@@ -43,6 +43,19 @@ class SessionError(DocxEditError):
     pass
 
 
+class DocumentOpenError(DocxEditError):
+    """Raised when saving to a destination that appears open in Word.
+
+    Word writes a ``~$`` owner (lock) file next to any document it has open. If
+    that stub exists at save time, saving would race Word's own writes and risk
+    corruption, so ``save()`` refuses unless ``force=True``. Also raised when the
+    OS denies the write with a ``PermissionError`` — on Windows, Word holding the
+    file open is exactly this case.
+    """
+
+    pass
+
+
 class XMLError(DocxEditError):
     """Raised when there's an error parsing or manipulating XML."""
 

@@ -152,3 +152,37 @@ with Document.open("contract.docx", author="Editor") as doc:
     ])
     doc.save()
 ```
+
+### Saving into synced folders
+
+`docx-editor` is safe to use inside cloud-synced folders (OneDrive, Dropbox,
+Google Drive, iCloud) and while Word is running.
+
+- **Atomic save.** `save()` writes the new document to a temporary file in the
+  destination's own directory and promotes it with a single atomic rename. The
+  destination is never observed half-written, so a sync client can never upload a
+  torn file. If the write (or `validate=True`) fails, the original is left exactly
+  as it was — a failed validation can no longer destroy your document.
+
+- **Open-in-Word guard.** Before writing, `save()` checks for the `~$` owner
+  (lock) file Word places next to any open document. If the destination looks
+  open, it raises `DocumentOpenError` rather than racing Word's writes:
+
+  ```python
+  from docx_editor import Document, DocumentOpenError
+
+  try:
+      doc.save()
+  except DocumentOpenError:
+      # Someone has this document open in Word — close it and retry.
+      ...
+  ```
+
+  If you are certain the `~$` file is a stale lock left by a crashed session, pass
+  `force=True` to save anyway: `doc.save(force=True)`.
+
+- **Limitation — remote co-authoring is undetectable.** The guard only sees a
+  *local* `~$` file. A document being edited remotely (OneDrive/SharePoint
+  co-authoring, or Word for the web) leaves **no local lock file**, so it cannot
+  be detected from the filesystem. In that case, rely on the cloud provider's
+  version history to recover if edits collide.

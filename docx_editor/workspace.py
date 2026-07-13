@@ -19,6 +19,7 @@ from typing import Any
 
 from .exceptions import (
     DocumentNotFoundError,
+    DocumentOpenError,
     InvalidDocumentError,
     WorkspaceError,
     WorkspaceExistsError,
@@ -70,6 +71,24 @@ def _default_cache_dir() -> Path:
         return _home() / "Library" / "Caches" / "docx-editor"
     root = _cache_root_from_env("XDG_CACHE_HOME") or _home() / ".cache"
     return root / "docx-editor"
+
+
+def owner_file_candidates(path: str | Path) -> list[Path]:
+    """Return the ``~$`` owner (lock) file paths Word would use for ``path``.
+
+    Word writes a hidden ``~$`` owner file next to any document it has open. Its
+    naming is length-dependent: for a normal filename Word drops the first two
+    characters (``Report.docx`` → ``~$port.docx``); for very short names it keeps
+    them (``ab.docx`` → ``~$ab.docx``). We return both the full-name form and the
+    two-char-truncated form and let the caller check for either, so a save-time
+    guard never under-detects an open document regardless of Word's exact rule
+    for a given name.
+    """
+    path = Path(path)
+    candidates = [path.parent / f"~${path.name}"]
+    if len(path.name) > 2:
+        candidates.append(path.parent / f"~${path.name[2:]}")
+    return candidates
 
 
 class Workspace:
@@ -317,7 +336,8 @@ class Workspace:
         Args:
             destination: Output path (defaults to original source path)
             validate: If True, validate with LibreOffice
-            force: If True, overwrite the source even if it changed on disk
+            force: If True, skip save-time safety checks (the source-changed-on-disk
+                check and the open-in-Word guard)
 
         Returns:
             Path to the saved document
@@ -325,6 +345,9 @@ class Workspace:
         Raises:
             WorkspaceSyncError: If saving to the original path and the source
                 document changed on disk since the workspace was created
+            DocumentOpenError: If the destination appears open in Word (a ``~$``
+                owner file exists) and ``force`` is False, or if the OS denies
+                the write with a PermissionError.
             WorkspaceError: If packing fails
         """
         # Keep the caller's path for packing and for the return value; resolution is
@@ -341,12 +364,33 @@ class Workspace:
                 f"or save(destination=...) to write elsewhere."
             )
 
+        # Refuse to overwrite a document Word currently has open. Saving into
+        # Word's live file races its own writes and can corrupt the document.
+        # Guard the destination only — saving a copy to a fresh path while the
+        # source is open is fine. force=True skips this (and any other save-time
+        # safety check) for confirmed-stale locks from a crashed session.
+        if not force:
+            owner_file = next((c for c in owner_file_candidates(output_path) if c.exists()), None)
+            if owner_file is not None:
+                raise DocumentOpenError(
+                    f"{output_path} appears to be open in Word (found owner file "
+                    f"{owner_file.name}). Close the document in Word, or pass "
+                    f"force=True if this is a stale lock from a crashed session."
+                )
+
         # Update metadata before saving
         self.meta["last_saved"] = datetime.now(timezone.utc).isoformat()
         self._save_meta()
 
-        # Pack the document
-        success = pack_document(self.workspace_path, output_path, validate=validate)
+        # Pack the document. A PermissionError here almost always means Word holds
+        # the destination open (Windows); map it to the same guard exception.
+        try:
+            success = pack_document(self.workspace_path, output_path, validate=validate)
+        except PermissionError as e:
+            raise DocumentOpenError(
+                f"{output_path} could not be written (permission denied); it may be "
+                f"open in Word or read-only. Close the document in Word and retry."
+            ) from e
 
         if not success:
             raise WorkspaceError(f"Failed to pack document to {output_path}")
