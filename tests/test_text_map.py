@@ -139,10 +139,11 @@ class TestBuildTextMapOriginalView:
         """Deleted chars reference w:delText with correct offsets and flags."""
         p = _parse_paragraph(MIXED_INS_DEL_XML)
         tm = build_text_map(p, view="original")
+        del_text_node = p.getElementsByTagName("w:delText")[0]
         # "Hello old world": positions 6-9 are "old " from w:delText
         for i, pos in enumerate(tm.positions[6:10]):
             assert pos.is_inside_del
-            assert pos.node.tagName == "w:delText"
+            assert pos.node is del_text_node
             assert pos.offset_in_node == i
         # Surrounding text is not marked deleted
         assert all(not pos.is_inside_del for pos in tm.positions[:6])
@@ -173,11 +174,33 @@ class TestBuildTextMapOriginalView:
         assert tm.positions[0].node is not tm.positions[6].node
         assert all(pos.is_inside_del for pos in tm.positions)
 
+    def test_move_revisions_counted_once(self):
+        """Moved text appears once in the original view, at its source.
+
+        w:moveTo (destination) is skipped like w:ins; w:moveFrom (source)
+        is treated like w:del.
+        """
+        p = _parse_paragraph(
+            "<w:p>"
+            '<w:moveFrom w:id="1" w:author="Test" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:delText>moved </w:delText></w:r>"
+            "</w:moveFrom>"
+            "<w:r><w:t>middle </w:t></w:r>"
+            '<w:moveTo w:id="2" w:author="Test" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>moved </w:t></w:r>"
+            "</w:moveTo>"
+            "</w:p>"
+        )
+        tm = build_text_map(p, view="original")
+        assert tm.text == "moved middle "
+        assert all(pos.is_inside_del for pos in tm.positions[:6])
+        assert all(not pos.is_inside_del for pos in tm.positions[6:])
+
     def test_invalid_view_raises(self):
         """Unknown view names are rejected."""
         p = _parse_paragraph("<w:p><w:r><w:t>Hello</w:t></w:r></w:p>")
         with pytest.raises(ValueError, match="bogus"):
-            build_text_map(p, view="bogus")
+            build_text_map(p, view="bogus")  # type: ignore[arg-type]
 
     def test_w_t_inside_del_defensive(self):
         """w:t inside w:del (invalid OOXML) is excluded from accepted,

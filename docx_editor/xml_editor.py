@@ -12,6 +12,7 @@ import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 from xml.dom.minidom import Element
 
 import defusedxml.minidom
@@ -353,7 +354,7 @@ def get_text_node_data(elem) -> str:
     return "".join(c.data for c in elem.childNodes if c.nodeType == c.TEXT_NODE)
 
 
-def build_text_map(paragraph, view: str = "accepted") -> TextMap:
+def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted") -> TextMap:
     """Build a text map for a paragraph element.
 
     Two views are supported:
@@ -361,8 +362,9 @@ def build_text_map(paragraph, view: str = "accepted") -> TextMap:
     - ``"accepted"`` (default): the visible text — text inside <w:ins> is
       included (with is_inside_ins=True), text inside <w:del>/<w:delText>
       is excluded. Paragraph hashes and all editing operations use this view.
-    - ``"original"``: the pre-revision text — <w:ins> subtrees are excluded,
-      <w:delText> is included (with is_inside_del=True).
+    - ``"original"``: the pre-revision text — <w:ins> and <w:moveTo> subtrees
+      are excluded, <w:delText> is included, and text inside <w:del> or
+      <w:moveFrom> is flagged with is_inside_del=True.
 
     Records the source node and offset for each character position.
     """
@@ -394,11 +396,11 @@ def build_text_map(paragraph, view: str = "accepted") -> TextMap:
 
         return TextMap(text="".join(text_chars), positions=positions)
 
-    def _collect_original(node, inside_del: bool) -> None:
+    def collect_original(node, inside_del: bool) -> None:
         for child in node.childNodes:
             if child.nodeType != child.ELEMENT_NODE:
                 continue
-            if child.tagName == "w:ins":
+            if child.tagName in ("w:ins", "w:moveTo"):
                 continue
             if child.tagName in ("w:t", "w:delText"):
                 node_text = get_text_node_data(child)
@@ -413,9 +415,9 @@ def build_text_map(paragraph, view: str = "accepted") -> TextMap:
                         )
                     )
             else:
-                _collect_original(child, inside_del or child.tagName == "w:del")
+                collect_original(child, inside_del or child.tagName in ("w:del", "w:moveFrom"))
 
-    _collect_original(paragraph, False)
+    collect_original(paragraph, False)
     return TextMap(text="".join(text_chars), positions=positions)
 
 

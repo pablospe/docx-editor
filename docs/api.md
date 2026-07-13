@@ -141,7 +141,7 @@ text = doc.get_visible_text()
 
 #### `get_original_text()`
 
-Get flattened original (pre-revision) document text. Deleted text is included and inserted text is excluded — the inverse of `get_visible_text()`. Equals what `get_visible_text()` would return after `reject_all()`, without modifying the document. Read-only: paragraph references and editing operations keep working on the visible view.
+Get flattened original (pre-revision) document text. Deleted text is included and inserted text is excluded — the inverse of `get_visible_text()`. For intra-paragraph revisions this equals what `get_visible_text()` would return after `reject_all()`, without modifying the document (paragraph-level revisions such as inserted paragraph marks only affect line boundaries). Read-only: paragraph references and editing operations keep working on the visible view.
 
 **Returns:** Original text with paragraphs separated by newlines (str)
 
