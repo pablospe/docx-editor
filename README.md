@@ -170,6 +170,10 @@ Google Drive, iCloud) and while Word is running.
   permission on the **containing directory**, not just on the document itself. If
   the directory is read-only, `save()` raises `PermissionError`.
 
+  A **write-protected document is refused**, not silently replaced: `save()` raises
+  `PermissionError` if the destination is read-only, even though the rename itself
+  would have been permitted by the directory.
+
   An atomic rename replaces the file's inode, so state bound to the *old* inode
   does not survive it: the saved document keeps its **permissions**, but its
   ownership, POSIX ACLs, extended attributes, and any hardlinks to it do not carry

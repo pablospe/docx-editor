@@ -144,10 +144,13 @@ class Workspace:
             InvalidDocumentError: If the file is not a .docx file
             WorkspaceExistsError: If workspace exists and create=True
         """
-        # Keep the name the caller actually opened, unresolved. If they opened a
-        # symlink, that is the name Word was told to open — and therefore the name
-        # its ~$ owner file sits beside. save() needs it to find that stub.
-        self._given_path = Path(source_path)
+        # Keep the name the caller actually opened. If they opened a symlink, that is
+        # the name Word was told to open — and therefore the name its ~$ owner file
+        # sits beside. save() needs it to find that stub. Made absolute but NOT
+        # resolved: resolving would collapse the symlink and lose the very name we are
+        # keeping, while leaving it relative would break if the cwd moves before save().
+        given = Path(source_path)
+        self._given_path = given if given.is_absolute() else Path.cwd() / given
         self.source_path = Path(source_path).resolve()
 
         if not self.source_path.exists():
@@ -430,7 +433,11 @@ class Workspace:
         if not success:
             raise WorkspaceError(f"Failed to pack document to {output_path}")
 
-        # Update source_mtime if saving to original location
+        # Update source_mtime/source_size if saving to the original location.
+        # overwrites_source uses os.path.samefile (see _is_source), so a different
+        # name for the same file — including through a symlink — still refreshes the
+        # workspace's stat, or the next open() would report a stale workspace. Both
+        # mtime and size are updated because sync_check() compares both.
         if overwrites_source:
             saved_stat = output_path.stat()
             self.meta["source_mtime"] = saved_stat.st_mtime

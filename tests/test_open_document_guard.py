@@ -171,6 +171,27 @@ class TestPermissionErrorMapping:
         assert list(clean_workspace.parent.glob(f".{clean_workspace.name}.*")) == []
         doc.close()
 
+    def test_replace_denial_on_a_fresh_destination_is_not_an_open_document(
+        self, clean_workspace, temp_dir, monkeypatch
+    ):
+        """A destination that does not exist yet cannot be open in Word.
+
+        Reporting a read-only-directory failure as DocumentOpenError would tell the
+        agent to go ask the user to close a document nobody has open.
+        """
+        monkeypatch.setattr(pack.sys, "platform", "win32")
+
+        def deny(*args, **kwargs):
+            raise PermissionError("directory is read-only")
+
+        monkeypatch.setattr(pack.os, "replace", deny)
+
+        doc = Document.open(clean_workspace)
+        with pytest.raises(PermissionError) as exc:
+            doc.save(temp_dir / "brandnew.docx")
+        assert not isinstance(exc.value, DocumentOpenError)
+        doc.close()
+
     def test_replace_denial_stays_permission_error_on_posix(self, clean_workspace, monkeypatch):
         """On POSIX a denied rename never means "open document" — don't mislabel it.
 

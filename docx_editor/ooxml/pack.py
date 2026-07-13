@@ -1,6 +1,7 @@
 """Pack a directory back into a .docx, .pptx, or .xlsx file."""
 
 import contextlib
+import errno
 import os
 import secrets
 import shutil
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import BinaryIO
 
 import defusedxml.minidom
 
@@ -89,14 +91,14 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
         # — a write error or a failed validation — leaves the existing destination
         # untouched. Same directory ⇒ same volume ⇒ os.replace() is a true atomic
         # rename (no cross-device error).
-        fd, tmp_path = _create_temp(target)
+        tmp_file, tmp_path = _create_temp(target)
         try:
             # Write through the temp file's own fd rather than reopening it by name.
             # Reopening would fail wherever the created file is not owner-writable —
-            # a directory with a restrictive default POSIX ACL masks the new file down
-            # to 0400 — and it would leave a window in which the name could be swapped
-            # under us.
-            with os.fdopen(fd, "w+b") as tmp_file:
+            # a directory with a restrictive default POSIX ACL masks the new file so
+            # its owner cannot write it — and it would leave a window in which the name
+            # could be swapped under us.
+            with tmp_file:
                 # Take the destination's permissions *before* writing any content, so
                 # the document is never briefly more readable than the file it replaces.
                 if target.exists():
@@ -135,6 +137,12 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
 
             _replace(tmp_path, target)
         finally:
+            # The temp file carries the destination's mode, and on Windows a read-only
+            # file cannot be deleted — clear that before trying, or a read-only
+            # destination would leave the temp archive littering a synced folder.
+            if sys.platform == "win32":  # pragma: no cover - CI is POSIX
+                with contextlib.suppress(OSError):
+                    os.chmod(tmp_path, stat.S_IWRITE | stat.S_IREAD)
             # Remove the temp file on every failure path (write error, validation
             # failure). On success os.replace() consumed it, so this is a no-op.
             # Suppress errors so a doomed cleanup cannot turn a completed save into
@@ -145,8 +153,41 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
     return True
 
 
-def _create_temp(target: Path) -> tuple[int, Path]:
-    """Create the promotion temp file next to ``target``; return its fd and path.
+def _has_surrogates(text: str) -> bool:
+    """True if ``text`` carries surrogateescape markers for undecodable bytes."""
+    return any(0xDC80 <= ord(ch) <= 0xDCFF for ch in text)
+
+
+def _clamp_name(name: str, budget: int) -> str:
+    """Trim ``name`` to at most ``budget`` bytes, without splitting a character.
+
+    NAME_MAX is a byte budget, not a character count, so the clamp has to happen on
+    the encoding — slicing characters would still overflow for a non-ASCII name at up
+    to 4 bytes each. Go through os.fsencode/os.fsdecode rather than str.encode:
+    Linux filenames are bytes, and an undecodable one arrives here as surrogates that
+    strict UTF-8 would reject.
+
+    Slicing bytes can cut a multibyte character in half, and the halves come back as
+    lone surrogates that macOS and Windows refuse in a filename. So back off to a
+    character boundary — unless the name was *already* undecodable, in which case its
+    surrogates are legitimate and must survive.
+    """
+    raw = os.fsencode(name)
+    if len(raw) <= budget:
+        return name
+
+    was_undecodable = _has_surrogates(name)
+    raw = raw[:budget]
+    stem = os.fsdecode(raw)
+    if not was_undecodable:
+        while raw and _has_surrogates(stem):
+            raw = raw[:-1]
+            stem = os.fsdecode(raw)
+    return stem
+
+
+def _create_temp(target: Path) -> tuple[BinaryIO, Path]:
+    """Create the promotion temp file next to ``target``; return it open, with its path.
 
     Deliberately not tempfile.mkstemp(): that forces mode 0600, which for a
     brand-new destination would then have to be corrected back to the process
@@ -155,39 +196,47 @@ def _create_temp(target: Path) -> tuple[int, Path]:
     lets the kernel apply the umask (and any default ACL) itself, so a new
     destination lands on exactly the mode a plain open() would have produced, with
     no race. O_EXCL keeps the name ours alone.
+
+    The file is returned already wrapped, so the raw fd is never exposed unowned.
     """
-    # NAME_MAX is a *byte* budget, not a character count, so clamp the encoded name —
-    # slicing characters would still overflow for a non-ASCII name at up to 4 bytes
-    # each. Go through os.fsencode/os.fsdecode, not str.encode: Linux filenames are
-    # bytes, and an undecodable one arrives here as surrogates that strict UTF-8
-    # encoding would reject.
     try:
         name_max = os.pathconf(target.parent, "PC_NAME_MAX")
     except (AttributeError, OSError, ValueError):  # pragma: no cover - platform-dependent
         name_max = 255
-    budget = max(8, name_max - _TEMP_NAME_OVERHEAD)
-    stem = os.fsdecode(os.fsencode(target.name)[:budget])
+    stem = _clamp_name(target.name, max(8, name_max - _TEMP_NAME_OVERHEAD))
 
     flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     for _ in range(_TEMP_NAME_ATTEMPTS):
         candidate = target.parent / f".{stem}.{secrets.token_hex(4)}.tmp"
         try:
-            return os.open(candidate, flags, 0o666), candidate
+            fd = os.open(candidate, flags, 0o666)
         except FileExistsError:  # pragma: no cover - requires a name collision
             continue
+        try:
+            return os.fdopen(fd, "w+b"), candidate
+        except BaseException:  # pragma: no cover - fdopen failing on a fresh fd
+            os.close(fd)
+            raise
     raise OSError(f"Could not create a unique temp file next to {target}")  # pragma: no cover
 
 
-def _chmod(tmp_file: object, tmp_path: Path, mode: int) -> None:
+def _chmod(tmp_file: BinaryIO, tmp_path: Path, mode: int) -> None:
     """Set the temp file's mode, preferring the fd so no path race is possible."""
     if hasattr(os, "fchmod"):
-        os.fchmod(tmp_file.fileno(), mode)  # ty: ignore[unresolved-attribute]
+        os.fchmod(tmp_file.fileno(), mode)
     else:  # pragma: no cover - Windows has no fchmod
         os.chmod(tmp_path, mode)
 
 
 def _replace(tmp_path: Path, target: Path) -> None:
     """Atomically move the finished archive onto the destination, and persist it."""
+    # Refuse a write-protected destination. rename(2) only needs write permission on
+    # the *directory*, so the promotion would happily replace a file the user marked
+    # read-only — something the pre-atomic in-place write could never do, and that
+    # Windows still refuses. Keep that contract, and keep both platforms agreeing.
+    if target.exists() and not os.access(target, os.W_OK):
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(target))
+
     try:
         os.replace(tmp_path, target)
     except PermissionError as e:
@@ -198,9 +247,11 @@ def _replace(tmp_path: Path, target: Path) -> None:
         # that "the document is open" would send the caller down a dead end.
         #
         # A read-only destination on Windows also lands here (MoveFileEx refuses to
-        # replace a FILE_ATTRIBUTE_READONLY file), and that is not an open document
-        # either — so only claim "open" when the destination is otherwise writable.
-        if sys.platform != "win32" or (target.exists() and not os.access(target, os.W_OK)):
+        # replace a FILE_ATTRIBUTE_READONLY file), and a destination that does not
+        # exist yet cannot be open in anything. Neither is an open document — only
+        # claim "open" for an existing, otherwise-writable file.
+        looks_open = sys.platform == "win32" and target.exists() and os.access(target, os.W_OK)
+        if not looks_open:
             raise
         raise DocumentOpenError(
             f"{target} could not be replaced (permission denied); it is likely open "

@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from docx_editor import Document
 from docx_editor.ooxml import pack, unpack_document
 from docx_editor.ooxml.pack import pack_document
 
@@ -182,20 +183,23 @@ class TestAtomicInodeState:
 
         assert stat.S_IMODE(dest.stat().st_mode) == 0o664
 
-    def test_read_only_destination_is_saved_and_keeps_its_mode(self, unpacked_dir, simple_docx, temp_dir):
-        """A 0444 destination must still save: the fsync must happen before the chmod.
+    def test_read_only_destination_is_refused(self, unpacked_dir, simple_docx, temp_dir):
+        """A write-protected document must not be silently overwritten.
 
-        Chmod-ing the temp file to 0444 first makes reopening it to fsync fail.
+        rename(2) only needs write permission on the *directory*, so an atomic promotion
+        would happily replace a 0444 file — something the pre-atomic in-place write
+        could never do, and that Windows still refuses.
         """
         dest = temp_dir / "readonly.docx"
         shutil.copy(simple_docx, dest)
         original_bytes = dest.read_bytes()
         dest.chmod(0o444)
 
-        pack_document(unpacked_dir, dest)
+        with pytest.raises(PermissionError):
+            pack_document(unpacked_dir, dest)
 
-        assert stat.S_IMODE(dest.stat().st_mode) == 0o444
-        assert dest.read_bytes() != original_bytes  # it really was written
+        assert dest.read_bytes() == original_bytes
+        assert _temp_litter(dest) == []
 
     def test_new_destination_respects_umask(self, unpacked_dir, temp_dir):
         """A brand-new file gets the mode a plain open() would have produced, not 0600."""
@@ -210,10 +214,11 @@ class TestAtomicInodeState:
 
     @pytest.mark.skipif(shutil.which("setfacl") is None, reason="setfacl not available")
     def test_saves_into_a_directory_with_a_restrictive_default_acl(self, unpacked_dir, simple_docx, temp_dir):
-        """A default ACL can mask a newly created file down to 0400.
+        """A default ACL can leave a newly created file not writable by its owner.
 
         Reopening the temp file by name to write or fsync it would then fail, breaking
-        a save that worked before this feature existed.
+        a save that worked before this feature existed. Writing through the fd it was
+        created with (opened O_RDWR before the mode applied) is what keeps this working.
         """
         acl_dir = temp_dir / "acl"
         acl_dir.mkdir()
@@ -243,3 +248,19 @@ class TestAtomicInodeState:
         with zipfile.ZipFile(real) as zf:
             assert zf.testzip() is None
         assert _temp_litter(real) == []
+
+    def test_saving_through_a_symlink_keeps_the_workspace_in_sync(self, clean_workspace, temp_dir):
+        """Saving via another name for the source still writes the source.
+
+        So the workspace's recorded mtime has to be refreshed, or the next open() sees a
+        workspace that looks stale and refuses.
+        """
+        link = temp_dir / "alias.docx"
+        link.symlink_to(clean_workspace)
+
+        doc = Document.open(clean_workspace)
+        doc.save(link)  # a different spelling of the same file
+        doc.close()
+
+        reopened = Document.open(clean_workspace)  # must not raise WorkspaceSyncError
+        reopened.close()
