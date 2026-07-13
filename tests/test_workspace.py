@@ -599,3 +599,79 @@ class TestWorkspaceLocationHardening:
             Workspace(victim)
 
         Workspace.delete(victim)
+
+
+class TestSaveStaleness:
+    def test_save_raises_when_source_changed_externally(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        # Simulate an external edit: bump the source file's mtime.
+        stat = temp_docx.stat()
+        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        try:
+            with pytest.raises(WorkspaceSyncError, match="changed on disk"):
+                ws.save()
+        finally:
+            ws.close()
+
+    def test_save_force_overwrites_changed_source(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        stat = temp_docx.stat()
+        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        try:
+            result = ws.save(force=True)
+            assert result == temp_docx.resolve()
+            # meta was refreshed: a follow-up save must not raise.
+            ws.save()
+        finally:
+            ws.close()
+
+    def test_save_to_other_destination_ignores_stale_source(self, temp_docx, temp_dir):
+        ws = Workspace(temp_docx, author="Test")
+        stat = temp_docx.stat()
+        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        try:
+            out = ws.save(destination=temp_dir / "elsewhere.docx")
+            assert out.exists()
+        finally:
+            ws.close()
+
+    def test_save_recreates_deleted_source_without_force(self, temp_docx):
+        """A deleted source has no external edits to lose — saving must restore it."""
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            temp_docx.unlink()
+            out = ws.save()
+            assert out.exists()
+            assert out.stat().st_size > 0
+        finally:
+            ws.close()
+
+    def test_save_returns_the_path_the_caller_passed(self, temp_docx, temp_dir, monkeypatch):
+        """save() must not silently upgrade the caller's path to a resolved absolute one."""
+        ws = Workspace(temp_docx, author="Test")
+        monkeypatch.chdir(temp_dir)
+        try:
+            out = ws.save(destination=Path("relative_out.docx"))
+            assert out == Path("relative_out.docx")
+            assert out.exists()
+        finally:
+            ws.close()
+
+    def test_reopen_is_consistent_with_save_staleness(self, temp_docx):
+        """__init__ and save() must share one staleness predicate.
+
+        Otherwise a workspace whose recorded size drifted from the source (an mtime
+        match but a size mismatch) opens clean, then save() rejects it with a
+        "changed on disk" error that is simply false.
+        """
+        ws = Workspace(temp_docx, author="Test")
+        ws.meta["source_size"] = ws.meta["source_size"] + 999  # drift the size only
+        ws._save_meta()
+        ws.close(cleanup=False)
+
+        with pytest.raises(WorkspaceSyncError):
+            Workspace(temp_docx, author="Test")  # fails early at open, not late at save
+
+        # And the documented recovery (drop the workspace) works.
+        Workspace.delete(temp_docx)
+        Workspace(temp_docx, author="Test").close()

@@ -24,6 +24,12 @@ Homepage = "https://pablospe.github.io/docx-editor/"
 Repository = "https://github.com/pablospe/docx-editor"
 Documentation = "https://pablospe.github.io/docx-editor/"
 
+[project.optional-dependencies]
+session = ["jupyter-client>=8.6", "ipykernel>=6.29"]
+
+[project.scripts]
+docx-session = "docx_editor.session:main"
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
@@ -36,6 +42,8 @@ dev = [
     "mkdocs-material>=9.7.1",
     "mkdocstrings[python]>=1.0.0",
     "pytest-xdist>=3.8.0",
+    "jupyter-client>=8.6",
+    "ipykernel>=6.29",
 ]
 
 [build-system]

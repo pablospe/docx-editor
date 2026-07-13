@@ -37,6 +37,12 @@ class WorkspaceSyncError(WorkspaceError):
     pass
 
 
+class SessionError(DocxEditError):
+    """Raised when there's an error with a persistent session kernel."""
+
+    pass
+
+
 class XMLError(DocxEditError):
     """Raised when there's an error parsing or manipulating XML."""
 
