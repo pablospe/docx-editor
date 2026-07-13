@@ -163,6 +163,7 @@ class TestForeignAcceptReject:
             assert "Please  your credentials." in text
             assert "It’s complicated.— or is it?" in text
             assert "DRAFT Specification follows." in text
+            assert "DRAFT DRAFT" not in text
 
     def test_reject_all(self, foreign_docx):
         with Document.open(foreign_docx, author="Test Editor") as doc:
@@ -190,9 +191,12 @@ class TestForeignAcceptReject:
         with Document.open(foreign_docx, author="Test Editor") as doc:
             assert doc.reject_all(author="Test Author") == 2
             assert len(doc.list_revisions()) == 6
+            text = _body_text(doc)
             # Discriminating: before the reject the body reads "This sentence
             # remains." — "old " only returns if the deletion was restored.
-            assert "This old sentence remains." in _body_text(doc)
+            assert "This old sentence remains." in text
+            # Test Author's rejected insertion is gone from the body too.
+            assert "This sentence has an  word." in text
 
     def test_accept_conflicting_insert_delete_pair(self, foreign_docx):
         """Author A inserted "DRAFT "; Author B deleted the pre-existing "DRAFT ".
@@ -362,12 +366,12 @@ class TestTrickyFixtureSearch:
         [
             ("reenter", 2),  # fragmented "re" + "enter"
             ("microservice", 2),  # fragmented "micro" + "ser" + "vice"
-            ("Quick Brown", 1),  # split across formatted runs
+            ("Quick Brown", 1),  # single bold run; the note's "ick Brown" must not match
             ("H2O", 2),  # "H" + superscript "2" + "O"
         ],
     )
     def test_count_matches_across_fragmented_runs(self, tricky_docx, needle, count):
-        """Each term occurs fragmented once in the body; most (not "Quick Brown") also once inside a note run."""
+        """Fragmented terms count correctly; single-run "Quick Brown" gets no spurious note match."""
         with Document.open(tricky_docx, author="Test Editor") as doc:
             assert doc.count_matches(needle) == count
 
