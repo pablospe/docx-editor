@@ -1681,10 +1681,17 @@ class TestNestedForeignRevisions:
             <w:r><w:delText>beta</w:delText></w:r>
         </w:del>"""
         manager = _make_revision_manager(body)
+        dom = manager.editor.dom
 
-        manager.accept_all(author="B")
+        count = manager.accept_all(author="B")
 
-        assert manager.list_revisions(author="B") == []
+        # Documented side effect of id-based matching: pass 1 accepts A's
+        # same-id insertion (collateral), pass 2 accepts B's deletion.
+        assert count == 2
+        assert manager.list_revisions() == []
+        texts = [t.firstChild.data for t in dom.getElementsByTagName("w:t")]
+        assert texts == ["alpha"]
+        assert dom.getElementsByTagName("w:delText") == []
 
     def test_accept_all_author_filter_terminates_with_foreign_revisions(self):
         """Test that accept_all(author=...) terminates while other authors' revisions remain."""
