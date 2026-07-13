@@ -2,6 +2,7 @@
 
 import shutil
 import tempfile
+import zipfile
 from pathlib import Path
 
 import defusedxml.minidom
@@ -14,6 +15,17 @@ def find_ref(doc, text):
         if text in entry:
             return entry.split("|")[0]
     raise ValueError(f"Paragraph containing '{text}' not found")
+
+
+def replace_document_xml(src: Path, dest: Path, new_doc_xml: str) -> None:
+    """Copy ``src`` to ``dest``, swapping ``word/document.xml`` for ``new_doc_xml``."""
+    with (
+        zipfile.ZipFile(src, "r") as z_in,
+        zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z_out,
+    ):
+        for item in z_in.infolist():
+            data = new_doc_xml.encode("utf-8") if item.filename == "word/document.xml" else z_in.read(item.filename)
+            z_out.writestr(item, data)
 
 
 NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'

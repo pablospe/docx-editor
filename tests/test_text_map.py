@@ -222,6 +222,42 @@ class TestFindInTextMap:
         assert match is not None
         assert match.spans_boundary  # crosses ins boundary
 
+    def test_find_across_many_fragments(self):
+        """Real Word output splits text into many tiny runs (e.g. dates)."""
+        p = _parse_paragraph(
+            "<w:p>"
+            "<w:r><w:t>20</w:t></w:r>"
+            "<w:r><w:t>/</w:t></w:r>"
+            "<w:r><w:t>0</w:t></w:r>"
+            "<w:r><w:t>4</w:t></w:r>"
+            "<w:r><w:t>/202</w:t></w:r>"
+            "<w:r><w:t>7</w:t></w:r>"
+            '<w:r><w:t xml:space="preserve"> deadline</w:t></w:r>'
+            "</w:p>"
+        )
+        tm = build_text_map(p)
+        match = find_in_text_map(tm, "20/04/2027")
+        assert match is not None
+        assert (match.start, match.end) == (0, 10)
+        assert match.text == "20/04/2027"
+
+    def test_find_match_ending_mid_run(self):
+        """Match whose last character sits inside a run with trailing text."""
+        p = _parse_paragraph(
+            "<w:p>"
+            "<w:r><w:t>20</w:t></w:r>"
+            "<w:r><w:t>/</w:t></w:r>"
+            "<w:r><w:t>0</w:t></w:r>"
+            "<w:r><w:t>4</w:t></w:r>"
+            "<w:r><w:t>/202</w:t></w:r>"
+            "<w:r><w:t>7 deadline</w:t></w:r>"
+            "</w:p>"
+        )
+        tm = build_text_map(p)
+        match = find_in_text_map(tm, "20/04/2027")
+        assert match is not None
+        assert (match.start, match.end) == (0, 10)
+
     def test_find_entirely_within_insertion(self):
         p = _parse_paragraph(
             "<w:p>"
