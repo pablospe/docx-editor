@@ -159,10 +159,16 @@ with Document.open("contract.docx", author="Editor") as doc:
 Google Drive, iCloud) and while Word is running.
 
 - **Atomic save.** `save()` writes the new document to a temporary file in the
-  destination's own directory and promotes it with a single atomic rename. The
-  destination is never observed half-written, so a sync client can never upload a
-  torn file. If the write (or `validate=True`) fails, the original is left exactly
-  as it was — a failed validation can no longer destroy your document.
+  destination's own directory and promotes it with a single atomic rename, flushed
+  to disk. The destination is never observed half-written, so a sync client can
+  never upload a torn file. If the write (or `validate=True`) fails, the original
+  is left exactly as it was — a failed validation can no longer destroy your
+  document. The saved file keeps the original's permissions, and a symlinked
+  destination is followed to the file it points at.
+
+  Because the temp file is created next to the destination, saving needs write
+  permission on the **containing directory**, not just on the document itself. If
+  the directory is read-only, `save()` raises `PermissionError`.
 
 - **Open-in-Word guard.** Before writing, `save()` checks for the `~$` owner
   (lock) file Word places next to any open document. If the destination looks

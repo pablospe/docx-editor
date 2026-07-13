@@ -74,19 +74,26 @@ def _default_cache_dir() -> Path:
 
 
 def owner_file_candidates(path: str | Path) -> list[Path]:
-    """Return the ``~$`` owner (lock) file paths Word would use for ``path``.
+    """Return the ``~$`` owner (lock) file paths Word may use for ``path``.
 
-    Word writes a hidden ``~$`` owner file next to any document it has open. Its
-    naming is length-dependent: for a normal filename Word drops the first two
-    characters (``Report.docx`` → ``~$port.docx``); for very short names it keeps
-    them (``ab.docx`` → ``~$ab.docx``). We return both the full-name form and the
-    two-char-truncated form and let the caller check for either, so a save-time
-    guard never under-detects an open document regardless of Word's exact rule
-    for a given name.
+    Word writes a hidden ``~$`` owner file next to any document it has open. The
+    name is derived from the document's: Word drops the first two characters of
+    the filename when the stem is longer than two characters (``Report.docx`` →
+    ``~$port.docx``), and keeps the name in full for very short stems
+    (``ab.docx`` → ``~$ab.docx``).
+
+    Both forms are returned as a deliberately conservative superset — checking a
+    stub that Word would not have written costs a false positive (recoverable via
+    ``force=True``), while missing one risks saving over a live document. The
+    truncated form is inherently ambiguous: ``01_intro.docx`` and
+    ``02_intro.docx`` share the stub ``~$_intro.docx``. That ambiguity is Word's
+    own — it uses the same owner file for both, and the stub records the *user*
+    who holds the lock, not the document — so it cannot be disambiguated here.
     """
     path = Path(path)
     candidates = [path.parent / f"~${path.name}"]
-    if len(path.name) > 2:
+    # Guard on the stem so short names don't yield junk like "~$.docx".
+    if len(path.stem) > 2:
         candidates.append(path.parent / f"~${path.name[2:]}")
     return candidates
 
@@ -346,8 +353,8 @@ class Workspace:
             WorkspaceSyncError: If saving to the original path and the source
                 document changed on disk since the workspace was created
             DocumentOpenError: If the destination appears open in Word (a ``~$``
-                owner file exists) and ``force`` is False, or if the OS denies
-                the write with a PermissionError.
+                owner file exists) and ``force`` is False, or if the OS denies the
+                final replace because another program holds the destination open.
             WorkspaceError: If packing fails
         """
         # Keep the caller's path for packing and for the return value; resolution is
@@ -369,28 +376,32 @@ class Workspace:
         # Guard the destination only — saving a copy to a fresh path while the
         # source is open is fine. force=True skips this (and any other save-time
         # safety check) for confirmed-stale locks from a crashed session.
+        #
+        # Check next to the *resolved* destination: pack_document() promotes into
+        # the symlink target, so that is where Word's stub would sit.
         if not force:
-            owner_file = next((c for c in owner_file_candidates(output_path) if c.exists()), None)
+            resolved = Path(os.path.realpath(output_path))
+            owner_file = next((c for c in owner_file_candidates(resolved) if os.path.lexists(c)), None)
             if owner_file is not None:
                 raise DocumentOpenError(
                     f"{output_path} appears to be open in Word (found owner file "
-                    f"{owner_file.name}). Close the document in Word, or pass "
-                    f"force=True if this is a stale lock from a crashed session."
+                    f"{owner_file.name}; note Word shares one owner file between "
+                    f"documents whose names differ only in the first two characters). "
+                    f"Close the document in Word, or pass force=True if this is a "
+                    f"stale lock from a crashed session.",
+                    path=output_path,
+                    owner_file=owner_file,
                 )
 
         # Update metadata before saving
         self.meta["last_saved"] = datetime.now(timezone.utc).isoformat()
         self._save_meta()
 
-        # Pack the document. A PermissionError here almost always means Word holds
-        # the destination open (Windows); map it to the same guard exception.
-        try:
-            success = pack_document(self.workspace_path, output_path, validate=validate)
-        except PermissionError as e:
-            raise DocumentOpenError(
-                f"{output_path} could not be written (permission denied); it may be "
-                f"open in Word or read-only. Close the document in Word and retry."
-            ) from e
+        # Pack the document. pack_document() maps a PermissionError from the final
+        # replace to DocumentOpenError itself; any other PermissionError (e.g. a
+        # non-writable directory) is a genuine filesystem error and propagates
+        # unchanged rather than being mislabeled as "the document is open".
+        success = pack_document(self.workspace_path, output_path, validate=validate)
 
         if not success:
             raise WorkspaceError(f"Failed to pack document to {output_path}")

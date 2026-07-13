@@ -1,5 +1,7 @@
 """Custom exceptions for docx_editor library."""
 
+from pathlib import Path
+
 
 class DocxEditError(Exception):
     """Base exception for all docx_editor errors."""
@@ -44,16 +46,30 @@ class SessionError(DocxEditError):
 
 
 class DocumentOpenError(DocxEditError):
-    """Raised when saving to a destination that appears open in Word.
+    """Raised when saving to a destination that appears open in another program.
 
     Word writes a ``~$`` owner (lock) file next to any document it has open. If
     that stub exists at save time, saving would race Word's own writes and risk
     corruption, so ``save()`` refuses unless ``force=True``. Also raised when the
-    OS denies the write with a ``PermissionError`` — on Windows, Word holding the
-    file open is exactly this case.
+    OS denies the final replace with a ``PermissionError`` — on Windows, Word
+    holding the file open is exactly this case.
+
+    Attributes:
+        path: The destination that could not be written.
+        owner_file: The ``~$`` owner file that triggered the guard, or None when
+            the error came from the OS denying the replace instead.
     """
 
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        path: Path | None = None,
+        owner_file: Path | None = None,
+    ):
+        self.path = path
+        self.owner_file = owner_file
+        super().__init__(message)
 
 
 class XMLError(DocxEditError):

@@ -846,8 +846,11 @@ class Document:
             WorkspaceSyncError: If the source document changed on disk since
                 it was opened (protects long-lived sessions from overwriting
                 edits made in Word). Pass force=True to overwrite anyway.
-            DocumentOpenError: If the destination appears open in Word and
-                force is False.
+            DocumentOpenError: If the destination appears open in Word (a ``~$``
+                owner file exists) and force is False, or if the OS denies the
+                final replace because another program holds the destination open.
+                force=True skips the ``~$`` check but cannot suppress the latter —
+                the OS still refuses the write.
 
         Example:
             doc.save()  # Save to original path
