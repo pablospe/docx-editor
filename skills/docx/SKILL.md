@@ -495,9 +495,12 @@ just to make the error go away.
 Two limits worth knowing: the guard sees only *local* locks, so remote co-authoring
 in OneDrive/SharePoint or Word-for-the-web leaves no local file and cannot be
 detected; and because the save writes a temp file next to the destination, it needs
-**write permission on the containing directory**, not just on the document. A
-directory-permission problem surfaces as a plain `PermissionError`, not
-`DocumentOpenError` — do not tell the user to close Word for that one.
+**write permission on the containing directory**, not just on the document.
+
+A directory-permission problem surfaces as a plain `PermissionError`, not
+`DocumentOpenError` — do not tell the user to close Word for that one. So does a
+**write-protected document**: `save()` refuses it rather than replacing it, so offer
+to save under a new path instead.
 
 ### Paragraph Rewrite (Fallback for Structural Edits)
 

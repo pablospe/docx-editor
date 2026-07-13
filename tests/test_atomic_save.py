@@ -201,6 +201,23 @@ class TestAtomicInodeState:
         assert dest.read_bytes() == original_bytes
         assert _temp_litter(dest) == []
 
+    def test_read_only_destination_is_refused_even_when_validation_fails(
+        self, unpacked_dir, simple_docx, temp_dir, monkeypatch
+    ):
+        """The refusal must not be swallowed by a validate=True run returning False first.
+
+        The pre-atomic code failed the moment it opened the destination for writing,
+        before validation could have any say.
+        """
+        dest = temp_dir / "readonly.docx"
+        shutil.copy(simple_docx, dest)
+        dest.chmod(0o444)
+
+        monkeypatch.setattr(pack, "validate_document", lambda p, **kw: False)
+
+        with pytest.raises(PermissionError):
+            pack_document(unpacked_dir, dest, validate=True)
+
     def test_new_destination_respects_umask(self, unpacked_dir, temp_dir):
         """A brand-new file gets the mode a plain open() would have produced, not 0600."""
         dest = temp_dir / "fresh.docx"
@@ -213,23 +230,23 @@ class TestAtomicInodeState:
         assert stat.S_IMODE(dest.stat().st_mode) == 0o644
 
     @pytest.mark.skipif(shutil.which("setfacl") is None, reason="setfacl not available")
-    def test_saves_into_a_directory_with_a_restrictive_default_acl(self, unpacked_dir, simple_docx, temp_dir):
+    def test_saves_into_a_directory_with_a_restrictive_default_acl(self, unpacked_dir, temp_dir):
         """A default ACL can leave a newly created file not writable by its owner.
 
         Reopening the temp file by name to write or fsync it would then fail, breaking
         a save that worked before this feature existed. Writing through the fd it was
-        created with (opened O_RDWR before the mode applied) is what keeps this working.
+        created with (opened O_RDWR, before the mode applied) is what keeps this working.
+
+        The destination must be *fresh*: for an existing one the temp file takes the
+        destination's mode up front, which would mask the bug.
         """
         acl_dir = temp_dir / "acl"
         acl_dir.mkdir()
         subprocess.run(["setfacl", "-d", "-m", "u::r--", str(acl_dir)], check=True)
-        dest = acl_dir / "doc.docx"
-        shutil.copy(simple_docx, dest)
-        original_bytes = dest.read_bytes()
+        dest = acl_dir / "fresh.docx"
 
         pack_document(unpacked_dir, dest)
 
-        assert dest.read_bytes() != original_bytes
         with zipfile.ZipFile(dest) as zf:
             assert zf.testzip() is None
 

@@ -68,6 +68,12 @@ def pack_document(input_dir: str | Path, output_file: str | Path, validate: bool
     # path for writing and therefore followed the link; preserve that.
     target = Path(os.path.realpath(output_file))
 
+    # Refuse a write-protected destination up front, before doing any work. The
+    # pre-atomic code failed the moment it opened the file for writing, so a
+    # validate=True run must not be able to return False first and quietly swallow
+    # the refusal. _replace() checks again as a race guard.
+    _assert_writable(target)
+
     # Work in temporary directory to avoid modifying original
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_content_dir = Path(temp_dir) / "content"
@@ -228,14 +234,21 @@ def _chmod(tmp_file: BinaryIO, tmp_path: Path, mode: int) -> None:
         os.chmod(tmp_path, mode)
 
 
-def _replace(tmp_path: Path, target: Path) -> None:
-    """Atomically move the finished archive onto the destination, and persist it."""
-    # Refuse a write-protected destination. rename(2) only needs write permission on
-    # the *directory*, so the promotion would happily replace a file the user marked
-    # read-only — something the pre-atomic in-place write could never do, and that
-    # Windows still refuses. Keep that contract, and keep both platforms agreeing.
+def _assert_writable(target: Path) -> None:
+    """Refuse a write-protected destination.
+
+    rename(2) only needs write permission on the *directory*, so the atomic promotion
+    would happily replace a file the user marked read-only — something the pre-atomic
+    in-place write could never do, and that Windows still refuses. Keep that contract,
+    and keep both platforms agreeing.
+    """
     if target.exists() and not os.access(target, os.W_OK):
         raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(target))
+
+
+def _replace(tmp_path: Path, target: Path) -> None:
+    """Atomically move the finished archive onto the destination, and persist it."""
+    _assert_writable(target)  # re-check: the mode may have changed while we packed
 
     try:
         os.replace(tmp_path, target)
