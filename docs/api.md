@@ -139,6 +139,18 @@ Get flattened visible document text. Inserted text is included and deleted text 
 text = doc.get_visible_text()
 ```
 
+#### `get_original_text()`
+
+Get flattened original (pre-revision) document text. Deleted text is included and inserted text is excluded — the inverse of `get_visible_text()`. Equals what `get_visible_text()` would return after `reject_all()`, without modifying the document. Read-only: paragraph references and editing operations keep working on the visible view.
+
+**Returns:** Original text with paragraphs separated by newlines (str)
+
+**Example:**
+
+```python
+text = doc.get_original_text()
+```
+
 #### `find_text(text, occurrence=0)`
 
 Find text in the document, including text spanning XML element boundaries.

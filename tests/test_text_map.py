@@ -1,5 +1,6 @@
 """Tests for text map building (Phase 1: Core Infrastructure)."""
 
+import pytest
 from conftest import parse_paragraph as _parse_paragraph
 
 from docx_editor.xml_editor import build_text_map, find_in_text_map
@@ -108,6 +109,92 @@ class TestBuildTextMapTrackedChanges:
         assert tm.positions[9].is_inside_ins
         # "world" - regular
         assert not tm.positions[10].is_inside_ins
+
+
+MIXED_INS_DEL_XML = (
+    "<w:p>"
+    "<w:r><w:t>Hello </w:t></w:r>"
+    '<w:del w:id="1" w:author="Test" w:date="2024-01-01T00:00:00Z">'
+    "<w:r><w:delText>old </w:delText></w:r>"
+    "</w:del>"
+    '<w:ins w:id="2" w:author="Test" w:date="2024-01-01T00:00:00Z">'
+    "<w:r><w:t>new </w:t></w:r>"
+    "</w:ins>"
+    "<w:r><w:t>world</w:t></w:r>"
+    "</w:p>"
+)
+
+
+class TestBuildTextMapOriginalView:
+    """Tests for build_text_map(view="original")."""
+
+    def test_mixed_paragraph_original_vs_accepted(self):
+        """Original view includes deletions and excludes insertions."""
+        p = _parse_paragraph(MIXED_INS_DEL_XML)
+        assert build_text_map(p, view="original").text == "Hello old world"
+        assert build_text_map(p, view="accepted").text == "Hello new world"
+        assert build_text_map(p).text == "Hello new world"
+
+    def test_original_position_metadata(self):
+        """Deleted chars reference w:delText with correct offsets and flags."""
+        p = _parse_paragraph(MIXED_INS_DEL_XML)
+        tm = build_text_map(p, view="original")
+        # "Hello old world": positions 6-9 are "old " from w:delText
+        for i, pos in enumerate(tm.positions[6:10]):
+            assert pos.is_inside_del
+            assert pos.node.tagName == "w:delText"
+            assert pos.offset_in_node == i
+        # Surrounding text is not marked deleted
+        assert all(not pos.is_inside_del for pos in tm.positions[:6])
+        assert all(not pos.is_inside_del for pos in tm.positions[10:])
+        # w:ins subtrees are skipped, so nothing is inside ins
+        assert all(not pos.is_inside_ins for pos in tm.positions)
+
+    def test_plain_paragraph_views_identical(self):
+        """Without revisions, original and accepted views match."""
+        p = _parse_paragraph("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")
+        original = build_text_map(p, view="original")
+        accepted = build_text_map(p, view="accepted")
+        assert original.text == accepted.text == "Hello world"
+        assert len(original.positions) == len(accepted.positions)
+
+    def test_deleted_text_split_across_runs(self):
+        """Multiple w:delText runs concatenate in document order."""
+        p = _parse_paragraph(
+            "<w:p>"
+            '<w:del w:id="1" w:author="Test" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:delText>Hello </w:delText></w:r>"
+            "<w:r><w:delText>world</w:delText></w:r>"
+            "</w:del>"
+            "</w:p>"
+        )
+        tm = build_text_map(p, view="original")
+        assert tm.text == "Hello world"
+        assert tm.positions[0].node is not tm.positions[6].node
+        assert all(pos.is_inside_del for pos in tm.positions)
+
+    def test_invalid_view_raises(self):
+        """Unknown view names are rejected."""
+        p = _parse_paragraph("<w:p><w:r><w:t>Hello</w:t></w:r></w:p>")
+        with pytest.raises(ValueError, match="bogus"):
+            build_text_map(p, view="bogus")
+
+    def test_w_t_inside_del_defensive(self):
+        """w:t inside w:del (invalid OOXML) is excluded from accepted,
+        included in original with is_inside_del=True."""
+        p = _parse_paragraph(
+            "<w:p>"
+            "<w:r><w:t>Hello </w:t></w:r>"
+            '<w:del w:id="1" w:author="Test" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>old </w:t></w:r>"
+            "</w:del>"
+            "<w:r><w:t>world</w:t></w:r>"
+            "</w:p>"
+        )
+        assert build_text_map(p).text == "Hello world"
+        tm = build_text_map(p, view="original")
+        assert tm.text == "Hello old world"
+        assert all(pos.is_inside_del for pos in tm.positions[6:10])
 
 
 class TestTextMapFind:
