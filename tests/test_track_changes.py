@@ -1619,7 +1619,7 @@ class TestNestedForeignRevisions:
         </w:ins>"""
 
     def test_accept_all_nested_del_inside_ins(self):
-        """accept_all resolves a w:del nested inside a w:ins completely."""
+        """Test that accept_all resolves a w:del nested inside a w:ins completely."""
         manager = _make_revision_manager(self.NESTED_DEL_INSIDE_INS)
         dom = manager.editor.dom
 
@@ -1632,7 +1632,7 @@ class TestNestedForeignRevisions:
         assert texts == ["kept"]
 
     def test_reject_all_nested_outer_processed_first(self):
-        """Rejecting the outer w:ins discards the nested w:del with it."""
+        """Test that rejecting the outer w:ins discards the nested w:del with it."""
         manager = _make_revision_manager(self.NESTED_DEL_INSIDE_INS)
         dom = manager.editor.dom
 
@@ -1647,7 +1647,7 @@ class TestNestedForeignRevisions:
         assert dom.getElementsByTagName("w:delText") == []
 
     def test_reject_all_nested_inner_processed_first(self):
-        """Rejecting the nested w:del first still converges to the same document."""
+        """Test that rejecting the nested w:del first still converges to the same document."""
         body = """
         <w:ins w:id="3" w:author="A" w:date="2026-01-01T00:00:00Z">
             <w:r><w:t>kept</w:t></w:r>
@@ -1669,7 +1669,7 @@ class TestNestedForeignRevisions:
         assert dom.getElementsByTagName("w:delText") == []
 
     def test_accept_all_author_filter_duplicate_ids_converges(self):
-        """accept_all(author=...) converges when w:id values collide across authors."""
+        """Test that accept_all(author=...) converges when w:id values collide across authors."""
         # Word does not guarantee unique w:id across w:ins/w:del. The per-id
         # lookup checks w:ins first, so accepting B's deletion by id hits A's
         # insertion instead; only re-listing until no progress resolves B.
@@ -1687,7 +1687,7 @@ class TestNestedForeignRevisions:
         assert manager.list_revisions(author="B") == []
 
     def test_accept_all_author_filter_terminates_with_foreign_revisions(self):
-        """accept_all(author=...) returns promptly while other authors' revisions remain."""
+        """Test that accept_all(author=...) terminates while other authors' revisions remain."""
         manager = _make_revision_manager(self.NESTED_DEL_INSIDE_INS)
 
         count = manager.accept_all(author="B")
@@ -1699,7 +1699,7 @@ class TestNestedForeignRevisions:
         assert remaining[0].type == "insertion"
 
     def test_reject_all_author_filter_terminates_with_foreign_revisions(self):
-        """reject_all(author=...) returns promptly while other authors' revisions remain."""
+        """Test that reject_all(author=...) terminates while other authors' revisions remain."""
         manager = _make_revision_manager(self.NESTED_DEL_INSIDE_INS)
         dom = manager.editor.dom
 

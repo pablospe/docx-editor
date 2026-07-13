@@ -1721,10 +1721,12 @@ class RevisionManager:
     def accept_all(self, author: str | None = None) -> int:
         """Accept all revisions, optionally filtered by author.
 
-        Repeated passes are made until no listed revision can be processed, so
-        nested revisions in Word-authored files (e.g. a w:del inside a w:ins)
-        are fully resolved; with an author filter, other authors' revisions are
-        left untouched.
+        Repeats passes until no listed revision can be processed, fully
+        resolving nested revisions in Word-authored files (e.g. a w:del inside
+        a w:ins) and terminating even when an author filter leaves other
+        authors' revisions in the document. Revisions are matched by w:id, so
+        if Word emits duplicate ids across authors, a filtered call may also
+        process a same-id revision by another author.
 
         Args:
             author: If provided, only accept revisions by this author
@@ -1746,10 +1748,12 @@ class RevisionManager:
     def reject_all(self, author: str | None = None) -> int:
         """Reject all revisions, optionally filtered by author.
 
-        Repeated passes are made until no listed revision can be processed, so
-        nested revisions in Word-authored files (e.g. a w:del inside a w:ins)
-        are fully resolved; with an author filter, other authors' revisions are
-        left untouched.
+        Repeats passes until no listed revision can be processed, fully
+        resolving nested revisions in Word-authored files (e.g. a w:del inside
+        a w:ins) and terminating even when an author filter leaves other
+        authors' revisions in the document. Revisions are matched by w:id, so
+        if Word emits duplicate ids across authors, a filtered call may also
+        process a same-id revision by another author.
 
         Args:
             author: If provided, only reject revisions by this author
