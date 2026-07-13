@@ -1644,6 +1644,11 @@ class RevisionManager:
             text_elems = elem.getElementsByTagName("w:t")
         else:
             text_elems = elem.getElementsByTagName("w:delText")
+            if not text_elems:
+                # Deliberate interop fallback: nonconforming producers may
+                # leave plain w:t inside w:del. Fires only when the w:del has
+                # no w:delText at all; mixed content reads only w:delText.
+                text_elems = elem.getElementsByTagName("w:t")
 
         text_parts = [self._get_node_text(t_elem) for t_elem in text_elems]
 
