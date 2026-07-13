@@ -1647,6 +1647,59 @@ class TestRestoreDeletionAttributeCopying:
         assert not r_elems[0].hasAttribute("w:rsidDel")
 
 
+class TestParseRevisionDelTextFallback:
+    """Tests for w:delText -> w:t fallback when reading deletion text."""
+
+    def test_deletion_with_plain_wt_falls_back(self):
+        """Test that deletion text falls back to w:t when w:delText is absent."""
+        import defusedxml.minidom
+
+        # Nonconforming producers may leave plain w:t inside w:del
+        xml = """<?xml version="1.0"?>
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+            <w:del w:id="1" w:author="Foreign">
+                <w:r>
+                    <w:t>lost text</w:t>
+                </w:r>
+            </w:del>
+        </w:document>"""
+
+        mock_editor = MagicMock()
+        mock_editor.dom = defusedxml.minidom.parseString(xml)
+
+        manager = RevisionManager(mock_editor)
+
+        revisions = manager.list_revisions()
+        assert len(revisions) == 1
+        assert revisions[0].type == "deletion"
+        assert revisions[0].text == "lost text"
+
+    def test_deletion_with_deltext_unchanged(self):
+        """Test that the fallback does not fire when w:delText exists."""
+        import defusedxml.minidom
+
+        xml = """<?xml version="1.0"?>
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+            <w:del w:id="1" w:author="Test">
+                <w:r>
+                    <w:delText>proper</w:delText>
+                </w:r>
+                <w:r>
+                    <w:t>stray</w:t>
+                </w:r>
+            </w:del>
+        </w:document>"""
+
+        mock_editor = MagicMock()
+        mock_editor.dom = defusedxml.minidom.parseString(xml)
+
+        manager = RevisionManager(mock_editor)
+
+        revisions = manager.list_revisions()
+        assert len(revisions) == 1
+        assert revisions[0].text == "proper"
+
+
 def _split_wt_text_nodes(doc, target_text, tag="w:t"):
     """Reach into the DOM and split an element's TEXT_NODE into multiple siblings.
 
