@@ -2,12 +2,15 @@
 
 import subprocess
 import sys
+import threading
+import time
 
 import pytest
 
 pytest.importorskip("jupyter_client")
 pytest.importorskip("ipykernel")
 
+from docx_editor.exceptions import SessionError  # noqa: E402
 from docx_editor.session import (  # noqa: E402
     exec_code,
     is_session_running,
@@ -32,7 +35,7 @@ def test_start_session_creates_connection_file(session_conn):
 
 
 def test_start_session_twice_raises(session_conn):
-    with pytest.raises(RuntimeError, match="already running"):
+    with pytest.raises(SessionError, match="already running"):
         start_session(session_conn)
 
 
@@ -111,6 +114,80 @@ def test_exec_docx_editing_workflow(session_conn, temp_docx):
     assert int(r2.result) > 0
     r3 = exec_code("doc.close()", connection_file=session_conn)
     assert r3.status == "ok"
+
+
+class TestBusyKernel:
+    """A busy kernel must stay distinguishable from a dead one.
+
+    The liveness probe rides the control channel; ipykernel serializes the *shell*
+    channel behind the running execute_request, so a shell-based probe reports a
+    busy kernel as dead — which let `start` spawn a second kernel over a live one
+    and orphan it, still holding the user's open document.
+    """
+
+    @pytest.fixture
+    def busy_conn(self, tmp_path):
+        conn = tmp_path / "kernel.json"
+        start_session(conn)
+        # Fire an execution and leave it running for the duration of the test.
+        t = threading.Thread(target=exec_code, args=("import time; time.sleep(10)", conn), daemon=True)
+        t.start()
+        time.sleep(1.5)  # let the kernel actually enter the busy state
+        try:
+            yield conn
+        finally:
+            stop_session(conn)
+
+    def test_busy_kernel_reports_running(self, busy_conn):
+        assert is_session_running(busy_conn) is True
+
+    def test_start_refuses_to_clobber_busy_kernel(self, busy_conn):
+        with pytest.raises(SessionError, match="already running"):
+            start_session(busy_conn)
+
+    def test_exec_queues_behind_busy_kernel(self, busy_conn):
+        # Must not raise "Kernel didn't respond in 10 seconds" — it queues instead.
+        res = exec_code("1 + 1", connection_file=busy_conn, timeout=30.0)
+        assert res.status == "ok"
+        assert res.result == "2"
+
+
+def test_exec_stdin_does_not_wedge_session(tmp_path):
+    """input() must fail cleanly, not park the kernel on an unanswered stdin request."""
+    conn = tmp_path / "kernel.json"
+    start_session(conn)
+    try:
+        res = exec_code("input('name? ')", connection_file=conn, timeout=15.0)
+        assert res.status == "error"
+        assert res.traceback is not None
+        # The session survives and is immediately usable.
+        assert exec_code("7 * 6", connection_file=conn, timeout=15.0).result == "42"
+    finally:
+        stop_session(conn)
+
+
+def test_stop_session_is_prompt(tmp_path):
+    """Graceful shutdown must be acknowledged, not silently dropped.
+
+    The old code fired shutdown() then tore the socket down before it flushed, so
+    every stop fell through to the 5s SIGTERM fallback.
+    """
+    conn = tmp_path / "kernel.json"
+    start_session(conn)
+    elapsed = time.monotonic()
+    assert stop_session(conn) is True
+    elapsed = time.monotonic() - elapsed
+    assert elapsed < 3.0, f"stop_session took {elapsed:.2f}s — shutdown ack was not honored"
+
+
+def test_stop_session_survives_corrupt_pid_file(tmp_path):
+    """A truncated pid file must not crash stop or strand the state files."""
+    conn = tmp_path / "kernel.json"
+    start_session(conn)
+    conn.with_suffix(".pid").write_text("", encoding="utf-8")
+    assert stop_session(conn) is True
+    assert conn.exists() is False
+    assert conn.with_suffix(".pid").exists() is False
 
 
 def test_main_full_lifecycle(tmp_path, capsys):

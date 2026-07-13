@@ -566,7 +566,9 @@ scripts. The document (and all your variables) stays open between commands:
 # Requires: pip install docx-editor[session]
 docx-session start
 
-docx-session exec "from docx_editor import Document; doc = Document.open('contract.docx', author='Reviewer')"
+# Use ABSOLUTE paths: the kernel keeps the cwd it was started in, which is not
+# necessarily the cwd of a later exec. `start` prints the cwd it captured.
+docx-session exec "from docx_editor import Document; doc = Document.open('/abs/path/contract.docx', author='Reviewer')"
 docx-session exec "paras = doc.list_paragraphs(); print('\n'.join(str(p) for p in paras[:20]))"
 docx-session exec "ref = doc.replace('30 days', '45 days', paragraph='P2#f3c1'); ref"
 docx-session exec "doc.add_comment('45 days', 'Extended per negotiation.', paragraph=ref)"
@@ -581,6 +583,9 @@ Rules:
 - Exit code 1 means the code raised: the traceback is on stderr, the session survives — fix the call and continue (introspect with `docx-session exec "import inspect; print(inspect.signature(doc.replace))"` when unsure).
 - Exit code 2 means timeout, 3 means no session is running.
 - Variables persist between `exec` calls: keep refs returned by edits in Python variables instead of re-running `list_paragraphs()`.
+- Use absolute paths inside `exec` — the kernel's cwd is whatever `start` captured.
+- A `exec` sent while the kernel is still busy **queues** behind the running one; `--timeout` covers the whole wait. A timeout does not cancel the running code.
+- The session is non-interactive: `input()` (and anything reading stdin) raises `StdinNotImplementedError` rather than hanging.
 - `doc.save()` raises `WorkspaceSyncError` if the file changed on disk while the session held it open (e.g. the user edited it in Word). Ask the user before retrying with `doc.save(force=True)` — force overwrites their changes.
 - For a single edit, a one-off script is still fine — session mode pays off with repeated operations.
 
