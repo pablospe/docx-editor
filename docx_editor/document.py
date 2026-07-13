@@ -113,6 +113,9 @@ class Document:
             Document instance ready for editing
 
         Raises:
+            WorkspaceError: If the workspace cannot be created (unwritable base,
+                undeterminable home directory) or an existing workspace was
+                unpacked from a different document.
             WorkspaceSyncError: If the source document was modified since the
                 workspace was created. The message includes the workspace path.
                 Pass force_recreate=True to discard the stale workspace and

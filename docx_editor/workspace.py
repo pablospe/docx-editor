@@ -170,7 +170,10 @@ class Workspace:
         document's XML over this one's source file.
         """
         recorded = meta.get("source_path")
-        if recorded != str(self.source_path):
+        # Compare with the same folding the workspace key uses (see
+        # _resolve_workspace_path), or two spellings that map to one workspace on
+        # a case-insensitive filesystem would be rejected as different documents.
+        if recorded is None or os.path.normcase(recorded) != os.path.normcase(str(self.source_path)):
             raise WorkspaceError(
                 f"Workspace {self.workspace_path} belongs to a different document "
                 f"({recorded!r}, expected {str(self.source_path)!r}). "
@@ -203,10 +206,16 @@ class Workspace:
         """
         base = None
         for override in (workspace_dir, os.environ.get("DOCX_EDITOR_WORKSPACE_DIR")):
-            text = str(override).strip() if override is not None else ""
-            if text:  # an empty/whitespace override falls through to the next level
-                base = Path(os.path.expanduser(text))
-                break
+            if override is None:
+                continue
+            # A str override (including the env var) is stripped — stray whitespace
+            # there is config noise, not part of a real path. A Path is used
+            # verbatim, so an exotic path really ending in a space still works.
+            text = override.strip() if isinstance(override, str) else os.fspath(override)
+            if not text:  # empty/whitespace override falls through to the next level
+                continue
+            base = Path(os.path.expanduser(text))
+            break
         if base is None:
             base = _default_cache_dir()
 

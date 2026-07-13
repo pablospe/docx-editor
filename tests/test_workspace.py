@@ -556,7 +556,13 @@ class TestWorkspaceLocationHardening:
         assert stat.S_IMODE(workspace.workspace_path.parent.stat().st_mode) == 0o700
         workspace.close()
 
-    @pytest.mark.skipif(os.getuid() == 0, reason="root ignores directory permissions")
+    # NB: a skipif condition is evaluated at collection time on every platform,
+    # so it must not touch os.geteuid (absent on Windows) unless already guarded
+    # by the short-circuiting os.name check.
+    @pytest.mark.skipif(
+        os.name != "posix" or os.geteuid() == 0,
+        reason="POSIX only; root ignores directory permissions",
+    )
     def test_unwritable_base_raises_workspace_error(self, temp_docx, tmp_path, monkeypatch):
         """A filesystem failure surfaces as WorkspaceError, not a raw PermissionError."""
         readonly = tmp_path / "readonly"

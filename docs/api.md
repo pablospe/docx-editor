@@ -26,6 +26,7 @@ Open a Word document for editing.
 **Raises:**
 
 - `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created. Pass `force_recreate=True` to discard the stale workspace and re-unpack from the current source. The workspace is never deleted silently. The error message includes the workspace path.
+- `WorkspaceError`: If the workspace directory cannot be created (e.g. the base is not writable), the home directory backing the default cache cannot be determined, or an existing workspace was unpacked from a different document. The message names the override to set.
 
 **Example:**
 
@@ -80,7 +81,7 @@ print(doc.source_path)  # Path("/path/to/contract.docx")
 Get the path to this document's workspace folder. Since the workspace lives in the user cache by default, this is how you locate the unpacked XML — for example after `close(cleanup=False)`, or when a workspace was preserved because an exception was raised.
 
 ```python
-print(doc.workspace_path)  # Path("~/.cache/docx-editor/0bebafb463a87cfa")
+print(doc.workspace_path)  # Path("/home/you/.cache/docx-editor/0bebafb463a87cfa")
 ```
 
 ### Track Changes Methods
