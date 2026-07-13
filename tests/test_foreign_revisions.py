@@ -1,0 +1,320 @@
+"""Tests against real-world fixtures containing revisions authored outside this library.
+
+Fixtures (see ``tests/test_data/THIRD_PARTY_NOTICES``):
+
+* ``OXML_TrackChanges_Test.docx`` — 8 foreign revisions (4 ``w:ins`` + 4 ``w:del``)
+  from 6 distinct authors, covering a del+ins replacement pair (colour→color),
+  an em-dash insertion adjoining smart-quote runs, and identical text
+  (``"DRAFT "``) inserted by one author and deleted by another in the same
+  paragraph.
+* ``tricky-track-changes.docx`` — no revisions, but heavily fragmented runs
+  (``w:proofErr``, bookmarks, ``w:lastRenderedPageBreak``, formatting splits)
+  that exercise cross-run text search the way real Word output does.
+
+Each fixture paragraph ends with a bracketed note run describing the expected
+outcome, so whole-document substring assertions must use strings that don't
+also appear inside those notes.  The double spaces in several expected strings
+are load-bearing: the separator run between a ``w:del`` and its paired
+``w:ins`` is untouched by accept/reject, so the library correctly yields two
+spaces where the fixture's normalized notes show one.
+"""
+
+import shutil
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+from conftest import find_ref, replace_document_xml
+
+from docx_editor import Document
+
+# id, type, author, text, date — ground truth for OXML_TrackChanges_Test.docx
+EXPECTED_REVISIONS = [
+    (1001, "insertion", "Test Author", "inserted", datetime(2026, 1, 29, 16, 55, tzinfo=timezone.utc)),
+    (1002, "deletion", "Test Author", "old ", datetime(2026, 1, 29, 16, 56, tzinfo=timezone.utc)),
+    (1003, "deletion", "Editor A", "colour", datetime(2026, 1, 29, 16, 57, tzinfo=timezone.utc)),
+    (1004, "insertion", "Editor A", "color", datetime(2026, 1, 29, 16, 57, 1, tzinfo=timezone.utc)),
+    (1005, "deletion", "Reviewer", "reenter", datetime(2026, 1, 29, 16, 58, tzinfo=timezone.utc)),
+    (1006, "insertion", "Reviewer B", "— or is it?", datetime(2026, 1, 29, 16, 59, tzinfo=timezone.utc)),
+    (1007, "insertion", "Author A", "DRAFT ", datetime(2026, 1, 29, 17, 0, tzinfo=timezone.utc)),
+    (1008, "deletion", "Author B", "DRAFT ", datetime(2026, 1, 29, 17, 0, 10, tzinfo=timezone.utc)),
+]
+
+AUTHOR_REVISION_COUNTS = {
+    "Test Author": 2,
+    "Editor A": 2,
+    "Reviewer": 1,
+    "Reviewer B": 1,
+    "Author A": 1,
+    "Author B": 1,
+}
+
+
+@pytest.fixture
+def foreign_docx(test_data_dir, tmp_path) -> Path:
+    """Copy of the foreign-revision fixture (never open fixtures in place)."""
+    dest = tmp_path / "OXML_TrackChanges_Test.docx"
+    shutil.copy(test_data_dir / "OXML_TrackChanges_Test.docx", dest)
+    return dest
+
+
+@pytest.fixture
+def tricky_docx(test_data_dir, tmp_path) -> Path:
+    """Copy of the fragmented-runs fixture."""
+    dest = tmp_path / "tricky-track-changes.docx"
+    shutil.copy(test_data_dir / "tricky-track-changes.docx", dest)
+    return dest
+
+
+class TestForeignRevisionParsing:
+    """list_revisions() on revisions this library did not create."""
+
+    def test_all_revisions_parsed(self, foreign_docx):
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            revs = doc.list_revisions()
+            assert len(revs) == 8
+            actual = [(r.id, r.type, r.author, r.text, r.date) for r in revs]
+            assert actual == EXPECTED_REVISIONS
+
+    def test_author_filter_counts(self, foreign_docx):
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            for author, count in AUTHOR_REVISION_COUNTS.items():
+                revs = doc.list_revisions(author=author)
+                assert len(revs) == count, author
+                assert all(r.author == author for r in revs)
+
+    def test_special_characters_survive_parsing(self, foreign_docx):
+        """Em dash in revision text; smart quote in surrounding paragraph text."""
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            rev_1006 = next(r for r in doc.list_revisions() if r.id == 1006)
+            assert rev_1006.text == "— or is it?"
+            assert "It’s complicated." in doc.get_visible_text()
+
+
+class TestForeignAcceptReject:
+    """accept_all()/reject_all() across all 8 foreign revisions."""
+
+    def test_accept_all(self, foreign_docx):
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            assert doc.accept_all() == 8
+            assert doc.list_revisions() == []
+            text = doc.get_visible_text()
+            assert "This sentence has an inserted word." in text
+            assert "This sentence remains." in text
+            assert "We prefer  color spelling." in text
+            assert "Please  your credentials." in text
+            assert "It’s complicated.— or is it?" in text
+            assert "DRAFT Specification follows." in text
+
+    def test_reject_all(self, foreign_docx):
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            assert doc.reject_all() == 8
+            assert doc.list_revisions() == []
+            text = doc.get_visible_text()
+            assert "This sentence has an  word." in text
+            assert "This old sentence remains." in text
+            assert "We prefer colour  spelling." in text
+            assert "Please reenter your credentials." in text
+            # The rejected insertion is gone: the contiguous accepted form must
+            # not appear ("— or is it?" alone still occurs inside a note run).
+            assert "It’s complicated." in text
+            assert "It’s complicated.— or is it?" not in text
+            assert "DRAFT Specification follows." in text
+
+    def test_accept_all_author_filter(self, foreign_docx):
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            assert doc.accept_all(author="Editor A") == 2
+            remaining = doc.list_revisions()
+            assert len(remaining) == 6
+            assert all(r.author != "Editor A" for r in remaining)
+            assert "We prefer  color spelling." in doc.get_visible_text()
+
+    def test_reject_all_author_filter(self, foreign_docx):
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            assert doc.reject_all(author="Test Author") == 2
+            assert len(doc.list_revisions()) == 6
+            assert "This old sentence remains." in doc.get_visible_text()
+
+    def test_accept_conflicting_insert_delete_pair(self, foreign_docx):
+        """Author A inserted "DRAFT "; Author B deleted the pre-existing "DRAFT ".
+
+        Accepting both must leave exactly one "DRAFT " in the paragraph.
+        """
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            assert doc.accept_revision(1007) is True
+            assert doc.accept_revision(1008) is True
+            text = doc.get_visible_text()
+            assert "DRAFT Specification follows." in text
+            assert "DRAFT DRAFT" not in text
+            draft_para = next(line for line in text.splitlines() if "Specification follows" in line)
+            assert draft_para.split("[")[0].count("DRAFT ") == 1
+
+
+class TestAcceptSaveReopenRoundTrip:
+    """Partial accept must survive save + reopen with the rest intact."""
+
+    def test_accept_save_reopen_finish(self, foreign_docx):
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            assert doc.accept_all(author="Editor A") == 2
+            doc.save()
+
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            remaining = doc.list_revisions()
+            assert len(remaining) == 6
+            assert "Editor A" not in {r.author for r in remaining}
+            # Spot-check one untouched revision survived the round trip intact.
+            rev_1006 = next(r for r in remaining if r.id == 1006)
+            assert rev_1006.author == "Reviewer B"
+            assert rev_1006.text == "— or is it?"
+            assert rev_1006.date == datetime(2026, 1, 29, 16, 59, tzinfo=timezone.utc)
+            assert "We prefer  color spelling." in doc.get_visible_text()
+            # Finish the job on the reopened document.
+            assert doc.accept_all() == 6
+            assert doc.list_revisions() == []
+
+
+_W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+
+def _xmlspace_document() -> str:
+    """One paragraph with a Word-realistic deletion: delText carries xml:space."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:document {_W_NS}>"
+        "<w:body>"
+        "<w:p>"
+        '<w:r><w:t xml:space="preserve">This </w:t></w:r>'
+        '<w:del w:id="99" w:author="Foreign Author" w:date="2026-01-29T16:56:00Z">'
+        '<w:r><w:delText xml:space="preserve">old </w:delText></w:r>'
+        "</w:del>"
+        "<w:r><w:t>sentence remains.</w:t></w:r>"
+        "</w:p>"
+        "</w:body>"
+        "</w:document>"
+    )
+
+
+class TestRejectDeletionXmlSpace:
+    """Rejecting a deletion must not lose whitespace-significant text."""
+
+    def test_rejected_deltext_keeps_xml_space_attribute(self, simple_docx, tmp_path):
+        docx_path = tmp_path / "xmlspace.docx"
+        replace_document_xml(simple_docx, docx_path, _xmlspace_document())
+
+        with Document.open(docx_path, author="Test Editor") as doc:
+            assert doc.reject_revision(99) is True
+            assert doc.get_visible_text() == "This old sentence remains."
+            doc.save()
+
+        with zipfile.ZipFile(docx_path) as z:
+            document_xml = z.read("word/document.xml").decode("utf-8")
+        assert '<w:t xml:space="preserve">old </w:t>' in document_xml
+
+        with Document.open(docx_path, author="Test Editor") as doc:
+            assert doc.get_visible_text() == "This old sentence remains."
+            assert doc.list_revisions() == []
+
+    def test_foreign_deletion_without_attribute_round_trips(self, foreign_docx):
+        """The fixture's delText lacks xml:space; text still survives save/reopen."""
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            assert doc.reject_revision(1002) is True
+            assert "This old sentence remains." in doc.get_visible_text()
+            doc.save()
+
+        with Document.open(foreign_docx, author="Test Editor") as doc:
+            assert "This old sentence remains." in doc.get_visible_text()
+            assert all(r.id != 1002 for r in doc.list_revisions())
+
+
+def _table_document() -> str:
+    """Body paragraphs plus a table whose second cell contains a nested table."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:document {_W_NS}>"
+        "<w:body>"
+        "<w:p><w:r><w:t>Body para one</w:t></w:r></w:p>"
+        "<w:tbl>"
+        "<w:tr>"
+        "<w:tc><w:p><w:r><w:t>Cell alpha text</w:t></w:r></w:p></w:tc>"
+        "<w:tc>"
+        "<w:p><w:r><w:t>Cell beta text</w:t></w:r></w:p>"
+        "<w:tbl>"
+        "<w:tr><w:tc><w:p><w:r><w:t>Nested cell text</w:t></w:r></w:p></w:tc></w:tr>"
+        "</w:tbl>"
+        "</w:tc>"
+        "</w:tr>"
+        "</w:tbl>"
+        "<w:p><w:r><w:t>Body para two</w:t></w:r></w:p>"
+        "</w:body>"
+        "</w:document>"
+    )
+
+
+def _make_table_edits(doc: Document) -> None:
+    """Tracked edits in body, both cells, and the nested cell (6 revisions)."""
+    doc.replace("para", "PARA", paragraph=find_ref(doc, "Body para one"))
+    doc.delete("alpha ", paragraph=find_ref(doc, "Cell alpha"))
+    doc.insert_after("text", " INSERTED", paragraph=find_ref(doc, "Cell beta"))
+    doc.replace("Nested", "NESTED-EDIT", paragraph=find_ref(doc, "Nested cell"))
+
+
+class TestTableRevisionLifecycle:
+    """Create/accept/reject revisions inside table cells and nested tables."""
+
+    @pytest.fixture
+    def table_docx(self, simple_docx, tmp_path) -> Path:
+        dest = tmp_path / "tables.docx"
+        replace_document_xml(simple_docx, dest, _table_document())
+        return dest
+
+    def test_accept_all_in_tables(self, table_docx):
+        with Document.open(table_docx, author="Test Editor") as doc:
+            _make_table_edits(doc)
+            assert len(doc.list_revisions()) == 6
+            assert doc.accept_all() == 6
+            assert doc.list_revisions() == []
+            assert doc.get_visible_text() == (
+                "Body PARA one\nCell text\nCell beta text INSERTED\nNESTED-EDIT cell text\nBody para two"
+            )
+
+    def test_reject_all_in_tables(self, table_docx):
+        with Document.open(table_docx, author="Test Editor") as doc:
+            _make_table_edits(doc)
+            assert doc.reject_all() == 6
+            assert doc.list_revisions() == []
+            assert doc.get_visible_text() == (
+                "Body para one\nCell alpha text\nCell beta text\nNested cell text\nBody para two"
+            )
+
+
+class TestTrickyFixtureSearch:
+    """Cross-run search over real Word run fragmentation."""
+
+    def test_document_shape(self, tricky_docx):
+        with Document.open(tricky_docx, author="Test Editor") as doc:
+            assert doc.paragraph_count() == 22
+            assert doc.list_revisions() == []
+
+    @pytest.mark.parametrize(
+        ("needle", "count"),
+        [
+            ("reenter", 2),  # fragmented "re" + "enter"
+            ("microservice", 2),  # fragmented "micro" + "ser" + "vice"
+            ("Quick Brown", 1),  # split across formatted runs
+            ("H2O", 2),  # "H" + superscript "2" + "O"
+        ],
+    )
+    def test_count_matches_across_fragmented_runs(self, tricky_docx, needle, count):
+        """Each term occurs fragmented once, plus once inside a note run."""
+        with Document.open(tricky_docx, author="Test Editor") as doc:
+            assert doc.count_matches(needle) == count
+
+    def test_replace_fragmented_occurrence(self, tricky_docx):
+        """Occurrence 0 is the fragmented match (document order beats note runs)."""
+        with Document.open(tricky_docx, author="Test Editor") as doc:
+            ref = find_ref(doc, "reenter")
+            doc.replace("reenter", "login", paragraph=ref, occurrence=0)
+            # Cross-run replace deletes both fragments and inserts once.
+            assert doc.accept_all() == 3
+            assert "login your password." in doc.get_visible_text()
