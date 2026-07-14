@@ -725,6 +725,20 @@ class TestDirtyWorkspace:
 
         Workspace.delete(temp_docx)
 
+    def test_failed_in_place_save_sets_dirty(self, temp_docx):
+        """save() flags the workspace write-ahead even for in-place saves, so a
+        pack failure cannot leave a diverged workspace unflagged for adoption."""
+        from unittest.mock import patch
+
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            with patch("docx_editor.workspace.pack_document", return_value=False):
+                with pytest.raises(WorkspaceError, match="Failed to pack"):
+                    ws.save()
+            assert self._meta_on_disk(ws)["dirty"] is True
+        finally:
+            ws.close()
+
     def test_mark_dirty_is_idempotent_and_persisted(self, temp_docx):
         ws = Workspace(temp_docx, author="Test")
         try:

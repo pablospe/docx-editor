@@ -836,6 +836,13 @@ class Document:
     def save(self, path: str | Path | None = None, validate: bool = False, force: bool = False) -> Path:
         """Save the document.
 
+        The workspace is flagged as holding unsaved changes before anything is
+        written, and the flag is cleared only by a successful save back to the
+        source. So after a save to a different path, or a save that raised
+        partway, a later open() of the source refuses to adopt the workspace
+        (WorkspaceSyncError) instead of silently carrying this session's edits
+        over. Recover with force_recreate=True.
+
         Args:
             path: Output path (defaults to original source path)
             validate: If True, validate with LibreOffice before saving
@@ -858,14 +865,6 @@ class Document:
                 final replace because another program holds the destination open.
                 force=True skips the ``~$`` check but cannot suppress the latter —
                 the OS still refuses the write.
-
-        Note:
-            The workspace is flagged as holding unsaved changes before anything
-            is written, and the flag is cleared only by a successful save back
-            to the source. So after a save to a different path, or a save that
-            raised partway, a later open() of the source refuses to adopt the
-            workspace (WorkspaceSyncError) instead of silently carrying this
-            session's edits over. Recover with force_recreate=True.
 
         Example:
             doc.save()  # Save to original path

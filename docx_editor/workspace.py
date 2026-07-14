@@ -177,11 +177,11 @@ class Workspace:
                     if existing_meta.get("dirty"):
                         raise WorkspaceSyncError(
                             f"Workspace {self.workspace_path} holds unsaved changes from a "
-                            f"previous session (the source document itself is unchanged). "
-                            f"Adopting it would carry those edits into this session and the "
-                            f"next save would write them into {self.source_path}. Use "
-                            f"force_recreate=True (or delete the workspace) to discard them, "
-                            f"or Workspace(source, create=False).save(destination=...) to "
+                            f"previous session. Adopting it would carry those edits into "
+                            f"this session and the next save would write them into "
+                            f"{self.source_path}. Use force_recreate=True (or delete the "
+                            f"workspace) to discard them, or "
+                            f"Workspace(source, create=False).save(destination=...) to "
                             f"rescue them first."
                         )
                     # Same staleness predicate as save(), so a workspace can never
@@ -361,6 +361,10 @@ class Workspace:
         previous session's edits would silently carry into the new session even
         though the source document itself is unchanged. The flag is cleared only
         by a successful save() back to the source.
+
+        Document.save() and Workspace.save() both call this themselves; callers
+        that mutate workspace files directly must call it before touching disk,
+        or a crash before save() leaves the divergence unflagged.
         """
         if not self.meta.get("dirty"):
             self.meta["dirty"] = True
@@ -430,6 +434,13 @@ class Workspace:
         output_path = Path(destination) if destination else self.source_path
         overwrites_source = self._is_source(output_path)
 
+        # Write-ahead: flag the workspace before any check or write can fail,
+        # so a crash from here on leaves the flag on disk. Not skipped by
+        # force= — this is bookkeeping, not a safety check. A save elsewhere
+        # leaves the flag set (the source never received that content); only
+        # a successful save back to the source clears it, below.
+        self.mark_dirty()
+
         # A missing source has no external edits to lose, so recreating it is safe
         # and must not be blocked — only an existing, changed source is protected.
         if not force and overwrites_source and self.source_path.exists() and not self.sync_check():
@@ -447,13 +458,7 @@ class Workspace:
         if not force:
             self._check_not_open(output_path, saving_in_place=destination is None)
 
-        # Update metadata before saving. A save to a non-source destination
-        # leaves the workspace holding content the source never received, so it
-        # is marked dirty ahead of the pack (not skipped by force= — this is
-        # bookkeeping, not a safety check). Only a later successful save back
-        # to the source clears it.
-        if not overwrites_source:
-            self.meta["dirty"] = True
+        # Update metadata before saving
         self.meta["last_saved"] = datetime.now(timezone.utc).isoformat()
         self._save_meta()
 
