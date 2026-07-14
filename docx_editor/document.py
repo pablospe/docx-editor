@@ -616,8 +616,8 @@ class Document:
 
         Example:
             new_refs = doc.batch_edit([
-                EditOperation(action="replace", find="old", replace_with="new", paragraph="P20#a7b2"),
-                EditOperation(action="delete", text="remove", paragraph="P15#f3c1"),
+                EditOperation.replace("old", "new", paragraph="P20#a7b2"),
+                EditOperation.delete("remove", paragraph="P15#f3c1"),
             ])
 
             # Pre-flight the batch (note: same-paragraph sequential effects are

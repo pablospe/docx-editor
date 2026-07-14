@@ -147,8 +147,8 @@ from docx_editor import Document, EditOperation
 with Document.open("contract.docx", author="Editor") as doc:
     refs = doc.list_paragraphs()
     doc.batch_edit([
-        EditOperation(action="replace", find="old", replace_with="new", paragraph="P2#f3c1"),
-        EditOperation(action="delete", text="remove this", paragraph="P5#d4e5"),
+        EditOperation.replace("old", "new", paragraph="P2#f3c1"),
+        EditOperation.delete("remove this", paragraph="P5#d4e5"),
     ])
     doc.save()
 ```
