@@ -1,8 +1,7 @@
 """Tests for XMLEditor and DocxXMLEditor classes."""
 
-import defusedxml.minidom
 import pytest
-from conftest import NS
+from conftest import parse_paragraph
 
 from docx_editor.exceptions import MultipleNodesFoundError, NodeNotFoundError
 from docx_editor.xml_editor import (
@@ -802,8 +801,7 @@ class TestHelperFunctions:
 
 def _parse_run(xml: str):
     """Parse XML string and return the first w:r element."""
-    doc = defusedxml.minidom.parseString(f"<root {NS}>{xml}</root>")
-    return doc.getElementsByTagName("w:r")[0]
+    return parse_paragraph(f"<w:p>{xml}</w:p>").getElementsByTagName("w:r")[0]
 
 
 class TestRunFragmentHelpers:

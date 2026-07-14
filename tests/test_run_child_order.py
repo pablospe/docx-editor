@@ -285,7 +285,7 @@ class TestTextboxNoDuplication:
         assert "boxed" in drawings[0].toxml()
 
 
-def _has_direct_rpr(run) -> bool:
+def _has_direct_rPr(run) -> bool:
     """True if ``run`` has a direct w:rPr child."""
     return any(c.nodeType == c.ELEMENT_NODE and c.tagName == "w:rPr" for c in run.childNodes)
 
@@ -323,7 +323,7 @@ class TestNestedRPrNoLeak:
         assert paragraph.toxml().count("<w:b/>") == 1
         assert "<w:b/>" in mgr.editor.dom.getElementsByTagName("w:drawing")[0].toxml()
         for run in _top_level_runs(paragraph):
-            assert not _has_direct_rpr(run)
+            assert not _has_direct_rPr(run)
 
     def test_empty_paragraph_insert_does_not_inherit_textbox_rpr(self, temp_xml):
         """Insert into a paragraph with no visible text: the created <w:ins>
@@ -343,4 +343,4 @@ class TestNestedRPrNoLeak:
         ins_elems = [c for c in paragraph.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName == "w:ins"]
         assert len(ins_elems) == 1
         for run in _top_level_runs(paragraph):
-            assert not _has_direct_rpr(run)
+            assert not _has_direct_rPr(run)

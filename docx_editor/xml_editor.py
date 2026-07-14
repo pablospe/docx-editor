@@ -438,8 +438,9 @@ def _extract_outline_level(paragraph, style: str | None, style_outlines: dict[st
 def _build_style_outline_map(styles_dom) -> dict[str, int]:
     """Map paragraph-style ids to their effective 0-based outline level.
 
-    One pass over ``<w:style w:type="paragraph">`` elements collects each
-    style's own ``<w:pPr>/<w:outlineLvl>`` and its ``w:basedOn`` parent; a
+    One pass over ``<w:style>`` elements whose type is ``paragraph`` or
+    unspecified (the ECMA-376 default) collects each style's own
+    ``<w:pPr>/<w:outlineLvl>`` and its ``w:basedOn`` parent; a
     second pass resolves ``basedOn`` chains (visited-set cycle guard) so a
     custom style based on e.g. ``Heading1`` without restating the level
     inherits it. A *present* ``w:outlineLvl`` terminates the chain even
