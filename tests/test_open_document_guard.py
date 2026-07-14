@@ -149,6 +149,23 @@ class TestOpenDocumentGuard:
         doc.close()
 
 
+def _deny_docx_replace(message):
+    """A stand-in for os.replace that denies only .docx promotions.
+
+    pack.os is the global os module, shared with Workspace._save_meta's atomic
+    meta.json replace — denying every replace would crash meta bookkeeping
+    before the code under test (the pack-time promotion) even runs.
+    """
+    real_replace = os.replace
+
+    def deny(src, dst, *args, **kwargs):
+        if str(dst).endswith(".docx"):
+            raise PermissionError(message)
+        return real_replace(src, dst, *args, **kwargs)
+
+    return deny
+
+
 class TestPermissionErrorMapping:
     """Only a denied *replace*, and only on Windows, means "the document is open"."""
 
@@ -156,11 +173,7 @@ class TestPermissionErrorMapping:
         """On Windows, Word holding the destination surfaces as a PermissionError here."""
         original_bytes = clean_workspace.read_bytes()
         monkeypatch.setattr(pack.sys, "platform", "win32")
-
-        def deny(*args, **kwargs):
-            raise PermissionError("Word has the file open")
-
-        monkeypatch.setattr(pack.os, "replace", deny)
+        monkeypatch.setattr(pack.os, "replace", _deny_docx_replace("Word has the file open"))
 
         doc = Document.open(clean_workspace)
         with pytest.raises(DocumentOpenError):
@@ -180,11 +193,7 @@ class TestPermissionErrorMapping:
         agent to go ask the user to close a document nobody has open.
         """
         monkeypatch.setattr(pack.sys, "platform", "win32")
-
-        def deny(*args, **kwargs):
-            raise PermissionError("directory is read-only")
-
-        monkeypatch.setattr(pack.os, "replace", deny)
+        monkeypatch.setattr(pack.os, "replace", _deny_docx_replace("directory is read-only"))
 
         doc = Document.open(clean_workspace)
         with pytest.raises(PermissionError) as exc:
@@ -199,11 +208,7 @@ class TestPermissionErrorMapping:
         means a sticky-bit directory, an immutable file, or an SELinux denial.
         """
         monkeypatch.setattr(pack.sys, "platform", "linux")
-
-        def deny(*args, **kwargs):
-            raise PermissionError("sticky-bit directory")
-
-        monkeypatch.setattr(pack.os, "replace", deny)
+        monkeypatch.setattr(pack.os, "replace", _deny_docx_replace("sticky-bit directory"))
 
         doc = Document.open(clean_workspace)
         with pytest.raises(PermissionError):
