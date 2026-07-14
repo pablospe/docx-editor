@@ -70,7 +70,7 @@ class TestSingleNodeRemovalGuard:
 
     def test_remove_one_run_preserves_sibling(self, temp_xml):
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>Hello </w:t></w:r>"
             "<w:r><w:t>world</w:t></w:r>"
             "</w:ins></w:p>"
@@ -85,7 +85,7 @@ class TestSingleNodeRemovalGuard:
 
     def test_remove_one_wt_preserves_sibling_in_same_run(self, temp_xml):
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>Hello </w:t><w:t>world</w:t></w:r>"
             "</w:ins></w:p>"
         )
@@ -125,7 +125,7 @@ class TestMidNodeInsertionOrder:
         xml_path = temp_xml(
             "<w:p>"
             "<w:r><w:t>Hello world</w:t></w:r>"
-            '<w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t> added</w:t></w:r>"
             "</w:ins>"
             "</w:p>"

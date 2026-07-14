@@ -904,7 +904,7 @@ class TestDocumentWideEditsRealXml:
     """Real-XML edge-case coverage for the unified document-wide edit path."""
 
     NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
-    INS_ATTRS = 'w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"'
+    INS_ATTRS = 'w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z"'
 
     def _manager(self, tmp_path, body_xml):
         xml = f'<?xml version="1.0" encoding="utf-8"?><w:document {self.NS}><w:body>{body_xml}</w:body></w:document>'
