@@ -1163,7 +1163,7 @@ class RevisionManager:
 
         Returns ``w:author``/``w:date``/``w16du:dateUtc`` (those present) as an
         XML attribute string, so a re-created half of a split ``w:ins`` keeps
-        the original author's identity; the attribute stamper only adds a
+        the original author's identity; attribute injection only adds a
         fresh ``w:id``.
         """
         parts = []
@@ -1173,14 +1173,14 @@ class RevisionManager:
                 parts.append(f' {attr}="{_escape_xml(value)}"')
         return "".join(parts)
 
-    def _group_positions_by_ins(self, positions: list) -> list[tuple[Element | None, list]]:
+    def _group_positions_by_ins(self, positions: list) -> list[tuple[Element | None, list[TextPosition]]]:
         """Group contiguous positions by their ancestor <w:ins> element.
 
         Positions are in document order, so positions sharing an ins element
         are contiguous; adjacent distinct ins elements form separate groups.
         A group's element is None for positions outside any insertion.
         """
-        groups: list[tuple[Element | None, list]] = []
+        groups: list[tuple[Element | None, list[TextPosition]]] = []
         current_ins = None
         for pos in positions:
             ins_elem = self._find_ancestor(pos.node, "w:ins")
@@ -1214,16 +1214,15 @@ class RevisionManager:
                     last_del = group_last_del
         return first_del_id, last_del
 
-    def _split_ins_after_child(self, ins_elem, child) -> Element | None:
+    def _split_ins_after_child(self, ins_elem, child) -> None:
         """Split ``ins_elem`` after ``child``, keeping the author's identity.
 
         Everything following ``child`` moves into a fresh sibling <w:ins>
-        that copies this insertion's w:author/w:date (fresh w:id via the
-        stamper). ``ins_elem`` is typically another author's insertion —
-        the copied identity keeps both halves attributed to them. Returns
-        the new right-half ins, or None when nothing follows ``child``.
-        ``child`` may be a descendant; the split happens after the direct
-        child containing it.
+        that copies this insertion's w:author/w:date (fresh w:id via
+        attribute injection). ``ins_elem`` is typically another author's
+        insertion — the copied identity keeps both halves attributed to
+        them. No-op when nothing follows ``child``. ``child`` may be a
+        descendant; the split happens after the direct child containing it.
         """
         while child.parentNode is not ins_elem:
             child = child.parentNode
@@ -1233,16 +1232,12 @@ class RevisionManager:
             trailing.append(node)
             node = node.nextSibling
         if not any(n.nodeType == n.ELEMENT_NODE for n in trailing):
-            return None
+            return
         children_xml = "".join(n.toxml() for n in trailing)
         for n in trailing:
             ins_elem.removeChild(n)
         identity_xml = self._ins_identity_attrs(ins_elem)
-        new_nodes = self.editor.insert_after(ins_elem, f"<w:ins{identity_xml}>{children_xml}</w:ins>")
-        for n in new_nodes:
-            if n.nodeType == n.ELEMENT_NODE and n.tagName == "w:ins":
-                return n
-        return None
+        self.editor.insert_after(ins_elem, f"<w:ins{identity_xml}>{children_xml}</w:ins>")
 
     def _split_foreign_ins_at(self, edge_node, offset: int) -> Element | None:
         """Make (edge_node, offset) fall on a child boundary of its <w:ins>.
@@ -1272,6 +1267,8 @@ class RevisionManager:
             return run
         if not left_texts:
             # Split point is immediately before this run
+            # (isinstance so ty narrows minidom's sibling union — the usual
+            # nodeType comparison doesn't)
             prev = run.previousSibling
             while prev is not None:
                 if isinstance(prev, Element):
