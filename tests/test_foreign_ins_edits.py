@@ -376,7 +376,7 @@ class TestInsertInsideForeignIns:
         assert _ins_visible_text(a_ins[1]) == "world"
 
     def test_insert_mid_run_with_non_text_child(self, temp_xml):
-        """Mid-run split of a run that also carries a w:tab (front-hoisted, see #20)."""
+        """Mid-run split of a run that also carries a leading w:tab."""
         xml_path = temp_xml(f"<w:p>{_foreign_ins('<w:r><w:tab/><w:t>Hello world</w:t></w:r>')}</w:p>")
         manager = _make_manager(xml_path)
 
@@ -387,6 +387,56 @@ class TestInsertInsideForeignIns:
         a_ins = [e for e in _ins_elems(manager) if e.getAttribute("w:author") == AUTHOR_A]
         assert len(a_ins) == 2
         assert len(a_ins[0].getElementsByTagName("w:tab")) == 1
+
+    def test_insert_mid_run_tab_between_texts_stays_in_order(self, temp_xml):
+        """A w:tab between two w:t nodes lands on the correct side of the split.
+
+        Splitting A's ins after "Hello" must leave the tab (which follows the
+        split point) in A's *second* ins, before "world" — not front-hoisted
+        into the first (issue #20).
+        """
+        xml_path = temp_xml(f"<w:p>{_foreign_ins('<w:r><w:t>Hello</w:t><w:tab/><w:t>world</w:t></w:r>')}</w:p>")
+        manager = _make_manager(xml_path)
+
+        manager.insert_text_after("Hello", "X")
+
+        _assert_no_nested_ins(manager)
+        assert _visible_text(manager) == "HelloXworld"
+        ins_elems = _ins_elems(manager)
+        a_ins = [e for e in ins_elems if e.getAttribute("w:author") == AUTHOR_A]
+        b_ins = [e for e in ins_elems if e.getAttribute("w:author") == AUTHOR_B]
+        assert len(a_ins) == 2
+        assert len(b_ins) == 1
+        # B's ins sits between the two A halves in document order
+        assert [e.getAttribute("w:author") for e in ins_elems] == [AUTHOR_A, AUTHOR_B, AUTHOR_A]
+        # First A half: just "Hello", no tab
+        assert _ins_visible_text(a_ins[0]) == "Hello"
+        assert len(a_ins[0].getElementsByTagName("w:tab")) == 0
+        # Second A half: the tab followed by "world"
+        assert _ins_visible_text(a_ins[1]) == "world"
+        assert len(a_ins[1].getElementsByTagName("w:tab")) == 1
+        assert _ins_visible_text(b_ins[0]) == "X"
+
+    def test_insert_mid_run_split_skips_rpr_and_empty_wt(self, temp_xml):
+        """The split walk skips w:rPr, whitespace text nodes, and empty w:t
+        children while keeping formatting on both rebuilt halves."""
+        run_xml = "<w:r><w:rPr><w:b/></w:rPr><w:t>Hello</w:t> <w:t></w:t><w:tab/><w:t>world</w:t></w:r>"
+        xml_path = temp_xml(f"<w:p>{_foreign_ins(run_xml)}</w:p>")
+        manager = _make_manager(xml_path)
+
+        manager.insert_text_after("Hello", "X")
+
+        _assert_no_nested_ins(manager)
+        assert _visible_text(manager) == "HelloXworld"
+        a_ins = [e for e in _ins_elems(manager) if e.getAttribute("w:author") == AUTHOR_A]
+        assert len(a_ins) == 2
+        assert _ins_visible_text(a_ins[0]) == "Hello"
+        assert len(a_ins[0].getElementsByTagName("w:tab")) == 0
+        assert _ins_visible_text(a_ins[1]) == "world"
+        assert len(a_ins[1].getElementsByTagName("w:tab")) == 1
+        # Formatting survives the rebuild on both sides of the split
+        for ins in a_ins:
+            assert ins.getElementsByTagName("w:b")
 
     def test_insert_before_at_ins_start_no_split(self, temp_xml):
         xml_path = temp_xml(f"<w:p>{_foreign_ins('<w:r><w:t>Hello</w:t></w:r>')}</w:p>")

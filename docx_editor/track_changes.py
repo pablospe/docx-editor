@@ -28,6 +28,7 @@ from .xml_editor import (
     compute_paragraph_hash,
     find_in_text_map,
     get_text_node_data,
+    rebuild_run_fragments,
 )
 
 
@@ -831,16 +832,6 @@ class RevisionManager:
             rPr_xml = rPr_elems[0].toxml()
         return run, rPr_xml
 
-    def _get_non_text_children_xml(self, run) -> str:
-        """Serialize non-text, non-rPr children (w:tab, w:br, w:drawing, etc.) of a run."""
-        parts = []
-        for child in run.childNodes:
-            if child.nodeType == child.ELEMENT_NODE:
-                tag = getattr(child, "tagName", "")
-                if tag not in ("w:t", "w:rPr"):
-                    parts.append(child.toxml())
-        return "".join(parts)
-
     def _get_node_text(self, node) -> str:
         """Get text content of a w:t node by concatenating ALL child text nodes.
 
@@ -1012,38 +1003,38 @@ class RevisionManager:
 
             # Build deterministic node-to-part mapping using node ids from parts
             node_to_part = {nid: (before, matched, after) for before, matched, after, nid in info["parts"]}
-
-            # Preserve non-text children (w:tab, w:br, w:drawing, etc.)
-            non_text_xml = self._get_non_text_children_xml(run)
-            if non_text_xml:
-                xml_parts.append(f"<w:r>{rPr_xml}{non_text_xml}</w:r>")
-
-            # Iterate all w:t in document order, emitting unmatched as preserved
-            all_wt = list(run.getElementsByTagName("w:t"))
             parts_emitted = 0
-            for wt in all_wt:
+
+            # Keyword-only defaults bind this iteration's state (B023)
+            def render_wt(wt, *, node_to_part=node_to_part, run_rPr=rPr_xml, base_idx=part_idx) -> list[str]:
+                nonlocal parts_emitted
+                fragments: list[str] = []
                 if id(wt) in node_to_part:
                     before, matched, after = node_to_part[id(wt)]
                     parts_emitted += 1
 
                     if before:
-                        xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
-                    xml_parts.append(
-                        f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>"
+                        fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                    fragments.append(
+                        f"<w:del><w:r>{run_rPr}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>"
                     )
 
                     # Insert replacement after the last deletion
-                    if part_idx + parts_emitted == total_parts:
-                        xml_parts.append(f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>")
+                    if base_idx + parts_emitted == total_parts:
+                        fragments.append(f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>")
 
                     if after:
-                        xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+                        fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(after)}</w:t></w:r>")
                 else:
                     # Unmatched sibling — preserve
                     wt_text = self._get_node_text(wt)
                     if wt_text:
-                        xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                        fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                return fragments
 
+            # Emit the run's children in document order (w:t split around the
+            # match; w:tab/w:br/w:drawing/… preserved in place)
+            xml_parts.extend(rebuild_run_fragments(run, rPr_xml, render_wt))
             part_idx += len(node_to_part)
 
         # Replace all affected runs: insert new XML before first run, remove all runs
@@ -1251,20 +1242,38 @@ class RevisionManager:
             return None
         node_text = self._get_node_text(edge_node)
 
-        run_wts = list(run.getElementsByTagName("w:t"))
-        edge_idx = next(i for i, wt in enumerate(run_wts) if wt is edge_node)
-        left_texts = [self._get_node_text(wt) for wt in run_wts[:edge_idx]]
-        if node_text[:offset]:
-            left_texts.append(node_text[:offset])
-        right_texts = []
-        if node_text[offset:]:
-            right_texts.append(node_text[offset:])
-        right_texts += [self._get_node_text(wt) for wt in run_wts[edge_idx + 1 :]]
+        # This site splits a run into left/right halves rather than rendering
+        # per-w:t, and must know which side each child lands on, so it keeps
+        # its own direct-children walk instead of rebuild_run_fragments.
+        # Non-text children (w:tab, w:br, w:drawing, …) stay in document
+        # order on whichever side of the split point they fall.
+        left_parts: list[str] = []
+        right_parts: list[str] = []
+        side = left_parts
+        for child in run.childNodes:
+            if child.nodeType != child.ELEMENT_NODE:
+                continue
+            tag = getattr(child, "tagName", "")
+            if tag == "w:rPr":
+                continue
+            if child is edge_node:
+                if node_text[:offset]:
+                    left_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(node_text[:offset])}</w:t></w:r>")
+                if node_text[offset:]:
+                    right_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(node_text[offset:])}</w:t></w:r>")
+                side = right_parts
+                continue
+            if tag == "w:t":
+                wt_text = self._get_node_text(child)
+                if wt_text:
+                    side.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                continue
+            side.append(f"<w:r>{rPr_xml}{child.toxml()}</w:r>")
 
-        if not right_texts:
+        if not right_parts:
             # Split point is at the end of this run — run boundary already
             return run
-        if not left_texts:
+        if not left_parts:
             # Split point is immediately before this run
             # (isinstance so ty narrows minidom's sibling union — the usual
             # nodeType comparison doesn't)
@@ -1275,19 +1284,9 @@ class RevisionManager:
                 prev = prev.previousSibling
             return None
 
-        # Mid-run: rebuild as left/right runs (non-text children front-hoisted,
-        # matching the existing sites — interleaving is issue #20's follow-up)
-        xml_parts = []
-        non_text_xml = self._get_non_text_children_xml(run)
-        if non_text_xml:
-            xml_parts.append(f"<w:r>{rPr_xml}{non_text_xml}</w:r>")
-        xml_parts += [f"<w:r>{rPr_xml}<w:t>{_escape_xml(t)}</w:t></w:r>" for t in left_texts]
-        left_len = len(xml_parts)
-        xml_parts += [f"<w:r>{rPr_xml}<w:t>{_escape_xml(t)}</w:t></w:r>" for t in right_texts]
-
-        new_nodes = self.editor.replace_node(run, "".join(xml_parts))
+        new_nodes = self.editor.replace_node(run, "".join(left_parts + right_parts))
         elements = [n for n in new_nodes if n.nodeType == n.ELEMENT_NODE]
-        return elements[left_len - 1]
+        return elements[len(left_parts) - 1]
 
     def _insert_own_ins_within_foreign_ins(self, ins_elem, edge_node, offset: int, text: str, rPr_xml: str) -> int:
         """Insert our own <w:ins> at (edge_node, offset) inside a foreign ins.
@@ -1477,26 +1476,20 @@ class RevisionManager:
             if rid in processed_runs:
                 continue
 
-            # Build xml_parts for ALL w:t nodes in this run, preserving unmatched ones
-            matched_node_ids = {id(ng["node"]) for ng in run_info["nodes"].values()}
             node_items = list(run_info["nodes"].values())
-            all_wt_nodes = list(run.getElementsByTagName("w:t"))
-            xml_parts: list[str] = []
 
-            # Preserve non-text children (w:tab, w:br, w:drawing, etc.)
-            non_text_xml = self._get_non_text_children_xml(run)
-            if non_text_xml:
-                xml_parts.append(f"<w:r>{rPr_xml}{non_text_xml}</w:r>")
-
-            for wt_node in all_wt_nodes:
-                if id(wt_node) not in matched_node_ids:
+            # Render ALL w:t nodes in this run, preserving unmatched ones.
+            # Keyword-only defaults bind this iteration's state (B023).
+            def render_wt(wt, *, run_info=run_info, run_rPr=rPr_xml, node_items=node_items, rid=rid) -> list[str]:
+                fragments: list[str] = []
+                if id(wt) not in run_info["nodes"]:
                     # Unmatched sibling — preserve as-is
-                    wt_text = self._get_node_text(wt_node)
+                    wt_text = self._get_node_text(wt)
                     if wt_text:
-                        xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
-                    continue
+                        fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                    return fragments
 
-                ng = run_info["nodes"][id(wt_node)]
+                ng = run_info["nodes"][id(wt)]
                 node_text = self._get_node_text(ng["node"])
                 first_offset = ng["first"]
                 last_offset = ng["last"]
@@ -1519,12 +1512,15 @@ class RevisionManager:
                     matched = node_text[first_offset : last_offset + 1]
 
                 if before:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
-                xml_parts.append(f"<w:del><w:r>{rPr_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
+                    fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                fragments.append(f"<w:del><w:r>{run_rPr}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
                 if after:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+                    fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(after)}</w:t></w:r>")
+                return fragments
 
-            new_xml = "".join(xml_parts)
+            # Emit the run's children in document order (w:tab/w:br/w:drawing/…
+            # preserved in place)
+            new_xml = "".join(rebuild_run_fragments(run, rPr_xml, render_wt))
             nodes = self.editor.insert_before(run, new_xml)
             if run.parentNode:
                 run.parentNode.removeChild(run)
@@ -1557,7 +1553,6 @@ class RevisionManager:
             return first_id
 
         # Group parts by run, using node ids from _build_cross_boundary_parts
-        matched_node_ids = {nid for _, _, _, _, _, nid in parts}
         run_parts: OrderedDict[int, list] = OrderedDict()
         for part in parts:
             rid = id(part[0])
@@ -1573,26 +1568,26 @@ class RevisionManager:
             # Build deterministic node-to-part mapping using node ids from parts
             node_to_part = {nid: (rp_xml, before, matched, after) for _, rp_xml, before, matched, after, nid in rparts}
 
-            # Preserve non-text children (w:tab, w:br, w:drawing, etc.)
-            non_text_xml = self._get_non_text_children_xml(run)
-            if non_text_xml:
-                xml_parts.append(f"<w:r>{rPr_xml}{non_text_xml}</w:r>")
-
-            # Emit w:t nodes in document order, matched as <w:del>, unmatched preserved
-            all_wt = list(run.getElementsByTagName("w:t"))
-            for wt in all_wt:
+            # Keyword-only defaults bind this iteration's state (B023)
+            def render_wt(wt, *, node_to_part=node_to_part, run_rPr=rPr_xml) -> list[str]:
+                fragments: list[str] = []
                 if id(wt) in node_to_part:
                     rp_xml, before, matched, after = node_to_part[id(wt)]
                     if before:
-                        xml_parts.append(f"<w:r>{rp_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
-                    xml_parts.append(f"<w:del><w:r>{rp_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
+                        fragments.append(f"<w:r>{rp_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                    fragments.append(f"<w:del><w:r>{rp_xml}<w:delText>{_escape_xml(matched)}</w:delText></w:r></w:del>")
                     if after:
-                        xml_parts.append(f"<w:r>{rp_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
-                elif id(wt) not in matched_node_ids:
+                        fragments.append(f"<w:r>{rp_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+                else:
                     # Unmatched sibling — preserve
                     wt_text = self._get_node_text(wt)
                     if wt_text:
-                        xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                        fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                return fragments
+
+            # Emit the run's children in document order (matched w:t as
+            # <w:del>; w:tab/w:br/w:drawing/… preserved in place)
+            xml_parts.extend(rebuild_run_fragments(run, rPr_xml, render_wt))
 
         first_run = parts[0][0]
         new_xml = "".join(xml_parts)
@@ -1722,32 +1717,29 @@ class RevisionManager:
                 return -1
             return self._insert_own_ins_within_foreign_ins(ins_ancestor, edge.node, offset, text, rPr_xml)
 
-        # Rebuild the edge run: split its w:t at the offset and wrap text in <w:ins>
+        # Rebuild the edge run: split its w:t at the offset and wrap text in
+        # <w:ins>; non-text children (w:tab, w:br, w:drawing, …) stay in place
         ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
-        xml_parts = []
 
-        # Preserve non-text children (w:tab, w:br, w:drawing, etc.)
-        non_text_xml = self._get_non_text_children_xml(run)
-        if non_text_xml:
-            xml_parts.append(f"<w:r>{rPr_xml}{non_text_xml}</w:r>")
-
-        for wt in run.getElementsByTagName("w:t"):
+        def render_wt(wt) -> list[str]:
+            fragments: list[str] = []
             if wt is edge.node:
                 node_text = self._get_node_text(wt)
                 before_text = node_text[:offset]
                 after_text = node_text[offset:]
                 if before_text:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before_text)}</w:t></w:r>")
-                xml_parts.append(ins_xml)
+                    fragments.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before_text)}</w:t></w:r>")
+                fragments.append(ins_xml)
                 if after_text:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r>")
+                    fragments.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r>")
             else:
                 # Preserve unmatched sibling w:t
                 wt_text = self._get_node_text(wt)
                 if wt_text:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                    fragments.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+            return fragments
 
-        nodes = self.editor.replace_node(run, "".join(xml_parts))
+        nodes = self.editor.replace_node(run, "".join(rebuild_run_fragments(run, rPr_xml, render_wt)))
 
         for node in nodes:
             if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
