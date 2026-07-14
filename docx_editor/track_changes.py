@@ -444,11 +444,14 @@ class RevisionManager:
                 be unique within the paragraph.
 
         Raises:
+            ValueError: If ``occurrence`` is negative.
             TextNotFoundError: If the text is absent, or ``occurrence`` is out
                 of range (then with ``occurrence``/``total_occurrences`` set).
             AmbiguousTextError: If ``occurrence`` is None and the text matches
                 more than once in the paragraph.
         """
+        if occurrence is not None and occurrence < 0:
+            raise ValueError(f"occurrence must be >= 0, got {occurrence}")
         text_map = build_text_map(paragraph)
         total = count_in_text_map(text_map, text)
 
@@ -925,11 +928,14 @@ class RevisionManager:
         the exact total is part of the error contract.
 
         Raises:
+            ValueError: If ``occurrence`` is negative.
             TextNotFoundError: If the text is not found or occurrence doesn't
                 exist; ``total_occurrences`` matches :meth:`count_matches`.
             AmbiguousTextError: If ``occurrence`` is None and the text matches
                 more than once in the document.
         """
+        if occurrence is not None and occurrence < 0:
+            raise ValueError(f"occurrence must be >= 0, got {occurrence}")
         occ = occurrence if occurrence is not None else 0
         match = self._find_across_boundaries(text, occ)
         if match is None:

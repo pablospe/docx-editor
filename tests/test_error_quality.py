@@ -19,6 +19,7 @@ move from string-parsing into structured fields.
 
 import shutil
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -253,7 +254,7 @@ class TestAmbiguousTextErrorQuality:
     def _build_doc(self, doc_path: Path) -> Document:
         return _build_doc_with_paragraphs(doc_path, [self.AMBIGUOUS, self.UNIQUE])
 
-    def _edit_calls(self, doc: Document, paragraph: str):
+    def _edit_calls(self, doc: Document, paragraph: str) -> list[Callable[[], object]]:
         """Every scoped edit method, called with an ambiguous target and no occurrence."""
         return [
             lambda: doc.replace("alpha", "x", paragraph=paragraph),
@@ -376,6 +377,34 @@ class TestOccurrenceOutOfRangeQuality:
             assert "Only 2 occurrence(s)" in error
             assert "occurrence=9" in error
             assert "Text not found" not in error
+        finally:
+            doc.close()
+
+
+class TestNegativeOccurrenceRejected:
+    """
+    Before: a negative occurrence slipped past the direct (non-batch) edit
+    methods into ``find_in_text_map``, where ``range(occurrence + 1)`` never
+    runs and the scoped paths crashed with ``UnboundLocalError`` (the
+    document-wide paths produced a nonsensical "occurrence=-1 requested").
+
+    After: every locate path rejects a negative occurrence up front with the
+    same ValueError the EditOperation constructors raise.
+    """
+
+    def test_all_paths_raise_value_error(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            calls = [
+                lambda: doc.replace("needle", "x", paragraph=ref, occurrence=-1),
+                lambda: doc.add_comment("needle", "note", paragraph=ref, occurrence=-1),
+                lambda: doc.add_comment("needle", "note", occurrence=-1),
+                lambda: doc._revision_manager.replace_text("needle", "x", occurrence=-1),
+            ]
+            for call in calls:
+                with pytest.raises(ValueError, match="occurrence must be >= 0"):
+                    call()
         finally:
             doc.close()
 

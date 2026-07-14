@@ -190,8 +190,11 @@ class CommentManager:
         ``_locate_document_wide`` so comment anchors and edit anchors find the
         same text and fail the same way: ``occurrence=None`` requires a unique
         anchor (else AmbiguousTextError), an explicit out-of-range occurrence
-        reports the actual total.
+        reports the actual total, and a negative occurrence is rejected with
+        ValueError.
         """
+        if occurrence is not None and occurrence < 0:
+            raise ValueError(f"occurrence must be >= 0, got {occurrence}")
         occ = occurrence if occurrence is not None else 0
 
         if paragraph is not None:
