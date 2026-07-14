@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from docx_editor.track_changes import RevisionManager
-from docx_editor.xml_editor import DocxXMLEditor
+from docx_editor.exceptions import TextNotFoundError
+from docx_editor.track_changes import EditOperation, RevisionManager
+from docx_editor.xml_editor import DocxXMLEditor, build_text_map, compute_paragraph_hash
 
 NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 
@@ -144,9 +145,9 @@ class TestOccurrenceIndexDrift:
 
     def test_replace_second_occurrence_in_multi_wt_run(self, temp_xml):
         # Two paragraphs: first has "cat" in a single w:t, second has "cat" in a
-        # multi-w:t run (so the fallback triggers). We ask for occurrence=1 (second).
-        # Bug: _find_across_boundaries with occurrence=1 could return a different
-        # match than what _get_nth_match found, because the two methods count differently.
+        # multi-w:t run. We ask for occurrence=1 (second). Historical bug: the
+        # element-level and text-map searches counted occurrences over different
+        # sequences, so occurrence=1 could land on a different match.
         xml_path = temp_xml("<w:p><w:r><w:t>cat</w:t></w:r></w:p><w:p><w:r><w:t>cat</w:t><w:t> dog</w:t></w:r></w:p>")
         mgr = _make_manager(xml_path)
         mgr.replace_text("cat", "tiger", occurrence=1)
@@ -250,10 +251,10 @@ class TestXmlSpacePreserveOnGeneratedWt:
 
 
 class TestOccurrenceFallbackConsistency:
-    """Initial fallback from _get_nth_match to _find_across_boundaries must find the right match."""
+    """Cross-boundary occurrence indexing must be consistent across paragraphs."""
 
     def test_replace_cross_boundary_second_occurrence(self, temp_xml):
-        # First paragraph: "catdog" split across two w:t (not findable by _get_nth_match)
+        # First paragraph: "catdog" split across two w:t (invisible to element-level search)
         # Second paragraph: "catdog" also split across two w:t
         # Asking for occurrence=1 should replace the SECOND "catdog", not the first.
         xml_path = temp_xml(
@@ -371,3 +372,134 @@ class TestRunRebuildPreservesNonTextChildren:
         mgr.suggest_deletion("MATCHEND")
         tabs = mgr.editor.dom.getElementsByTagName("w:tab")
         assert tabs.length > 0, "w:tab should be preserved during deletion rebuild"
+
+
+def _paragraph_texts(mgr) -> list[str]:
+    """Accepted-view visible text of each paragraph (insertions in, deletions out)."""
+    return [build_text_map(p).text for p in mgr.editor.dom.getElementsByTagName("w:p")]
+
+
+def _pref(mgr, index: int) -> str:
+    """Build a hash-anchored paragraph ref like 'P1#a7b2' for the nth (1-based) paragraph."""
+    p = mgr.editor.dom.getElementsByTagName("w:p")[index - 1]
+    return f"P{index}#{compute_paragraph_hash(p)}"
+
+
+class TestDocumentWideOccurrenceStability:
+    """Document-wide occurrence must count text-map matches, not whole w:t nodes (ISSUES.md #21).
+
+    Occurrence 0 of "target" spans two runs in P1; occurrence 1 is a single w:t
+    in P2. The element-level search saw only P2, so occurrence=0 edited P2.
+    """
+
+    BODY = "<w:p><w:r><w:t>tar</w:t></w:r><w:r><w:t>get</w:t></w:r></w:p><w:p><w:r><w:t>target</w:t></w:r></w:p>"
+
+    def test_replace_occurrence_0_edits_split_match(self, temp_xml):
+        mgr = _make_manager(temp_xml(self.BODY))
+        mgr.replace_text("target", "X", occurrence=0)
+        assert _paragraph_texts(mgr) == ["X", "target"]
+
+    def test_replace_occurrence_1_edits_single_node_match(self, temp_xml):
+        mgr = _make_manager(temp_xml(self.BODY))
+        mgr.replace_text("target", "X", occurrence=1)
+        assert _paragraph_texts(mgr) == ["target", "X"]
+
+    def test_delete_occurrence_0_edits_split_match(self, temp_xml):
+        mgr = _make_manager(temp_xml(self.BODY))
+        mgr.suggest_deletion("target", occurrence=0)
+        assert _paragraph_texts(mgr) == ["", "target"]
+
+    def test_delete_occurrence_1_edits_single_node_match(self, temp_xml):
+        mgr = _make_manager(temp_xml(self.BODY))
+        mgr.suggest_deletion("target", occurrence=1)
+        assert _paragraph_texts(mgr) == ["target", ""]
+
+    def test_insert_after_occurrence_0_edits_split_match(self, temp_xml):
+        mgr = _make_manager(temp_xml(self.BODY))
+        mgr.insert_text_after("target", "XX", occurrence=0)
+        assert _paragraph_texts(mgr) == ["targetXX", "target"]
+
+    def test_insert_after_occurrence_1_edits_single_node_match(self, temp_xml):
+        mgr = _make_manager(temp_xml(self.BODY))
+        mgr.insert_text_after("target", "XX", occurrence=1)
+        assert _paragraph_texts(mgr) == ["target", "targetXX"]
+
+    def test_insert_before_occurrence_0_edits_split_match(self, temp_xml):
+        mgr = _make_manager(temp_xml(self.BODY))
+        mgr.insert_text_before("target", "XX", occurrence=0)
+        assert _paragraph_texts(mgr) == ["XXtarget", "target"]
+
+    def test_error_total_matches_count_matches(self, temp_xml):
+        mgr = _make_manager(temp_xml(self.BODY))
+        with pytest.raises(TextNotFoundError) as exc_info:
+            mgr.replace_text("target", "X", occurrence=5)
+        assert exc_info.value.total_occurrences == mgr.count_matches("target") == 2
+
+    def test_no_match_raises_plain_not_found(self, temp_xml):
+        mgr = _make_manager(temp_xml(self.BODY))
+        with pytest.raises(TextNotFoundError, match="Text not found"):
+            mgr.suggest_deletion("missing")
+
+
+class TestInsertPlacementMidNode:
+    """_insert_near_match must split the anchor's w:t at the match edge.
+
+    It used to insert relative to whole runs, so a mid-node anchor pushed the
+    insertion to the run boundary ("Hello worldXX" instead of "HelloXX world").
+    """
+
+    def test_insert_after_mid_node_paragraph_scoped(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"))
+        mgr.insert_text_after("Hello", "XX", paragraph=_pref(mgr, 1))
+        assert _paragraph_texts(mgr) == ["HelloXX world"]
+
+    def test_insert_before_mid_node_paragraph_scoped(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"))
+        mgr.insert_text_before("world", "XX", paragraph=_pref(mgr, 1))
+        assert _paragraph_texts(mgr) == ["Hello XXworld"]
+
+    def test_insert_after_mid_node_batch(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"))
+        op = EditOperation(action="insert_after", paragraph=_pref(mgr, 1), anchor="Hello", text="XX")
+        mgr.batch_edit([op])
+        assert _paragraph_texts(mgr) == ["HelloXX world"]
+
+    def test_insert_before_mid_node_batch(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"))
+        op = EditOperation(action="insert_before", paragraph=_pref(mgr, 1), anchor="world", text="XX")
+        mgr.batch_edit([op])
+        assert _paragraph_texts(mgr) == ["Hello XXworld"]
+
+    def test_insert_after_mid_node_document_wide(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"))
+        mgr.insert_text_after("Hello", "XX")
+        assert _paragraph_texts(mgr) == ["HelloXX world"]
+
+    def test_insert_before_mid_node_document_wide(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"))
+        mgr.insert_text_before("world", "XX")
+        assert _paragraph_texts(mgr) == ["Hello XXworld"]
+
+    def test_insert_after_preserves_sibling_wt(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>cat</w:t><w:t> dog</w:t></w:r></w:p>"))
+        mgr.insert_text_after("cat", "XX", paragraph=_pref(mgr, 1))
+        assert _paragraph_texts(mgr) == ["catXX dog"]
+
+    def test_insert_after_run_boundary_edge(self, temp_xml):
+        # Anchor ends exactly at a run boundary — placement was already correct.
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>cat</w:t></w:r><w:r><w:t> dog</w:t></w:r></w:p>"))
+        mgr.insert_text_after("cat", "XX", paragraph=_pref(mgr, 1))
+        assert _paragraph_texts(mgr) == ["catXX dog"]
+
+    def test_insert_after_mid_node_inside_ins(self, temp_xml):
+        # Anchor inside an existing insertion: splice at the exact offset, no nested w:ins.
+        mgr = _make_manager(
+            temp_xml(
+                '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+                "<w:r><w:t>Hello world</w:t></w:r></w:ins></w:p>"
+            )
+        )
+        mgr.insert_text_after("Hello", "XX", paragraph=_pref(mgr, 1))
+        assert _paragraph_texts(mgr) == ["HelloXX world"]
+        for ins in mgr.editor.dom.getElementsByTagName("w:ins"):
+            assert len(ins.getElementsByTagName("w:ins")) == 0
