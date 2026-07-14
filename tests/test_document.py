@@ -99,7 +99,7 @@ class TestDocumentOpen:
         assert isinstance(excinfo.value.__cause__, EntitiesForbidden)
 
     def test_document_open_invalid_xml_raises_invalid_document_error(self, simple_docx, temp_dir):
-        """ISSUES.md #35: malformed XML in a part surfaces as InvalidDocumentError."""
+        """Malformed XML in a part surfaces as InvalidDocumentError (ISSUES.md #35)."""
         bad_docx = temp_dir / "bad.docx"
         replace_document_xml(simple_docx, bad_docx, ENTITY_DTD_XML)
 

@@ -87,7 +87,7 @@ class TestWorkspaceCreation:
 
 
 class TestWorkspaceParseFailureCleanup:
-    """ISSUES.md #35: a parse failure during creation must not leave a partial workspace."""
+    """A parse failure during creation must not leave a partial workspace (ISSUES.md #35)."""
 
     def test_create_workspace_parse_failure_leaves_no_workspace(self, simple_docx, temp_dir, isolated_workspace_base):
         """A failed unpack leaves neither a workspace dir nor a .lock sibling."""

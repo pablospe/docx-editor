@@ -173,7 +173,7 @@ class TestUnpack:
 
 
 class TestUnpackParseErrors:
-    """ISSUES.md #35: parse-stage failures must raise InvalidDocumentError, not leak raw.
+    """Parse-stage failures must raise InvalidDocumentError, not leak raw (ISSUES.md #35).
 
     Each fixture contains exactly one bad XML part — rglob order is
     nondeterministic, so a second bad part would make the "names the
@@ -204,6 +204,31 @@ class TestUnpackParseErrors:
 
         assert isinstance(excinfo.value.__cause__, ExpatError)
         assert not output.exists()
+
+    def test_unpack_wraps_non_utf8_garbage_in_invalid_document_error(self, temp_dir):
+        """Byte-level garbage must not escape as a raw UnicodeDecodeError."""
+        bad_zip = temp_dir / "bad.docx"
+        _build_zip(bad_zip, [("word/document.xml", b"<r>\xff\xfe</r>")])
+        output = temp_dir / "output"
+
+        with pytest.raises(InvalidDocumentError, match=r"Invalid XML in word/document\.xml") as excinfo:
+            unpack_document(bad_zip, output)
+
+        assert isinstance(excinfo.value.__cause__, ExpatError)
+        assert not output.exists()
+
+    def test_unpack_honors_part_encoding_declaration(self, temp_dir):
+        """A part declaring a non-UTF-8 encoding is valid XML and must unpack."""
+        u16_zip = temp_dir / "u16.docx"
+        part = '<?xml version="1.0" encoding="utf-16"?><r>héllo</r>'.encode("utf-16")
+        _build_zip(u16_zip, [("word/document.xml", part)])
+        output = temp_dir / "output"
+
+        unpack_document(u16_zip, output)
+
+        # toprettyxml(encoding="utf-8") re-serializes every part as UTF-8.
+        pretty = (output / "word" / "document.xml").read_text(encoding="utf-8")
+        assert "héllo" in pretty
 
     def test_unpack_parse_failure_preserves_preexisting_output_dir(self, temp_dir):
         """Cleanup must never delete a caller's pre-existing output directory."""

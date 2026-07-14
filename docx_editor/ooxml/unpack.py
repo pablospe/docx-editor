@@ -41,6 +41,9 @@ def _is_symlink_entry(info: zipfile.ZipInfo) -> bool:
 def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
     """Unpack a .docx file to a directory with pretty-printed XML.
 
+    On failure after extraction has started, the output directory is removed
+    if this call created it; a pre-existing directory is left in place.
+
     Args:
         input_file: Path to the .docx file to unpack
         output_dir: Directory to extract contents to
@@ -55,9 +58,6 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
             or XML constructs refused for security (DTD entity/external
             declarations), or the output directory is (or contains) a symlink
             or is an existing non-directory.
-
-    On failure after extraction has started, the output directory is removed
-    if this call created it; a pre-existing directory is left in place.
     """
     input_path = Path(input_file)
     output_path = Path(output_dir)
@@ -95,7 +95,11 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
         # Pretty print all XML files
         xml_files = list(output_path.rglob("*.xml")) + list(output_path.rglob("*.rels"))
         for xml_file in xml_files:
-            content = xml_file.read_text(encoding="utf-8")
+            # Parse bytes, not decoded text: expat then honors the part's XML
+            # encoding declaration (a UTF-16 part is valid OOXML), and byte-level
+            # garbage surfaces as ExpatError below instead of a raw
+            # UnicodeDecodeError escaping the InvalidDocumentError contract.
+            content = xml_file.read_bytes()
             try:
                 dom = defusedxml.minidom.parseString(content)
             except (ExpatError, DefusedXmlException) as e:
@@ -104,7 +108,7 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
                 # to keep unrelated ValueErrors loud. `from e` preserves the
                 # security exception for audit.
                 raise InvalidDocumentError(
-                    f"Invalid XML in {xml_file.relative_to(output_path)} of {input_file}: {e}"
+                    f"Invalid XML in {xml_file.relative_to(output_path).as_posix()} of {input_file}: {e}"
                 ) from e
             xml_file.write_bytes(dom.toprettyxml(indent="  ", encoding="utf-8"))
     except BaseException:
