@@ -191,16 +191,19 @@ Find text in the document, including text spanning XML element boundaries.
 **Parameters:**
 
 - `text` (str): Text to search for
-- `occurrence` (int): Which occurrence to return. Defaults to 0.
+- `occurrence` (int): Which occurrence to return, counted document-wide. Defaults to 0.
 
-**Returns:** Match information, or None if not found
+**Returns:** [`SearchResult`](#searchresult), or None if not found
 
 **Example:**
 
 ```python
 match = doc.find_text("Aim: To")
-if match and match.spans_boundary:
-    print("Text spans multiple XML contexts")
+if match:
+    if match.spans_revision:
+        print("Text spans a tracked-revision boundary")
+    # The ref is directly usable for a follow-up edit
+    doc.replace("Aim: To", "Goal: To", paragraph=match.paragraph_ref)
 ```
 
 #### `count_matches(text)`
@@ -329,10 +332,13 @@ Apply multiple edits after validating paragraph hashes up front.
 from docx_editor import EditOperation
 
 new_refs = doc.batch_edit([
-    EditOperation(action="replace", find="old", replace_with="new", paragraph="P2#f3c1"),
-    EditOperation(action="delete", text="remove this", paragraph="P5#d4e5"),
+    EditOperation.replace("old", "new", paragraph="P2#f3c1"),
+    EditOperation.delete("remove this", paragraph="P5#d4e5"),
 ])
 ```
+
+Prefer the typed constructors ([`EditOperation`](#editoperation)) — they validate
+arguments when the operation is built, so mistakes fail fast instead of at apply time.
 
 #### `batch_rewrite(rewrites)`
 
@@ -629,6 +635,105 @@ for rev in revisions:
     symbol = "+" if rev.type == "insertion" else "-"
     print(f"{symbol} {rev.text} (by {rev.author})")
 ```
+
+---
+
+## EditOperation
+
+A single edit operation for `batch_edit()`. Build operations with the typed
+constructors below — they validate arguments at construction time with the same
+rules `batch_edit()` applies, so mistakes surface immediately. The raw
+`EditOperation(action=..., ...)` form remains supported.
+
+```python
+from docx_editor import EditOperation
+```
+
+### Constructors
+
+#### `EditOperation.replace(find, replace_with, *, paragraph, occurrence=0)`
+
+- `find` (str): Text to find and replace. Must be non-empty.
+- `replace_with` (str): Replacement text. Empty string is allowed (replacing
+  with nothing is a valid tracked deletion).
+
+#### `EditOperation.delete(text, *, paragraph, occurrence=0)`
+
+- `text` (str): Text to mark as deleted. Must be non-empty.
+
+#### `EditOperation.insert_after(anchor, text, *, paragraph, occurrence=0)`
+
+#### `EditOperation.insert_before(anchor, text, *, paragraph, occurrence=0)`
+
+- `anchor` (str): Text to find as insertion point. Must be non-empty.
+- `text` (str): Text to insert.
+
+All constructors also take:
+
+- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+- `occurrence` (int): Which occurrence within the paragraph. Defaults to 0. Must be >= 0.
+
+**Raises:** `ValueError` at construction time if the paragraph ref is malformed,
+`occurrence` is negative, or a required text argument is empty/missing. Each
+signature mirrors the corresponding `Document` method 1:1, so
+`doc.replace(...)` translates mechanically to `EditOperation.replace(...)`.
+
+### Example
+
+```python
+new_refs = doc.batch_edit([
+    EditOperation.replace("30 days", "60 days", paragraph="P2#f3c1"),
+    EditOperation.delete("obsolete clause", paragraph="P5#d4e5"),
+    EditOperation.insert_after("Section 5", " (as amended)", paragraph="P7#b1c2"),
+])
+```
+
+---
+
+## SearchResult
+
+The result of `Document.find_text()`. Carries no XML/DOM internals.
+
+```python
+from docx_editor import SearchResult
+```
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `start` | int | Start offset of the match in the containing paragraph's visible text |
+| `end` | int | Exclusive end offset, same coordinate space |
+| `text` | str | The matched text |
+| `paragraph_ref` | str | Hash-anchored ref like `P3#a7b2`, usable as the `paragraph=` argument of follow-up edits |
+| `spans_revision` | bool | True if the match crosses a tracked-revision boundary |
+
+`start`/`end` are offsets within the matched paragraph's visible text, **not**
+document-wide offsets (`find_text`'s `occurrence` parameter, by contrast, counts
+matches document-wide). `paragraph_ref` is computed at search time and — like
+refs from `list_paragraphs()` — goes stale once that paragraph is edited.
+
+### Example
+
+```python
+match = doc.find_text("30 days")
+if match:
+    doc.replace("30 days", "60 days", paragraph=match.paragraph_ref)
+```
+
+---
+
+## Deprecated internals
+
+The text-map machinery (`TextMap`, `TextMapMatch`, `TextPosition`,
+`build_text_map`, `find_in_text_map`) is no longer part of the public API:
+these names have been removed from `docx_editor.__all__`, and accessing them
+via the top-level package emits a `DeprecationWarning`. They will be removed
+from the package namespace in the next release.
+
+Use `Document.find_text()` / [`SearchResult`](#searchresult) instead. If you
+genuinely need the internals (raw DOM positions), import them from
+`docx_editor.xml_editor`.
 
 ---
 

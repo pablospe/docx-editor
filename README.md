@@ -128,7 +128,7 @@ with Document.open("reviewed.docx", author="Editor") as doc:
 
     # Find text across element boundaries
     match = doc.find_text("Aim: To")
-    if match and match.spans_boundary:
+    if match and match.spans_revision:
         print("Text spans a revision boundary")
 
     # Replace works even across revision boundaries

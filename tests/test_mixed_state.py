@@ -59,7 +59,7 @@ class TestMixedStateReplace:
         doc.insert_after("dog.", " ADDED", paragraph=ref)
 
         match = doc.find_text("dog. ADDED")
-        if match is None or not match.spans_boundary:
+        if match is None or not match.spans_revision:
             doc.close()
             pytest.skip("Expected boundary not created")
 
@@ -86,7 +86,9 @@ class TestMixedStateReplace:
         ref = find_ref(doc, "dog.")
         doc.insert_after("dog.", " beautiful amazing", paragraph=ref)
 
-        match = doc.find_text("beautiful")
+        # Precondition needs per-character ins-state, which the public
+        # SearchResult intentionally hides — use the internal match here.
+        match = doc._revision_manager._find_across_boundaries("beautiful")
         if match is None:
             doc.close()
             pytest.skip("Text not found in insertion")
@@ -129,7 +131,7 @@ class TestMixedStateReplace:
         doc.insert_after("dog.", " ADDED", paragraph=ref)
 
         match = doc.find_text("dog. ADDED")
-        if match is None or not match.spans_boundary:
+        if match is None or not match.spans_revision:
             doc.close()
             pytest.skip("Expected boundary not created")
 
@@ -146,7 +148,7 @@ class TestMixedStateReplace:
         doc.insert_after("dog.", " ADDED", paragraph=ref)
 
         match = doc.find_text("dog. ADDED")
-        if match is None or not match.spans_boundary:
+        if match is None or not match.spans_revision:
             doc.close()
             pytest.skip("Expected boundary not created")
 
@@ -168,7 +170,9 @@ class TestMixedStateReplace:
         ref = find_ref(doc, "dog.")
         doc.insert_after("dog.", " beautiful amazing", paragraph=ref)
 
-        match = doc.find_text("beautiful")
+        # Precondition needs per-character ins-state, which the public
+        # SearchResult intentionally hides — use the internal match here.
+        match = doc._revision_manager._find_across_boundaries("beautiful")
         if match is None or not all(pos.is_inside_ins for pos in match.positions):
             doc.close()
             pytest.skip("Text not entirely within insertion")

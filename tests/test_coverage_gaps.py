@@ -189,7 +189,7 @@ class TestMixedStateDeletion:
         doc.insert_after("fox", " ADDED", paragraph=ref)
 
         match = doc.find_text("fox ADDED")
-        if match is None or not match.spans_boundary:
+        if match is None or not match.spans_revision:
             doc.close()
             pytest.skip("Expected boundary not created")
 
@@ -209,7 +209,7 @@ class TestMixedStateDeletion:
         doc.insert_after("fox", " ADDED", paragraph=ref)
 
         match = doc.find_text("ADDED jumps")
-        if match is None or not match.spans_boundary:
+        if match is None or not match.spans_revision:
             doc.close()
             pytest.skip("Expected boundary not created")
 
@@ -226,7 +226,9 @@ class TestMixedStateDeletion:
         ref = find_ref(doc, "fox")
         doc.insert_after("fox", " beautiful amazing", paragraph=ref)
 
-        match = doc.find_text("beautiful")
+        # Precondition needs per-character ins-state, which the public
+        # SearchResult intentionally hides — use the internal match here.
+        match = doc._revision_manager._find_across_boundaries("beautiful")
         if match is None or not all(p.is_inside_ins for p in match.positions):
             doc.close()
             pytest.skip("Text not entirely within insertion")
@@ -245,7 +247,7 @@ class TestMixedStateDeletion:
         doc.insert_after("fox", " ADDED", paragraph=ref)
 
         match = doc.find_text("fox ADDED")
-        if match is None or not match.spans_boundary:
+        if match is None or not match.spans_revision:
             doc.close()
             pytest.skip("Expected boundary not created")
 
@@ -402,7 +404,7 @@ class TestOccurrenceParameter:
         if match0 is None or match1 is None:
             doc.close()
             pytest.skip("Not enough occurrences of 'the'")
-        assert match0.positions[0].node is not match1.positions[0].node
+        assert (match0.paragraph_ref, match0.start) != (match1.paragraph_ref, match1.start)
         doc.close()
 
     def test_replace_second_occurrence_cross_boundary(self, clean_workspace):
@@ -464,7 +466,7 @@ class TestInsertWithCrossBoundaryAnchor:
         doc.insert_after("fox", " RED", paragraph=ref)
 
         match = doc.find_text("fox RED")
-        if match is None or not match.spans_boundary:
+        if match is None or not match.spans_revision:
             doc.close()
             pytest.skip("Boundary not created")
 
@@ -482,7 +484,7 @@ class TestInsertWithCrossBoundaryAnchor:
         doc.insert_after("fox", " RED", paragraph=ref)
 
         match = doc.find_text("fox RED")
-        if match is None or not match.spans_boundary:
+        if match is None or not match.spans_revision:
             doc.close()
             pytest.skip("Boundary not created")
 
@@ -500,7 +502,7 @@ class TestInsertWithCrossBoundaryAnchor:
         doc.insert_after("fox", " RED", paragraph=ref)
 
         match = doc.find_text("fox RED")
-        if match is None or not match.spans_boundary:
+        if match is None or not match.spans_revision:
             doc.close()
             pytest.skip("Boundary not created")
 

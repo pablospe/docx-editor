@@ -218,7 +218,8 @@ for p in doc.list_paragraphs():
 #         P2#f3c1| The payment term is 30 days...
 #         P3#b2c4| Section 3. Terms and conditions...
 
-# Find text (returns TextMapMatch or None, works across element boundaries)
+# Find text (returns SearchResult or None, works across element boundaries).
+# match.paragraph_ref is directly usable as the paragraph= of a follow-up edit.
 match = doc.find_text("30 days")
 
 # Get all visible text (inserted text included, deleted text excluded)
@@ -431,13 +432,15 @@ from docx_editor import Document, EditOperation
 with Document.open("file.docx", author=author) as doc:
     refs = doc.list_paragraphs()
     new_refs = doc.batch_edit([
-        EditOperation(action="replace", find="old term", replace_with="new term", paragraph="P2#f3c1"),
-        EditOperation(action="delete", text="remove this", paragraph="P5#d4e5"),
-        EditOperation(action="insert_after", anchor="Section 5", text=" (amended)", paragraph="P3#b2c4"),
+        EditOperation.replace("old term", "new term", paragraph="P2#f3c1"),
+        EditOperation.delete("remove this", paragraph="P5#d4e5"),
+        EditOperation.insert_after("Section 5", " (amended)", paragraph="P3#b2c4"),
     ])
     # new_refs[0] = "P2#c3d4" — fresh ref for paragraph 2
     doc.save()
 ```
+
+Build operations with the typed constructors (`EditOperation.replace/.delete/.insert_after/.insert_before` — same signatures as the `Document` methods). They validate arguments immediately and raise `ValueError` with a field-specific message, instead of failing later at apply time.
 
 If any hash is stale, the entire batch is rejected before any edits are applied.
 
@@ -522,9 +525,9 @@ doc.replace("30", "60", paragraph="P2#f3c1")
 # Multiple independent swaps — use batch_edit():
 # "CFO" → "Finance Director", "audit committee" → "board", "December 31st" → "January 15th"
 doc.batch_edit([
-    EditOperation(action="replace", find="CFO", replace_with="Finance Director", paragraph="P5#a7b2"),
-    EditOperation(action="replace", find="audit committee", replace_with="board", paragraph="P5#a7b2"),
-    EditOperation(action="replace", find="December 31st", replace_with="January 15th", paragraph="P5#a7b2"),
+    EditOperation.replace("CFO", "Finance Director", paragraph="P5#a7b2"),
+    EditOperation.replace("audit committee", "board", paragraph="P5#a7b2"),
+    EditOperation.replace("December 31st", "January 15th", paragraph="P5#a7b2"),
 ])
 ```
 
