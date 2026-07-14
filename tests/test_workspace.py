@@ -48,6 +48,7 @@ class TestWorkspaceCreation:
         assert "source_path" in meta
         assert "source_mtime" in meta
         assert "source_size" in meta
+        assert "source_sha256" in meta
         assert "created_at" in meta
         assert "author" in meta
         assert "rsid" in meta
@@ -609,9 +610,8 @@ class TestWorkspaceLocationHardening:
 class TestSaveStaleness:
     def test_save_raises_when_source_changed_externally(self, temp_docx):
         ws = Workspace(temp_docx, author="Test")
-        # Simulate an external edit: bump the source file's mtime.
-        stat = temp_docx.stat()
-        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        # Simulate an external edit: change the source file's content.
+        temp_docx.write_bytes(temp_docx.read_bytes() + b"\x00")
         try:
             with pytest.raises(WorkspaceSyncError, match="changed on disk"):
                 ws.save()
@@ -620,8 +620,7 @@ class TestSaveStaleness:
 
     def test_save_force_overwrites_changed_source(self, temp_docx):
         ws = Workspace(temp_docx, author="Test")
-        stat = temp_docx.stat()
-        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        temp_docx.write_bytes(temp_docx.read_bytes() + b"\x00")
         try:
             result = ws.save(force=True)
             assert result == temp_docx.resolve()
@@ -632,8 +631,7 @@ class TestSaveStaleness:
 
     def test_save_to_other_destination_ignores_stale_source(self, temp_docx, temp_dir):
         ws = Workspace(temp_docx, author="Test")
-        stat = temp_docx.stat()
-        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        temp_docx.write_bytes(temp_docx.read_bytes() + b"\x00")
         try:
             out = ws.save(destination=temp_dir / "elsewhere.docx")
             assert out.exists()
@@ -680,6 +678,67 @@ class TestSaveStaleness:
         # And the documented recovery (drop the workspace) works.
         Workspace.delete(temp_docx)
         Workspace(temp_docx, author="Test").close()
+
+
+class TestSha256Staleness:
+    """Content-hash staleness detection in sync_check() (issue #22 follow-up)."""
+
+    def test_same_size_same_mtime_content_swap_is_detected(self, temp_docx):
+        """The case mtime+size provably cannot catch: same-length content swap
+        with the timestamp restored."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+
+        original = bytearray(temp_docx.read_bytes())
+        stat_before = temp_docx.stat()
+        original[-1] ^= 0xFF  # flip one byte, length unchanged
+        temp_docx.write_bytes(bytes(original))
+        os.utime(temp_docx, (stat_before.st_atime, stat_before.st_mtime))
+
+        with pytest.raises(WorkspaceSyncError):
+            Workspace(temp_docx, author="Test")
+
+        Workspace.delete(temp_docx)
+
+    def test_touch_with_identical_content_is_not_stale(self, temp_docx):
+        """An mtime bump over identical bytes (touch, cloud-sync re-download)
+        is not an external edit — the workspace adopts."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+
+        stat = temp_docx.stat()
+        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+
+        ws2 = Workspace(temp_docx, author="Test")  # must not raise
+        ws2.close()
+
+    def test_legacy_meta_without_sha256_uses_mtime_size(self, temp_docx):
+        """meta.json written before the hash existed keeps the old semantics:
+        an mtime-only bump still reads as stale."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+
+        meta_path = ws.workspace_path / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        del meta["source_sha256"]
+        meta_path.write_text(json.dumps(meta))
+
+        stat = temp_docx.stat()
+        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+
+        with pytest.raises(WorkspaceSyncError):
+            Workspace(temp_docx, author="Test")
+
+        Workspace.delete(temp_docx)
+
+    def test_save_to_source_refreshes_sha256(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            ws.save()
+            meta = json.loads((ws.workspace_path / "meta.json").read_text())
+            assert meta["source_sha256"] == hashlib.sha256(temp_docx.read_bytes()).hexdigest()
+        finally:
+            ws.close()
 
 
 class TestDirtyWorkspace:

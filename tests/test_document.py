@@ -727,13 +727,11 @@ class TestDocumentFindText:
 
 class TestDocumentSaveStaleness:
     def test_document_save_raises_on_external_change(self, temp_docx):
-        import os
-
         from docx_editor.exceptions import WorkspaceSyncError
 
         doc = Document.open(temp_docx, author="Test")
-        stat = temp_docx.stat()
-        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        # Simulate an external edit: change the source file's content.
+        temp_docx.write_bytes(temp_docx.read_bytes() + b"\x00")
         try:
             with pytest.raises(WorkspaceSyncError):
                 doc.save()

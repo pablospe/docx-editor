@@ -99,6 +99,15 @@ def owner_file_candidates(path: str | Path) -> list[Path]:
     return candidates
 
 
+def _file_sha256(path: Path) -> str:
+    """Streamed sha256 hex digest of a file's content."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 16), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _pid_alive(pid: int) -> bool:
     """True if the process is still running.
 
@@ -487,6 +496,7 @@ class Workspace:
             "source_path": str(self.source_path),
             "source_mtime": source_stat.st_mtime,
             "source_size": source_stat.st_size,
+            "source_sha256": _file_sha256(self.source_path),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "author": self._author,
             "initials": self._author[0].upper() if self._author else "",
@@ -665,15 +675,18 @@ class Workspace:
         if not success:
             raise WorkspaceError(f"Failed to pack document to {output_path}")
 
-        # Update source_mtime/source_size if saving to the original location.
-        # overwrites_source uses os.path.samefile (see _is_source), so a different
-        # name for the same file — including through a symlink — still refreshes the
-        # workspace's stat, or the next open() would report a stale workspace. Both
-        # mtime and size are updated because sync_check() compares both.
+        # Update the recorded source fingerprint if saving to the original
+        # location. overwrites_source uses os.path.samefile (see _is_source), so
+        # a different name for the same file — including through a symlink —
+        # still refreshes it, or the next open() would report a stale workspace.
+        # mtime/size are refreshed alongside the hash: sync_check() needs size
+        # for its cheap reject, and legacy library versions reading this meta
+        # compare mtime+size only.
         if overwrites_source:
             saved_stat = output_path.stat()
             self.meta["source_mtime"] = saved_stat.st_mtime
             self.meta["source_size"] = saved_stat.st_size
+            self.meta["source_sha256"] = _file_sha256(output_path)
             # The source now holds everything the workspace holds — the
             # workspace is no longer ahead of it, so adoption is safe again.
             self.meta["dirty"] = False
@@ -722,6 +735,12 @@ class Workspace:
     def sync_check(self) -> bool:
         """Check if the workspace is in sync with the source document.
 
+        Metas that record ``source_sha256`` compare content: size first (a
+        cheap reject), then the hash. A touch/copy that rewrites identical
+        bytes no longer counts as an external edit, and a same-size content
+        swap — which mtime+size provably cannot catch — now does. Legacy metas
+        without the key keep the original mtime+size comparison.
+
         Returns:
             True if in sync, False if source has changed
         """
@@ -729,6 +748,11 @@ class Workspace:
             return False
 
         source_stat = self.source_path.stat()
+        recorded_sha256 = self.meta.get("source_sha256")
+        if recorded_sha256 is not None:
+            if self.meta.get("source_size") != source_stat.st_size:
+                return False
+            return _file_sha256(self.source_path) == recorded_sha256
         return (
             self.meta.get("source_mtime") == source_stat.st_mtime
             and self.meta.get("source_size") == source_stat.st_size
