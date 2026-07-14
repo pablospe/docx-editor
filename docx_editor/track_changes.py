@@ -30,6 +30,7 @@ from .xml_editor import (
     build_text_map,
     compute_paragraph_hash,
     compute_text_hash,
+    count_in_text_map,
     find_in_text_map,
     get_rPr_xml,
     get_text_node_data,
@@ -449,11 +450,7 @@ class RevisionManager:
                 more than once in the paragraph.
         """
         text_map = build_text_map(paragraph)
-        total = 0
-        start = 0
-        while (idx := text_map.find(text, start)) != -1:
-            total += 1
-            start = idx + 1
+        total = count_in_text_map(text_map, text)
 
         occ = occurrence if occurrence is not None else 0
         match = find_in_text_map(text_map, text, occ)
@@ -902,11 +899,7 @@ class RevisionManager:
         """
         count = 0
         for paragraph in self.editor.dom.getElementsByTagName("w:p"):
-            text_map = build_text_map(paragraph)
-            local_occ = 0
-            while find_in_text_map(text_map, text, local_occ) is not None:
-                count += 1
-                local_occ += 1
+            count += count_in_text_map(build_text_map(paragraph), text)
         return count
 
     def _find_document_wide(self, text: str, occurrence: int | None = None) -> TextMapMatch:

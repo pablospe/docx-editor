@@ -245,9 +245,13 @@ for r in doc.find_all("30 days"):
                 paragraph=r.paragraph_ref, occurrence=r.paragraph_occurrence)
 ```
 
-Editing a paragraph invalidates its remaining refs — when one paragraph holds
-several matches, re-run `find_all` after each edit or apply the edits with
-`batch_edit()`.
+Editing a paragraph invalidates its remaining refs and shifts the occurrence
+numbers of the matches after the edit. When one paragraph holds several
+matches, either re-run `find_all` after each edit, or apply them in a single
+`batch_edit()` with the same-paragraph ops in **descending** occurrence order —
+an edit never shifts the matches before it. (Ascending order mis-targets;
+descending is not valid for search strings that overlap themselves, e.g.
+`"aa"` in `"aaaa"`.)
 
 #### `count_matches(text)`
 

@@ -91,6 +91,21 @@ def find_in_text_map(text_map: TextMap, search: str, occurrence: int = 0) -> Tex
     )
 
 
+def count_in_text_map(text_map: TextMap, search: str) -> int:
+    """Count occurrences of text in a text map.
+
+    Uses the same overlapping-advance semantics as ``find_in_text_map``
+    (successive matches may overlap), so the result is exactly the number of
+    distinct ``occurrence`` values ``find_in_text_map`` can resolve.
+    """
+    count = 0
+    start = 0
+    while (idx := text_map.find(search, start)) != -1:
+        count += 1
+        start = idx + 1
+    return count
+
+
 _PARAGRAPH_REF_RE = re.compile(r"^P(\d+)#([0-9a-f]{4})$")
 
 

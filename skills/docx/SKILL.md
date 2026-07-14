@@ -232,8 +232,12 @@ for r in doc.find_all("30 days"):
     doc.replace(r.text, "60 days", paragraph=r.paragraph_ref,
                 occurrence=r.paragraph_occurrence)
 # Optionally scope to one paragraph: doc.find_all("term", paragraph="P2#f3c1")
-# (editing a paragraph invalidates its remaining refs — re-run find_all after
-# each edit when a paragraph has several matches, or use batch_edit)
+# Editing a paragraph invalidates its remaining refs AND shifts the occurrence
+# numbers of the matches after the edit. Several matches in ONE paragraph:
+# re-run find_all after each edit, or batch_edit them in DESCENDING occurrence
+# order (an edit never shifts the matches before it; ascending mis-targets,
+# and descending is not valid for self-overlapping search strings like "aa"
+# in "aaaa").
 
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()

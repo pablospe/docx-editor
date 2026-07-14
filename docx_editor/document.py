@@ -247,9 +247,14 @@ class Document:
                     occurrence=r.paragraph_occurrence,
                 )
 
-        Note: editing a paragraph invalidates its remaining refs; when editing
-        several matches in one paragraph, re-run find_all after each edit or
-        apply edits via batch_edit in one pass.
+        Editing a paragraph invalidates its remaining refs and shifts the
+        occurrence numbers of the matches after the edit, so when one
+        paragraph holds several matches either re-run find_all after each
+        edit, or apply them in a single batch_edit with the same-paragraph
+        ops in *descending* occurrence order — an edit never shifts the
+        matches before it. (Ascending order mis-targets; descending is not
+        valid for search strings that overlap themselves, e.g. "aa" in
+        "aaaa".)
         """
         self._ensure_open()
         return self._revision_manager.find_all(text, paragraph=paragraph)

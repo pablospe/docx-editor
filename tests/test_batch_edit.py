@@ -745,6 +745,47 @@ class TestSingleExceptionContract:
         assert "MISSING" not in vis
 
 
+class TestSameParagraphBatch:
+    """The documented pattern for several matches in ONE paragraph: batch the
+    ops in DESCENDING occurrence order — an edit never shifts the matches
+    before it. Ascending order breaks because each edit shifts the occurrence
+    numbering of the matches after it in the accepted text view."""
+
+    def test_descending_occurrence_order_hits_every_intended_match(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        results = [r for r in doc.find_all("committee") if r.paragraph_ref.startswith("P3#")]
+        assert [r.paragraph_occurrence for r in results] == [0, 1]
+
+        ops = [
+            EditOperation.replace(
+                r.text, f"EDIT{r.paragraph_occurrence}", paragraph=r.paragraph_ref, occurrence=r.paragraph_occurrence
+            )
+            for r in sorted(results, key=lambda r: r.paragraph_occurrence, reverse=True)
+        ]
+        doc.batch_edit(ops)
+        doc.accept_all()
+        assert (
+            "[P03] The EDIT0 shall review item 3. The report includes findings from the EDIT1."
+            in doc.get_visible_text()
+        )
+
+    def test_ascending_occurrence_order_fails_atomically(self, multi_para_doc):
+        """find_all order (ascending) is NOT batchable within a paragraph: the
+        first edit renumbers the rest, so a later op goes out of range and the
+        atomic contract rolls everything back."""
+        doc, _ = multi_para_doc
+        before = doc.get_visible_text()
+        results = [r for r in doc.find_all("committee") if r.paragraph_ref.startswith("P3#")]
+        ops = [
+            EditOperation.replace(r.text, "X", paragraph=r.paragraph_ref, occurrence=r.paragraph_occurrence)
+            for r in results
+        ]
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_edit(ops)
+        assert isinstance(exc.value.original, TextNotFoundError)
+        assert doc.get_visible_text() == before
+
+
 class TestBatchRewriteSingleExceptionContract:
     """batch_rewrite honors the same single-exception contract."""
 

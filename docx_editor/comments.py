@@ -26,6 +26,7 @@ from .xml_editor import (
     _generate_hex_id,
     build_text_map,
     compute_paragraph_hash,
+    count_in_text_map,
     find_in_text_map,
     get_rPr_xml,
     get_text_node_data,
@@ -207,11 +208,7 @@ class CommentManager:
                     preview += "..."
                 raise HashMismatchError(ref.index, ref.hash, actual, preview)
             text_map = build_text_map(p)
-            total = 0
-            start = 0
-            while (idx := text_map.find(anchor_text, start)) != -1:
-                total += 1
-                start = idx + 1
+            total = count_in_text_map(text_map, anchor_text)
             match = find_in_text_map(text_map, anchor_text, occ)
             if match is not None:
                 if occurrence is None and total > 1:
