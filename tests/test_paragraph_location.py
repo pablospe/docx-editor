@@ -1092,6 +1092,46 @@ class TestStyleOutlineBasedOnChain:
             assert loc.outline_level is None
 
 
+class TestStyleMissingTypeDefaultsToParagraph:
+    """A ``w:style`` without ``w:type`` defaults to *paragraph* (ECMA-376)."""
+
+    _STYLES_XML = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:styles {_W_NS}>"
+        # No w:type attribute — must still contribute its outline level.
+        '<w:style w:styleId="TypelessHead">'
+        '<w:name w:val="Typeless Head"/>'
+        '<w:pPr><w:outlineLvl w:val="2"/></w:pPr>'
+        "</w:style>"
+        "</w:styles>"
+    )
+
+    _DOCUMENT_XML = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:document {_W_NS}>"
+        "<w:body>"
+        f"<w:p>{_p_style('TypelessHead')}<w:r><w:t>Typeless heading</w:t></w:r></w:p>"
+        "</w:body>"
+        "</w:document>"
+    )
+
+    @pytest.fixture
+    def typeless_docx(self, simple_docx, tmp_path) -> Path:
+        dest = tmp_path / "typeless-style.docx"
+        replace_docx_parts(
+            simple_docx,
+            dest,
+            {"word/document.xml": self._DOCUMENT_XML, "word/styles.xml": self._STYLES_XML},
+        )
+        return dest
+
+    def test_typeless_style_resolves_outline_level(self, typeless_docx):
+        with Document.open(typeless_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Typeless heading"))
+            assert loc.style == "TypelessHead"
+            assert loc.outline_level == 2
+
+
 class TestMissingStylesPart:
     """A document without ``word/styles.xml`` degrades gracefully."""
 

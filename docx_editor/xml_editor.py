@@ -449,7 +449,8 @@ def _build_style_outline_map(styles_dom) -> dict[str, int]:
     """
     raw: dict[str, tuple[int | None, bool, str | None]] = {}
     for style in styles_dom.getElementsByTagName("w:style"):
-        if style.getAttribute("w:type") != "paragraph":
+        # A missing w:type defaults to "paragraph" per ECMA-376
+        if style.getAttribute("w:type") not in ("", "paragraph"):
             continue
         style_id = style.getAttribute("w:styleId")
         if not style_id:
@@ -635,6 +636,42 @@ def rebuild_run_fragments(run, rPr_xml: str, render_wt: Callable[[Element], list
             continue
         fragments.extend(render_wt(child))
     return fragments
+
+
+def _escape_xml(text: str) -> str:
+    """Escape text for safe XML inclusion."""
+    return (
+        text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
+def get_rPr_xml(run) -> str:
+    """Serialize ``run``'s direct ``w:rPr`` child, or empty string.
+
+    Iterates direct children so a nested ``w:rPr`` deep inside a ``w:drawing``
+    text-box descendant is not picked up by mistake.
+    """
+    for child in run.childNodes:
+        if child.nodeType == child.ELEMENT_NODE and getattr(child, "tagName", "") == "w:rPr":
+            return child.toxml()
+    return ""
+
+
+def render_plain_wt(wt, rPr_xml: str) -> list[str]:
+    """Render an unmatched ``w:t`` node as a plain run fragment carrying ``rPr_xml``.
+
+    The shared preserve-as-is step for ``render_wt`` callbacks passed to
+    :func:`rebuild_run_fragments` — nodes with no text yield no fragment.
+    """
+    wt_text = get_text_node_data(wt)
+    if not wt_text:
+        return []
+    return [f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>"]
 
 
 def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted") -> TextMap:
