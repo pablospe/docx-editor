@@ -1,6 +1,7 @@
 """Tests for XMLEditor and DocxXMLEditor classes."""
 
 import pytest
+from conftest import parse_paragraph
 
 from docx_editor.exceptions import MultipleNodesFoundError, NodeNotFoundError
 from docx_editor.xml_editor import (
@@ -8,6 +9,8 @@ from docx_editor.xml_editor import (
     XMLEditor,
     _generate_hex_id,
     _generate_rsid,
+    get_rPr_xml,
+    render_plain_wt,
 )
 
 
@@ -794,6 +797,46 @@ class TestHelperFunctions:
         int(rsid, 16)
         # Should be uppercase
         assert rsid == rsid.upper()
+
+
+def _parse_run(xml: str):
+    """Parse XML string and return the first w:r element."""
+    return parse_paragraph(f"<w:p>{xml}</w:p>").getElementsByTagName("w:r")[0]
+
+
+class TestRunFragmentHelpers:
+    """Tests for get_rPr_xml and render_plain_wt."""
+
+    def test_get_rpr_xml_direct_child(self):
+        run = _parse_run("<w:r><w:rPr><w:b/></w:rPr><w:t>hi</w:t></w:r>")
+        assert get_rPr_xml(run) == "<w:rPr><w:b/></w:rPr>"
+
+    def test_get_rpr_xml_no_rpr(self):
+        run = _parse_run("<w:r><w:t>hi</w:t></w:r>")
+        assert get_rPr_xml(run) == ""
+
+    def test_get_rpr_xml_ignores_descendant_rpr(self):
+        """An rPr nested inside a drawing's text box is not the run's own."""
+        run = _parse_run(
+            "<w:r><w:drawing><w:txbxContent><w:p><w:r><w:rPr><w:b/></w:rPr>"
+            "<w:t>boxed</w:t></w:r></w:p></w:txbxContent></w:drawing></w:r>"
+        )
+        assert get_rPr_xml(run) == ""
+
+    def test_render_plain_wt_with_text(self):
+        run = _parse_run("<w:r><w:t>hi</w:t></w:r>")
+        wt = run.getElementsByTagName("w:t")[0]
+        assert render_plain_wt(wt, "<w:rPr><w:b/></w:rPr>") == ["<w:r><w:rPr><w:b/></w:rPr><w:t>hi</w:t></w:r>"]
+
+    def test_render_plain_wt_empty_node_yields_nothing(self):
+        run = _parse_run("<w:r><w:t></w:t></w:r>")
+        wt = run.getElementsByTagName("w:t")[0]
+        assert render_plain_wt(wt, "") == []
+
+    def test_render_plain_wt_escapes_special_characters(self):
+        run = _parse_run("<w:r><w:t>a &amp; b &lt; c</w:t></w:r>")
+        wt = run.getElementsByTagName("w:t")[0]
+        assert render_plain_wt(wt, "") == ["<w:r><w:t>a &amp; b &lt; c</w:t></w:r>"]
 
 
 class TestDocxXMLEditorAttributeInjectionExtended:
