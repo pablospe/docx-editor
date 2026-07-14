@@ -159,16 +159,22 @@ class TableCell:
 
 @dataclass(frozen=True)
 class ListItem:
-    """Raw numbering reference of a list paragraph.
+    """Numbering reference of a list paragraph.
 
-    Values come straight from the paragraph's direct ``<w:pPr>/<w:numPr>``:
-    ``num_id`` keys into ``word/numbering.xml``; ``ilvl`` is the 0-based
-    indentation level (0 when ``<w:ilvl>`` is absent, per spec default).
+    A direct ``<w:pPr>/<w:numPr>`` wins when present — including the
+    ``numId=0`` "numbering disabled" marker Word writes to remove
+    style-inherited numbering from a single paragraph (→ no ``ListItem``,
+    no style fallback). Otherwise the numbering defined by the
+    paragraph's style in ``word/styles.xml`` applies, with ``w:basedOn``
+    chains resolved. ``num_id`` keys into ``word/numbering.xml``;
+    ``ilvl`` is the 0-based indentation level (0 when ``<w:ilvl>`` is
+    absent, per spec default).
 
-    Limitations of this raw extraction: numbering inherited via a paragraph
-    style (``w:pStyle``) is NOT resolved — a paragraph numbered only through
-    its style reports ``list=None``. Rendered display numbers ("7.2(a)")
-    are not computed (that requires resolving ``word/numbering.xml``).
+    Limitations: rendered display numbers ("7.2(a)") are not computed
+    (that requires resolving ``word/numbering.xml``), and a
+    style-numbered paragraph reports the style's raw ``ilvl`` — levels
+    assigned via ``w:lvl/w:pStyle`` associations inside
+    ``word/numbering.xml`` are not resolved.
     """
 
     num_id: int  # w:numPr/w:numId/@w:val — key into word/numbering.xml
@@ -184,8 +190,10 @@ class ParagraphLocation:
     may add other container kinds (header, footer, footnote), etc., as
     plain optional field additions.
 
-    ``list`` is the paragraph's raw numbering reference (see
-    :class:`ListItem`), or ``None`` for non-list paragraphs.
+    ``list`` is the paragraph's numbering reference (see
+    :class:`ListItem` — a direct ``w:numPr`` wins; absent that, the
+    numbering defined by the paragraph's style applies), or ``None`` for
+    non-list paragraphs.
 
     ``style`` is the raw ``w:pPr/w:pStyle/@w:val`` style id (a key into
     ``word/styles.xml``, e.g. ``"Heading1"``), or ``None`` when the
@@ -352,21 +360,14 @@ def _direct_child(elem, tag_name: str) -> Element | None:
     return None
 
 
-def _extract_list_item(paragraph) -> ListItem | None:
-    """Raw ``<w:pPr>/<w:numPr>`` of ``paragraph``, as a :class:`ListItem`.
+def _parse_num_pr(numpr) -> ListItem | None:
+    """Parse a ``<w:numPr>`` element as a :class:`ListItem`.
 
-    Walks direct children only, so a stale ``w:numPr`` inside a
-    ``<w:pPrChange>`` revision record is never picked up. Returns ``None``
-    when there is no ``w:numPr``, when ``w:numId`` is absent or malformed,
-    or when ``w:numId`` is 0 (the spec's "numbering disabled" marker).
-    ``w:ilvl`` absent/malformed → level 0 (spec default).
+    Returns ``None`` when ``w:numId`` is absent or malformed, or when it
+    is < 1 (``numId=0`` is the spec's "numbering disabled" marker).
+    ``w:ilvl`` absent/malformed → level 0 (spec default). Direct-child
+    walks only.
     """
-    ppr = _direct_child(paragraph, "w:pPr")
-    if ppr is None:
-        return None
-    numpr = _direct_child(ppr, "w:numPr")
-    if numpr is None:
-        return None
     numid_elem = _direct_child(numpr, "w:numId")
     if numid_elem is None:
         return None
@@ -384,6 +385,29 @@ def _extract_list_item(paragraph) -> ListItem | None:
         except ValueError:
             ilvl = 0
     return ListItem(num_id=num_id, ilvl=ilvl)
+
+
+def _extract_list_item(paragraph, style: str | None, style_numbering: dict[str, ListItem]) -> ListItem | None:
+    """Effective numbering of ``paragraph``, as a :class:`ListItem`.
+
+    A direct ``<w:pPr>/<w:numPr>`` always wins: when the element is
+    present, its value decides (``numId=0`` — Word's "remove numbering
+    from this styled paragraph" marker — malformed, or ``numId``-less
+    blocks → ``None``, no style fallback, matching OOXML
+    direct-formatting override semantics; a direct block carrying only
+    ``w:ilvl`` is not merged with the style's ``numId``). When absent,
+    the numbering defined by ``style`` in ``style_numbering`` (see
+    :func:`_build_style_numbering_map`) applies. Direct-child walk only,
+    so a stale ``w:numPr`` inside a ``<w:pPrChange>`` revision record is
+    never picked up.
+    """
+    ppr = _direct_child(paragraph, "w:pPr")
+    numpr = _direct_child(ppr, "w:numPr") if ppr is not None else None
+    if numpr is not None:
+        return _parse_num_pr(numpr)
+    if style is not None:
+        return style_numbering.get(style)
+    return None
 
 
 def _extract_style(paragraph) -> str | None:
@@ -478,6 +502,51 @@ def _build_style_outline_map(styles_dom) -> dict[str, int]:
     return resolved
 
 
+def _build_style_numbering_map(styles_dom) -> dict[str, ListItem]:
+    """Map paragraph-style ids to their effective numbering reference.
+
+    Structural mirror of :func:`_build_style_outline_map`: one pass over
+    ``<w:style>`` elements whose type is ``paragraph`` or unspecified
+    (the ECMA-376 default) collects each style's own
+    ``<w:pPr>/<w:numPr>`` and its ``w:basedOn`` parent; a second pass
+    resolves ``basedOn`` chains (visited-set cycle guard) so a custom
+    style based on e.g. ``ListNumber`` without restating the numbering
+    inherits it. A *present* ``w:numPr`` terminates the chain even when
+    it yields no numbering (``numId=0`` explicitly disables inherited
+    numbering; a block carrying only ``w:ilvl`` likewise contributes
+    nothing — the parent's ``numId`` is not merged in). Styles that end
+    up with no numbering are omitted from the map.
+    """
+    raw: dict[str, tuple[ListItem | None, bool, str | None]] = {}
+    for style in styles_dom.getElementsByTagName("w:style"):
+        # A missing w:type defaults to "paragraph" per ECMA-376
+        if style.getAttribute("w:type") not in ("", "paragraph"):
+            continue
+        style_id = style.getAttribute("w:styleId")
+        if not style_id:
+            continue
+        ppr = _direct_child(style, "w:pPr")
+        numpr = _direct_child(ppr, "w:numPr") if ppr is not None else None
+        item = _parse_num_pr(numpr) if numpr is not None else None
+        based_on_elem = _direct_child(style, "w:basedOn")
+        based_on = based_on_elem.getAttribute("w:val") if based_on_elem is not None else None
+        raw[style_id] = (item, numpr is not None, based_on or None)
+
+    resolved: dict[str, ListItem] = {}
+    for style_id in raw:
+        current: str | None = style_id
+        visited: set[str] = set()
+        while current is not None and current in raw and current not in visited:
+            visited.add(current)
+            item, has_own_numpr, based_on = raw[current]
+            if has_own_numpr:
+                if item is not None:
+                    resolved[style_id] = item
+                break
+            current = based_on
+    return resolved
+
+
 def _compute_heading_paths(paragraphs, style_outlines: dict[str, int]) -> list[tuple[str, ...]]:
     """Heading-ancestor path for each of ``paragraphs`` (document order).
 
@@ -524,13 +593,14 @@ def _compute_paragraph_location(
     paragraph,
     table_index: dict | None = None,
     style_outlines: dict[str, int] | None = None,
+    style_numbering: dict[str, ListItem] | None = None,
     heading_path: tuple[str, ...] = (),
     section: int = 1,
 ) -> ParagraphLocation:
     """Compute the structural location of a ``<w:p>`` element.
 
     Reports the innermost enclosing ``<w:tc>`` (and its table) plus the
-    paragraph's raw list membership (see :func:`_extract_list_item`),
+    paragraph's list membership (see :func:`_extract_list_item`),
     style id, and outline level; a plain body paragraph gets ``table=None``.
 
     ``table_index`` is an optional ``{tbl_node: 1-based-index}`` map (see
@@ -542,12 +612,15 @@ def _compute_paragraph_location(
     ``style_outlines`` is an optional precomputed ``{style_id:
     outline_level}`` map (see :func:`_build_style_outline_map`) used to
     resolve style-defined outline levels; ``None`` behaves like ``{}``.
+    ``style_numbering`` is the analogous ``{style_id: ListItem}`` map
+    (see :func:`_build_style_numbering_map`) used to resolve
+    style-defined numbering; ``None`` behaves like ``{}``.
     ``heading_path`` and ``section`` are threaded through verbatim —
     computing them needs whole-document context (see
     :func:`_compute_heading_paths` and :func:`_compute_section_indexes`).
     """
-    list_item = _extract_list_item(paragraph)
     style = _extract_style(paragraph)
+    list_item = _extract_list_item(paragraph, style, style_numbering or {})
     outline_level = _extract_outline_level(paragraph, style, style_outlines or {})
     tc = _innermost_ancestor(paragraph, "w:tc")
     if tc is None:

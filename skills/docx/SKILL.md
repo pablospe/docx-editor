@@ -226,8 +226,8 @@ match = doc.find_text("30 days")
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()
 
-# Structural location: table cell, list item (raw numId/ilvl), heading context,
-# and section index
+# Structural location: table cell, list item (numId/ilvl; style-inherited
+# numbering resolved), heading context, and section index
 loc = doc.get_paragraph_location("P3#b2c4")
 if loc.table:
     print(f"table {loc.table.index} r{loc.table.row} c{loc.table.col}")
