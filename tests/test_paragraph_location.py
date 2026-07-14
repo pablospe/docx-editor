@@ -226,6 +226,15 @@ def _single_paragraph_body(p_pr_xml: str) -> str:
     )
 
 
+def _open_single_paragraph(simple_docx: Path, tmp_path: Path, p_pr_xml: str) -> Document:
+    """Open a copy of ``simple_docx`` whose body is one ``Target`` paragraph
+    carrying ``p_pr_xml`` (the ``<w:pPr>`` block under test).
+    """
+    dest = tmp_path / "single-paragraph.docx"
+    replace_document_xml(simple_docx, dest, _single_paragraph_body(p_pr_xml))
+    return Document.open(dest)
+
+
 def _ref_for_text(doc: Document, snippet: str) -> str:
     """Return the first paragraph ref whose preview contains ``snippet``."""
     for entry in doc.list_paragraphs():
@@ -764,53 +773,32 @@ class TestParagraphLocationListMalformed:
     ``w:numPr`` blocks must degrade to ``None`` (or ilvl=0), never raise.
     """
 
-    @staticmethod
-    def _doc_with_p_pr(p_pr_xml: str) -> str:
-        """Single paragraph carrying ``p_pr_xml`` (the ``<w:pPr>`` block under test)."""
-        return (
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            f"<w:document {_W_NS}>"
-            "<w:body>"
-            f"<w:p>{p_pr_xml}<w:r><w:t>Target</w:t></w:r></w:p>"
-            "</w:body>"
-            "</w:document>"
-        )
-
-    @staticmethod
-    def _open(simple_docx: Path, tmp_path: Path, body_xml: str) -> Document:
-        dest = tmp_path / "list-malformed.docx"
-        replace_document_xml(simple_docx, dest, body_xml)
-        return Document.open(dest)
-
     def test_num_pr_without_num_id_reports_none(self, simple_docx, tmp_path):
-        body = self._doc_with_p_pr('<w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>')
-        with self._open(simple_docx, tmp_path, body) as doc:
+        p_pr = '<w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>'
+        with _open_single_paragraph(simple_docx, tmp_path, p_pr) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
             assert loc.list is None
 
     def test_num_id_zero_reports_none(self, simple_docx, tmp_path):
         """``numId=0`` is the spec's "numbering disabled" marker, not a list."""
-        body = self._doc_with_p_pr(_num_pr("0", "0"))
-        with self._open(simple_docx, tmp_path, body) as doc:
+        with _open_single_paragraph(simple_docx, tmp_path, _num_pr("0", "0")) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
             assert loc.list is None
 
     def test_non_integer_num_id_reports_none(self, simple_docx, tmp_path):
-        body = self._doc_with_p_pr(_num_pr("abc", "0"))
-        with self._open(simple_docx, tmp_path, body) as doc:
+        with _open_single_paragraph(simple_docx, tmp_path, _num_pr("abc", "0")) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
             assert loc.list is None
 
     def test_num_id_without_val_reports_none(self, simple_docx, tmp_path):
-        body = self._doc_with_p_pr("<w:pPr><w:numPr><w:numId/></w:numPr></w:pPr>")
-        with self._open(simple_docx, tmp_path, body) as doc:
+        p_pr = "<w:pPr><w:numPr><w:numId/></w:numPr></w:pPr>"
+        with _open_single_paragraph(simple_docx, tmp_path, p_pr) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
             assert loc.list is None
 
     def test_non_integer_ilvl_falls_back_to_zero(self, simple_docx, tmp_path):
         """Malformed ``w:ilvl`` doesn't discard the (valid) numId — level 0."""
-        body = self._doc_with_p_pr(_num_pr("5", "abc"))
-        with self._open(simple_docx, tmp_path, body) as doc:
+        with _open_single_paragraph(simple_docx, tmp_path, _num_pr("5", "abc")) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
             assert loc.list == ListItem(num_id=5, ilvl=0)
 
@@ -819,14 +807,14 @@ class TestParagraphLocationListMalformed:
         ``w:numPr`` found only there must not be reported — direct-child
         walk regression guard against descendant search.
         """
-        body = self._doc_with_p_pr(
+        p_pr = (
             "<w:pPr>"
             '<w:pPrChange w:id="1" w:author="A" w:date="2026-01-01T00:00:00Z">'
             '<w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="9"/></w:numPr></w:pPr>'
             "</w:pPrChange>"
             "</w:pPr>"
         )
-        with self._open(simple_docx, tmp_path, body) as doc:
+        with _open_single_paragraph(simple_docx, tmp_path, p_pr) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
             assert loc.list is None
 
@@ -844,12 +832,6 @@ class TestListParagraphLocationsListInfo:
 
 class TestParagraphStyleField:
     """``location.style`` reports the raw ``w:pPr/w:pStyle`` id."""
-
-    @staticmethod
-    def _open(simple_docx: Path, tmp_path: Path, p_pr_xml: str) -> Document:
-        dest = tmp_path / "style-edge.docx"
-        replace_document_xml(simple_docx, dest, _single_paragraph_body(p_pr_xml))
-        return Document.open(dest)
 
     def test_heading_reports_raw_style_id(self, styled_docx):
         with Document.open(styled_docx) as doc:
@@ -869,12 +851,12 @@ class TestParagraphStyleField:
             assert loc.outline_level is None
 
     def test_p_style_without_val_reports_none(self, simple_docx, tmp_path):
-        with self._open(simple_docx, tmp_path, "<w:pPr><w:pStyle/></w:pPr>") as doc:
+        with _open_single_paragraph(simple_docx, tmp_path, "<w:pPr><w:pStyle/></w:pPr>") as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
             assert loc.style is None
 
     def test_p_style_with_empty_val_reports_none(self, simple_docx, tmp_path):
-        with self._open(simple_docx, tmp_path, '<w:pPr><w:pStyle w:val=""/></w:pPr>') as doc:
+        with _open_single_paragraph(simple_docx, tmp_path, '<w:pPr><w:pStyle w:val=""/></w:pPr>') as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
             assert loc.style is None
 
@@ -894,12 +876,6 @@ class TestOutlineLevel:
     style definition from ``word/styles.xml`` applies (0-based; ``None`` =
     body text).
     """
-
-    @staticmethod
-    def _open(simple_docx: Path, tmp_path: Path, p_pr_xml: str) -> Document:
-        dest = tmp_path / "outline-edge.docx"
-        replace_document_xml(simple_docx, dest, _single_paragraph_body(p_pr_xml))
-        return Document.open(dest)
 
     def test_level_from_style_definition(self, styled_docx):
         with Document.open(styled_docx) as doc:
@@ -922,7 +898,7 @@ class TestOutlineLevel:
     def test_direct_value_overrides_style_definition(self, simple_docx, tmp_path):
         """Heading1 defines level 0, but a direct ``w:outlineLvl`` wins."""
         p_pr = '<w:pPr><w:pStyle w:val="Heading1"/><w:outlineLvl w:val="4"/></w:pPr>'
-        with self._open(simple_docx, tmp_path, p_pr) as doc:
+        with _open_single_paragraph(simple_docx, tmp_path, p_pr) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
             assert loc.outline_level == 4
 
@@ -931,7 +907,7 @@ class TestOutlineLevel:
         Heading1 style definition must NOT leak back in as a fallback.
         """
         p_pr = '<w:pPr><w:pStyle w:val="Heading1"/><w:outlineLvl w:val="9"/></w:pPr>'
-        with self._open(simple_docx, tmp_path, p_pr) as doc:
+        with _open_single_paragraph(simple_docx, tmp_path, p_pr) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
             assert loc.outline_level is None
 
@@ -941,7 +917,7 @@ class TestOutlineLevel:
         all degrade to ``None``, never raise.
         """
         p_pr = f'<w:pPr><w:outlineLvl w:val="{val}"/></w:pPr>'
-        with self._open(simple_docx, tmp_path, p_pr) as doc:
+        with _open_single_paragraph(simple_docx, tmp_path, p_pr) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
             assert loc.outline_level is None
 
