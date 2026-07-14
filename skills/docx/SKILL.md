@@ -341,9 +341,10 @@ for r in revisions:
 # Filter by author
 their_changes = doc.list_revisions(author="OtherUser")
 
-# Accept or reject individual revisions (return True if found, False if not)
-doc.accept_revision(revision_id=1)
-doc.reject_revision(revision_id=2)
+# Accept or reject individual revisions (return True if found, False if not).
+# Use IDs from list_revisions() — don't guess numbering.
+doc.accept_revision(revisions[0].id)
+doc.reject_revision(their_changes[0].id)
 
 # Accept or reject all revisions (returns count of revisions processed)
 doc.accept_all()
