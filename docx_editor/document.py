@@ -13,7 +13,7 @@ from xml.dom.minidom import Element
 
 from .comments import Comment, CommentManager
 from .exceptions import HashMismatchError, ParagraphIndexError
-from .track_changes import EditOperation, EditValidationResult, Revision, RevisionManager
+from .track_changes import EditOperation, EditValidationResult, Revision, RevisionManager, SearchResult
 from .workspace import Workspace
 from .xml_editor import (
     DocxXMLEditor,
@@ -162,13 +162,42 @@ class Document:
 
     # ==================== Track Changes API ====================
 
-    def find_text(self, text: str, occurrence: int = 0):
+    def find_text(self, text: str, occurrence: int = 0) -> SearchResult | None:
         """Find text in the document, including across element boundaries.
 
-        Returns match info or None if not found.
+        Args:
+            text: Text to search for
+            occurrence: Which occurrence document-wide (0 = first, 1 = second, etc.)
+
+        Returns:
+            A SearchResult, or None if the text (or that occurrence) is not
+            found. Fields:
+
+            - ``start`` / ``end``: character offsets of the match in the
+              *containing paragraph's* visible text (not document-wide).
+            - ``text``: the matched text.
+            - ``paragraph_ref``: hash-anchored ref like "P3#a7b2", directly
+              usable as the ``paragraph=`` argument of follow-up edits. Valid
+              until that paragraph is edited.
+            - ``paragraph_occurrence``: occurrence index of this match within
+              its paragraph — pass as the ``occurrence=`` of a follow-up edit
+              (edit methods count occurrences within the paragraph, not
+              document-wide).
+            - ``spans_revision``: True if the match crosses a tracked-revision
+              boundary (e.g. part of it is inside a tracked insertion).
+
+        Example:
+            match = doc.find_text("30 days")
+            if match:
+                doc.replace(
+                    "30 days",
+                    "60 days",
+                    paragraph=match.paragraph_ref,
+                    occurrence=match.paragraph_occurrence,
+                )
         """
         self._ensure_open()
-        return self._revision_manager._find_across_boundaries(text, occurrence)
+        return self._revision_manager.find_text(text, occurrence)
 
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.
@@ -602,8 +631,8 @@ class Document:
 
         Example:
             new_refs = doc.batch_edit([
-                EditOperation(action="replace", find="old", replace_with="new", paragraph="P20#a7b2"),
-                EditOperation(action="delete", text="remove", paragraph="P15#f3c1"),
+                EditOperation.replace("old", "new", paragraph="P20#a7b2"),
+                EditOperation.delete("remove", paragraph="P15#f3c1"),
             ])
 
             # Pre-flight the batch (note: same-paragraph sequential effects are

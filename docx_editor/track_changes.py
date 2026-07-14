@@ -33,7 +33,14 @@ from .xml_editor import (
 
 @dataclass
 class EditOperation:
-    """A single edit operation for batch processing."""
+    """A single edit operation for batch processing.
+
+    Prefer the typed constructors (:meth:`replace`, :meth:`delete`,
+    :meth:`insert_after`, :meth:`insert_before`) — they validate arguments at
+    construction time with the same rules ``batch_edit`` applies, so mistakes
+    surface immediately instead of at apply time. The raw
+    ``EditOperation(action=..., ...)`` form remains supported.
+    """
 
     action: Literal["replace", "delete", "insert_after", "insert_before"]
     paragraph: str  # Required: hash-anchored ref like "P3#a7b2"
@@ -42,6 +49,107 @@ class EditOperation:
     text: str | None = None  # For delete (text to delete) or insert (text to insert)
     anchor: str | None = None  # For insert_after/insert_before
     occurrence: int = 0
+
+    @staticmethod
+    def _validate_common(constructor: str, paragraph: str, occurrence: int) -> None:
+        """Construction-time checks shared by all typed constructors."""
+        ParagraphRef.parse(paragraph)
+        if occurrence < 0:
+            raise ValueError(f"EditOperation.{constructor}(): occurrence must be >= 0, got {occurrence}")
+
+    @classmethod
+    def replace(cls, find: str, replace_with: str, *, paragraph: str, occurrence: int = 0) -> "EditOperation":
+        """Build a validated replace operation (mirrors ``Document.replace``).
+
+        Args:
+            find: Text to find and replace (must be non-empty)
+            replace_with: Replacement text (empty string allowed — replacing
+                with nothing is a valid tracked deletion)
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence within the paragraph (0 = first)
+
+        Raises:
+            ValueError: If the paragraph ref is malformed, ``occurrence`` is
+                negative, ``find`` is empty, or ``replace_with`` is None.
+        """
+        cls._validate_common("replace", paragraph, occurrence)
+        if not find:
+            raise ValueError("EditOperation.replace(): 'find' must be a non-empty string — the text to search for")
+        if replace_with is None:
+            raise ValueError("EditOperation.replace(): 'replace_with' must be a string (empty string is allowed)")
+        return cls(
+            action="replace",
+            paragraph=paragraph,
+            find=find,
+            replace_with=replace_with,
+            occurrence=occurrence,
+        )
+
+    @classmethod
+    def delete(cls, text: str, *, paragraph: str, occurrence: int = 0) -> "EditOperation":
+        """Build a validated delete operation (mirrors ``Document.delete``).
+
+        Args:
+            text: Text to mark as deleted (must be non-empty)
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence within the paragraph (0 = first)
+
+        Raises:
+            ValueError: If the paragraph ref is malformed, ``occurrence`` is
+                negative, or ``text`` is empty.
+        """
+        cls._validate_common("delete", paragraph, occurrence)
+        if not text:
+            raise ValueError("EditOperation.delete(): 'text' must be a non-empty string — the text to mark as deleted")
+        return cls(action="delete", paragraph=paragraph, text=text, occurrence=occurrence)
+
+    @classmethod
+    def _insert(
+        cls,
+        action: Literal["insert_after", "insert_before"],
+        anchor: str,
+        text: str,
+        paragraph: str,
+        occurrence: int,
+    ) -> "EditOperation":
+        cls._validate_common(action, paragraph, occurrence)
+        if not anchor:
+            raise ValueError(f"EditOperation.{action}(): 'anchor' must be a non-empty string — the text to insert near")
+        if text is None:
+            raise ValueError(f"EditOperation.{action}(): 'text' must be a string (empty string is allowed)")
+        return cls(action=action, paragraph=paragraph, anchor=anchor, text=text, occurrence=occurrence)
+
+    @classmethod
+    def insert_after(cls, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> "EditOperation":
+        """Build a validated insert_after operation (mirrors ``Document.insert_after``).
+
+        Args:
+            anchor: Text to find as insertion point (must be non-empty)
+            text: Text to insert after the anchor
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence of anchor within the paragraph (0 = first)
+
+        Raises:
+            ValueError: If the paragraph ref is malformed, ``occurrence`` is
+                negative, ``anchor`` is empty, or ``text`` is None.
+        """
+        return cls._insert("insert_after", anchor, text, paragraph, occurrence)
+
+    @classmethod
+    def insert_before(cls, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> "EditOperation":
+        """Build a validated insert_before operation (mirrors ``Document.insert_before``).
+
+        Args:
+            anchor: Text to find as insertion point (must be non-empty)
+            text: Text to insert before the anchor
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            occurrence: Which occurrence of anchor within the paragraph (0 = first)
+
+        Raises:
+            ValueError: If the paragraph ref is malformed, ``occurrence`` is
+                negative, ``anchor`` is empty, or ``text`` is None.
+        """
+        return cls._insert("insert_before", anchor, text, paragraph, occurrence)
 
 
 @dataclass
@@ -52,6 +160,41 @@ class EditValidationResult:
     paragraph: str | None  # the operation's paragraph ref (None if it was missing)
     valid: bool  # True if the op would apply cleanly
     error: str | None = None  # human-readable reason when not valid
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """Public result of ``Document.find_text`` — no DOM internals.
+
+    ``start``/``end`` are character offsets in the *containing paragraph's*
+    visible text (text maps are per-paragraph), not document-wide offsets.
+
+    ``paragraph_ref`` is computed at search time and is directly usable as the
+    ``paragraph=`` argument of follow-up edits; like refs from
+    ``list_paragraphs()``, it is valid until that paragraph is edited.
+
+    ``find_text``'s ``occurrence`` counts matches document-wide, while edit
+    methods count within one paragraph — ``paragraph_occurrence`` bridges the
+    two: pass it as the ``occurrence=`` of a follow-up edit to target exactly
+    the match ``find_text`` located.
+    """
+
+    start: int  # Start offset in the paragraph's visible text
+    end: int  # Exclusive end offset, same coordinate space
+    text: str  # The matched text
+    paragraph_ref: str  # Hash-anchored ref like "P3#a7b2"
+    paragraph_occurrence: int  # Occurrence index of this match within its paragraph
+    spans_revision: bool  # True if the match crosses a tracked-revision boundary
+
+
+@dataclass(frozen=True)
+class _LocatedMatch:
+    """Internal: a text-map match plus the paragraph identity needed for refs."""
+
+    match: TextMapMatch
+    paragraph_index: int  # 1-based document-order index of the containing w:p
+    paragraph: Element  # The containing w:p element
+    paragraph_occurrence: int  # Occurrence index of the match within that paragraph
 
 
 @dataclass
@@ -547,14 +690,17 @@ class RevisionManager:
             raise TextNotFoundError(text, occurrence=occurrence, total_occurrences=total)
         raise TextNotFoundError(text)
 
-    def _find_across_boundaries(self, text: str, occurrence: int = 0) -> TextMapMatch | None:
+    def _find_across_boundaries_located(self, text: str, occurrence: int = 0) -> _LocatedMatch | None:
         """Find the nth occurrence of text across element boundaries.
 
-        Searches across all paragraphs using text maps.
-        Returns TextMapMatch or None.
+        Searches across all paragraphs using text maps, keeping paragraph
+        identity so callers can build hash-anchored refs.
+
+        Returns:
+            A _LocatedMatch, or None if not found.
         """
         current_occurrence = 0
-        for paragraph in self.editor.dom.getElementsByTagName("w:p"):
+        for idx, paragraph in enumerate(self.editor.dom.getElementsByTagName("w:p"), start=1):
             text_map = build_text_map(paragraph)
             local_occ = 0
             while True:
@@ -562,10 +708,42 @@ class RevisionManager:
                 if match is None:
                     break
                 if current_occurrence == occurrence:
-                    return match
+                    return _LocatedMatch(
+                        match=match,
+                        paragraph_index=idx,
+                        paragraph=paragraph,
+                        paragraph_occurrence=local_occ,
+                    )
                 current_occurrence += 1
                 local_occ += 1
         return None
+
+    def _find_across_boundaries(self, text: str, occurrence: int = 0) -> TextMapMatch | None:
+        """Find the nth occurrence of text across element boundaries.
+
+        Searches across all paragraphs using text maps.
+        Returns TextMapMatch or None.
+        """
+        located = self._find_across_boundaries_located(text, occurrence)
+        return located.match if located is not None else None
+
+    def find_text(self, text: str, occurrence: int = 0) -> SearchResult | None:
+        """Find the nth occurrence of text, as a public SearchResult.
+
+        Searches across element boundaries; ``occurrence`` counts matches
+        document-wide (0 = first). Returns None if not found.
+        """
+        located = self._find_across_boundaries_located(text, occurrence)
+        if located is None:
+            return None
+        return SearchResult(
+            start=located.match.start,
+            end=located.match.end,
+            text=located.match.text,
+            paragraph_ref=f"P{located.paragraph_index}#{compute_paragraph_hash(located.paragraph)}",
+            paragraph_occurrence=located.paragraph_occurrence,
+            spans_revision=located.match.spans_boundary,
+        )
 
     def replace_text(self, find: str, replace_with: str, occurrence: int = 0, paragraph: str | None = None) -> int:
         """Replace text with tracked changes (deletion + insertion).

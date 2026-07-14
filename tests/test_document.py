@@ -1,12 +1,14 @@
 """Tests for the main Document class."""
 
 import json
+import re
 import zipfile
 
 import pytest
 from conftest import find_ref
 
-from docx_editor import Document
+import docx_editor
+from docx_editor import Document, SearchResult
 from docx_editor.exceptions import DocumentOpenError, WorkspaceSyncError
 from docx_editor.workspace import Workspace
 
@@ -677,8 +679,12 @@ class TestDocumentFindText:
         doc = Document.open(clean_workspace)
         match = doc.find_text("fox")
         assert match is not None
+        assert isinstance(match, SearchResult)
         assert match.text == "fox"
-        assert not match.spans_boundary
+        assert not match.spans_revision
+        assert re.fullmatch(r"P\d+#[0-9a-f]{4}", match.paragraph_ref)
+        assert 0 <= match.start < match.end
+        assert match.paragraph_occurrence == 0
         doc.close()
 
     def test_find_text_not_found(self, clean_workspace):
@@ -697,7 +703,35 @@ class TestDocumentFindText:
         # "dog. INSERTED" spans original run + insertion
         match = doc.find_text("dog. INSERTED")
         assert match is not None
-        assert match.spans_boundary
+        assert match.spans_revision
+        doc.close()
+
+    def test_find_text_ref_chains_into_edit(self, clean_workspace):
+        """paragraph_ref from find_text is directly usable for a follow-up edit."""
+        doc = Document.open(clean_workspace)
+        match = doc.find_text("fox")
+        assert match is not None
+        doc.replace("fox", "cat", paragraph=match.paragraph_ref)
+        assert "cat" in doc.get_visible_text()
+        doc.close()
+
+    def test_find_text_paragraph_occurrence_chains_into_edit(self, clean_workspace):
+        """paragraph_occurrence pins which in-paragraph match a follow-up edit targets.
+
+        find_text's occurrence counts document-wide; edit methods count within
+        the paragraph. Without passing paragraph_occurrence through, the edit
+        would silently target the paragraph's first match instead of the one
+        find_text located.
+        """
+        doc = Document.open(clean_workspace)
+        # "he" appears twice in the fox paragraph: in "The" and in "the lazy"
+        match = doc.find_text("he", occurrence=1)
+        assert match is not None
+        assert match.paragraph_occurrence == 1
+        doc.replace("he", "XX", paragraph=match.paragraph_ref, occurrence=match.paragraph_occurrence)
+        text = doc.get_visible_text()
+        assert "tXX lazy" in text
+        assert "The quick" in text  # the paragraph's first match is untouched
         doc.close()
 
     def test_find_text_after_close_raises(self, clean_workspace):
@@ -705,6 +739,34 @@ class TestDocumentFindText:
         doc.close()
         with pytest.raises(ValueError, match="closed"):
             doc.find_text("test")
+
+
+class TestPublicApiSurface:
+    """The text-map internals are deprecated at the top level; SearchResult is public."""
+
+    DEPRECATED = ["TextMap", "TextMapMatch", "TextPosition", "build_text_map", "find_in_text_map"]
+
+    @pytest.mark.parametrize("name", DEPRECATED)
+    def test_deprecated_internal_warns_and_forwards(self, name):
+        """Accessing an internal via the top-level package warns and returns the real object."""
+        from docx_editor import xml_editor
+
+        with pytest.warns(DeprecationWarning, match=f"docx_editor.{name} is internal"):
+            obj = getattr(docx_editor, name)
+        assert obj is getattr(xml_editor, name)
+
+    def test_deprecated_internals_not_in_all(self):
+        for name in self.DEPRECATED:
+            assert name not in docx_editor.__all__
+
+    def test_search_result_is_public(self):
+        assert "SearchResult" in docx_editor.__all__
+        assert docx_editor.SearchResult is SearchResult
+
+    def test_unknown_attribute_raises(self):
+        name = "DoesNotExist"
+        with pytest.raises(AttributeError, match="no attribute 'DoesNotExist'"):
+            getattr(docx_editor, name)
 
 
 class TestDocumentSaveStaleness:

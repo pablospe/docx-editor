@@ -185,8 +185,10 @@ class TestMultiWtCrossBoundary:
         text = doc.get_visible_text()
         assert "hello world" in text
 
-        # Delete "o wor" — spans both w:t nodes inside the insertion
-        match = doc.find_text("o wor")
+        # Delete "o wor" — spans both w:t nodes inside the insertion.
+        # Per-character ins-state is not on the public SearchResult — use the
+        # internal match for this structural assertion.
+        match = doc._revision_manager._find_across_boundaries("o wor")
         assert match is not None
         assert all(pos.is_inside_ins for pos in match.positions)
 

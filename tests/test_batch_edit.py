@@ -824,3 +824,106 @@ class TestBatchEditRollback:
         # raises before any mutation, so visible text is still unchanged
         # even though the rollback re-parse itself was swallowed.
         assert doc.get_visible_text() == before_text
+
+
+class TestEditOperationConstructors:
+    """Typed constructors validate at construction time, mirroring apply-time rules."""
+
+    def test_replace_builds_op(self):
+        op = EditOperation.replace("old", "new", paragraph="P2#f3c1", occurrence=1)
+        assert op == EditOperation(action="replace", paragraph="P2#f3c1", find="old", replace_with="new", occurrence=1)
+
+    def test_delete_builds_op(self):
+        op = EditOperation.delete("gone", paragraph="P2#f3c1")
+        assert op == EditOperation(action="delete", paragraph="P2#f3c1", text="gone")
+
+    def test_insert_after_builds_op(self):
+        op = EditOperation.insert_after("anchor", " tail", paragraph="P2#f3c1")
+        assert op == EditOperation(action="insert_after", paragraph="P2#f3c1", anchor="anchor", text=" tail")
+
+    def test_insert_before_builds_op(self):
+        op = EditOperation.insert_before("anchor", "head ", paragraph="P2#f3c1")
+        assert op == EditOperation(action="insert_before", paragraph="P2#f3c1", anchor="anchor", text="head ")
+
+    def test_typed_ops_apply_end_to_end(self, multi_para_doc):
+        """A batch built exclusively from typed constructors applies cleanly."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        ops = [
+            EditOperation.replace("item 3", "ITEM_THREE", paragraph=refs[2].split("|")[0]),
+            EditOperation.delete("The report includes findings", paragraph=refs[4].split("|")[0]),
+            EditOperation.insert_after("item 7", " (amended)", paragraph=refs[6].split("|")[0]),
+            EditOperation.insert_before("The committee", "NOTE: ", paragraph=refs[8].split("|")[0]),
+        ]
+        doc.batch_edit(ops)
+        # Inserts land relative to the run containing the anchor (each fixture
+        # paragraph is a single run), so assert per-paragraph outcomes.
+        paras = doc.list_paragraphs(max_chars=200)
+        assert "ITEM_THREE" in paras[2]
+        assert "The report includes findings" not in paras[4]
+        assert "(amended)" in paras[6]
+        assert "NOTE: " in paras[8]
+
+    def test_constructor_rules_match_apply_rules(self, multi_para_doc):
+        """Drift guard: whatever the constructors accept must pass apply-time validation.
+
+        If ``_resolve_action_target`` ever becomes stricter than the typed
+        constructors (or vice versa), this dry-run disagrees and fails.
+        """
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        ops = [
+            # Boundary inputs the constructors deliberately allow:
+            EditOperation.replace("item 1", "", paragraph=refs[0].split("|")[0]),
+            EditOperation.delete("item 2", paragraph=refs[1].split("|")[0]),
+            EditOperation.insert_after("item 3", "", paragraph=refs[2].split("|")[0]),
+            EditOperation.insert_before("item 4", "x", paragraph=refs[3].split("|")[0]),
+        ]
+        results = doc.batch_edit(ops, dry_run=True)
+        assert all(r.valid for r in results), [r.error for r in results]
+
+    def test_malformed_paragraph_ref_rejected(self):
+        with pytest.raises(ValueError, match="Invalid paragraph reference 'P3'"):
+            EditOperation.replace("a", "b", paragraph="P3")
+
+    def test_empty_paragraph_ref_rejected(self):
+        with pytest.raises(ValueError, match="Invalid paragraph reference"):
+            EditOperation.delete("a", paragraph="")
+
+    def test_negative_occurrence_rejected(self):
+        with pytest.raises(ValueError, match=r"EditOperation\.replace\(\): occurrence must be >= 0, got -1"):
+            EditOperation.replace("a", "b", paragraph="P2#f3c1", occurrence=-1)
+
+    def test_replace_empty_find_rejected(self):
+        with pytest.raises(ValueError, match=r"EditOperation\.replace\(\): 'find' must be a non-empty string"):
+            EditOperation.replace("", "b", paragraph="P2#f3c1")
+
+    def test_delete_empty_text_rejected(self):
+        with pytest.raises(ValueError, match=r"EditOperation\.delete\(\): 'text' must be a non-empty string"):
+            EditOperation.delete("", paragraph="P2#f3c1")
+
+    def test_insert_after_empty_anchor_rejected(self):
+        with pytest.raises(ValueError, match=r"EditOperation\.insert_after\(\): 'anchor' must be a non-empty"):
+            EditOperation.insert_after("", "x", paragraph="P2#f3c1")
+
+    def test_insert_before_empty_anchor_rejected(self):
+        with pytest.raises(ValueError, match=r"EditOperation\.insert_before\(\): 'anchor' must be a non-empty"):
+            EditOperation.insert_before("", "x", paragraph="P2#f3c1")
+
+    def test_replace_with_empty_string_accepted(self):
+        """Replacing with nothing is a valid tracked deletion — parity with apply-time rules."""
+        op = EditOperation.replace("old", "", paragraph="P2#f3c1")
+        assert op.replace_with == ""
+
+    def test_replace_with_none_rejected(self):
+        with pytest.raises(ValueError, match=r"EditOperation\.replace\(\): 'replace_with' must be a string"):
+            EditOperation.replace("old", None, paragraph="P2#f3c1")  # type: ignore[arg-type]
+
+    def test_insert_empty_text_accepted(self):
+        """Empty insert text is allowed at apply time, so the constructor allows it too."""
+        op = EditOperation.insert_after("anchor", "", paragraph="P2#f3c1")
+        assert op.text == ""
+
+    def test_insert_none_text_rejected(self):
+        with pytest.raises(ValueError, match=r"EditOperation\.insert_before\(\): 'text' must be a string"):
+            EditOperation.insert_before("anchor", None, paragraph="P2#f3c1")  # type: ignore[arg-type]

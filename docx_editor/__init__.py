@@ -54,19 +54,14 @@ from .exceptions import (
     WorkspaceSyncError,
     XMLError,
 )
-from .track_changes import EditOperation, EditValidationResult, Revision
+from .track_changes import EditOperation, EditValidationResult, Revision, SearchResult
 from .xml_editor import (
     ListItem,
     ParagraphInfo,
     ParagraphLocation,
     ParagraphRef,
     TableCell,
-    TextMap,
-    TextMapMatch,
-    TextPosition,
-    build_text_map,
     compute_paragraph_hash,
-    find_in_text_map,
 )
 
 __all__ = [
@@ -75,6 +70,7 @@ __all__ = [
     "EditOperation",
     "EditValidationResult",
     "Revision",
+    "SearchResult",
     "Comment",
     # Exceptions
     "DocxEditError",
@@ -93,17 +89,35 @@ __all__ = [
     "HashMismatchError",
     "ParagraphIndexError",
     "BatchOperationError",
-    # Text map & paragraph refs
-    "TextPosition",
-    "TextMap",
-    "TextMapMatch",
+    # Paragraph refs
     "ParagraphInfo",
     "ParagraphRef",
-    "build_text_map",
     "compute_paragraph_hash",
-    "find_in_text_map",
     # Paragraph location
     "ListItem",
     "ParagraphLocation",
     "TableCell",
 ]
+
+# Internal text-map machinery removed from the public API (see SearchResult /
+# Document.find_text instead). Accessing these via the top-level package warns
+# for one release before removal; the real objects remain importable from
+# docx_editor.xml_editor.
+_DEPRECATED_INTERNALS = frozenset({"TextMap", "TextMapMatch", "TextPosition", "build_text_map", "find_in_text_map"})
+
+
+def __getattr__(name: str):
+    if name in _DEPRECATED_INTERNALS:
+        import warnings
+
+        from . import xml_editor
+
+        warnings.warn(
+            f"docx_editor.{name} is internal and will be removed from the public API "
+            f"in the next release; use Document.find_text()/SearchResult instead, or "
+            f"import from docx_editor.xml_editor if you need the internals.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return getattr(xml_editor, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

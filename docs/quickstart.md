@@ -124,9 +124,9 @@ from docx_editor import Document, EditOperation
 
 with Document.open("contract.docx") as doc:
     new_refs = doc.batch_edit([
-        EditOperation(action="replace", find="30 days", replace_with="60 days", paragraph="P2#f3c1"),
-        EditOperation(action="delete", text="obsolete clause", paragraph="P5#d4e5"),
-        EditOperation(action="insert_after", anchor="Section 5", text=" (as amended)", paragraph="P3#b2c4"),
+        EditOperation.replace("30 days", "60 days", paragraph="P2#f3c1"),
+        EditOperation.delete("obsolete clause", paragraph="P5#d4e5"),
+        EditOperation.insert_after("Section 5", " (as amended)", paragraph="P3#b2c4"),
     ])
     print(new_refs)
     doc.save()
