@@ -1103,6 +1103,70 @@ class TestWorkspaceLock:
         assert out.exists()
         rescue.close()
 
+    def test_double_close_is_idempotent(self, temp_docx):
+        """A second close() finds the lock already released and the workspace
+        already gone — both must be silent no-ops."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close()
+        ws.close()
+        assert not self._lock_path(ws).exists()
+
+    @pytest.mark.skipif(
+        os.name != "posix" or os.geteuid() == 0,
+        reason="chmod 000 only denies reads on POSIX as non-root",
+    )
+    def test_unreadable_lock_file_is_reclaimed(self, temp_docx):
+        """A lock whose content cannot be read has no provable live holder —
+        it counts as stale and is reclaimed, like corrupt content."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        lock = self._lock_path(ws)
+        lock.write_text("123:abc")
+        lock.chmod(0)
+
+        ws2 = Workspace(temp_docx, author="Test")  # must not raise
+        try:
+            assert self._lock_pid(self._lock_path(ws2)) == str(os.getpid())
+        finally:
+            ws2.close()
+
+    def test_lost_reclaim_race_raises_locked(self, temp_docx, monkeypatch):
+        """If the lock content keeps changing between the stale read and the
+        reclaim re-check, another process is actively re-creating it — after
+        both attempts the open must give up with WorkspaceLockedError instead
+        of unlinking a competitor's fresh lock or looping forever."""
+        ws = Workspace(temp_docx, author="Test")
+        lock = self._lock_path(ws)
+        ws.close(cleanup=True)
+        lock.write_text("placeholder")  # so O_EXCL keeps failing
+
+        reads = iter(f"not-a-pid-{n}" for n in range(10))
+        monkeypatch.setattr(Workspace, "_read_lock_content", lambda self: next(reads))
+
+        try:
+            with pytest.raises(WorkspaceLockedError, match="reclaiming"):
+                Workspace(temp_docx, author="Test")
+        finally:
+            monkeypatch.undo()
+            lock.unlink()
+
+    def test_failed_token_write_removes_lock_file(self, temp_docx, monkeypatch):
+        """If the token write fails right after the O_EXCL create, the file
+        must be removed: an orphaned lock would name this live pid, which the
+        staleness probe could never reclaim."""
+
+        def boom(fd, *args, **kwargs):
+            os.close(fd)
+            raise RuntimeError("simulated fdopen failure")
+
+        monkeypatch.setattr("docx_editor.workspace.os.fdopen", boom)
+        with pytest.raises(RuntimeError, match="simulated"):
+            Workspace(temp_docx, author="Test")
+        monkeypatch.undo()
+
+        # Were the lock orphaned, this open would raise WorkspaceLockedError.
+        Workspace(temp_docx, author="Test").close()
+
 
 class TestAtomicMetaSave:
     """_save_meta() must never leave a truncated meta.json (issue #22)."""
