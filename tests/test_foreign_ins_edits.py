@@ -17,7 +17,9 @@ in-place behavior (no ``w:del``, direct text surgery).
 from pathlib import Path
 
 import pytest
+from conftest import find_ref
 
+from docx_editor import Document
 from docx_editor.track_changes import RevisionManager
 from docx_editor.xml_editor import DocxXMLEditor, compute_paragraph_hash
 
@@ -684,9 +686,6 @@ class TestDocumentIntegration:
     """Two-session flow through the public Document API."""
 
     def test_two_author_review_flow(self, temp_docx):
-        from docx_editor import Document
-        from tests.conftest import find_ref
-
         # Session 1: A proposes an insertion
         doc = Document.open(temp_docx, author=AUTHOR_A)
         try:
@@ -725,9 +724,6 @@ class TestDocumentIntegration:
             doc.close()
 
     def test_reject_b_preserves_a_proposal_via_document(self, temp_docx):
-        from docx_editor import Document
-        from tests.conftest import find_ref
-
         doc = Document.open(temp_docx, author=AUTHOR_A)
         try:
             ref = find_ref(doc, "quick brown fox")

@@ -1173,13 +1173,14 @@ class RevisionManager:
                 parts.append(f' {attr}="{_escape_xml(value)}"')
         return "".join(parts)
 
-    def _group_positions_by_ins(self, positions: list) -> list[tuple[Element, list]]:
+    def _group_positions_by_ins(self, positions: list) -> list[tuple[Element | None, list]]:
         """Group contiguous positions by their ancestor <w:ins> element.
 
         Positions are in document order, so positions sharing an ins element
         are contiguous; adjacent distinct ins elements form separate groups.
+        A group's element is None for positions outside any insertion.
         """
-        groups: list[tuple[Element, list]] = []
+        groups: list[tuple[Element | None, list]] = []
         current_ins = None
         for pos in positions:
             ins_elem = self._find_ancestor(pos.node, "w:ins")
@@ -1218,9 +1219,11 @@ class RevisionManager:
 
         Everything following ``child`` moves into a fresh sibling <w:ins>
         that copies this insertion's w:author/w:date (fresh w:id via the
-        stamper). Returns the new right-half ins, or None when nothing
-        follows ``child``. ``child`` may be a descendant; the split happens
-        after the direct child containing it.
+        stamper). ``ins_elem`` is typically another author's insertion —
+        the copied identity keeps both halves attributed to them. Returns
+        the new right-half ins, or None when nothing follows ``child``.
+        ``child`` may be a descendant; the split happens after the direct
+        child containing it.
         """
         while child.parentNode is not ins_elem:
             child = child.parentNode
@@ -1234,22 +1237,24 @@ class RevisionManager:
         children_xml = "".join(n.toxml() for n in trailing)
         for n in trailing:
             ins_elem.removeChild(n)
-        identity = self._ins_identity_attrs(ins_elem)
-        new_nodes = self.editor.insert_after(ins_elem, f"<w:ins{identity}>{children_xml}</w:ins>")
+        identity_xml = self._ins_identity_attrs(ins_elem)
+        new_nodes = self.editor.insert_after(ins_elem, f"<w:ins{identity_xml}>{children_xml}</w:ins>")
         for n in new_nodes:
             if n.nodeType == n.ELEMENT_NODE and n.tagName == "w:ins":
                 return n
         return None
 
-    def _split_foreign_ins_at(self, ins_elem, edge_node, offset: int) -> Element | None:
-        """Make (edge_node, offset) fall on a child boundary of ``ins_elem``.
+    def _split_foreign_ins_at(self, edge_node, offset: int) -> Element | None:
+        """Make (edge_node, offset) fall on a child boundary of its <w:ins>.
 
         Splits the run containing ``edge_node`` at ``offset`` when the split
         point falls mid-run. Returns the last element that belongs to the
         left side of the split point (None when the split point is at the
-        very start of ``ins_elem``'s content).
+        very start of the insertion's content).
         """
         run, rPr_xml = self._get_run_info(edge_node)
+        if not run:
+            return None
         node_text = self._get_node_text(edge_node)
 
         run_wts = list(run.getElementsByTagName("w:t"))
@@ -1268,9 +1273,11 @@ class RevisionManager:
         if not left_texts:
             # Split point is immediately before this run
             prev = run.previousSibling
-            while prev is not None and prev.nodeType != prev.ELEMENT_NODE:
+            while prev is not None:
+                if isinstance(prev, Element):
+                    return prev
                 prev = prev.previousSibling
-            return prev
+            return None
 
         # Mid-run: rebuild as left/right runs (non-text children front-hoisted,
         # matching the existing sites — interleaving is issue #20's follow-up)
@@ -1305,7 +1312,7 @@ class RevisionManager:
         elif edge_node is wt_nodes[-1] and offset == len(node_text):
             new_nodes = self.editor.insert_after(ins_elem, own_ins_xml)
         else:
-            boundary = self._split_foreign_ins_at(ins_elem, edge_node, offset)
+            boundary = self._split_foreign_ins_at(edge_node, offset)
             if boundary is None:
                 new_nodes = self.editor.insert_before(ins_elem, own_ins_xml)
             else:
