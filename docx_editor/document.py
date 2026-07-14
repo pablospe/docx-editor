@@ -517,11 +517,10 @@ class Document:
         Batch counterpart to :meth:`get_paragraph_location`: precomputes
         table indexes, style outline levels, style numbering, heading
         paths, and section indexes once instead of re-scanning the
-        document per ref. Each
-        entry is ``(ref, location)`` where ``ref`` is the same
-        ``"P{i}#{hash}"`` token emitted by :meth:`list_paragraphs` (the
-        part before ``|``) and accepted by :meth:`get_paragraph_location`
-        and the editing methods.
+        document per ref. Each entry is ``(ref, location)`` where ``ref``
+        is the same ``"P{i}#{hash}"`` token emitted by
+        :meth:`list_paragraphs` (the part before ``|``) and accepted by
+        :meth:`get_paragraph_location` and the editing methods.
 
         Returns:
             List of ``(ref, ParagraphLocation)`` tuples in document order.

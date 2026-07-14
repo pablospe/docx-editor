@@ -510,8 +510,9 @@ def _build_style_numbering_map(styles_dom) -> dict[str, ListItem]:
     style based on e.g. ``ListNumber`` without restating the numbering
     inherits it. A *present* ``w:numPr`` terminates the chain even when
     it yields no numbering (``numId=0`` explicitly disables inherited
-    numbering). Styles that end up with no numbering are omitted from
-    the map.
+    numbering; a block carrying only ``w:ilvl`` likewise contributes
+    nothing — the parent's ``numId`` is not merged in). Styles that end
+    up with no numbering are omitted from the map.
     """
     raw: dict[str, tuple[ListItem | None, bool, str | None]] = {}
     for style in styles_dom.getElementsByTagName("w:style"):
