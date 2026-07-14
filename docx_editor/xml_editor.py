@@ -178,17 +178,35 @@ class ListItem:
 class ParagraphLocation:
     """Structural location of a paragraph within the document body.
 
-    Reports table membership and list membership. The shape is intentionally
-    extensible: future releases may add other container kinds (header,
-    footer, footnote), section index, etc., as plain optional field
-    additions.
+    Reports table membership, list membership, and heading context. The
+    shape is intentionally extensible: future releases may add other
+    container kinds (header, footer, footnote), section index, etc., as
+    plain optional field additions.
 
     ``list`` is the paragraph's raw numbering reference (see
     :class:`ListItem`), or ``None`` for non-list paragraphs.
+
+    ``style`` is the raw ``w:pPr/w:pStyle/@w:val`` style id (a key into
+    ``word/styles.xml``, e.g. ``"Heading1"``), or ``None`` when the
+    paragraph carries no explicit style. No name resolution is performed.
+
+    ``outline_level`` is the paragraph's 0-based outline level (0 ==
+    Heading 1). A direct ``w:pPr/w:outlineLvl`` wins; absent that, the
+    level defined by the paragraph's style (``w:basedOn`` chains resolved)
+    applies. ``None`` means body text — including the spec's explicit
+    "no outline" marker ``w:val="9"``.
+
+    ``heading_path`` is the chain of nearest preceding headings that
+    contains this paragraph, outermost first (e.g. ``("Chapter one",
+    "Termination")``), using each heading's current visible text. A
+    heading's own path lists only its ancestors, never itself.
     """
 
     table: TableCell | None
     list: ListItem | None = None
+    style: str | None = None
+    outline_level: int | None = None
+    heading_path: tuple[str, ...] = ()
 
     @property
     def in_table(self) -> bool:
@@ -359,28 +377,158 @@ def _extract_list_item(paragraph) -> ListItem | None:
     return ListItem(num_id=num_id, ilvl=ilvl)
 
 
-def _compute_paragraph_location(paragraph, table_index: dict | None = None) -> ParagraphLocation:
+def _extract_style(paragraph) -> str | None:
+    """Raw ``<w:pPr>/<w:pStyle>/@w:val`` of ``paragraph``, or ``None``.
+
+    Walks direct children only, so a stale ``w:pStyle`` inside a
+    ``<w:pPrChange>`` revision record is never picked up. Returns ``None``
+    when there is no ``w:pStyle`` or its ``w:val`` is absent/empty.
+    """
+    ppr = _direct_child(paragraph, "w:pPr")
+    if ppr is None:
+        return None
+    pstyle = _direct_child(ppr, "w:pStyle")
+    if pstyle is None:
+        return None
+    return pstyle.getAttribute("w:val") or None
+
+
+def _parse_outline_level(outline_elem) -> int | None:
+    """Parse a ``<w:outlineLvl>`` element's ``w:val`` as an outline level.
+
+    Valid levels are ``0..8`` (0 == Heading 1). ``9`` is the spec's
+    explicit "no outline level / body text" marker; it, out-of-range, and
+    malformed values all return ``None``.
+    """
+    try:
+        level = int(outline_elem.getAttribute("w:val"))
+    except ValueError:
+        return None
+    return level if 0 <= level <= 8 else None
+
+
+def _extract_outline_level(paragraph, style: str | None, style_outlines: dict[str, int]) -> int | None:
+    """Effective outline level of ``paragraph`` (0-based, ``None`` = body text).
+
+    A direct ``<w:pPr>/<w:outlineLvl>`` always wins: when the element is
+    present, its value decides (``9``, out-of-range, or malformed →
+    ``None`` — no style fallback, matching OOXML direct-formatting
+    override semantics). When absent, the level defined by ``style`` in
+    ``style_outlines`` (see :func:`_build_style_outline_map`) applies.
+    Direct-child walk only, so ``<w:pPrChange>`` decoys are ignored.
+    """
+    ppr = _direct_child(paragraph, "w:pPr")
+    outline_elem = _direct_child(ppr, "w:outlineLvl") if ppr is not None else None
+    if outline_elem is not None:
+        return _parse_outline_level(outline_elem)
+    if style is not None:
+        return style_outlines.get(style)
+    return None
+
+
+def _build_style_outline_map(styles_dom) -> dict[str, int]:
+    """Map paragraph-style ids to their effective 0-based outline level.
+
+    One pass over ``<w:style w:type="paragraph">`` elements collects each
+    style's own ``<w:pPr>/<w:outlineLvl>`` and its ``w:basedOn`` parent; a
+    second pass resolves ``basedOn`` chains (visited-set cycle guard) so a
+    custom style based on e.g. ``Heading1`` without restating the level
+    inherits it. A *present* ``w:outlineLvl`` terminates the chain even
+    when it yields no level (``w:val="9"`` explicitly resets to body text
+    — Word's ``TOCHeading`` based on ``Heading1`` relies on this). Styles
+    that end up with no outline level are omitted from the map.
+    """
+    raw: dict[str, tuple[int | None, bool, str | None]] = {}
+    for style in styles_dom.getElementsByTagName("w:style"):
+        if style.getAttribute("w:type") != "paragraph":
+            continue
+        style_id = style.getAttribute("w:styleId")
+        if not style_id:
+            continue
+        ppr = _direct_child(style, "w:pPr")
+        outline_elem = _direct_child(ppr, "w:outlineLvl") if ppr is not None else None
+        level = _parse_outline_level(outline_elem) if outline_elem is not None else None
+        based_on_elem = _direct_child(style, "w:basedOn")
+        based_on = based_on_elem.getAttribute("w:val") if based_on_elem is not None else None
+        raw[style_id] = (level, outline_elem is not None, based_on or None)
+
+    resolved: dict[str, int] = {}
+    for style_id in raw:
+        current: str | None = style_id
+        visited: set[str] = set()
+        while current is not None and current in raw and current not in visited:
+            visited.add(current)
+            level, has_own_outline, based_on = raw[current]
+            if has_own_outline:
+                if level is not None:
+                    resolved[style_id] = level
+                break
+            current = based_on
+    return resolved
+
+
+def _compute_heading_paths(paragraphs, style_outlines: dict[str, int]) -> list[tuple[str, ...]]:
+    """Heading-ancestor path for each of ``paragraphs`` (document order).
+
+    Single forward pass maintaining a stack of open headings. A heading at
+    outline level L first pops all open headings at level >= L (so its own
+    recorded path lists only its ancestors, never itself or a sibling),
+    then pushes its current visible text (insertions included, deletions
+    excluded, per :func:`build_text_map`). Non-heading paragraphs record
+    the stack as-is.
+    """
+    paths: list[tuple[str, ...]] = []
+    stack: list[tuple[int, str]] = []  # (outline_level, heading text)
+    for p in paragraphs:
+        level = _extract_outline_level(p, _extract_style(p), style_outlines)
+        if level is not None:
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+        paths.append(tuple(text for _, text in stack))
+        if level is not None:
+            stack.append((level, build_text_map(p).text))
+    return paths
+
+
+def _compute_paragraph_location(
+    paragraph,
+    table_index: dict | None = None,
+    style_outlines: dict[str, int] | None = None,
+    heading_path: tuple[str, ...] = (),
+) -> ParagraphLocation:
     """Compute the structural location of a ``<w:p>`` element.
 
     Reports the innermost enclosing ``<w:tc>`` (and its table) plus the
-    paragraph's raw list membership (see :func:`_extract_list_item`), or
-    ``ParagraphLocation(table=None, list=None)`` for a plain body paragraph.
+    paragraph's raw list membership (see :func:`_extract_list_item`),
+    style id, and outline level; a plain body paragraph gets ``table=None``.
 
     ``table_index`` is an optional ``{tbl_node: 1-based-index}`` map (see
     :func:`_build_table_index`). When supplied, the enclosing table's index
     is looked up there instead of via a whole-document rescan — the batch
     fast path. The result is identical to the ``None`` (per-call) path; a
     table missing from the map falls back to the rescan defensively.
+
+    ``style_outlines`` is an optional precomputed ``{style_id:
+    outline_level}`` map (see :func:`_build_style_outline_map`) used to
+    resolve style-defined outline levels; ``None`` behaves like ``{}``.
+    ``heading_path`` is threaded through verbatim — computing it needs
+    whole-document context (see :func:`_compute_heading_paths`).
     """
     list_item = _extract_list_item(paragraph)
+    style = _extract_style(paragraph)
+    outline_level = _extract_outline_level(paragraph, style, style_outlines or {})
     tc = _innermost_ancestor(paragraph, "w:tc")
     if tc is None:
-        return ParagraphLocation(table=None, list=list_item)
+        return ParagraphLocation(
+            table=None, list=list_item, style=style, outline_level=outline_level, heading_path=heading_path
+        )
     tr = _innermost_ancestor(tc, "w:tr")
     tbl = _innermost_ancestor(tr, "w:tbl") if tr is not None else None
     if tr is None or tbl is None:
         # Malformed table structure — tolerate by treating as body content.
-        return ParagraphLocation(table=None, list=list_item)
+        return ParagraphLocation(
+            table=None, list=list_item, style=style, outline_level=outline_level, heading_path=heading_path
+        )
     if table_index is not None and tbl in table_index:
         index = table_index[tbl]
     else:
@@ -393,6 +541,9 @@ def _compute_paragraph_location(paragraph, table_index: dict | None = None) -> P
             depth=_table_depth(tbl),
         ),
         list=list_item,
+        style=style,
+        outline_level=outline_level,
+        heading_path=heading_path,
     )
 
 
