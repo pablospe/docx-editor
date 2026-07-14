@@ -26,6 +26,7 @@ Open a Word document for editing.
 **Raises:**
 
 - `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created, or if a leftover workspace holds unsaved changes from a previous session (one that saved to a different path, or whose save failed, and never closed). Pass `force_recreate=True` to discard the workspace and re-unpack from the current source. The workspace is never deleted silently. The error message includes the workspace path.
+- `WorkspaceLockedError`: If a live session — another process, or an unclosed `Document` in this one — already holds the document's workspace. Close the other session, or pass `force_recreate=True` to take the workspace over and discard its unsaved edits. Locks left by dead processes are reclaimed silently.
 - `WorkspaceError`: If the workspace directory cannot be created (e.g. the base is not writable), the home directory backing the default cache cannot be determined, or an existing workspace was unpacked from a different document. The message names the override to set.
 
 **Example:**

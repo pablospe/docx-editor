@@ -210,6 +210,8 @@ class Workspace:
             WorkspaceSyncError: If create=True and an existing workspace holds
                 unsaved changes from a previous session, or the source document
                 changed on disk since the workspace was created
+            WorkspaceLockedError: If a live session already holds this
+                document's workspace (see _acquire_lock)
         """
         # Keep the name the caller actually opened. If they opened a symlink, that is
         # the name Word was told to open — and therefore the name its ~$ owner file

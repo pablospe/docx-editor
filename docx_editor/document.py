@@ -128,6 +128,10 @@ class Document:
                 The message includes the workspace path. Pass
                 force_recreate=True to discard the workspace and re-unpack from
                 the current source.
+            WorkspaceLockedError: If a live session — another process, or an
+                unclosed Document in this one — already holds the document's
+                workspace. Close the other session, or pass force_recreate=True
+                to take the workspace over, discarding its unsaved edits.
 
         Example:
             doc = Document.open("contract.docx")
