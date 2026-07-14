@@ -4,13 +4,14 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from conftest import find_ref
+from conftest import ENTITY_DTD_XML, find_ref, replace_document_xml
 
 from docx_editor.document import Document
 from docx_editor.exceptions import (
@@ -83,6 +84,37 @@ class TestWorkspaceCreation:
 
         with pytest.raises(InvalidDocumentError):
             Workspace(txt_file)
+
+
+class TestWorkspaceParseFailureCleanup:
+    """A parse failure during creation must not leave a partial workspace (ISSUES.md #35)."""
+
+    def test_create_workspace_parse_failure_leaves_no_workspace(self, simple_docx, temp_dir, isolated_workspace_base):
+        """A failed unpack leaves neither a workspace dir nor a .lock sibling."""
+        bad_docx = temp_dir / "bad.docx"
+        replace_document_xml(simple_docx, bad_docx, ENTITY_DTD_XML)
+
+        with pytest.raises(InvalidDocumentError):
+            Workspace(bad_docx)
+
+        assert list(isolated_workspace_base.iterdir()) == []
+
+    def test_open_retry_after_parse_failure_not_wedged(self, simple_docx, temp_dir):
+        """After a failed open, fixing the file and reopening must succeed.
+
+        Without cleanup the partial dir (no meta.json) makes the retry raise a
+        misleading WorkspaceExistsError — the user-facing regression this guards.
+        """
+        doc_path = temp_dir / "retry.docx"
+        replace_document_xml(simple_docx, doc_path, ENTITY_DTD_XML)
+
+        with pytest.raises(InvalidDocumentError):
+            Workspace(doc_path)
+
+        shutil.copy(simple_docx, doc_path)
+        workspace = Workspace(doc_path)
+        assert workspace.document_xml_path.exists()
+        workspace.close()
 
 
 class TestWorkspacePersistence:

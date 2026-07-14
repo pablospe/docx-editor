@@ -44,6 +44,10 @@ def replace_document_xml(src: Path, dest: Path, new_doc_xml: str) -> None:
 
 NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 
+# XML with an entity declaration: defusedxml refuses it (EntitiesForbidden),
+# reproducing the ISSUES.md #35 parse-failure path (apache/poi XXE sample).
+ENTITY_DTD_XML = '<!DOCTYPE r [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><r>&xxe;</r>'
+
 
 def parse_paragraph(xml: str):
     """Parse XML string and return the first w:p element."""
