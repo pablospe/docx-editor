@@ -448,18 +448,19 @@ class Workspace:
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(self._lock_token)
-            except OSError:
-                # The O_EXCL create succeeded but the token write failed
-                # (e.g. disk full): remove the empty file rather than orphan
-                # a lock that belongs to nobody.
+                # Safety net for sessions dropped without close(): release
+                # the lock at garbage collection, or this process could never
+                # reopen (nor rescue) the document — the lock names its own
+                # live pid, so the staleness probe would never reclaim it.
+                self._lock_finalizer = weakref.finalize(self, _release_lock_file, self._lock_path, self._lock_token)
+            except BaseException:
+                # The O_EXCL create succeeded but the token write or the
+                # finalizer registration failed (disk full, MemoryError):
+                # remove the file rather than orphan a lock naming this live
+                # pid, which the staleness probe could never reclaim.
                 self._lock_path.unlink(missing_ok=True)
                 raise
             self._lock_acquired = True
-            # Safety net for sessions dropped without close(): release the
-            # lock at garbage collection, or this process could never reopen
-            # (nor rescue) the document — the lock names its own live pid, so
-            # the staleness probe would never reclaim it.
-            self._lock_finalizer = weakref.finalize(self, _release_lock_file, self._lock_path, self._lock_token)
             return
 
         # Both attempts found a fresh lock after reclaiming a stale one:
