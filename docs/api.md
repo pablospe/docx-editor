@@ -240,18 +240,25 @@ what a follow-up edit needs.
 **Example:**
 
 ```python
-for r in doc.find_all("30 days"):
-    doc.replace(r.text, "60 days",
-                paragraph=r.paragraph_ref, occurrence=r.paragraph_occurrence)
+# Edit every match in one atomic batch. reversed() puts same-paragraph ops in
+# the required descending occurrence order, so this is safe however the
+# matches are distributed:
+ops = [
+    EditOperation.replace(r.text, "60 days",
+                          paragraph=r.paragraph_ref, occurrence=r.paragraph_occurrence)
+    for r in reversed(doc.find_all("30 days"))
+]
+doc.batch_edit(ops)
 ```
 
-Editing a paragraph invalidates its remaining refs and shifts the occurrence
-numbers of the matches after the edit. When one paragraph holds several
-matches, either re-run `find_all` after each edit, or apply them in a single
-`batch_edit()` with the same-paragraph ops in **descending** occurrence order —
-an edit never shifts the matches before it. (Ascending order mis-targets;
-descending is not valid for search strings that overlap themselves, e.g.
-`"aa"` in `"aaaa"`.)
+Editing one match at a time (`doc.replace(...)` per result) also works when
+every paragraph holds at most one match. With several matches in one
+paragraph, an edit invalidates the paragraph's remaining refs and shifts the
+occurrence numbers of the matches after it — either re-run `find_all` after
+each edit, or batch the same-paragraph ops in **descending** occurrence order
+as above; an edit never shifts the matches before it. (Ascending order
+mis-targets; descending is not valid for search strings that overlap
+themselves, e.g. `"aa"` in `"aaaa"`.)
 
 #### `count_matches(text)`
 
@@ -908,7 +915,9 @@ except AmbiguousTextError as e:
 The only exception `batch_edit()` / `batch_rewrite()` raise for a failing
 operation. Structured fields: `operation_index` (0-based position of the
 failing op), `reason` (human-readable message), `original` (the underlying
-typed exception, also set as `__cause__`).
+typed exception, also set as `__cause__`; `None` for batch-level rule
+violations that have no underlying exception, e.g. a missing paragraph ref or
+a duplicate paragraph in `batch_rewrite`).
 
 ```python
 from docx_editor.exceptions import BatchOperationError, HashMismatchError

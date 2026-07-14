@@ -239,22 +239,28 @@ class Document:
             HashMismatchError: If ``paragraph``'s hash is stale.
 
         Example:
-            for r in doc.find_all("30 days"):
-                doc.replace(
+            # Edit every match in one atomic batch. reversed() puts
+            # same-paragraph ops in the required descending occurrence order,
+            # so this is safe however the matches are distributed:
+            ops = [
+                EditOperation.replace(
                     r.text,
                     "60 days",
                     paragraph=r.paragraph_ref,
                     occurrence=r.paragraph_occurrence,
                 )
+                for r in reversed(doc.find_all("30 days"))
+            ]
+            doc.batch_edit(ops)
 
-        Editing a paragraph invalidates its remaining refs and shifts the
-        occurrence numbers of the matches after the edit, so when one
-        paragraph holds several matches either re-run find_all after each
-        edit, or apply them in a single batch_edit with the same-paragraph
-        ops in *descending* occurrence order — an edit never shifts the
-        matches before it. (Ascending order mis-targets; descending is not
-        valid for search strings that overlap themselves, e.g. "aa" in
-        "aaaa".)
+        Editing one match at a time also works when every paragraph holds at
+        most one match; with several matches in one paragraph, an edit
+        invalidates the paragraph's remaining refs and shifts the occurrence
+        numbers of the matches after it, so either re-run find_all after each
+        edit or batch the same-paragraph ops in *descending* occurrence order
+        as above — an edit never shifts the matches before it. (Ascending
+        order mis-targets; descending is not valid for search strings that
+        overlap themselves, e.g. "aa" in "aaaa".)
         """
         self._ensure_open()
         return self._revision_manager.find_all(text, paragraph=paragraph)

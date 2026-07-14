@@ -227,17 +227,21 @@ for p in doc.list_paragraphs():
 match = doc.find_text("30 days")
 
 # Enumerate EVERY match in one call (returns list[SearchResult], [] if none).
-# Each result plugs straight into a follow-up edit — no occurrence math needed:
-for r in doc.find_all("30 days"):
-    doc.replace(r.text, "60 days", paragraph=r.paragraph_ref,
-                occurrence=r.paragraph_occurrence)
+# Each result plugs straight into a follow-up edit — no occurrence math needed.
+# Edit them all in one atomic batch; reversed() puts same-paragraph ops in the
+# required DESCENDING occurrence order, safe however the matches are spread:
+ops = [EditOperation.replace(r.text, "60 days", paragraph=r.paragraph_ref,
+                             occurrence=r.paragraph_occurrence)
+       for r in reversed(doc.find_all("30 days"))]
+doc.batch_edit(ops)
 # Optionally scope to one paragraph: doc.find_all("term", paragraph="P2#f3c1")
-# Editing a paragraph invalidates its remaining refs AND shifts the occurrence
-# numbers of the matches after the edit. Several matches in ONE paragraph:
-# re-run find_all after each edit, or batch_edit them in DESCENDING occurrence
-# order (an edit never shifts the matches before it; ascending mis-targets,
-# and descending is not valid for self-overlapping search strings like "aa"
-# in "aaaa").
+# One-at-a-time doc.replace() per result also works when every paragraph has
+# at most one match. Several matches in ONE paragraph: an edit invalidates the
+# paragraph's remaining refs and shifts the occurrence numbers of the matches
+# after it — re-run find_all after each edit, or batch in DESCENDING occurrence
+# order as above (an edit never shifts the matches before it; ascending
+# mis-targets, and descending is not valid for self-overlapping search strings
+# like "aa" in "aaaa").
 
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()
@@ -636,7 +640,7 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `TextNotFoundError`    | `search_text`, `paragraph_ref`, `paragraph_preview`, `occurrence`, `total_occurrences`  | Use `paragraph_preview` to pick a substring that actually appears; if `total_occurrences` is set, retry with an `occurrence` < `total_occurrences`. |
 | `AmbiguousTextError`   | `search_text`, `paragraph_ref`, `paragraph_preview`, `total_occurrences`                | The target matched more than once with no `occurrence` given. Enumerate with `find_all()` and pick, or pass an explicit `occurrence` (0-based).      |
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` or call `list_paragraphs()` to pick a valid ref.                 |
-| `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref). Batch methods never raise the inner types directly. |
+| `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (missing paragraph ref, duplicate paragraph). Batch methods never raise the inner types directly. |
 | `DocumentOpenError`    | `path`, `owner_file`                                                                    | **Do not retry blindly.** The destination is open in Word. Stop and tell the user to close it. Only pass `force=True` if the user confirms the `~$` lock is stale (crashed session). |
 
 ```python

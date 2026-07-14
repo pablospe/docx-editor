@@ -159,7 +159,7 @@ class CommentManager:
         """
         if not anchor_text:
             raise CommentError("anchor_text must not be empty")
-        _, match = self._find_anchor(anchor_text, paragraph, occurrence)
+        _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id
         para_id = _generate_hex_id()
@@ -181,7 +181,7 @@ class CommentManager:
 
         return comment_id
 
-    def _find_anchor(
+    def _locate_anchor(
         self, anchor_text: str, paragraph: str | None, occurrence: int | None
     ) -> tuple[Element, TextMapMatch]:
         """Locate ``anchor_text`` and return its paragraph + text-map match.
