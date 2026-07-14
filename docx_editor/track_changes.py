@@ -1978,7 +1978,7 @@ class RevisionManager:
                     continue
                 if child.tagName in ("w:ins", "w:del"):
                     kind = "ins" if child.tagName == "w:ins" else "del"
-                    rev_id = child.getAttribute("w:id")
+                    rev_id = child.getAttribute("w:id") or "?"
                     rev_author = child.getAttribute("w:author") or "Unknown"
                     parts.append(f"[{kind}#{rev_id}:{rev_author}]{render(child)}[/{kind}]")
                 elif child.tagName in ("w:t", "w:delText"):

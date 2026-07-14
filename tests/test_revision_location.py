@@ -409,6 +409,12 @@ class TestGetMarkupText:
             "Plain\nKeep [ins#1:A]added[/ins][del#2:B]removed[/del]\n[ins#3:A]kept [del#4:B]gone[/del][/ins]"
         )
 
+    def test_markers_fall_back_on_missing_id_and_author(self, temp_xml):
+        """Malformed revisions render [ins#?:Unknown] instead of [ins#:]."""
+        body = "<w:p><w:ins><w:r><w:t>x</w:t></w:r></w:ins></w:p>"
+        manager = _make_manager(temp_xml(body))
+        assert manager.get_markup_text() == "[ins#?:Unknown]x[/ins]"
+
     def test_document_wrapper_shows_tracked_edit(self, temp_docx):
         with Document.open(temp_docx, author="Test Editor") as doc:
             ref = doc.list_paragraphs()[0].split("|")[0]
