@@ -9,6 +9,7 @@ import io
 import random
 import re
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -651,16 +652,21 @@ class XMLEditor:
         dom: Parsed DOM tree with parse_position attributes on elements
     """
 
-    def __init__(self, xml_path: str | Path):
+    def __init__(self, xml_path: str | Path, *, on_save: Callable[[], None] | None = None):
         """Initialize with path to XML file and parse with line number tracking.
 
         Args:
             xml_path: Path to XML file to edit (str or Path)
+            on_save: Optional callback save() invokes immediately before
+                writing the file — a write-ahead hook (e.g.
+                Workspace.mark_dirty) so bookkeeping reaches disk even if the
+                write itself crashes.
 
         Raises:
             FileNotFoundError: If the XML file does not exist
         """
         self.xml_path = Path(xml_path)
+        self._on_save = on_save
         if not self.xml_path.exists():
             raise FileNotFoundError(f"XML file not found: {xml_path}")
 
@@ -930,8 +936,12 @@ class XMLEditor:
         """Save the edited XML back to the file.
 
         Serializes the DOM tree and writes it back to the original file path,
-        preserving the original encoding (ascii or utf-8).
+        preserving the original encoding (ascii or utf-8). The on_save hook
+        (if any) fires first, before the file is touched, so its write-ahead
+        bookkeeping is on disk even if the write crashes.
         """
+        if self._on_save is not None:
+            self._on_save()
         content = self.dom.toxml(encoding=self.encoding)
         self.xml_path.write_bytes(content)
 
@@ -974,7 +984,15 @@ class DocxXMLEditor(XMLEditor):
     - w:id (for w:ins and w:del elements)
     """
 
-    def __init__(self, xml_path: str | Path, rsid: str, author: str, initials: str = ""):
+    def __init__(
+        self,
+        xml_path: str | Path,
+        rsid: str,
+        author: str,
+        initials: str = "",
+        *,
+        on_save: Callable[[], None] | None = None,
+    ):
         """Initialize with required RSID and optional author.
 
         Args:
@@ -982,8 +1000,10 @@ class DocxXMLEditor(XMLEditor):
             rsid: RSID to automatically apply to new elements
             author: Author name for tracked changes and comments
             initials: Author initials for comments
+            on_save: Forwarded to XMLEditor — called by save() just before
+                the file is written
         """
-        super().__init__(xml_path)
+        super().__init__(xml_path, on_save=on_save)
         self.rsid = rsid
         self.author = author
         self.initials = initials or author[0].upper() if author else ""

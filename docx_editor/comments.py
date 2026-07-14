@@ -5,6 +5,7 @@ Provides CommentManager for creating and managing document comments.
 
 import html
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +66,8 @@ class CommentManager:
         document_editor: DocxXMLEditor,
         author: str,
         initials: str,
+        *,
+        on_write: Callable[[], None] | None = None,
     ):
         """Initialize with workspace path and document editor.
 
@@ -73,12 +76,19 @@ class CommentManager:
             document_editor: DocxXMLEditor for word/document.xml
             author: Author name for new comments
             initials: Author initials for new comments
+            on_write: Optional write-ahead callback (e.g.
+                Workspace.mark_dirty) invoked before any comment-file write
+                touches the workspace on disk. Broader than XMLEditor's
+                ``on_save`` (which it is wired into for editor flushes) —
+                hence the different name — because it also covers non-editor
+                writes like template copies
         """
         self.workspace_path = workspace_path
         self.word_path = workspace_path / "word"
         self.document_editor = document_editor
         self.author = author
         self.initials = initials
+        self._on_write = on_write
 
         # Comment file paths
         self.comments_path = self.word_path / "comments.xml"
@@ -102,6 +112,7 @@ class CommentManager:
                 rsid=self.document_editor.rsid,
                 author=self.author,
                 initials=self.initials,
+                on_save=self._on_write,
             )
         return self._editors[path_str]
 
@@ -635,8 +646,15 @@ class CommentManager:
     # ==================== Private: XML File Creation ====================
 
     def _ensure_comment_file(self, path: Path, template_name: str) -> None:
-        """Ensure a comment XML file exists, creating from template if needed."""
+        """Ensure a comment XML file exists, creating from template if needed.
+
+        Runs during add_comment(), i.e. after open — a post-open workspace
+        write, so it is write-ahead flagged like any editor flush, even though
+        the copied template holds no user content yet.
+        """
         if not path.exists():
+            if self._on_write is not None:
+                self._on_write()
             shutil.copy(TEMPLATE_DIR / template_name, path)
 
     def _add_to_comments_xml(self, comment_id: int, para_id: str, text: str, timestamp: str) -> None:
