@@ -278,6 +278,19 @@ class TestPack:
         assert "meta.json" not in names
         assert "word/meta.json" in names
 
+    def test_pack_excludes_meta_json_tmp(self, simple_docx, temp_dir):
+        """A meta.json.tmp orphaned by a crash mid-_save_meta must not be packed."""
+        unpacked = temp_dir / "unpacked"
+        unpack_document(simple_docx, unpacked)
+        (unpacked / "meta.json.tmp").write_text('{"author": "te')
+
+        output_path = temp_dir / "output.docx"
+        pack_document(unpacked, output_path)
+
+        with zipfile.ZipFile(output_path, "r") as zf:
+            names = zf.namelist()
+        assert "meta.json.tmp" not in names
+
     def test_pack_deterministic_output(self, simple_docx, temp_dir):
         """Packing the same directory twice must produce byte-identical ZIPs."""
         unpack_document(simple_docx, temp_dir / "unpacked")

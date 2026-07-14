@@ -26,6 +26,7 @@ Open a Word document for editing.
 **Raises:**
 
 - `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created, or if a leftover workspace holds unsaved changes from a previous session (one that saved to a different path, or whose save failed, and never closed). Pass `force_recreate=True` to discard the workspace and re-unpack from the current source. The workspace is never deleted silently. The error message includes the workspace path.
+- `WorkspaceLockedError`: If a live session — another process, or an unclosed `Document` in this one — already holds the document's workspace. Close the other session, or pass `force_recreate=True` to take the workspace over and discard its unsaved edits. Locks left by dead processes are reclaimed silently.
 - `WorkspaceError`: If the workspace directory cannot be created (e.g. the base is not writable), the home directory backing the default cache cannot be determined, or an existing workspace was unpacked from a different document. The message names the override to set.
 
 **Example:**
@@ -575,7 +576,7 @@ doc.save("contract_v2.docx")  # Save to new path
 
 #### `close(cleanup=True)`
 
-Close the document and clean up workspace.
+Close the document and clean up workspace. Releases the advisory workspace lock in both cleanup modes — closing is what frees the document for another session to open (see [`WorkspaceLockedError`](#workspacelockederror)).
 
 **Parameters:**
 
@@ -811,4 +812,17 @@ Raised when the workspace is out of sync with the source document: the source ch
 
 ```python
 from docx_editor.exceptions import WorkspaceSyncError
+```
+
+### `WorkspaceLockedError`
+
+Raised when opening a document whose workspace is locked by a live session — another process (or another `Document` object in the same process) already has it open. Two sessions sharing one workspace would silently overwrite each other's saves. Close the other session, or pass `force_recreate=True` to take the workspace over and discard its unsaved edits. Locks left behind by dead processes are reclaimed automatically and never raise. The exception carries `pid` and `lock_path` attributes.
+
+```python
+from docx_editor.exceptions import WorkspaceLockedError
+
+try:
+    doc = Document.open("contract.docx")
+except WorkspaceLockedError as e:
+    print(f"Held by pid {e.pid}")
 ```

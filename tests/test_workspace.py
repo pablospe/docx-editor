@@ -5,18 +5,22 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from conftest import find_ref
 
+from docx_editor.document import Document
 from docx_editor.exceptions import (
     DocumentNotFoundError,
     InvalidDocumentError,
     WorkspaceError,
+    WorkspaceLockedError,
     WorkspaceSyncError,
 )
-from docx_editor.workspace import Workspace, _default_cache_dir
+from docx_editor.workspace import Workspace, _default_cache_dir, _pid_alive
 
 
 class TestWorkspaceCreation:
@@ -44,6 +48,7 @@ class TestWorkspaceCreation:
         assert "source_path" in meta
         assert "source_mtime" in meta
         assert "source_size" in meta
+        assert "source_sha256" in meta
         assert "created_at" in meta
         assert "author" in meta
         assert "rsid" in meta
@@ -605,9 +610,8 @@ class TestWorkspaceLocationHardening:
 class TestSaveStaleness:
     def test_save_raises_when_source_changed_externally(self, temp_docx):
         ws = Workspace(temp_docx, author="Test")
-        # Simulate an external edit: bump the source file's mtime.
-        stat = temp_docx.stat()
-        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        # Simulate an external edit: change the source file's content.
+        temp_docx.write_bytes(temp_docx.read_bytes() + b"\x00")
         try:
             with pytest.raises(WorkspaceSyncError, match="changed on disk"):
                 ws.save()
@@ -616,8 +620,7 @@ class TestSaveStaleness:
 
     def test_save_force_overwrites_changed_source(self, temp_docx):
         ws = Workspace(temp_docx, author="Test")
-        stat = temp_docx.stat()
-        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        temp_docx.write_bytes(temp_docx.read_bytes() + b"\x00")
         try:
             result = ws.save(force=True)
             assert result == temp_docx.resolve()
@@ -628,8 +631,7 @@ class TestSaveStaleness:
 
     def test_save_to_other_destination_ignores_stale_source(self, temp_docx, temp_dir):
         ws = Workspace(temp_docx, author="Test")
-        stat = temp_docx.stat()
-        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+        temp_docx.write_bytes(temp_docx.read_bytes() + b"\x00")
         try:
             out = ws.save(destination=temp_dir / "elsewhere.docx")
             assert out.exists()
@@ -676,6 +678,67 @@ class TestSaveStaleness:
         # And the documented recovery (drop the workspace) works.
         Workspace.delete(temp_docx)
         Workspace(temp_docx, author="Test").close()
+
+
+class TestSha256Staleness:
+    """Content-hash staleness detection in sync_check() (issue #22 follow-up)."""
+
+    def test_same_size_same_mtime_content_swap_is_detected(self, temp_docx):
+        """The case mtime+size provably cannot catch: same-length content swap
+        with the timestamp restored."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+
+        original = bytearray(temp_docx.read_bytes())
+        stat_before = temp_docx.stat()
+        original[-1] ^= 0xFF  # flip one byte, length unchanged
+        temp_docx.write_bytes(bytes(original))
+        os.utime(temp_docx, (stat_before.st_atime, stat_before.st_mtime))
+
+        with pytest.raises(WorkspaceSyncError):
+            Workspace(temp_docx, author="Test")
+
+        Workspace.delete(temp_docx)
+
+    def test_touch_with_identical_content_is_not_stale(self, temp_docx):
+        """An mtime bump over identical bytes (touch, cloud-sync re-download)
+        is not an external edit — the workspace adopts."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+
+        stat = temp_docx.stat()
+        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+
+        ws2 = Workspace(temp_docx, author="Test")  # must not raise
+        ws2.close()
+
+    def test_legacy_meta_without_sha256_uses_mtime_size(self, temp_docx):
+        """meta.json written before the hash existed keeps the old semantics:
+        an mtime-only bump still reads as stale."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+
+        meta_path = ws.workspace_path / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        del meta["source_sha256"]
+        meta_path.write_text(json.dumps(meta))
+
+        stat = temp_docx.stat()
+        os.utime(temp_docx, (stat.st_atime, stat.st_mtime + 10))
+
+        with pytest.raises(WorkspaceSyncError):
+            Workspace(temp_docx, author="Test")
+
+        Workspace.delete(temp_docx)
+
+    def test_save_to_source_refreshes_sha256(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            ws.save()
+            meta = json.loads((ws.workspace_path / "meta.json").read_text())
+            assert meta["source_sha256"] == hashlib.sha256(temp_docx.read_bytes()).hexdigest()
+        finally:
+            ws.close()
 
 
 class TestDirtyWorkspace:
@@ -749,6 +812,41 @@ class TestDirtyWorkspace:
         finally:
             ws.close()
 
+    def test_fresh_document_open_does_not_mark_dirty(self, temp_docx):
+        """Open-time tracking setup writes (people.xml, settings, rels) are
+        deterministic bookkeeping — they must not flag the workspace, or every
+        crashed-but-unedited session would force force_recreate at next open."""
+        doc = Document.open(temp_docx, author="Test")
+        try:
+            assert self._meta_on_disk(doc)["dirty"] is False
+        finally:
+            doc.close(cleanup=False)
+
+        # And the untouched workspace still adopts.
+        Document.open(temp_docx, author="Test").close()
+
+    def test_in_memory_edit_does_not_mark_dirty(self, temp_docx):
+        """DOM edits die with the process — only disk writes need the flag."""
+        doc = Document.open(temp_docx, author="Test")
+        try:
+            doc.replace("fox", "cat", paragraph=find_ref(doc, "fox"))
+            assert self._meta_on_disk(doc)["dirty"] is False
+
+            doc.save()  # flag set write-ahead, cleared by the in-place save
+            assert self._meta_on_disk(doc)["dirty"] is False
+        finally:
+            doc.close()
+
+    def test_add_comment_marks_dirty_before_save(self, temp_docx):
+        """add_comment() copies comment templates into the workspace on disk —
+        a post-open write, so it is flagged even though save() hasn't run."""
+        doc = Document.open(temp_docx, author="Test")
+        try:
+            doc.add_comment("fox", "needs review")
+            assert self._meta_on_disk(doc)["dirty"] is True
+        finally:
+            doc.close()
+
     def test_pre_upgrade_meta_without_dirty_key_adopts(self, temp_docx):
         """meta.json written before the flag existed must adopt exactly as before."""
         ws = Workspace(temp_docx, author="Test")
@@ -762,4 +860,355 @@ class TestDirtyWorkspace:
             json.dump(meta, f)
 
         ws2 = Workspace(temp_docx, author="Test")  # must not raise
+        ws2.close()
+
+
+class TestWorkspaceLock:
+    """Advisory per-workspace lock against concurrent opens (issue #24)."""
+
+    def _lock_path(self, ws):
+        return ws.workspace_path.with_name(ws.workspace_path.name + ".lock")
+
+    @staticmethod
+    def _lock_pid(lock):
+        """PID part of the "<pid>:<token>" lock content."""
+        return lock.read_text().split(":", 1)[0]
+
+    def test_second_open_in_same_process_is_refused(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            with pytest.raises(WorkspaceLockedError) as exc_info:
+                Workspace(temp_docx, author="Test")
+            assert exc_info.value.pid == os.getpid()
+            assert "close()" in str(exc_info.value)
+        finally:
+            ws.close()
+
+    def test_lock_holds_pid_and_close_releases_it(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        lock = self._lock_path(ws)
+        assert self._lock_pid(lock) == str(os.getpid())
+
+        ws.close(cleanup=False)  # workspace kept — the lock must still go
+        assert not lock.exists()
+
+        Workspace(temp_docx, author="Test").close()  # and reopen adopts freely
+
+    def test_rescue_create_false_conflicts_with_live_session(self, temp_docx):
+        """The create=False rescue flow reads the workspace and writes meta, so
+        it must respect a live session's lock like any other open."""
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            with pytest.raises(WorkspaceLockedError):
+                Workspace(temp_docx, create=False)
+        finally:
+            ws.close()
+
+    def test_failed_init_releases_lock(self, temp_docx):
+        """Every __init__ failure path must release the lock, or the process
+        locks itself out of its own retry/rescue."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        temp_docx.write_bytes(temp_docx.read_bytes() + b"\x00")  # now stale
+
+        # Were the lock leaked by the first failure, the second attempt would
+        # raise WorkspaceLockedError instead of the real, actionable error.
+        with pytest.raises(WorkspaceSyncError):
+            Workspace(temp_docx, author="Test")
+        with pytest.raises(WorkspaceSyncError):
+            Workspace(temp_docx, author="Test")
+
+        Workspace.delete(temp_docx)
+
+    @pytest.mark.skipif(os.name != "posix", reason="PID 1 is only guaranteed foreign-and-alive on POSIX")
+    def test_foreign_live_pid_blocks_open(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        lock = self._lock_path(ws)
+        lock.write_text("1")  # init/launchd: alive, not ours, unkillable
+
+        with pytest.raises(WorkspaceLockedError) as exc_info:
+            Workspace(temp_docx, author="Test")
+        assert exc_info.value.pid == 1
+        assert exc_info.value.lock_path == lock
+
+        Workspace.delete(temp_docx)
+
+    def test_stale_lock_from_dead_process_is_reclaimed(self, temp_docx):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()  # reaped: the pid is gone
+
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        self._lock_path(ws).write_text(str(proc.pid))
+
+        ws2 = Workspace(temp_docx, author="Test")  # reclaims silently
+        try:
+            assert self._lock_pid(self._lock_path(ws2)) == str(os.getpid())
+        finally:
+            ws2.close()
+
+    @pytest.mark.parametrize("content", ["not-a-pid", "0", "-1"])
+    def test_corrupt_lock_content_is_reclaimed(self, temp_docx, content):
+        """Unparseable and non-positive pids are corrupt, not holders — probing
+        them would be dangerous (waitpid(-1) reaps an arbitrary child)."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        self._lock_path(ws).write_text(content)
+
+        ws2 = Workspace(temp_docx, author="Test")
+        try:
+            assert self._lock_pid(self._lock_path(ws2)) == str(os.getpid())
+        finally:
+            ws2.close()
+
+    def test_two_processes_conflict(self, temp_docx):
+        """A second OS process is refused while the first holds the document."""
+        script = (
+            "import sys\n"
+            "from docx_editor.workspace import Workspace\n"
+            "ws = Workspace(sys.argv[1], author='Child')\n"
+            "print('READY', flush=True)\n"
+            "sys.stdin.read()\n"  # hold the lock until the parent is done
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", script, str(temp_docx)],
+            stdout=subprocess.PIPE,
+            stdin=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert proc.stdout is not None  # stdout=PIPE guarantees it
+            assert proc.stdout.readline().strip() == "READY"
+            with pytest.raises(WorkspaceLockedError) as exc_info:
+                Workspace(temp_docx, author="Parent")
+            assert exc_info.value.pid == proc.pid
+        finally:
+            proc.kill()
+            proc.wait()
+
+    @pytest.mark.skipif(os.name != "posix", reason="PID 1 is only guaranteed foreign-and-alive on POSIX")
+    def test_force_recreate_takes_over_foreign_live_lock(self, temp_docx):
+        """force_recreate is the universal escape hatch — it must break even a
+        live foreign lock, and the new session ends up holding its own."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        lock = self._lock_path(ws)
+        lock.write_text("1")
+
+        doc = Document.open(temp_docx, author="Test", force_recreate=True)
+        try:
+            assert self._lock_pid(lock) == str(os.getpid())
+        finally:
+            doc.close()
+
+    def test_superseded_session_close_keeps_new_lock(self, temp_docx):
+        """After a force_recreate takeover, the superseded session's close()
+        must not release the new session's lock (release is token-aware)."""
+        ws_old = Workspace(temp_docx, author="Test")
+        doc_new = Document.open(temp_docx, author="Test", force_recreate=True)
+        try:
+            ws_old.close(cleanup=False)  # superseded; must not unlink
+
+            lock = self._lock_path(ws_old)
+            assert lock.exists()
+            with pytest.raises(WorkspaceLockedError):  # new session still holds
+                Workspace(temp_docx, author="Test")
+        finally:
+            doc_new.close()
+
+    def test_close_releases_lock_even_if_cleanup_fails(self, temp_docx, monkeypatch):
+        ws = Workspace(temp_docx, author="Test")
+        lock = self._lock_path(ws)
+
+        def boom(path):
+            raise OSError("simulated rmtree failure")
+
+        monkeypatch.setattr("docx_editor.workspace.shutil.rmtree", boom)
+        with pytest.raises(OSError, match="simulated"):
+            ws.close()
+        monkeypatch.undo()
+
+        assert not lock.exists()
+        Workspace.delete(temp_docx)
+
+    def test_delete_removes_lock_sidecar(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        lock = self._lock_path(ws)
+        assert lock.exists()
+
+        Workspace.delete(temp_docx)
+        assert not lock.exists()
+
+    def test_pid_alive_probe(self):
+        assert _pid_alive(os.getpid()) is True
+
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()  # reaped by wait(): dead even as our own child
+        assert _pid_alive(proc.pid) is False
+
+    @pytest.mark.skipif(not Path("/proc").exists(), reason="needs /proc to observe zombie state")
+    def test_zombie_child_reads_alive_unless_reaping(self):
+        """Without reap=True the probe must not waitpid an arbitrary pid — that
+        would steal the exit status of another component's child. The zombie
+        conservatively reads as alive; only the owning caller reaps."""
+        import time
+
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                state = Path(f"/proc/{proc.pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+                if state == "Z":
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail("child never became a zombie")
+
+            assert _pid_alive(proc.pid) is True  # unreaped: conservative
+            assert _pid_alive(proc.pid, reap=True) is False  # owner may reap
+        finally:
+            proc.wait()  # no-op if the reap above already collected it
+
+    def test_dropped_session_lock_is_freed_on_gc(self, temp_docx):
+        """A session dropped without close() must not lock its own process out
+        of the document forever — the lock names a live pid, so the staleness
+        probe would never reclaim it. The GC finalizer releases it."""
+        import gc
+
+        doc = Document.open(temp_docx, author="Test")
+        doc.save()  # workspace clean, so the reopen below adopts
+        del doc  # dropped without close()
+        gc.collect()  # refcounting already freed it on CPython; be explicit
+
+        doc2 = Document.open(temp_docx, author="Test")  # must not raise
+        doc2.close()
+
+    def test_dropped_dirty_session_is_rescuable_in_process(self, temp_docx, temp_dir):
+        """The rescue path documented by WorkspaceSyncError must work in the
+        same process after the dirty session is dropped without close()."""
+        import gc
+
+        doc = Document.open(temp_docx, author="Test")
+        doc.add_comment("fox", "unsaved edit")  # marks the workspace dirty
+        del doc
+        gc.collect()
+
+        # The dirty refusal (not a lock error) is what the user must see...
+        with pytest.raises(WorkspaceSyncError, match="unsaved changes"):
+            Document.open(temp_docx, author="Test")
+        # ...and its advertised rescue hatch must actually work.
+        rescue = Workspace(temp_docx, create=False)
+        out = rescue.save(destination=temp_dir / "rescued.docx")
+        assert out.exists()
+        rescue.close()
+
+    def test_double_close_is_idempotent(self, temp_docx):
+        """A second close() finds the lock already released and the workspace
+        already gone — both must be silent no-ops."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close()
+        ws.close()
+        assert not self._lock_path(ws).exists()
+
+    @pytest.mark.skipif(
+        os.name != "posix" or os.geteuid() == 0,
+        reason="chmod 000 only denies reads on POSIX as non-root",
+    )
+    def test_unreadable_lock_file_is_reclaimed(self, temp_docx):
+        """A lock whose content cannot be read has no provable live holder —
+        it counts as stale and is reclaimed, like corrupt content."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        lock = self._lock_path(ws)
+        lock.write_text("123:abc")
+        lock.chmod(0)
+
+        ws2 = Workspace(temp_docx, author="Test")  # must not raise
+        try:
+            assert self._lock_pid(self._lock_path(ws2)) == str(os.getpid())
+        finally:
+            ws2.close()
+
+    def test_lost_reclaim_race_raises_locked(self, temp_docx, monkeypatch):
+        """If the lock content keeps changing between the stale read and the
+        reclaim re-check, another process is actively re-creating it — after
+        both attempts the open must give up with WorkspaceLockedError instead
+        of unlinking a competitor's fresh lock or looping forever."""
+        ws = Workspace(temp_docx, author="Test")
+        lock = self._lock_path(ws)
+        ws.close(cleanup=True)
+        lock.write_text("placeholder")  # so O_EXCL keeps failing
+
+        reads = iter(f"not-a-pid-{n}" for n in range(10))
+        monkeypatch.setattr(Workspace, "_read_lock_content", lambda self: next(reads))
+
+        try:
+            with pytest.raises(WorkspaceLockedError, match="reclaiming"):
+                Workspace(temp_docx, author="Test")
+        finally:
+            monkeypatch.undo()
+            lock.unlink()
+
+    def test_failed_token_write_removes_lock_file(self, temp_docx, monkeypatch):
+        """If the token write fails right after the O_EXCL create, the file
+        must be removed: an orphaned lock would name this live pid, which the
+        staleness probe could never reclaim."""
+
+        def boom(fd, *args, **kwargs):
+            os.close(fd)
+            raise RuntimeError("simulated fdopen failure")
+
+        monkeypatch.setattr("docx_editor.workspace.os.fdopen", boom)
+        with pytest.raises(RuntimeError, match="simulated"):
+            Workspace(temp_docx, author="Test")
+        monkeypatch.undo()
+
+        # Were the lock orphaned, this open would raise WorkspaceLockedError.
+        Workspace(temp_docx, author="Test").close()
+
+
+class TestAtomicMetaSave:
+    """_save_meta() must never leave a truncated meta.json (issue #22)."""
+
+    def test_crash_mid_write_preserves_previous_meta(self, temp_docx, monkeypatch):
+        """A crash mid-write leaves the old meta.json intact — including the
+        write-ahead dirty flag, which a truncated file would destroy."""
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            ws.mark_dirty()  # dirty: true is now on disk
+
+            def exploding_dump(obj, fp, **kwargs):
+                fp.write("{ truncated garbage")
+                raise RuntimeError("simulated crash mid-write")
+
+            monkeypatch.setattr("docx_editor.workspace.json.dump", exploding_dump)
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                ws._save_meta()
+            monkeypatch.undo()
+
+            with open(ws.workspace_path / "meta.json") as f:
+                meta = json.load(f)  # still parses: the old file was never touched
+            assert meta["dirty"] is True
+            assert not (ws.workspace_path / "meta.json.tmp").exists()
+        finally:
+            ws.close()
+
+    def test_failed_write_leaves_workspace_adoptable(self, temp_docx, monkeypatch):
+        """After a crashed meta write, the next open must not see a corrupt
+        workspace (the pre-fix symptom was a misleading WorkspaceExistsError)."""
+        ws = Workspace(temp_docx, author="Test")
+
+        def exploding_dump(obj, fp, **kwargs):
+            fp.write("{ truncated garbage")
+            raise RuntimeError("simulated crash mid-write")
+
+        monkeypatch.setattr("docx_editor.workspace.json.dump", exploding_dump)
+        with pytest.raises(RuntimeError):
+            ws.meta["last_saved"] = "whenever"
+            ws._save_meta()
+        monkeypatch.undo()
+        ws.close(cleanup=False)
+
+        ws2 = Workspace(temp_docx, author="Test")  # adopts the intact meta
         ws2.close()

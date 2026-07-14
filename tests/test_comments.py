@@ -416,6 +416,25 @@ class TestCommentManagerInternalMethods:
 
         doc.close()
 
+    def test_ensure_comment_file_without_write_hook(self, clean_workspace):
+        """on_write is optional: a manager built without the hook must still
+        create comment files from templates (None skips the write-ahead call)."""
+        from docx_editor.comments import CommentManager
+
+        doc = Document.open(clean_workspace)
+        try:
+            manager = CommentManager(
+                doc._workspace.workspace_path,
+                doc._document_editor,
+                doc.author,
+                "T",
+            )
+            assert not manager.comments_path.exists()
+            manager._ensure_comment_file(manager.comments_path, "comments.xml")
+            assert manager.comments_path.exists()
+        finally:
+            doc.close()
+
     def test_get_next_comment_id_after_adding_comments(self, clean_workspace):
         """Test _get_next_comment_id after adding comments."""
         doc = Document.open(clean_workspace)

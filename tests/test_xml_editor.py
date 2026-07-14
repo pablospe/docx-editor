@@ -138,6 +138,39 @@ class TestXMLEditorInit:
         assert editor.encoding == "ascii"
 
 
+class TestOnSaveHook:
+    """Tests for the write-ahead on_save hook (issue #23)."""
+
+    def test_on_save_fires_before_file_write(self, sample_xml_file):
+        """The hook must fire write-ahead: at callback time the file still
+        holds its old bytes, so bookkeeping lands even if the write crashes."""
+        original = sample_xml_file.read_bytes()
+        seen = []
+        editor = XMLEditor(sample_xml_file, on_save=lambda: seen.append(sample_xml_file.read_bytes()))
+
+        editor.save()
+
+        assert seen == [original]
+        assert sample_xml_file.read_bytes() != original  # save itself did write
+
+    def test_docx_editor_forwards_on_save(self, docx_xml_file):
+        calls = []
+        editor = DocxXMLEditor(
+            docx_xml_file,
+            rsid="00AABBCC",
+            author="Test",
+            on_save=lambda: calls.append("fired"),
+        )
+
+        editor.save()
+
+        assert calls == ["fired"]
+
+    def test_save_without_hook_still_works(self, sample_xml_file):
+        editor = XMLEditor(sample_xml_file)
+        editor.save()  # must not raise
+
+
 class TestXMLEditorGetNode:
     """Tests for XMLEditor.get_node method."""
 

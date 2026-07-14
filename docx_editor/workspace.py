@@ -11,8 +11,10 @@ import getpass
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import sys
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,9 +25,15 @@ from .exceptions import (
     InvalidDocumentError,
     WorkspaceError,
     WorkspaceExistsError,
+    WorkspaceLockedError,
     WorkspaceSyncError,
 )
 from .ooxml import pack_document, unpack_document
+
+# One retry after reclaiming a stale lock; losing the O_EXCL race twice means a
+# live competitor, not another stale file (same pattern as _TEMP_NAME_ATTEMPTS
+# in ooxml/pack.py).
+_LOCK_ACQUIRE_ATTEMPTS = 2
 
 
 def _cache_root_from_env(name: str) -> Path | None:
@@ -98,6 +106,98 @@ def owner_file_candidates(path: str | Path) -> list[Path]:
     return candidates
 
 
+def _file_sha256(path: Path) -> str:
+    """Streamed sha256 hex digest of a file's content."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 16), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _pid_alive(pid: int, *, reap: bool = False) -> bool:
+    """True if the process is still running.
+
+    Decides whether a workspace lock (or a session pid file — see session.py)
+    refers to a live process or a stale leftover. On any ambiguous probe the
+    answer errs toward "alive": a false positive refuses adoption, which
+    force_recreate can override; a false negative would reclaim a live
+    session's lock.
+
+    On Windows, ``os.kill(pid, sig)`` is not a probe — any signal other than
+    the CTRL events calls TerminateProcess and would kill the process being
+    checked — so the process is queried via the win32 API instead.
+
+    Args:
+        pid: Process ID to probe.
+        reap: On POSIX, reap the pid first if it is this process's own exited
+            child — otherwise a zombie keeps ``os.kill(pid, 0)`` succeeding
+            forever. Only pass True when the caller owns that child (as
+            session.py does for its kernel): ``os.waitpid`` on an arbitrary
+            pid would steal the exit status of another component's child.
+            Without reaping, a zombie child conservatively reads as alive.
+    """
+    if os.name == "nt":  # pragma: no cover - CI is POSIX
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        ERROR_ACCESS_DENIED = 5
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        # Explicit signatures: ctypes defaults every restype to c_int, which
+        # truncates a pointer-sized HANDLE on 64-bit Windows.
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+        kernel32.CloseHandle.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            # Access denied: the process exists but belongs to someone else.
+            # Any other failure (e.g. invalid parameter): no such process.
+            return ctypes.get_last_error() == ERROR_ACCESS_DENIED  # type: ignore[attr-defined]
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True  # query failed: assume alive
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+
+    if reap:
+        try:
+            if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                return False
+        except (ChildProcessError, OSError):
+            pass  # Not our child — normal for a pid from another process.
+
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True  # exists, just owned by another user
+    except OSError:
+        return False
+    return True
+
+
+def _release_lock_file(lock_path: Path, token: str) -> None:
+    """Unlink ``lock_path`` if it still holds ``token`` (ownership-aware).
+
+    Module-level so weakref.finalize can call it without keeping the
+    Workspace alive: a session dropped without close() frees its own lock at
+    garbage collection (or interpreter exit) instead of locking its process
+    out of the document until restart. A SIGKILLed process still leaves the
+    file behind; the liveness probe in _acquire_lock reclaims that case.
+    """
+    try:
+        if lock_path.read_text(encoding="utf-8") == token:
+            lock_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 class Workspace:
     """Manages the per-document workspace folder.
 
@@ -114,9 +214,10 @@ class Workspace:
         meta: Dictionary containing workspace metadata
     """
 
-    # If you rename META_FILE, also update EXCLUDED_PATHS in ooxml/pack.py —
-    # otherwise the renamed file will be packed into the .docx and Word will
-    # flag it as "unreadable content" (issue #8).
+    # If you rename META_FILE, also update EXCLUDED_PATHS in ooxml/pack.py
+    # (both the file and its _save_meta ".tmp" twin) — otherwise the renamed
+    # file will be packed into the .docx and Word will flag it as "unreadable
+    # content" (issue #8).
     META_FILE = "meta.json"
 
     meta: dict[str, Any]
@@ -142,6 +243,10 @@ class Workspace:
         Raises:
             DocumentNotFoundError: If the source document doesn't exist
             InvalidDocumentError: If the file is not a .docx file
+            WorkspaceLockedError: If a live session already holds this
+                document's workspace (see _acquire_lock). Checked first: a
+                live holder masks the sync/exists errors below until it
+                closes.
             WorkspaceExistsError: If workspace exists and create=True
             WorkspaceSyncError: If create=True and an existing workspace holds
                 unsaved changes from a previous session, or the source document
@@ -168,47 +273,85 @@ class Workspace:
         # Set author (default to system user)
         self._author = author or getpass.getuser()
 
-        if create:
-            if self.workspace_path.exists():
-                # Check if it's stale or matches current document
-                existing_meta = self._load_meta()
-                if existing_meta:
-                    self._check_provenance(existing_meta)
-                    self.meta = existing_meta
-                    # Checked before staleness: when both hold, the unsaved edits
-                    # are the data-loss-relevant fact to surface, not the mtime.
-                    if existing_meta.get("dirty"):
-                        raise WorkspaceSyncError(
-                            f"Workspace {self.workspace_path} holds unsaved changes from a "
-                            f"previous session. Adopting it would carry those edits into "
-                            f"this session and the next save would write them into "
-                            f"{self.source_path}. Use force_recreate=True (or delete the "
-                            f"workspace) to discard them, or "
-                            f"Workspace(source, create=False).save(destination=...) to "
-                            f"rescue them first."
-                        )
-                    # Same staleness predicate as save(), so a workspace can never
-                    # open clean here and then fail sync_check() later at save time.
-                    if not self.sync_check():
-                        raise WorkspaceSyncError(
-                            f"Document has changed since workspace was created. "
-                            f"Delete {self.workspace_path} or use force_recreate=True"
-                        )
-                    # Workspace is valid, just load it
-                    return
-                else:
-                    raise WorkspaceExistsError(f"Workspace already exists: {self.workspace_path}")
+        # One live session per workspace: acquire the advisory lock before the
+        # adopt/create branch, so a concurrent open conflicts here instead of
+        # silently sharing the workspace and racing last-save-wins. The lock is
+        # a sidecar of the workspace dir — it cannot live inside it, because
+        # the adopt-vs-create branch below keys on the dir's existence (and a
+        # workspace-root file would need a pack exclusion). Both create modes
+        # lock: the create=False rescue flow reads the workspace and writes
+        # meta, so it must conflict with a live session too. Acquiring before
+        # the dirty/staleness checks means a live holder masks those errors —
+        # the correct priority: it is actively using the workspace.
+        self._lock_path = self.workspace_path.with_name(self.workspace_path.name + ".lock")
+        # pid + random token: the pid feeds the liveness probe; the token
+        # identifies this specific instance so release stays ownership-aware
+        # even when a force_recreate takeover happens within one process.
+        self._lock_token = f"{os.getpid()}:{secrets.token_hex(8)}"
+        self._lock_acquired = False
+        self._lock_finalizer: weakref.finalize | None = None
+        try:
+            # The shared cache base must exist to hold the sidecar (same mkdir
+            # _create_workspace performs; owner-only, see there).
+            self.workspace_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+            self._acquire_lock()
+        except OSError as exc:
+            # Lock *contention* raises WorkspaceLockedError (not OSError) and
+            # propagates past this clause; only filesystem failures land here.
+            raise WorkspaceError(
+                f"Cannot create workspace at {self.workspace_path}: {exc}. "
+                f"Set DOCX_EDITOR_WORKSPACE_DIR to a writable absolute path, "
+                f"or pass workspace_dir=."
+            ) from exc
 
-            self._create_workspace()
-        else:
-            # Load existing workspace
-            if not self.workspace_path.exists():
-                raise WorkspaceError(f"Workspace not found: {self.workspace_path}")
-            loaded_meta = self._load_meta()
-            if not loaded_meta:
-                raise WorkspaceError(f"Invalid workspace (no meta.json): {self.workspace_path}")
-            self._check_provenance(loaded_meta)
-            self.meta = loaded_meta
+        try:
+            if create:
+                if self.workspace_path.exists():
+                    # Check if it's stale or matches current document
+                    existing_meta = self._load_meta()
+                    if existing_meta:
+                        self._check_provenance(existing_meta)
+                        self.meta = existing_meta
+                        # Checked before staleness: when both hold, the unsaved edits
+                        # are the data-loss-relevant fact to surface, not the mtime.
+                        if existing_meta.get("dirty"):
+                            raise WorkspaceSyncError(
+                                f"Workspace {self.workspace_path} holds unsaved changes from a "
+                                f"previous session. Adopting it would carry those edits into "
+                                f"this session and the next save would write them into "
+                                f"{self.source_path}. Use force_recreate=True (or delete the "
+                                f"workspace) to discard them, or "
+                                f"Workspace(source, create=False).save(destination=...) to "
+                                f"rescue them first."
+                            )
+                        # Same staleness predicate as save(), so a workspace can never
+                        # open clean here and then fail sync_check() later at save time.
+                        if not self.sync_check():
+                            raise WorkspaceSyncError(
+                                f"Document has changed since workspace was created. "
+                                f"Delete {self.workspace_path} or use force_recreate=True"
+                            )
+                        # Workspace is valid, just load it
+                        return
+                    else:
+                        raise WorkspaceExistsError(f"Workspace already exists: {self.workspace_path}")
+
+                self._create_workspace()
+            else:
+                # Load existing workspace
+                if not self.workspace_path.exists():
+                    raise WorkspaceError(f"Workspace not found: {self.workspace_path}")
+                loaded_meta = self._load_meta()
+                if not loaded_meta:
+                    raise WorkspaceError(f"Invalid workspace (no meta.json): {self.workspace_path}")
+                self._check_provenance(loaded_meta)
+                self.meta = loaded_meta
+        except BaseException:
+            # A failed __init__ hands the caller no object to close(); without
+            # this release the process would lock itself out of its own
+            # retry/rescue (e.g. reopening after a WorkspaceSyncError).
+            self._release_lock()
+            raise
 
     def _check_provenance(self, meta: dict[str, Any]) -> None:
         """Refuse to adopt a workspace that was unpacked from a different document.
@@ -228,6 +371,128 @@ class Workspace:
                 f"({recorded!r}, expected {str(self.source_path)!r}). "
                 f"Delete it or use force_recreate=True."
             )
+
+    def _read_lock_content(self) -> str | None:
+        """Raw lock-file content, or None if the file is absent or unreadable."""
+        try:
+            return self._lock_path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+    @staticmethod
+    def _parse_lock_pid(content: str | None) -> int | None:
+        """PID from ``<pid>:<token>`` lock content (bare ``<pid>`` also parses).
+
+        Non-positive values count as corrupt: probing them would be dangerous
+        (``os.waitpid(-1)`` reaps an arbitrary child; ``os.kill(0/-N, 0)``
+        signals whole process groups), so they read as "no holder" and the
+        lock is reclaimed.
+        """
+        if content is None:
+            return None
+        try:
+            pid = int(content.split(":", 1)[0])
+        except ValueError:
+            return None
+        return pid if pid > 0 else None
+
+    def _read_lock_pid(self) -> int | None:
+        """PID recorded in the lock file, or None if absent/unreadable/corrupt."""
+        return self._parse_lock_pid(self._read_lock_content())
+
+    def _acquire_lock(self) -> None:
+        """Create the sidecar lock file naming this session, exclusively.
+
+        The file holds ``<pid>:<random token>``: the pid drives the liveness
+        probe, the token makes release ownership-aware (see _release_lock).
+        A lock naming a live process raises WorkspaceLockedError; a dead or
+        unreadable one is stale and reclaimed. This is advisory protection
+        against *accidental* concurrent opens, not a hardened mutex: the
+        lock's content is re-checked right before a stale file is unlinked,
+        which narrows — but cannot close — the window in which a racing
+        process's fresh lock is removed instead. A lost race degrades to the
+        pre-lock behavior (two sessions sharing a workspace); it cannot
+        corrupt data beyond that.
+
+        Raises:
+            WorkspaceLockedError: A live process holds the lock, or the
+                reclaim attempts lost the creation race.
+        """
+        for _ in range(_LOCK_ACQUIRE_ATTEMPTS):
+            try:
+                fd = os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                stale_content = self._read_lock_content()
+                holder = self._parse_lock_pid(stale_content)
+                if holder is not None and _pid_alive(holder):
+                    if holder == os.getpid():
+                        hint = "this process already has the document open — close() the other Document/Workspace first"
+                    else:
+                        hint = (
+                            f"close the session in process {holder} first, or use "
+                            f"force_recreate=True to take the workspace over and "
+                            f"discard its unsaved edits"
+                        )
+                    raise WorkspaceLockedError(
+                        f"Workspace {self.workspace_path} is locked by a live session "
+                        f"(pid {holder}, lock file {self._lock_path}): {hint}.",
+                        pid=holder,
+                        lock_path=self._lock_path,
+                    ) from None
+                # Dead process or unreadable content: stale — reclaim and
+                # retry, unless another process already replaced the lock
+                # since it was read (see docstring: narrowed, not airtight).
+                if self._read_lock_content() == stale_content:
+                    self._lock_path.unlink(missing_ok=True)
+                continue
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(self._lock_token)
+                # Safety net for sessions dropped without close(): release
+                # the lock at garbage collection, or this process could never
+                # reopen (nor rescue) the document — the lock names its own
+                # live pid, so the staleness probe would never reclaim it.
+                self._lock_finalizer = weakref.finalize(self, _release_lock_file, self._lock_path, self._lock_token)
+            except BaseException:
+                # The O_EXCL create succeeded but the token write or the
+                # finalizer registration failed (disk full, MemoryError):
+                # remove the file rather than orphan a lock naming this live
+                # pid, which the staleness probe could never reclaim.
+                self._lock_path.unlink(missing_ok=True)
+                raise
+            self._lock_acquired = True
+            return
+
+        # Both attempts found a fresh lock after reclaiming a stale one:
+        # another process won the re-creation race.
+        raise WorkspaceLockedError(
+            f"Workspace {self.workspace_path} was locked by another session while "
+            f"reclaiming a stale lock ({self._lock_path}). Retry, or close the "
+            f"competing session.",
+            pid=self._read_lock_pid(),
+            lock_path=self._lock_path,
+        )
+
+    def _release_lock(self) -> None:
+        """Remove the sidecar lock file if this instance still owns it.
+
+        Ownership is verified by token, not just the _lock_acquired flag:
+        after a force_recreate takeover (Workspace.delete removes even a live
+        session's lock), the superseded session's close() must not unlink the
+        new session's lock — and the pid alone cannot tell them apart when
+        both live in one process. Release is independent of workspace cleanup:
+        close(cleanup=False) keeps the workspace but must still free it for
+        the next session. A session dropped without close() is covered by the
+        weakref finalizer registered at acquire time; a killed process leaves
+        the file behind by design, and the staleness probe in _acquire_lock
+        reclaims it.
+        """
+        if self._lock_acquired:
+            if self._lock_finalizer is not None:
+                self._lock_finalizer()  # ownership-checked unlink; runs once
+            else:  # pragma: no cover - acquire always registers the finalizer
+                _release_lock_file(self._lock_path, self._lock_token)
+            self._lock_acquired = False
 
     @classmethod
     def _resolve_workspace_path(cls, source_path: Path, workspace_dir: str | Path | None) -> Path:
@@ -326,6 +591,7 @@ class Workspace:
             "source_path": str(self.source_path),
             "source_mtime": source_stat.st_mtime,
             "source_size": source_stat.st_size,
+            "source_sha256": _file_sha256(self.source_path),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "author": self._author,
             "initials": self._author[0].upper() if self._author else "",
@@ -350,10 +616,27 @@ class Workspace:
             return None
 
     def _save_meta(self) -> None:
-        """Save metadata to meta.json."""
+        """Save metadata to meta.json atomically.
+
+        Written to a temp file in the same directory, fsynced, then renamed
+        over meta.json, so no crash can leave a truncated meta.json — a
+        truncated file destroys the write-ahead dirty flag and makes the next
+        open fail with a misleading WorkspaceExistsError (issue #22). The
+        fixed temp name assumes one writer per workspace (one live session);
+        EXCLUDED_PATHS in ooxml/pack.py keeps a crash-orphaned temp out of
+        the packed document.
+        """
         meta_path = self.workspace_path / self.META_FILE
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(self.meta, f, indent=2)
+        tmp_path = meta_path.with_name(meta_path.name + ".tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self.meta, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, meta_path)
+        finally:
+            # A failed write leaves only the intact old meta.json behind.
+            tmp_path.unlink(missing_ok=True)
 
     def mark_dirty(self) -> None:
         """Persist that the workspace may hold content not saved to the source.
@@ -366,9 +649,15 @@ class Workspace:
         unchanged). The flag is cleared only by a successful save() back to the
         source.
 
-        Document.save() and Workspace.save() both call this themselves; callers
-        that mutate workspace files directly must call it before touching disk,
-        or a crash before save() leaves the divergence unflagged.
+        Document.save() and Workspace.save() both call this themselves, and
+        Document wires it as the write-ahead hook of every editor it
+        constructs (XMLEditor's ``on_save``, CommentManager's ``on_write``),
+        so editor-mediated flushes honor the contract mechanically. The
+        exception is open-time tracking setup, which deliberately bypasses the
+        flag — see Document._setup_tracking(). Code that writes workspace
+        files directly (no editor in between) must still call this before
+        touching disk, or a crash before save() leaves the divergence
+        unflagged.
         """
         if not self.meta.get("dirty"):
             self.meta["dirty"] = True
@@ -481,15 +770,18 @@ class Workspace:
         if not success:
             raise WorkspaceError(f"Failed to pack document to {output_path}")
 
-        # Update source_mtime/source_size if saving to the original location.
-        # overwrites_source uses os.path.samefile (see _is_source), so a different
-        # name for the same file — including through a symlink — still refreshes the
-        # workspace's stat, or the next open() would report a stale workspace. Both
-        # mtime and size are updated because sync_check() compares both.
+        # Update the recorded source fingerprint if saving to the original
+        # location. overwrites_source uses os.path.samefile (see _is_source), so
+        # a different name for the same file — including through a symlink —
+        # still refreshes it, or the next open() would report a stale workspace.
+        # mtime/size are refreshed alongside the hash: sync_check() needs size
+        # for its cheap reject, and legacy library versions reading this meta
+        # compare mtime+size only.
         if overwrites_source:
             saved_stat = output_path.stat()
             self.meta["source_mtime"] = saved_stat.st_mtime
             self.meta["source_size"] = saved_stat.st_size
+            self.meta["source_sha256"] = _file_sha256(output_path)
             # The source now holds everything the workspace holds — the
             # workspace is no longer ahead of it, so adoption is safe again.
             self.meta["dirty"] = False
@@ -509,7 +801,10 @@ class Workspace:
         return output_path.resolve() == self.source_path
 
     def close(self, cleanup: bool = True) -> None:
-        """Close the workspace.
+        """Close the workspace and release its advisory lock.
+
+        The lock is released in both cleanup modes — closing is what frees
+        the document for the next session (see WorkspaceLockedError).
 
         Args:
             cleanup: If True, delete the workspace folder
@@ -518,8 +813,13 @@ class Workspace:
         # shared (and may be a caller-supplied one via workspace_dir=/
         # DOCX_EDITOR_WORKSPACE_DIR), so it is left alone even when empty —
         # _create_workspace() recreates it on demand.
-        if cleanup and self.workspace_path.exists():
-            shutil.rmtree(self.workspace_path)
+        try:
+            if cleanup and self.workspace_path.exists():
+                shutil.rmtree(self.workspace_path)
+        finally:
+            # Released in both cleanup modes, and even if rmtree fails: a
+            # kept (or half-removed) workspace must still be adoptable.
+            self._release_lock()
 
     def get_xml_path(self, relative_path: str) -> Path:
         """Get the full path to an XML file in the workspace.
@@ -535,6 +835,12 @@ class Workspace:
     def sync_check(self) -> bool:
         """Check if the workspace is in sync with the source document.
 
+        Metas that record ``source_sha256`` compare content: size first (a
+        cheap reject), then the hash. A touch/copy that rewrites identical
+        bytes no longer counts as an external edit, and a same-size content
+        swap — which mtime+size provably cannot catch — now does. Legacy metas
+        without the key keep the original mtime+size comparison.
+
         Returns:
             True if in sync, False if source has changed
         """
@@ -542,6 +848,11 @@ class Workspace:
             return False
 
         source_stat = self.source_path.stat()
+        recorded_sha256 = self.meta.get("source_sha256")
+        if recorded_sha256 is not None:
+            if self.meta.get("source_size") != source_stat.st_size:
+                return False
+            return _file_sha256(self.source_path) == recorded_sha256
         return (
             self.meta.get("source_mtime") == source_stat.st_mtime
             and self.meta.get("source_size") == source_stat.st_size
@@ -576,9 +887,14 @@ class Workspace:
         source_path = Path(source_path).resolve()
         workspace_path = cls._resolve_workspace_path(source_path, workspace_dir)
 
-        if not workspace_path.exists():
-            return False
+        removed = False
+        if workspace_path.exists():
+            # As in close(), the shared base directory is left in place.
+            shutil.rmtree(workspace_path)
+            removed = True
 
-        # As in close(), the shared base directory is left in place.
-        shutil.rmtree(workspace_path)
-        return True
+        # The advisory lock sidecar goes with the workspace — even one held by
+        # a live (possibly stuck) session — keeping force_recreate the
+        # universal escape hatch.
+        workspace_path.with_name(workspace_path.name + ".lock").unlink(missing_ok=True)
+        return removed

@@ -61,12 +61,16 @@ class Document:
         self._workspace = workspace
         self._closed = False
 
-        # Create the document editor
+        # Create the document editor. Every post-open workspace write goes
+        # through an editor (or the comment manager's template copies), so
+        # routing mark_dirty through their write-ahead hooks enforces the
+        # dirty-flag contract mechanically at the write layer.
         self._document_editor = DocxXMLEditor(
             workspace.document_xml_path,
             rsid=workspace.rsid,
             author=workspace.author,
             initials=workspace.initials,
+            on_save=workspace.mark_dirty,
         )
 
         # Initialize managers
@@ -76,6 +80,7 @@ class Document:
             self._document_editor,
             workspace.author,
             workspace.initials,
+            on_write=workspace.mark_dirty,
         )
 
         # Setup tracking infrastructure
@@ -127,6 +132,10 @@ class Document:
                 The message includes the workspace path. Pass
                 force_recreate=True to discard the workspace and re-unpack from
                 the current source.
+            WorkspaceLockedError: If a live session — another process, or an
+                unclosed Document in this one — already holds the document's
+                workspace. Close the other session, or pass force_recreate=True
+                to take the workspace over, discarding its unsaved edits.
 
         Example:
             doc = Document.open("contract.docx")
@@ -997,6 +1006,9 @@ class Document:
     def close(self, cleanup: bool = True) -> None:
         """Close the document and clean up workspace.
 
+        Releases the advisory workspace lock in both cleanup modes — closing
+        is what frees the document for another session to open.
+
         Args:
             cleanup: If True, delete the workspace folder
 
@@ -1026,7 +1038,18 @@ class Document:
             raise ValueError("Document is closed")
 
     def _setup_tracking(self) -> None:
-        """Set up tracked changes infrastructure in the document."""
+        """Set up tracked changes infrastructure in the document.
+
+        Runs at every open. Its writes (people.xml, [Content_Types].xml,
+        document.xml.rels, settings.xml rsids) deliberately do NOT mark the
+        workspace dirty: they are deterministic bookkeeping that an adopting
+        session re-produces identically (each helper checks before adding; the
+        rsid comes from meta), not unsaved user content. Marking dirty here
+        would flag every workspace the moment it is opened, so any session
+        that crashed without editing would force force_recreate on the next
+        open with no data-loss risk behind it. All post-open writes DO mark
+        dirty first — see the on_save/on_write hooks in __init__.
+        """
         # Ensure people.xml exists
         people_path = self._workspace.word_path / "people.xml"
         if not people_path.exists():
@@ -1176,6 +1199,7 @@ class Document:
             rels_path,
             rsid=self._workspace.rsid,
             author=self._workspace.author,
+            on_save=self._workspace.mark_dirty,
         )
 
         # Check if already exists
@@ -1230,6 +1254,7 @@ class Document:
             content_types_path,
             rsid=self._workspace.rsid,
             author=self._workspace.author,
+            on_save=self._workspace.mark_dirty,
         )
 
         # Check if already exists
