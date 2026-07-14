@@ -5,6 +5,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -16,9 +17,10 @@ from docx_editor.exceptions import (
     DocumentNotFoundError,
     InvalidDocumentError,
     WorkspaceError,
+    WorkspaceLockedError,
     WorkspaceSyncError,
 )
-from docx_editor.workspace import Workspace, _default_cache_dir
+from docx_editor.workspace import Workspace, _default_cache_dir, _pid_alive
 
 
 class TestWorkspaceCreation:
@@ -800,6 +802,152 @@ class TestDirtyWorkspace:
 
         ws2 = Workspace(temp_docx, author="Test")  # must not raise
         ws2.close()
+
+
+class TestWorkspaceLock:
+    """Advisory per-workspace lock against concurrent opens (issue #24)."""
+
+    def _lock_path(self, ws):
+        return ws.workspace_path.with_name(ws.workspace_path.name + ".lock")
+
+    def test_second_open_in_same_process_is_refused(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            with pytest.raises(WorkspaceLockedError) as exc_info:
+                Workspace(temp_docx, author="Test")
+            assert exc_info.value.pid == os.getpid()
+            assert "close()" in str(exc_info.value)
+        finally:
+            ws.close()
+
+    def test_lock_holds_pid_and_close_releases_it(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        lock = self._lock_path(ws)
+        assert lock.read_text() == str(os.getpid())
+
+        ws.close(cleanup=False)  # workspace kept — the lock must still go
+        assert not lock.exists()
+
+        Workspace(temp_docx, author="Test").close()  # and reopen adopts freely
+
+    def test_rescue_create_false_conflicts_with_live_session(self, temp_docx):
+        """The create=False rescue flow reads the workspace and writes meta, so
+        it must respect a live session's lock like any other open."""
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            with pytest.raises(WorkspaceLockedError):
+                Workspace(temp_docx, create=False)
+        finally:
+            ws.close()
+
+    def test_failed_init_releases_lock(self, temp_docx):
+        """Every __init__ failure path must release the lock, or the process
+        locks itself out of its own retry/rescue."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        temp_docx.write_bytes(temp_docx.read_bytes() + b"\x00")  # now stale
+
+        # Were the lock leaked by the first failure, the second attempt would
+        # raise WorkspaceLockedError instead of the real, actionable error.
+        with pytest.raises(WorkspaceSyncError):
+            Workspace(temp_docx, author="Test")
+        with pytest.raises(WorkspaceSyncError):
+            Workspace(temp_docx, author="Test")
+
+        Workspace.delete(temp_docx)
+
+    @pytest.mark.skipif(os.name != "posix", reason="PID 1 is only guaranteed foreign-and-alive on POSIX")
+    def test_foreign_live_pid_blocks_open(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        lock = self._lock_path(ws)
+        lock.write_text("1")  # init/launchd: alive, not ours, unkillable
+
+        with pytest.raises(WorkspaceLockedError) as exc_info:
+            Workspace(temp_docx, author="Test")
+        assert exc_info.value.pid == 1
+        assert exc_info.value.lock_path == lock
+
+        Workspace.delete(temp_docx)
+
+    def test_stale_lock_from_dead_process_is_reclaimed(self, temp_docx):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()  # reaped: the pid is gone
+
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        self._lock_path(ws).write_text(str(proc.pid))
+
+        ws2 = Workspace(temp_docx, author="Test")  # reclaims silently
+        try:
+            assert self._lock_path(ws2).read_text() == str(os.getpid())
+        finally:
+            ws2.close()
+
+    def test_corrupt_lock_content_is_reclaimed(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        self._lock_path(ws).write_text("not-a-pid")
+
+        ws2 = Workspace(temp_docx, author="Test")
+        try:
+            assert self._lock_path(ws2).read_text() == str(os.getpid())
+        finally:
+            ws2.close()
+
+    def test_two_processes_conflict(self, temp_docx):
+        """A second OS process is refused while the first holds the document."""
+        script = (
+            "import sys\n"
+            "from docx_editor.workspace import Workspace\n"
+            "ws = Workspace(sys.argv[1], author='Child')\n"
+            "print('READY', flush=True)\n"
+            "sys.stdin.read()\n"  # hold the lock until the parent is done
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", script, str(temp_docx)],
+            stdout=subprocess.PIPE,
+            stdin=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert proc.stdout.readline().strip() == "READY"
+            with pytest.raises(WorkspaceLockedError) as exc_info:
+                Workspace(temp_docx, author="Parent")
+            assert exc_info.value.pid == proc.pid
+        finally:
+            proc.kill()
+            proc.wait()
+
+    @pytest.mark.skipif(os.name != "posix", reason="PID 1 is only guaranteed foreign-and-alive on POSIX")
+    def test_force_recreate_takes_over_foreign_live_lock(self, temp_docx):
+        """force_recreate is the universal escape hatch — it must break even a
+        live foreign lock, and the new session ends up holding its own."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+        lock = self._lock_path(ws)
+        lock.write_text("1")
+
+        doc = Document.open(temp_docx, author="Test", force_recreate=True)
+        try:
+            assert lock.read_text() == str(os.getpid())
+        finally:
+            doc.close()
+
+    def test_delete_removes_lock_sidecar(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        lock = self._lock_path(ws)
+        assert lock.exists()
+
+        Workspace.delete(temp_docx)
+        assert not lock.exists()
+
+    def test_pid_alive_probe(self):
+        assert _pid_alive(os.getpid()) is True
+
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()  # reaped by wait(): dead even as our own child
+        assert _pid_alive(proc.pid) is False
 
 
 class TestAtomicMetaSave:

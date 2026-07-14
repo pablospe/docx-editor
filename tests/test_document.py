@@ -11,6 +11,19 @@ from docx_editor.exceptions import DocumentOpenError, WorkspaceSyncError
 from docx_editor.workspace import Workspace
 
 
+def _simulate_process_exit(doc):
+    """Drop the document's advisory lock as if its process had died.
+
+    The adoption regressions below simulate "RUN 1 exited without close()"
+    inside a single test process. A real dead session leaves a lock naming a
+    dead pid, which the next open silently reclaims (covered in
+    test_workspace.py); in here the pid is this very process — alive — so the
+    lock must be dropped explicitly or RUN 2 sees WorkspaceLockedError instead
+    of what it would actually hit after a crash.
+    """
+    doc._workspace._release_lock()
+
+
 class TestDocumentOpen:
     """Tests for opening documents."""
 
@@ -122,6 +135,7 @@ class TestStaleWorkspaceAdoption:
         doc.replace("fox", "cat", paragraph=find_ref(doc, "fox"))
         doc.save(temp_dir / "reviewed.docx")
         workspace_path = doc.workspace_path
+        _simulate_process_exit(doc)
         del doc  # no close()
 
         # RUN 2: the untouched source must refuse the diverged workspace.
@@ -141,6 +155,7 @@ class TestStaleWorkspaceAdoption:
         doc = Document.open(clean_workspace, author="Run One")
         doc.replace("fox", "cat", paragraph=find_ref(doc, "fox"))
         doc.save()
+        _simulate_process_exit(doc)
         del doc  # no close()
 
         doc2 = Document.open(clean_workspace, author="Run Two")
@@ -152,6 +167,7 @@ class TestStaleWorkspaceAdoption:
         """Opening writes tracking infrastructure (people.xml, rsid) into the
         workspace; that alone must not count as unsaved changes."""
         doc = Document.open(clean_workspace, author="Run One")
+        _simulate_process_exit(doc)
         del doc  # no edits, no save, no close()
 
         doc2 = Document.open(clean_workspace, author="Run Two")
@@ -174,6 +190,7 @@ class TestStaleWorkspaceAdoption:
                 doc.save()
         finally:
             owner_stub.unlink()
+        _simulate_process_exit(doc)
         del doc  # no close()
 
         with pytest.raises(WorkspaceSyncError, match="unsaved changes"):
@@ -192,6 +209,7 @@ class TestStaleWorkspaceAdoption:
             meta = json.load(f)
         assert meta["source_mtime"] == clean_workspace.stat().st_mtime
         assert meta["dirty"] is False
+        _simulate_process_exit(doc)
         del doc  # no close()
 
         doc2 = Document.open(clean_workspace, author="Run Two")

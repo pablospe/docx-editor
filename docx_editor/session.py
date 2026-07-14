@@ -22,6 +22,7 @@ from queue import Empty
 from typing import TYPE_CHECKING, Literal
 
 from .exceptions import SessionError
+from .workspace import _pid_alive
 
 if TYPE_CHECKING:
     from jupyter_client import BlockingKernelClient
@@ -87,26 +88,6 @@ def _read_pid(connection_file: Path) -> int | None:
         return int(_pid_file(connection_file).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-
-
-def _pid_alive(pid: int) -> bool:
-    """True if the process is still running (POSIX only).
-
-    Reaps first: when the kernel is our own child (library use, as opposed to the
-    CLI where it is reparented to init), an exited kernel lingers as a zombie and
-    os.kill(pid, 0) keeps succeeding on it forever.
-    """
-    try:
-        if os.waitpid(pid, os.WNOHANG)[0] == pid:
-            return False
-    except (ChildProcessError, OSError):
-        pass  # Not our child — normal for the CLI.
-
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
 
 
 def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: float = 30.0) -> int:

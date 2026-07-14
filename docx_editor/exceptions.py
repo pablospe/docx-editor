@@ -44,6 +44,34 @@ class WorkspaceSyncError(WorkspaceError):
     pass
 
 
+class WorkspaceLockedError(WorkspaceError):
+    """Raised when a live session already holds a document's workspace lock.
+
+    Two sessions sharing one workspace silently overwrite each other's edits
+    (last save wins), so opening a document whose advisory lock file names a
+    still-running process is refused — whether that process is another one or
+    the caller's own (two Document objects on one workspace clobber each other
+    either way). A lock left behind by a dead process is reclaimed silently
+    and never raises. ``force_recreate=True`` discards the workspace and its
+    lock regardless.
+
+    Attributes:
+        pid: PID recorded in the lock file, or None if it could not be read.
+        lock_path: The lock file that blocked the open.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        pid: int | None = None,
+        lock_path: Path | None = None,
+    ):
+        self.pid = pid
+        self.lock_path = lock_path
+        super().__init__(message)
+
+
 class SessionError(DocxEditError):
     """Raised when there's an error with a persistent session kernel."""
 

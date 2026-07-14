@@ -23,6 +23,7 @@ from .exceptions import (
     InvalidDocumentError,
     WorkspaceError,
     WorkspaceExistsError,
+    WorkspaceLockedError,
     WorkspaceSyncError,
 )
 from .ooxml import pack_document, unpack_document
@@ -98,6 +99,59 @@ def owner_file_candidates(path: str | Path) -> list[Path]:
     return candidates
 
 
+def _pid_alive(pid: int) -> bool:
+    """True if the process is still running.
+
+    Decides whether a workspace lock (or a session pid file — see session.py)
+    refers to a live process or a stale leftover. On any ambiguous probe the
+    answer errs toward "alive": a false positive refuses adoption, which
+    force_recreate can override; a false negative would reclaim a live
+    session's lock.
+
+    On Windows, ``os.kill(pid, sig)`` is not a probe — any signal other than
+    the CTRL events calls TerminateProcess and would kill the process being
+    checked — so the process is queried via the win32 API instead.
+
+    On POSIX, reaps first: when the pid is this process's own child (e.g. a
+    session kernel it spawned), an exited child lingers as a zombie and
+    ``os.kill(pid, 0)`` keeps succeeding on it forever.
+    """
+    if os.name == "nt":  # pragma: no cover - CI is POSIX
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        ERROR_ACCESS_DENIED = 5
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            # Access denied: the process exists but belongs to someone else.
+            # Any other failure (e.g. invalid parameter): no such process.
+            return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True  # query failed: assume alive
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+
+    try:
+        if os.waitpid(pid, os.WNOHANG)[0] == pid:
+            return False
+    except (ChildProcessError, OSError):
+        pass  # Not our child — normal for a pid from another process.
+
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True  # exists, just owned by another user
+    except OSError:
+        return False
+    return True
+
+
 class Workspace:
     """Manages the per-document workspace folder.
 
@@ -169,47 +223,80 @@ class Workspace:
         # Set author (default to system user)
         self._author = author or getpass.getuser()
 
-        if create:
-            if self.workspace_path.exists():
-                # Check if it's stale or matches current document
-                existing_meta = self._load_meta()
-                if existing_meta:
-                    self._check_provenance(existing_meta)
-                    self.meta = existing_meta
-                    # Checked before staleness: when both hold, the unsaved edits
-                    # are the data-loss-relevant fact to surface, not the mtime.
-                    if existing_meta.get("dirty"):
-                        raise WorkspaceSyncError(
-                            f"Workspace {self.workspace_path} holds unsaved changes from a "
-                            f"previous session. Adopting it would carry those edits into "
-                            f"this session and the next save would write them into "
-                            f"{self.source_path}. Use force_recreate=True (or delete the "
-                            f"workspace) to discard them, or "
-                            f"Workspace(source, create=False).save(destination=...) to "
-                            f"rescue them first."
-                        )
-                    # Same staleness predicate as save(), so a workspace can never
-                    # open clean here and then fail sync_check() later at save time.
-                    if not self.sync_check():
-                        raise WorkspaceSyncError(
-                            f"Document has changed since workspace was created. "
-                            f"Delete {self.workspace_path} or use force_recreate=True"
-                        )
-                    # Workspace is valid, just load it
-                    return
-                else:
-                    raise WorkspaceExistsError(f"Workspace already exists: {self.workspace_path}")
+        # One live session per workspace: acquire the advisory lock before the
+        # adopt/create branch, so a concurrent open conflicts here instead of
+        # silently sharing the workspace and racing last-save-wins. The lock is
+        # a sidecar of the workspace dir — it cannot live inside it, because
+        # the adopt-vs-create branch below keys on the dir's existence (and a
+        # workspace-root file would need a pack exclusion). Both create modes
+        # lock: the create=False rescue flow reads the workspace and writes
+        # meta, so it must conflict with a live session too. Acquiring before
+        # the dirty/staleness checks means a live holder masks those errors —
+        # the correct priority: it is actively using the workspace.
+        self._lock_path = self.workspace_path.with_name(self.workspace_path.name + ".lock")
+        self._lock_acquired = False
+        try:
+            # The shared cache base must exist to hold the sidecar (same mkdir
+            # _create_workspace performs; owner-only, see there).
+            self.workspace_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+            self._acquire_lock()
+        except OSError as exc:
+            # Lock *contention* raises WorkspaceLockedError (not OSError) and
+            # propagates past this clause; only filesystem failures land here.
+            raise WorkspaceError(
+                f"Cannot create workspace at {self.workspace_path}: {exc}. "
+                f"Set DOCX_EDITOR_WORKSPACE_DIR to a writable absolute path, "
+                f"or pass workspace_dir=."
+            ) from exc
 
-            self._create_workspace()
-        else:
-            # Load existing workspace
-            if not self.workspace_path.exists():
-                raise WorkspaceError(f"Workspace not found: {self.workspace_path}")
-            loaded_meta = self._load_meta()
-            if not loaded_meta:
-                raise WorkspaceError(f"Invalid workspace (no meta.json): {self.workspace_path}")
-            self._check_provenance(loaded_meta)
-            self.meta = loaded_meta
+        try:
+            if create:
+                if self.workspace_path.exists():
+                    # Check if it's stale or matches current document
+                    existing_meta = self._load_meta()
+                    if existing_meta:
+                        self._check_provenance(existing_meta)
+                        self.meta = existing_meta
+                        # Checked before staleness: when both hold, the unsaved edits
+                        # are the data-loss-relevant fact to surface, not the mtime.
+                        if existing_meta.get("dirty"):
+                            raise WorkspaceSyncError(
+                                f"Workspace {self.workspace_path} holds unsaved changes from a "
+                                f"previous session. Adopting it would carry those edits into "
+                                f"this session and the next save would write them into "
+                                f"{self.source_path}. Use force_recreate=True (or delete the "
+                                f"workspace) to discard them, or "
+                                f"Workspace(source, create=False).save(destination=...) to "
+                                f"rescue them first."
+                            )
+                        # Same staleness predicate as save(), so a workspace can never
+                        # open clean here and then fail sync_check() later at save time.
+                        if not self.sync_check():
+                            raise WorkspaceSyncError(
+                                f"Document has changed since workspace was created. "
+                                f"Delete {self.workspace_path} or use force_recreate=True"
+                            )
+                        # Workspace is valid, just load it
+                        return
+                    else:
+                        raise WorkspaceExistsError(f"Workspace already exists: {self.workspace_path}")
+
+                self._create_workspace()
+            else:
+                # Load existing workspace
+                if not self.workspace_path.exists():
+                    raise WorkspaceError(f"Workspace not found: {self.workspace_path}")
+                loaded_meta = self._load_meta()
+                if not loaded_meta:
+                    raise WorkspaceError(f"Invalid workspace (no meta.json): {self.workspace_path}")
+                self._check_provenance(loaded_meta)
+                self.meta = loaded_meta
+        except BaseException:
+            # A failed __init__ hands the caller no object to close(); without
+            # this release the process would lock itself out of its own
+            # retry/rescue (e.g. reopening after a WorkspaceSyncError).
+            self._release_lock()
+            raise
 
     def _check_provenance(self, meta: dict[str, Any]) -> None:
         """Refuse to adopt a workspace that was unpacked from a different document.
@@ -229,6 +316,79 @@ class Workspace:
                 f"({recorded!r}, expected {str(self.source_path)!r}). "
                 f"Delete it or use force_recreate=True."
             )
+
+    def _read_lock_pid(self) -> int | None:
+        """PID recorded in the lock file, or None if absent/unreadable/corrupt."""
+        try:
+            return int(self._lock_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def _acquire_lock(self) -> None:
+        """Create the sidecar lock file holding this process's PID, exclusively.
+
+        A lock whose recorded process is still alive raises
+        WorkspaceLockedError; a dead or unreadable one is stale and reclaimed.
+        This is advisory protection against *accidental* concurrent opens, not
+        a hardened mutex: between probing a dead holder and unlinking its
+        stale file, another process may have reclaimed the lock, and the
+        unlink then removes that fresh lock. The O_EXCL retry bound means the
+        loser of that microsecond race errors out rather than proceeding, so
+        two sessions never both hold the lock.
+
+        Raises:
+            WorkspaceLockedError: A live process holds the lock, or two
+                reclaim attempts lost the creation race.
+        """
+        for _ in range(2):
+            try:
+                fd = os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                holder = self._read_lock_pid()
+                if holder is not None and _pid_alive(holder):
+                    if holder == os.getpid():
+                        hint = "this process already has the document open — close() the other Document/Workspace first"
+                    else:
+                        hint = (
+                            f"close the session in process {holder} first, or use "
+                            f"force_recreate=True to take the workspace over and "
+                            f"discard its unsaved edits"
+                        )
+                    raise WorkspaceLockedError(
+                        f"Workspace {self.workspace_path} is locked by a live session "
+                        f"(pid {holder}, lock file {self._lock_path}): {hint}.",
+                        pid=holder,
+                        lock_path=self._lock_path,
+                    ) from None
+                # Dead process or unreadable content: stale — reclaim and retry.
+                self._lock_path.unlink(missing_ok=True)
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(str(os.getpid()))
+            self._lock_acquired = True
+            return
+
+        # Both attempts found a fresh lock after reclaiming a stale one:
+        # another process won the re-creation race.
+        raise WorkspaceLockedError(
+            f"Workspace {self.workspace_path} was locked by another session while "
+            f"reclaiming a stale lock ({self._lock_path}). Retry, or close the "
+            f"competing session.",
+            pid=self._read_lock_pid(),
+            lock_path=self._lock_path,
+        )
+
+    def _release_lock(self) -> None:
+        """Remove the sidecar lock file if this instance acquired it.
+
+        Independent of workspace cleanup: close(cleanup=False) keeps the
+        workspace but must still free it for the next session. No __del__
+        counterpart — a killed process leaves the file behind by design, and
+        the staleness probe in _acquire_lock reclaims it.
+        """
+        if self._lock_acquired:
+            self._lock_path.unlink(missing_ok=True)
+            self._lock_acquired = False
 
     @classmethod
     def _resolve_workspace_path(cls, source_path: Path, workspace_dir: str | Path | None) -> Path:
@@ -384,9 +544,15 @@ class Workspace:
         unchanged). The flag is cleared only by a successful save() back to the
         source.
 
-        Document.save() and Workspace.save() both call this themselves; callers
-        that mutate workspace files directly must call it before touching disk,
-        or a crash before save() leaves the divergence unflagged.
+        Document.save() and Workspace.save() both call this themselves, and
+        Document wires it as the write-ahead hook of every editor it
+        constructs (XMLEditor's ``on_save``, CommentManager's ``on_write``),
+        so editor-mediated flushes honor the contract mechanically. The
+        exception is open-time tracking setup, which deliberately bypasses the
+        flag — see Document._setup_tracking(). Code that writes workspace
+        files directly (no editor in between) must still call this before
+        touching disk, or a crash before save() leaves the divergence
+        unflagged.
         """
         if not self.meta.get("dirty"):
             self.meta["dirty"] = True
@@ -538,6 +704,9 @@ class Workspace:
         # _create_workspace() recreates it on demand.
         if cleanup and self.workspace_path.exists():
             shutil.rmtree(self.workspace_path)
+        # Released in both cleanup modes: a kept workspace must still be
+        # adoptable by the next session.
+        self._release_lock()
 
     def get_xml_path(self, relative_path: str) -> Path:
         """Get the full path to an XML file in the workspace.
@@ -594,9 +763,14 @@ class Workspace:
         source_path = Path(source_path).resolve()
         workspace_path = cls._resolve_workspace_path(source_path, workspace_dir)
 
-        if not workspace_path.exists():
-            return False
+        removed = False
+        if workspace_path.exists():
+            # As in close(), the shared base directory is left in place.
+            shutil.rmtree(workspace_path)
+            removed = True
 
-        # As in close(), the shared base directory is left in place.
-        shutil.rmtree(workspace_path)
-        return True
+        # The advisory lock sidecar goes with the workspace — even one held by
+        # a live (possibly stuck) session — keeping force_recreate the
+        # universal escape hatch.
+        workspace_path.with_name(workspace_path.name + ".lock").unlink(missing_ok=True)
+        return removed

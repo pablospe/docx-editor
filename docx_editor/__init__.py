@@ -51,6 +51,7 @@ from .exceptions import (
     TextNotFoundError,
     WorkspaceError,
     WorkspaceExistsError,
+    WorkspaceLockedError,
     WorkspaceSyncError,
     XMLError,
 )
@@ -82,6 +83,7 @@ __all__ = [
     "InvalidDocumentError",
     "WorkspaceError",
     "WorkspaceExistsError",
+    "WorkspaceLockedError",
     "WorkspaceSyncError",
     "XMLError",
     "NodeNotFoundError",
