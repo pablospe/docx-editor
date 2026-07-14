@@ -143,6 +143,9 @@ class Workspace:
             DocumentNotFoundError: If the source document doesn't exist
             InvalidDocumentError: If the file is not a .docx file
             WorkspaceExistsError: If workspace exists and create=True
+            WorkspaceSyncError: If create=True and an existing workspace holds
+                unsaved changes from a previous session, or the source document
+                changed on disk since the workspace was created
         """
         # Keep the name the caller actually opened. If they opened a symlink, that is
         # the name Word was told to open — and therefore the name its ~$ owner file
@@ -172,6 +175,18 @@ class Workspace:
                 if existing_meta:
                     self._check_provenance(existing_meta)
                     self.meta = existing_meta
+                    # Checked before staleness: when both hold, the unsaved edits
+                    # are the data-loss-relevant fact to surface, not the mtime.
+                    if existing_meta.get("dirty"):
+                        raise WorkspaceSyncError(
+                            f"Workspace {self.workspace_path} holds unsaved changes from a "
+                            f"previous session. Adopting it would carry those edits into "
+                            f"this session and the next save would write them into "
+                            f"{self.source_path}. Use force_recreate=True (or delete the "
+                            f"workspace) to discard them, or "
+                            f"Workspace(source, create=False).save(destination=...) to "
+                            f"rescue them first."
+                        )
                     # Same staleness predicate as save(), so a workspace can never
                     # open clean here and then fail sync_check() later at save time.
                     if not self.sync_check():
@@ -317,6 +332,7 @@ class Workspace:
             "rsid": rsid,
             "next_comment_id": 0,
             "next_change_id": 0,
+            "dirty": False,
         }
 
         self._save_meta()
@@ -338,6 +354,25 @@ class Workspace:
         meta_path = self.workspace_path / self.META_FILE
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(self.meta, f, indent=2)
+
+    def mark_dirty(self) -> None:
+        """Persist that the workspace may hold content not saved to the source.
+
+        Call this *before* mutating workspace content on disk (write-ahead), so
+        that even a crash mid-mutation leaves the flag set. A dirty workspace is
+        refused for adoption by a later ``Workspace(create=True)`` — otherwise a
+        previous session's edits could silently carry into the new session (the
+        staleness check cannot catch this case: the source itself may be
+        unchanged). The flag is cleared only by a successful save() back to the
+        source.
+
+        Document.save() and Workspace.save() both call this themselves; callers
+        that mutate workspace files directly must call it before touching disk,
+        or a crash before save() leaves the divergence unflagged.
+        """
+        if not self.meta.get("dirty"):
+            self.meta["dirty"] = True
+            self._save_meta()
 
     def _check_not_open(self, output_path: Path, *, saving_in_place: bool) -> None:
         """Raise DocumentOpenError if Word appears to have the destination open.
@@ -381,6 +416,12 @@ class Workspace:
     ) -> Path:
         """Pack workspace back to a .docx file.
 
+        The workspace is flagged as holding unsaved changes (see
+        :meth:`mark_dirty`) before any check or write runs; only a successful
+        save back to the source clears the flag. A failed save, or a save to a
+        different destination, leaves the workspace refused for adoption by a
+        later ``Workspace(create=True)``.
+
         Args:
             destination: Output path (defaults to original source path)
             validate: If True, validate with LibreOffice
@@ -402,6 +443,13 @@ class Workspace:
         # only needed to decide whether we are about to overwrite our own source.
         output_path = Path(destination) if destination else self.source_path
         overwrites_source = self._is_source(output_path)
+
+        # Write-ahead: flag the workspace before any check or write can fail,
+        # so a crash from here on leaves the flag on disk. Not skipped by
+        # force= — this is bookkeeping, not a safety check. A save elsewhere
+        # leaves the flag set (the source never received that content); only
+        # a successful save back to the source clears it, below.
+        self.mark_dirty()
 
         # A missing source has no external edits to lose, so recreating it is safe
         # and must not be blocked — only an existing, changed source is protected.
@@ -442,6 +490,9 @@ class Workspace:
             saved_stat = output_path.stat()
             self.meta["source_mtime"] = saved_stat.st_mtime
             self.meta["source_size"] = saved_stat.st_size
+            # The source now holds everything the workspace holds — the
+            # workspace is no longer ahead of it, so adoption is safe again.
+            self.meta["dirty"] = False
             self._save_meta()
 
         return output_path

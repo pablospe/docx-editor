@@ -34,7 +34,12 @@ class WorkspaceExistsError(WorkspaceError):
 
 
 class WorkspaceSyncError(WorkspaceError):
-    """Raised when the source document has changed since workspace creation."""
+    """Raised when the workspace is out of sync with the source document.
+
+    Two triggers: the source changed on disk since the workspace was created,
+    or the workspace holds unsaved changes from a previous session that the
+    source never received.
+    """
 
     pass
 

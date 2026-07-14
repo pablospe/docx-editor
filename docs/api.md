@@ -25,7 +25,7 @@ Open a Word document for editing.
 
 **Raises:**
 
-- `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created. Pass `force_recreate=True` to discard the stale workspace and re-unpack from the current source. The workspace is never deleted silently. The error message includes the workspace path.
+- `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created, or if a leftover workspace holds unsaved changes from a previous session (one that saved to a different path, or whose save failed, and never closed). Pass `force_recreate=True` to discard the workspace and re-unpack from the current source. The workspace is never deleted silently. The error message includes the workspace path.
 - `WorkspaceError`: If the workspace directory cannot be created (e.g. the base is not writable), the home directory backing the default cache cannot be determined, or an existing workspace was unpacked from a different document. The message names the override to set.
 
 **Example:**
@@ -543,6 +543,8 @@ Save the document.
 
 **Returns:** Path to the saved document (Path)
 
+After saving to a different path (or a save that fails), the workspace is flagged as holding unsaved changes; a later `Document.open()` of the source raises `WorkspaceSyncError` until the workspace is saved back to the source or discarded with `force_recreate=True`. See [`WorkspaceSyncError`](#workspacesyncerror) below.
+
 **Example:**
 
 ```python
@@ -676,7 +678,7 @@ from docx_editor.exceptions import WorkspaceExistsError
 
 ### `WorkspaceSyncError`
 
-Raised when the workspace is out of sync with the source document.
+Raised when the workspace is out of sync with the source document: the source changed on disk since the workspace was created, or the workspace holds unsaved changes from a previous session that the source never received.
 
 ```python
 from docx_editor.exceptions import WorkspaceSyncError
