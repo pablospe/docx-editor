@@ -14,6 +14,9 @@ Covers:
     (``w:basedOn`` chains resolved, ``w:val="9"`` = body text)
   * ``heading_path`` is the chain of nearest preceding headings, outermost
     first, excluding the paragraph itself
+  * ``section`` is the 1-based section index: a direct ``w:pPr/w:sectPr``
+    closes a section (the carrying paragraph belongs to the section it
+    closes); the body-level ``w:sectPr`` defines the final section
   * stale refs raise ``HashMismatchError``; out-of-range refs raise
     ``ParagraphIndexError``
 
@@ -211,6 +214,45 @@ def styled_docx(simple_docx, tmp_path) -> Path:
     """A .docx with heading-styled paragraphs (uses simple.docx's own styles.xml)."""
     dest = tmp_path / "styled.docx"
     replace_document_xml(simple_docx, dest, _build_styled_document_xml())
+    return dest
+
+
+def _build_sectioned_document_xml() -> str:
+    """Hand-written ``word/document.xml`` with three sections.
+
+    Layout (unique text snippets for ``_ref_for_text``):
+
+      "Intro one"     plain                          → section 1
+      "Close one"     w:pPr/w:sectPr                 → section 1 (closes it)
+      "Open two"      plain                          → section 2
+      "Cell in two"   table cell paragraph           → section 2
+      "Close two"     w:pPr/w:sectPr                 → section 2 (closes it)
+      "Tail three"    plain                          → section 3
+      body-level w:sectPr at end of w:body           (final section)
+    """
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:document {_W_NS}>"
+        "<w:body>"
+        "<w:p><w:r><w:t>Intro one</w:t></w:r></w:p>"
+        "<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>Close one</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Open two</w:t></w:r></w:p>"
+        "<w:tbl><w:tr><w:tc>"
+        "<w:p><w:r><w:t>Cell in two</w:t></w:r></w:p>"
+        "</w:tc></w:tr></w:tbl>"
+        "<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>Close two</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Tail three</w:t></w:r></w:p>"
+        "<w:sectPr/>"
+        "</w:body>"
+        "</w:document>"
+    )
+
+
+@pytest.fixture
+def sectioned_docx(simple_docx, tmp_path) -> Path:
+    """A .docx with three sections split by paragraph-level ``w:sectPr``."""
+    dest = tmp_path / "sectioned.docx"
+    replace_document_xml(simple_docx, dest, _build_sectioned_document_xml())
     return dest
 
 
@@ -1094,3 +1136,80 @@ class TestListParagraphLocationsStyleInfo:
                 assert loc == doc.get_paragraph_location(ref)
             assert any(loc.outline_level is not None for _, loc in entries)
             assert any(loc.heading_path for _, loc in entries)
+
+
+class TestParagraphLocationSection:
+    """``location.section`` — 1-based section index from ``w:sectPr`` walks."""
+
+    def test_single_section_document_reports_one_everywhere(self, gridspan_docx):
+        """No paragraph-level ``w:sectPr`` → body, table, and nested-table
+        paragraphs all report section 1.
+        """
+        with Document.open(gridspan_docx) as doc:
+            for _, loc in doc.list_paragraph_locations():
+                assert loc.section == 1
+
+    def test_sections_split_at_sect_pr_boundaries(self, sectioned_docx):
+        expected = {
+            "Intro one": 1,
+            "Close one": 1,
+            "Open two": 2,
+            "Cell in two": 2,
+            "Close two": 2,
+            "Tail three": 3,
+        }
+        with Document.open(sectioned_docx) as doc:
+            for snippet, section in expected.items():
+                loc = doc.get_paragraph_location(_ref_for_text(doc, snippet))
+                assert loc.section == section, snippet
+
+    def test_carrying_paragraph_belongs_to_closed_section(self, sectioned_docx):
+        """A paragraph whose ``w:pPr`` carries the ``w:sectPr`` belongs to
+        the section it closes, not the next one.
+        """
+        with Document.open(sectioned_docx) as doc:
+            assert doc.get_paragraph_location(_ref_for_text(doc, "Close one")).section == 1
+            assert doc.get_paragraph_location(_ref_for_text(doc, "Close two")).section == 2
+
+    def test_table_paragraph_gets_enclosing_section(self, sectioned_docx):
+        with Document.open(sectioned_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Cell in two"))
+            assert loc.in_table is True
+            assert loc.section == 2
+
+    def test_stale_sect_pr_inside_p_pr_change_is_ignored(self, simple_docx, tmp_path):
+        """A ``w:sectPr`` found only inside a ``w:pPrChange`` revision record
+        must not close a section — direct-child walk regression guard.
+        """
+        body = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            "<w:p><w:pPr>"
+            '<w:pPrChange w:id="1" w:author="A" w:date="2026-01-01T00:00:00Z">'
+            "<w:pPr><w:sectPr/></w:pPr>"
+            "</w:pPrChange>"
+            "</w:pPr><w:r><w:t>Decoy paragraph</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>Following paragraph</w:t></w:r></w:p>"
+            "</w:body>"
+            "</w:document>"
+        )
+        dest = tmp_path / "sectpr-decoy.docx"
+        replace_document_xml(simple_docx, dest, body)
+        with Document.open(dest) as doc:
+            assert doc.get_paragraph_location(_ref_for_text(doc, "Decoy paragraph")).section == 1
+            assert doc.get_paragraph_location(_ref_for_text(doc, "Following paragraph")).section == 1
+
+    def test_dataclass_defaults_to_section_one(self):
+        assert ParagraphLocation(table=None).section == 1
+
+
+class TestListParagraphLocationsSectionInfo:
+    """Batch accessor carries the same section info as the per-call accessor."""
+
+    def test_equivalence_with_per_call_accessor(self, sectioned_docx):
+        with Document.open(sectioned_docx) as doc:
+            entries = doc.list_paragraph_locations()
+            for ref, loc in entries:
+                assert loc == doc.get_paragraph_location(ref)
+            assert [loc.section for _, loc in entries] == [1, 1, 2, 2, 2, 3]

@@ -226,7 +226,8 @@ match = doc.find_text("30 days")
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()
 
-# Structural location: table cell, list item (raw numId/ilvl), and heading context
+# Structural location: table cell, list item (raw numId/ilvl), heading context,
+# and section index
 loc = doc.get_paragraph_location("P3#b2c4")
 if loc.table:
     print(f"table {loc.table.index} r{loc.table.row} c{loc.table.col}")
@@ -235,6 +236,7 @@ if loc.list:
 if loc.outline_level is not None:  # 0-based; 0 == Heading 1
     print(f"heading level {loc.outline_level + 1}: style={loc.style}")
 print(" > ".join(loc.heading_path))  # e.g. "Chapter one > Termination"
+print(loc.section)  # 1-based section index; sectPr-carrying paragraph closes its section
 
 # All edit methods return the new paragraph ref as a plain string.
 # Use it for follow-up edits on the same paragraph:
