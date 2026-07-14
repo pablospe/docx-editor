@@ -898,9 +898,11 @@ class Document:
             List of Revision objects sorted by id. Each carries location
             fields: ``paragraph_ref`` (hash-anchored ref of its containing
             paragraph), ``occurrence`` (0-based index of the revision's text
-            within that paragraph — plugs into the ``occurrence=`` parameter
-            of replace()/delete()/add_comment(); None when the text is
-            not locatable, e.g. nested revisions), plus ``nested_under`` and
+            within that paragraph — for insertions it plugs into the
+            ``occurrence=`` parameter of replace()/delete()/add_comment();
+            for deletions it counts in the original, pre-revision text and
+            must not be passed to those APIs; None when the text is not
+            locatable, e.g. nested revisions), plus ``nested_under`` and
             ``contains_ids`` describing revision nesting (e.g. a foreign
             deletion inside another author's pending insertion).
 

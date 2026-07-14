@@ -321,9 +321,9 @@ their_changes = doc.list_revisions(author="OtherUser")
 # Filter to one paragraph (ref from list_paragraphs())
 para_changes = doc.list_revisions(paragraph="P3#a7b2")
 
-# r.paragraph_ref/r.occurrence plug straight into the anchor APIs
-# (occurrence is 0-based, same convention as replace/delete/add_comment):
-r = doc.list_revisions()[0]
+# For INSERTIONS, r.paragraph_ref/r.occurrence plug straight into the anchor
+# APIs (occurrence is 0-based, same convention as replace/delete/add_comment):
+r = next(r for r in doc.list_revisions() if r.type == "insertion")
 doc.add_comment(r.text, "please confirm", paragraph=r.paragraph_ref, occurrence=r.occurrence)
 
 # Accept or reject individual revisions (return True if found, False if not)
@@ -347,6 +347,12 @@ text (paragraph-mark markers), a host insertion whose text was partly consumed
 by a nested deletion, or a nested deletion itself (its text never existed in
 the original document). Never treat `None` as `0` — in every `None` case,
 `nested_under`/`contains_ids` describe the revision instead.
+
+**Deletion occurrences count in the original (pre-revision) text**, where the
+deleted span still exists — they locate the deletion for reporting, but must
+NOT be passed to replace/delete/add_comment, which search the visible text
+(an earlier inserted copy of the same text would shift the count and silently
+anchor the wrong span). Only insertion occurrences feed the anchor APIs.
 
 **Nested revisions**: when a reviewer deletes text inside another author's
 pending insertion (Word and this library both produce this), the deletion
