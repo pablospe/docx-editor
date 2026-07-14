@@ -20,7 +20,10 @@ from .xml_editor import (
     ParagraphInfo,
     ParagraphLocation,
     ParagraphRef,
+    XMLEditor,
+    _build_style_outline_map,
     _build_table_index,
+    _compute_heading_paths,
     _compute_paragraph_location,
     build_text_map,
     compute_paragraph_hash,
@@ -383,6 +386,17 @@ class Document:
         h = compute_paragraph_hash(p)
         return ParagraphInfo(index=index, ref=f"P{index}#{h}", text=build_text_map(p).text)
 
+    def _style_outline_map(self) -> dict[str, int]:
+        """Outline levels defined by paragraph styles in ``word/styles.xml``.
+
+        Parsed per call (no caching, matching the per-call table rescan
+        philosophy); a document without a styles part degrades to ``{}``.
+        """
+        styles_path = self._workspace.word_path / "styles.xml"
+        if not styles_path.exists():
+            return {}
+        return _build_style_outline_map(XMLEditor(styles_path).dom)
+
     def get_paragraph_location(self, ref: str) -> ParagraphLocation:
         """Return the structural location of the paragraph identified by ``ref``.
 
@@ -401,6 +415,22 @@ class Document:
         paragraph style (``w:pStyle``) is not resolved, and rendered display
         numbers (e.g. "7.2(a)") are not computed.
 
+        ``location.style`` is the raw ``w:pStyle`` style id (e.g.
+        ``"Heading1"``), ``None`` when absent. ``location.outline_level``
+        is the 0-based outline level (0 == Heading 1): a direct
+        ``w:outlineLvl`` on the paragraph wins (the spec's ``w:val="9"``
+        means body text → ``None``); otherwise the level defined by the
+        paragraph's style in ``word/styles.xml`` applies, with ``w:basedOn``
+        chains resolved. ``location.heading_path`` is the chain of nearest
+        preceding headings containing the paragraph, outermost first,
+        using each heading's current visible text; a heading's own path
+        excludes itself. Headings inside table cells participate in
+        document order.
+
+        Heading context is derived from whole-document scans on every
+        call; to locate many paragraphs, prefer
+        :meth:`list_paragraph_locations`, which precomputes it once.
+
         Args:
             ref: Paragraph reference from :meth:`list_paragraphs` (e.g.,
                 ``"P3#a7b2"``).
@@ -410,7 +440,9 @@ class Document:
             for body paragraphs; ``True`` when the paragraph is inside a
             ``<w:tc>`` cell (in which case ``location.table`` is populated).
             ``location.list`` is a :class:`ListItem` for list paragraphs,
-            ``None`` otherwise.
+            ``None`` otherwise. ``location.style``,
+            ``location.outline_level`` and ``location.heading_path`` carry
+            the paragraph's heading context as described above.
 
         Raises:
             ValueError: If ``ref`` has an invalid format.
@@ -420,14 +452,15 @@ class Document:
                 was captured).
 
         Example:
-            for entry in doc.list_paragraphs():
-                ref = entry.split("|")[0]
-                loc = doc.get_paragraph_location(ref)
-                if loc.in_table:
-                    cell = loc.table
-                    print(f"{ref}: table {cell.index} r{cell.row} c{cell.col}")
-                if loc.list:
-                    print(f"{ref}: list numId={loc.list.num_id} level={loc.list.ilvl}")
+            loc = doc.get_paragraph_location("P3#a7b2")
+            if loc.in_table:
+                cell = loc.table
+                print(f"table {cell.index} r{cell.row} c{cell.col}")
+            if loc.list:
+                print(f"list numId={loc.list.num_id} level={loc.list.ilvl}")
+            if loc.outline_level is not None:
+                print(f"heading level {loc.outline_level + 1}")
+            print(f"under {' > '.join(loc.heading_path) or '(no heading)'}")
         """
         self._ensure_open()
         parsed = ParagraphRef.parse(ref)
@@ -442,17 +475,19 @@ class Document:
             if len(tm.text) > 80:
                 preview += "..."
             raise HashMismatchError(parsed.index, parsed.hash, actual_hash, preview)
-        return _compute_paragraph_location(p)
+        style_outlines = self._style_outline_map()
+        heading_path = _compute_heading_paths(paragraphs[: parsed.index], style_outlines)[-1]
+        return _compute_paragraph_location(p, style_outlines=style_outlines, heading_path=heading_path)
 
     def list_paragraph_locations(self) -> list[tuple[str, ParagraphLocation]]:
         """List every paragraph paired with its structural location.
 
         Batch counterpart to :meth:`get_paragraph_location`: precomputes
-        table indices once instead of re-scanning the table hierarchy per
-        ref. Each entry is ``(ref, location)`` where
-        ``ref`` is the same ``"P{i}#{hash}"`` token emitted by
-        :meth:`list_paragraphs` (the part before ``|``) and accepted by
-        :meth:`get_paragraph_location` and the editing methods.
+        table indices, style outline levels, and heading paths once instead
+        of re-scanning the document per ref. Each entry is ``(ref,
+        location)`` where ``ref`` is the same ``"P{i}#{hash}"`` token
+        emitted by :meth:`list_paragraphs` (the part before ``|``) and
+        accepted by :meth:`get_paragraph_location` and the editing methods.
 
         Returns:
             List of ``(ref, ParagraphLocation)`` tuples in document order.
@@ -461,6 +496,9 @@ class Document:
             ``location.list`` is a :class:`ListItem` for paragraphs with a
             direct ``w:pPr/w:numPr``, ``None`` otherwise (raw values; no
             style-inherited numbering, no rendered display numbers).
+            ``location.style``, ``location.outline_level`` and
+            ``location.heading_path`` carry the paragraph's heading context
+            with the same semantics as :meth:`get_paragraph_location`.
 
         Example:
             for ref, loc in doc.list_paragraph_locations():
@@ -469,14 +507,21 @@ class Document:
                     print(f"{ref}: table {cell.index} r{cell.row} c{cell.col}")
                 if loc.list:
                     print(f"{ref}: list numId={loc.list.num_id} level={loc.list.ilvl}")
+                print(f"{ref}: under {' > '.join(loc.heading_path) or '(no heading)'}")
         """
         self._ensure_open()
         dom = self._document_editor.dom
         table_index = _build_table_index(dom)
+        style_outlines = self._style_outline_map()
+        paragraphs = dom.getElementsByTagName("w:p")
+        heading_paths = _compute_heading_paths(paragraphs, style_outlines)
         result = []
-        for i, p in enumerate(dom.getElementsByTagName("w:p"), start=1):
+        for i, (p, path) in enumerate(zip(paragraphs, heading_paths, strict=True), start=1):
             ref = f"P{i}#{compute_paragraph_hash(p)}"
-            result.append((ref, _compute_paragraph_location(p, table_index)))
+            result.append((
+                ref,
+                _compute_paragraph_location(p, table_index, style_outlines=style_outlines, heading_path=path),
+            ))
         return result
 
     def get_visible_text(self) -> str:

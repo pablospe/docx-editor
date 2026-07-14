@@ -128,13 +128,15 @@ for start in range(1, count + 1, page_size):
 
 #### `get_paragraph_location(ref)`
 
-Report whether a paragraph lives in the document body or inside a table cell, and whether it is a list item.
+Report whether a paragraph lives in the document body or inside a table cell, whether it is a list item, and its heading context (style, outline level, and the chain of headings above it).
 
 **Parameters:**
 
 - `ref` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 
 **Returns:** `ParagraphLocation`. `location.in_table` is `False` for body paragraphs; `True` when the paragraph is inside a `<w:tc>` cell, in which case `location.table` carries the 1-based table index, row, `w:gridSpan`-aware logical column, and nesting depth. `location.list` is a `ListItem(num_id, ilvl)` for paragraphs carrying a direct `w:pPr/w:numPr`, `None` otherwise — raw values only: numbering inherited via a paragraph style is not resolved, and rendered display numbers (e.g. "7.2(a)") are not computed.
+
+`location.style` is the raw `w:pStyle` style id (e.g. `"Heading1"`), `None` when the paragraph carries no explicit style — no name resolution against `word/styles.xml`. `location.outline_level` is the 0-based outline level (`0` == Heading 1, so a document heading level is `outline_level + 1`): a direct `w:outlineLvl` on the paragraph wins, and the spec's `w:val="9"` marker means body text (`None`); otherwise the level defined by the paragraph's style applies, with `w:basedOn` inheritance chains resolved. `location.heading_path` is the chain of nearest preceding headings that contains the paragraph, outermost first (e.g. `("Chapter one", "Termination")`), built from each heading's current visible text; a heading's own path lists only its ancestors, never itself. Headings inside table cells participate in document order.
 
 **Example:**
 
@@ -145,13 +147,16 @@ if loc.in_table:
     print(f"table {cell.index} r{cell.row} c{cell.col} (depth {cell.depth})")
 if loc.list:
     print(f"list numId={loc.list.num_id} level={loc.list.ilvl}")
+if loc.outline_level is not None:
+    print(f"heading level {loc.outline_level + 1}: style={loc.style}")
+print(" > ".join(loc.heading_path))  # e.g. "Chapter one > Termination"
 ```
 
 #### `list_paragraph_locations()`
 
-Batch counterpart to `get_paragraph_location()`: pair every paragraph with its structural location in one pass, precomputing table indices once instead of rescanning the table hierarchy per ref.
+Batch counterpart to `get_paragraph_location()`: pair every paragraph with its structural location in one pass, precomputing table indices, style outline levels, and heading paths once instead of rescanning the document per ref.
 
-**Returns:** List of `(ref, ParagraphLocation)` tuples in document order, where `ref` is the same `P{index}#{hash}` token emitted by `list_paragraphs()`. Each location carries the same table and list info as `get_paragraph_location()`.
+**Returns:** List of `(ref, ParagraphLocation)` tuples in document order, where `ref` is the same `P{index}#{hash}` token emitted by `list_paragraphs()`. Each location carries the same table, list, style, outline-level, and heading-path info as `get_paragraph_location()`.
 
 **Example:**
 
@@ -162,6 +167,8 @@ for ref, loc in doc.list_paragraph_locations():
         print(f"{ref}: table {cell.index} r{cell.row} c{cell.col} (depth {cell.depth})")
     if loc.list:
         print(f"{ref}: list numId={loc.list.num_id} level={loc.list.ilvl}")
+    if loc.heading_path:
+        print(f"{ref}: under {' > '.join(loc.heading_path)}")
 ```
 
 #### `get_visible_text()`
