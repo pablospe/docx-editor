@@ -219,3 +219,11 @@ __marimo__/
 .claude/commands/agtx/
 .claude/commands/openspec/
 .mcp.json
+
+# Corpus benchmark artifacts (benchmarks/corpus/README.md)
+benchmarks/corpus/files/
+benchmarks/corpus/out/
+benchmarks/corpus/work/
+benchmarks/corpus/loprofile/
+benchmarks/corpus/results.json*
+benchmarks/corpus/srcgen/plain.odt

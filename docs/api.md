@@ -25,7 +25,7 @@ Open a Word document for editing.
 
 **Raises:**
 
-- `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created, or if a leftover workspace holds unsaved changes from a previous session (one that saved to a different path, or whose save failed, and never closed). Pass `force_recreate=True` to discard the workspace and re-unpack from the current source. The workspace is never deleted silently. The error message includes the workspace path.
+- `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created, or if a leftover workspace holds unsaved changes from a previous session — any session that made edits without a final successful `save()` back to the source (it saved to a different path, its save failed, or it closed with `close(cleanup=False)`). Pass `force_recreate=True` to discard the workspace and re-unpack from the current source. The workspace is never deleted silently. The error message includes the workspace path.
 - `WorkspaceLockedError`: If a live session — another process, or an unclosed `Document` in this one — already holds the document's workspace. Close the other session, or pass `force_recreate=True` to take the workspace over and discard its unsaved edits. Locks left by dead processes are reclaimed silently.
 - `WorkspaceError`: If the workspace directory cannot be created (e.g. the base is not writable), the home directory backing the default cache cannot be determined, or an existing workspace was unpacked from a different document. The message names the override to set.
 
@@ -135,7 +135,7 @@ Report whether a paragraph lives in the document body or inside a table cell, wh
 
 - `ref` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 
-**Returns:** `ParagraphLocation`. `location.in_table` is `False` for body paragraphs; `True` when the paragraph is inside a `<w:tc>` cell, in which case `location.table` carries the 1-based table index, row, `w:gridSpan`-aware logical column, and nesting depth. `location.list` is a `ListItem(num_id, ilvl)` for paragraphs carrying a direct `w:pPr/w:numPr`, `None` otherwise — raw values only: numbering inherited via a paragraph style is not resolved, and rendered display numbers (e.g. "7.2(a)") are not computed.
+**Returns:** `ParagraphLocation`. `location.in_table` is `False` for body paragraphs; `True` when the paragraph is inside a `<w:tc>` cell, in which case `location.table` carries the 1-based table index, row, `w:gridSpan`-aware logical column, and nesting depth. `location.list` is a `ListItem(num_id, ilvl)` for list paragraphs, `None` otherwise: a direct `w:pPr/w:numPr` wins when present — including Word's `numId=0` "numbering disabled" marker, which reports `None` with no style fallback — otherwise the numbering defined by the paragraph's style applies, with `w:basedOn` inheritance chains resolved. Rendered display numbers (e.g. "7.2(a)") are not computed.
 
 `location.style` is the raw `w:pStyle` style id (e.g. `"Heading1"`), `None` when the paragraph carries no explicit style — no name resolution against `word/styles.xml`. `location.outline_level` is the 0-based outline level (`0` == Heading 1, so a document heading level is `outline_level + 1`): a direct `w:outlineLvl` on the paragraph wins, and the spec's `w:val="9"` marker means body text (`None`); otherwise the level defined by the paragraph's style applies, with `w:basedOn` inheritance chains resolved. `location.heading_path` is the chain of nearest preceding headings that contains the paragraph, outermost first (e.g. `("Chapter one", "Termination")`), built from each heading's current visible text; a heading's own path lists only its ancestors, never itself. Headings inside table cells participate in document order. `location.section` is the paragraph's 1-based section index: a paragraph carrying a direct `w:pPr/w:sectPr` closes a section and belongs to the section it closes, the next paragraph starts the following one, and the body-level `w:sectPr` defines the final section — single-section documents report `1` everywhere.
 
@@ -156,7 +156,7 @@ print(f"section {loc.section}")
 
 #### `list_paragraph_locations()`
 
-Batch counterpart to `get_paragraph_location()`: pair every paragraph with its structural location in one pass, precomputing table indexes, style outline levels, heading paths, and section indexes once instead of rescanning the document per ref.
+Batch counterpart to `get_paragraph_location()`: pair every paragraph with its structural location in one pass, precomputing table indexes, style outline levels, style numbering, heading paths, and section indexes once instead of rescanning the document per ref.
 
 **Returns:** List of `(ref, ParagraphLocation)` tuples in document order, where `ref` is the same `P{index}#{hash}` token emitted by `list_paragraphs()`. Each location carries the same table, list, style, outline-level, heading-path, and section info as `get_paragraph_location()`.
 
@@ -204,7 +204,7 @@ Find text in the document, including text spanning XML element boundaries.
 **Parameters:**
 
 - `text` (str): Text to search for
-- `occurrence` (int): Which occurrence to return, counted document-wide. Defaults to 0.
+- `occurrence` (int): Which occurrence to return, counted document-wide, 0-based (0 = first). Defaults to 0.
 
 **Returns:** [`SearchResult`](#searchresult), or None if not found
 
@@ -248,7 +248,7 @@ Replace text with tracked changes. When the target sits inside another author's 
 - `find` (str): Text to find and replace
 - `replace_with` (str): Replacement text
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
-- `occurrence` (int): Which occurrence within the paragraph. Defaults to 0.
+- `occurrence` (int): Which occurrence within the paragraph, 0-based (0 = first). Defaults to 0.
 
 **Returns:** Updated paragraph reference (str)
 
@@ -267,7 +267,7 @@ Mark text as deleted with tracked changes. Deleting text inside another author's
 
 - `text` (str): Text to mark as deleted
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
-- `occurrence` (int): Which occurrence within the paragraph. Defaults to 0.
+- `occurrence` (int): Which occurrence within the paragraph, 0-based (0 = first). Defaults to 0.
 
 **Returns:** Updated paragraph reference (str)
 
@@ -286,7 +286,7 @@ Insert text after anchor with tracked changes. An anchor inside another author's
 - `anchor` (str): Text to find as insertion point
 - `text` (str): Text to insert after the anchor
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
-- `occurrence` (int): Which occurrence within the paragraph. Defaults to 0.
+- `occurrence` (int): Which occurrence within the paragraph, 0-based (0 = first). Defaults to 0.
 
 **Returns:** Updated paragraph reference (str)
 
@@ -305,7 +305,7 @@ Insert text before anchor with tracked changes. Foreign pending insertions are t
 - `anchor` (str): Text to find as insertion point
 - `text` (str): Text to insert before the anchor
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
-- `occurrence` (int): Which occurrence within the paragraph. Defaults to 0.
+- `occurrence` (int): Which occurrence within the paragraph, 0-based (0 = first). Defaults to 0.
 
 **Returns:** Updated paragraph reference (str)
 
@@ -332,29 +332,43 @@ Rewrite a paragraph using tracked changes generated from a word-level diff.
 ref = doc.rewrite_paragraph("P2#f3c1", "Payment is due within 60 days after invoice receipt.")
 ```
 
-#### `batch_edit(operations)`
+#### `batch_edit(operations, *, dry_run=False)`
 
-Apply multiple edits after validating paragraph hashes up front.
+Apply multiple edits after validating paragraph hashes up front. If any hash is
+stale, the entire batch is rejected before any edits are applied.
 
 **Parameters:**
 
 - `operations` (list[EditOperation]): Edit operations to apply
+- `dry_run` (bool): If True, validate every operation without applying any edits and return one [`EditValidationResult`](#editvalidationresult) per operation, in input order; the document is left unchanged. Each operation is validated independently against the current document — sequential effects between multiple operations on the same paragraph are **not** simulated. Defaults to False.
 
-**Returns:** Updated paragraph references in input order (list[str])
+**Returns:** Updated paragraph references in input order (list[str]); with `dry_run=True`, a list of [`EditValidationResult`](#editvalidationresult) instead
 
 **Example:**
 
 ```python
 from docx_editor import EditOperation
 
-new_refs = doc.batch_edit([
+ops = [
     EditOperation.replace("old", "new", paragraph="P2#f3c1"),
     EditOperation.delete("remove this", paragraph="P5#d4e5"),
-])
+]
+
+# Pre-flight the batch, then apply
+results = doc.batch_edit(ops, dry_run=True)
+if all(r.valid for r in results):
+    new_refs = doc.batch_edit(ops)
 ```
 
 Prefer the typed constructors ([`EditOperation`](#editoperation)) — they validate
 arguments when the operation is built, so mistakes fail fast instead of at apply time.
+
+Multiple operations on the same paragraph apply sequentially in input order:
+each operation's find/anchor text and `occurrence` resolve against the
+paragraph's visible text as left by the previous operations in the batch (a
+tracked delete removes text from that view; an insert adds to it). Across
+different paragraphs, operations are applied in reverse document order — a
+behavior that keeps one `list_paragraphs()` snapshot valid for the whole batch.
 
 #### `batch_rewrite(rewrites)`
 
@@ -377,21 +391,27 @@ new_refs = doc.batch_rewrite([
 
 ### Comment Methods
 
-#### `add_comment(anchor_text, comment)`
+#### `add_comment(anchor_text, comment, *, paragraph=None, occurrence=0)`
 
-Add a comment anchored to specific text.
+Add a comment anchored to specific text. Anchors are located with the same
+visible-text search used by `count_matches()` and the tracked-change edit
+methods, so anchors that span `w:t` run boundaries (formatting changes,
+smart-quote splits, `w:ins` wrappers) are found.
 
 **Parameters:**
 
 - `anchor_text` (str): Text to attach the comment to
 - `comment` (str): The comment content
+- `paragraph` (str, optional): Paragraph reference (e.g. `P3#a7b2`) to scope the search. `None` searches the whole document. Defaults to None.
+- `occurrence` (int): Which occurrence to anchor to, 0-based (0 = first). Defaults to 0.
 
-**Returns:** The comment ID (int)
+**Returns:** The comment ID (int). IDs are allocated sequentially starting at 0 in a document with no existing comments — always use the returned ID rather than guessing.
 
 **Example:**
 
 ```python
-doc.add_comment("Section 5", "Please review this section")
+cid = doc.add_comment("Section 5", "Please review this section")
+doc.add_comment("term", "Note on the 2nd 'term'", paragraph="P3#a7b2", occurrence=1)
 ```
 
 #### `reply_to_comment(comment_id, reply)`
@@ -487,6 +507,7 @@ Accept a revision by ID.
 
 - For insertions: keeps the inserted content
 - For deletions: permanently removes the deleted content
+- Nested revisions: accepting an insertion unwraps it in place, so a deletion another author nested inside it survives as an independent pending deletion
 
 **Parameters:**
 
@@ -506,6 +527,7 @@ Reject a revision by ID.
 
 - For insertions: removes the inserted content
 - For deletions: restores the deleted content
+- Nested revisions: rejecting an insertion removes everything inside it — deletions another author nested inside it disappear with it
 
 **Parameters:**
 
@@ -554,7 +576,7 @@ count = doc.reject_all(author="OtherUser")
 
 ### Save and Close Methods
 
-#### `save(path=None, validate=False)`
+#### `save(path=None, validate=False, force=False)`
 
 Save the document.
 
@@ -562,6 +584,7 @@ Save the document.
 
 - `path` (str | Path, optional): Output path. Defaults to original source path.
 - `validate` (bool): If True, validate with LibreOffice before saving. Defaults to False.
+- `force` (bool): If True, skip save-time safety checks. By default `save()` refuses to overwrite the source if it changed on disk since it was opened (raising [`WorkspaceSyncError`](#workspacesyncerror)), or to write a destination that appears open in Word — a `~$` owner file exists next to it (raising [`DocumentOpenError`](#documentopenerror)). Pass `force=True` only for a confirmed-stale lock left by a crashed session. Defaults to False.
 
 **Returns:** Path to the saved document (Path)
 
@@ -578,6 +601,8 @@ doc.save("contract_v2.docx")  # Save to new path
 
 Close the document and clean up workspace. Releases the advisory workspace lock in both cleanup modes — closing is what frees the document for another session to open (see [`WorkspaceLockedError`](#workspacelockederror)).
 
+> **Warning:** closing without saving discards unsaved edits. There is no dirty check: `close()` (the default `cleanup=True`, including normal context-manager exit) deletes the workspace and everything not yet written by `save()` is silently lost. `close(cleanup=False)` keeps the workspace on disk, but a later `Document.open()` of the same source raises `WorkspaceSyncError` if it holds unsaved changes, rather than silently carrying them over.
+
 **Parameters:**
 
 - `cleanup` (bool): If True, delete the workspace folder. Defaults to True.
@@ -585,15 +610,20 @@ Close the document and clean up workspace. Releases the advisory workspace lock 
 **Example:**
 
 ```python
-doc.close()  # Clean up workspace
-doc.close(cleanup=False)  # Keep workspace for inspection
+doc.save()   # persist edits first —
+doc.close()  # close() alone discards anything unsaved
+
+# Or, instead of the above: keep the workspace on disk for inspection
+doc.close(cleanup=False)
 ```
 
 ---
 
 ## Comment
 
-Represents a document comment.
+Represents a document comment. IDs are allocated sequentially starting at 0 in
+a document with no existing comments — always use the ID returned by
+`add_comment()` / `reply_to_comment()` rather than assuming a numbering scheme.
 
 ```python
 from docx_editor import Comment
@@ -687,7 +717,7 @@ from docx_editor import EditOperation
 All constructors also take:
 
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
-- `occurrence` (int): Which occurrence within the paragraph. Defaults to 0. Must be >= 0.
+- `occurrence` (int): Which occurrence within the paragraph, 0-based (0 = first). Defaults to 0. Must be >= 0.
 
 **Raises:** `ValueError` at construction time if the paragraph ref is malformed,
 `occurrence` is negative, a search-target argument (`find`, delete `text`,
@@ -704,6 +734,43 @@ new_refs = doc.batch_edit([
     EditOperation.delete("obsolete clause", paragraph="P5#d4e5"),
     EditOperation.insert_after("Section 5", " (as amended)", paragraph="P7#b1c2"),
 ])
+```
+
+---
+
+## EditValidationResult
+
+The outcome of validating one `EditOperation` in a `batch_edit(ops, dry_run=True)`
+call. One result is returned per operation, in input order.
+
+```python
+from docx_editor import EditValidationResult
+```
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `index` | int | 0-based position of the operation in the input list |
+| `paragraph` | str or None | The operation's paragraph ref (`None` if it was missing) |
+| `valid` | bool | True if the operation would apply cleanly |
+| `error` | str or None | Human-readable reason when not valid |
+
+### Example
+
+```python
+from docx_editor import EditOperation
+
+ops = [
+    EditOperation.replace("old", "new", paragraph="P2#f3c1"),
+    EditOperation.delete("remove this", paragraph="P5#d4e5"),
+]
+results = doc.batch_edit(ops, dry_run=True)
+for r in results:
+    if not r.valid:
+        print(f"op {r.index} on {r.paragraph}: {r.error}")
+if all(r.valid for r in results):
+    new_refs = doc.batch_edit(ops)
 ```
 
 ---
@@ -812,6 +879,19 @@ Raised when the workspace is out of sync with the source document: the source ch
 
 ```python
 from docx_editor.exceptions import WorkspaceSyncError
+```
+
+### `DocumentOpenError`
+
+Raised by `save()` when the destination appears open in another program. Word writes a `~$` owner (lock) file next to any document it has open; if that stub exists at save time, saving would race Word's own writes, so `save()` refuses unless `force=True`. Also raised when the OS denies the final replace (on Windows, Word holding the file open is exactly this case) — `force=True` cannot suppress that one. The exception carries `path` (the destination) and `owner_file` (the `~$` file that triggered the guard, or `None` when the OS denied the replace) attributes.
+
+```python
+from docx_editor.exceptions import DocumentOpenError
+
+try:
+    doc.save()
+except DocumentOpenError as e:
+    print(f"Close {e.path} in Word first (lock: {e.owner_file})")
 ```
 
 ### `WorkspaceLockedError`

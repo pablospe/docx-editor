@@ -17,10 +17,12 @@ from .track_changes import EditOperation, EditValidationResult, Revision, Revisi
 from .workspace import Workspace
 from .xml_editor import (
     DocxXMLEditor,
+    ListItem,
     ParagraphInfo,
     ParagraphLocation,
     ParagraphRef,
     XMLEditor,
+    _build_style_numbering_map,
     _build_style_outline_map,
     _build_table_index,
     _compute_heading_paths,
@@ -396,16 +398,18 @@ class Document:
         h = compute_paragraph_hash(p)
         return ParagraphInfo(index=index, ref=f"P{index}#{h}", text=build_text_map(p).text)
 
-    def _style_outline_map(self) -> dict[str, int]:
-        """Outline levels defined by paragraph styles in ``word/styles.xml``.
+    def _style_maps(self) -> tuple[dict[str, int], dict[str, ListItem]]:
+        """Outline-level and numbering maps defined by paragraph styles.
 
-        Parsed per call (no caching, matching the per-call table rescan
-        philosophy); a document without a styles part degrades to ``{}``.
+        One ``word/styles.xml`` parse serves both maps. Parsed per call
+        (no caching, matching the per-call table rescan philosophy); a
+        document without a styles part degrades to ``({}, {})``.
         """
         styles_path = self._workspace.word_path / "styles.xml"
         if not styles_path.exists():
-            return {}
-        return _build_style_outline_map(XMLEditor(styles_path).dom)
+            return {}, {}
+        styles_dom = XMLEditor(styles_path).dom
+        return _build_style_outline_map(styles_dom), _build_style_numbering_map(styles_dom)
 
     def get_paragraph_location(self, ref: str) -> ParagraphLocation:
         """Return the structural location of the paragraph identified by ``ref``.
@@ -414,16 +418,19 @@ class Document:
         inside a table cell, and — when in a table — gives its 1-based
         coordinates (table index, row, logical column, depth). Also reports
         list membership: ``location.list`` is a ``ListItem(num_id, ilvl)``
-        when the paragraph carries a direct ``w:pPr/w:numPr``, else ``None``.
+        for list paragraphs, else ``None``.
 
         ``location.table.col`` is the *logical-grid* column, accounting for
         ``w:gridSpan`` of preceding cells in the same row. A cell that
         visually sits in column 4 reports ``col=4`` even when an earlier
         cell in the row spans 2 grid columns.
 
-        ``location.list`` holds raw values only: numbering inherited via a
-        paragraph style (``w:pStyle``) is not resolved, and rendered display
-        numbers (e.g. "7.2(a)") are not computed.
+        For ``location.list``, a direct ``w:pPr/w:numPr`` wins when present
+        — including Word's ``numId=0`` "numbering disabled" marker, which
+        reports ``None`` with no style fallback; otherwise the numbering
+        defined by the paragraph's style in ``word/styles.xml`` applies,
+        with ``w:basedOn`` chains resolved. Rendered display numbers
+        (e.g. "7.2(a)") are not computed.
 
         ``location.style`` is the raw ``w:pStyle`` style id (e.g.
         ``"Heading1"``), ``None`` when absent. ``location.outline_level``
@@ -493,29 +500,36 @@ class Document:
             if len(tm.text) > 80:
                 preview += "..."
             raise HashMismatchError(parsed.index, parsed.hash, actual_hash, preview)
-        style_outlines = self._style_outline_map()
+        style_outlines, style_numbering = self._style_maps()
         heading_path = _compute_heading_paths(paragraphs[: parsed.index], style_outlines)[-1]
         section = _compute_section_indexes(paragraphs[: parsed.index])[-1]
-        return _compute_paragraph_location(p, style_outlines=style_outlines, heading_path=heading_path, section=section)
+        return _compute_paragraph_location(
+            p,
+            style_outlines=style_outlines,
+            style_numbering=style_numbering,
+            heading_path=heading_path,
+            section=section,
+        )
 
     def list_paragraph_locations(self) -> list[tuple[str, ParagraphLocation]]:
         """List every paragraph paired with its structural location.
 
         Batch counterpart to :meth:`get_paragraph_location`: precomputes
-        table indexes, style outline levels, heading paths, and section
-        indexes once instead of re-scanning the document per ref. Each
-        entry is ``(ref, location)`` where ``ref`` is the same
-        ``"P{i}#{hash}"`` token emitted by :meth:`list_paragraphs` (the
-        part before ``|``) and accepted by :meth:`get_paragraph_location`
-        and the editing methods.
+        table indexes, style outline levels, style numbering, heading
+        paths, and section indexes once instead of re-scanning the
+        document per ref. Each entry is ``(ref, location)`` where ``ref``
+        is the same ``"P{i}#{hash}"`` token emitted by
+        :meth:`list_paragraphs` (the part before ``|``) and accepted by
+        :meth:`get_paragraph_location` and the editing methods.
 
         Returns:
             List of ``(ref, ParagraphLocation)`` tuples in document order.
             ``location.in_table`` is ``False`` for body paragraphs; ``True``
             when the paragraph is inside a ``<w:tc>`` cell.
-            ``location.list`` is a :class:`ListItem` for paragraphs with a
-            direct ``w:pPr/w:numPr``, ``None`` otherwise (raw values; no
-            style-inherited numbering, no rendered display numbers).
+            ``location.list`` is a :class:`ListItem` for list paragraphs,
+            ``None`` otherwise (a direct ``w:numPr`` wins, else the
+            paragraph style's numbering applies with ``w:basedOn`` chains
+            resolved; rendered display numbers are not computed).
             ``location.style``, ``location.outline_level``,
             ``location.heading_path`` and ``location.section`` carry the
             paragraph's heading and section context with the same
@@ -534,7 +548,7 @@ class Document:
         self._ensure_open()
         dom = self._document_editor.dom
         table_index = _build_table_index(dom)
-        style_outlines = self._style_outline_map()
+        style_outlines, style_numbering = self._style_maps()
         paragraphs = dom.getElementsByTagName("w:p")
         heading_paths = _compute_heading_paths(paragraphs, style_outlines)
         section_indexes = _compute_section_indexes(paragraphs)
@@ -544,7 +558,12 @@ class Document:
             result.append((
                 ref,
                 _compute_paragraph_location(
-                    p, table_index, style_outlines=style_outlines, heading_path=path, section=section
+                    p,
+                    table_index,
+                    style_outlines=style_outlines,
+                    style_numbering=style_numbering,
+                    heading_path=path,
+                    section=section,
                 ),
             ))
         return result
