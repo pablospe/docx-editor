@@ -589,6 +589,30 @@ class Document:
             parts.append(tm.text)
         return "\n".join(parts)
 
+    def get_markup_text(self) -> str:
+        """Get document text with tracked changes rendered inline.
+
+        Paragraphs are separated by newlines; insertions render as
+        ``[ins#{id}:{author}]...[/ins]`` and deletions as
+        ``[del#{id}:{author}]...[/del]``, nesting included — a foreign
+        deletion inside a pending insertion renders as
+        ``[ins#1:A]kept [del#9:B]gone[/del][/ins]``.
+
+        A verification view for humans and agents (e.g. checking redlines
+        without accepting them), not a parseable format: author names are
+        not escaped, and tabs/breaks are not rendered.
+
+        Returns:
+            The marked-up text content
+
+        Example:
+            doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+            print(doc.get_markup_text())
+            # ... [del#3:Reviewer]30 days[/del][ins#4:Reviewer]60 days[/ins] ...
+        """
+        self._ensure_open()
+        return self._revision_manager.get_markup_text()
+
     def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int = 0) -> str:
         """Replace text with tracked changes.
 
@@ -861,22 +885,39 @@ class Document:
 
     # ==================== Revision Management API ====================
 
-    def list_revisions(self, author: str | None = None) -> list[Revision]:
+    def list_revisions(self, author: str | None = None, paragraph: str | None = None) -> list[Revision]:
         """List all tracked changes in the document.
 
         Args:
             author: If provided, filter by author name
+            paragraph: If provided, a paragraph reference from
+                list_paragraphs() (e.g. "P2#f3c1"); only revisions inside
+                that paragraph are returned.
 
         Returns:
-            List of Revision objects
+            List of Revision objects sorted by id. Each carries location
+            fields: ``paragraph_ref`` (hash-anchored ref of its containing
+            paragraph), ``occurrence`` (0-based index of the revision's text
+            within that paragraph — plugs into the ``occurrence=`` parameter
+            of replace()/delete()/add_comment(); None when the text is
+            not locatable, e.g. nested revisions), plus ``nested_under`` and
+            ``contains_ids`` describing revision nesting (e.g. a foreign
+            deletion inside another author's pending insertion).
+
+        Raises:
+            ValueError: If ``paragraph`` is malformed
+            ParagraphIndexError: If the paragraph index is out of range
+            HashMismatchError: If the paragraph hash doesn't match current content
 
         Example:
-            revisions = doc.list_revisions()
-            for r in revisions:
-                print(f"{r.type}: {r.text} by {r.author}")
+            # Reviewer workflow: inspect one paragraph's revisions, then act.
+            for ref, location in doc.list_paragraph_locations():
+                for r in doc.list_revisions(paragraph=ref):
+                    print(f"{r.id}: {r.type} '{r.text}' by {r.author}")
+            doc.accept_revision(3)
         """
         self._ensure_open()
-        return self._revision_manager.list_revisions(author=author)
+        return self._revision_manager.list_revisions(author=author, paragraph=paragraph)
 
     def accept_revision(self, revision_id: int) -> bool:
         """Accept a revision by ID.
