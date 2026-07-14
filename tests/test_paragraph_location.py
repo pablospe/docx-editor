@@ -7,8 +7,10 @@ Covers:
     ``<w:tc>`` count
   * nested tables increment ``depth`` and produce a depth-first doc-wide
     table ``index``
-  * list paragraphs report ``ListItem(num_id, ilvl)`` from their direct
-    ``w:pPr/w:numPr``; non-list paragraphs report ``list=None``
+  * list paragraphs report ``ListItem(num_id, ilvl)``: a direct
+    ``w:pPr/w:numPr`` wins when present (``numId=0`` disables), otherwise
+    the numbering defined by the paragraph style applies (``w:basedOn``
+    chains resolved); non-list paragraphs report ``list=None``
   * ``style`` reports the raw ``w:pStyle`` id; ``outline_level`` comes from
     a direct ``w:outlineLvl`` or the style definition in ``word/styles.xml``
     (``w:basedOn`` chains resolved, ``w:val="9"`` = body text)
@@ -1092,6 +1094,201 @@ class TestStyleOutlineBasedOnChain:
             assert loc.outline_level is None
 
 
+class TestStyleNumberingChain:
+    """Style-defined ``w:numPr`` resolution in the style numbering map."""
+
+    _STYLES_XML = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:styles {_W_NS}>"
+        # Style carrying its own numbering (the dogfooding shape: no ilvl).
+        '<w:style w:type="paragraph" w:styleId="ListNumber">'
+        '<w:name w:val="List Number"/>'
+        '<w:pPr><w:numPr><w:numId w:val="5"/></w:numPr></w:pPr>'
+        "</w:style>"
+        # Custom style inheriting the numbering from ListNumber.
+        '<w:style w:type="paragraph" w:styleId="MyList">'
+        '<w:name w:val="My List"/>'
+        '<w:basedOn w:val="ListNumber"/>'
+        "</w:style>"
+        # Style whose own numPr carries an explicit level.
+        '<w:style w:type="paragraph" w:styleId="LeveledList">'
+        '<w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="5"/></w:numPr></w:pPr>'
+        "</w:style>"
+        # numId=0 disables the numbering inherited from ListNumber.
+        '<w:style w:type="paragraph" w:styleId="DisabledNum">'
+        '<w:basedOn w:val="ListNumber"/>'
+        '<w:pPr><w:numPr><w:numId w:val="0"/></w:numPr></w:pPr>'
+        "</w:style>"
+        # basedOn cycle — must terminate, not hang.
+        '<w:style w:type="paragraph" w:styleId="CycleA"><w:basedOn w:val="CycleB"/></w:style>'
+        '<w:style w:type="paragraph" w:styleId="CycleB"><w:basedOn w:val="CycleA"/></w:style>'
+        # Non-paragraph style carrying a numPr — must be ignored.
+        '<w:style w:type="character" w:styleId="CharNum">'
+        '<w:pPr><w:numPr><w:numId w:val="5"/></w:numPr></w:pPr>'
+        "</w:style>"
+        # No w:type attribute — defaults to paragraph (ECMA-376), so its
+        # numbering must still contribute.
+        '<w:style w:styleId="TypelessNum">'
+        '<w:pPr><w:numPr><w:numId w:val="5"/></w:numPr></w:pPr>'
+        "</w:style>"
+        "</w:styles>"
+    )
+
+    _DOCUMENT_XML = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:document {_W_NS}>"
+        "<w:body>"
+        f"<w:p>{_p_style('ListNumber')}<w:r><w:t>Styled number</w:t></w:r></w:p>"
+        f"<w:p>{_p_style('MyList')}<w:r><w:t>Inherited number</w:t></w:r></w:p>"
+        f"<w:p>{_p_style('LeveledList')}<w:r><w:t>Leveled number</w:t></w:r></w:p>"
+        '<w:p><w:pPr><w:pStyle w:val="ListNumber"/>'
+        '<w:numPr><w:ilvl w:val="2"/><w:numId w:val="9"/></w:numPr></w:pPr>'
+        "<w:r><w:t>Direct wins</w:t></w:r></w:p>"
+        '<w:p><w:pPr><w:pStyle w:val="ListNumber"/>'
+        '<w:numPr><w:numId w:val="0"/></w:numPr></w:pPr>'
+        "<w:r><w:t>Direct disable</w:t></w:r></w:p>"
+        '<w:p><w:pPr><w:pStyle w:val="ListNumber"/>'
+        '<w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>'
+        "<w:r><w:t>Ilvl only</w:t></w:r></w:p>"
+        f"<w:p>{_p_style('DisabledNum')}<w:r><w:t>Disabled style</w:t></w:r></w:p>"
+        f"<w:p>{_p_style('CycleA')}<w:r><w:t>Cycle styled</w:t></w:r></w:p>"
+        f"<w:p>{_p_style('CharNum')}<w:r><w:t>Char styled</w:t></w:r></w:p>"
+        f"<w:p>{_p_style('TypelessNum')}<w:r><w:t>Typeless number</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Plain paragraph</w:t></w:r></w:p>"
+        "</w:body>"
+        "</w:document>"
+    )
+
+    @pytest.fixture
+    def style_numbered_docx(self, simple_docx, tmp_path) -> Path:
+        dest = tmp_path / "style-numbered.docx"
+        replace_docx_parts(
+            simple_docx,
+            dest,
+            {"word/document.xml": self._DOCUMENT_XML, "word/styles.xml": self._STYLES_XML},
+        )
+        return dest
+
+    def test_style_defined_numbering_is_resolved(self, style_numbered_docx):
+        """The dogfooding shape: pStyle=ListNumber, numPr only in styles.xml."""
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Styled number"))
+            assert loc.style == "ListNumber"
+            assert loc.list == ListItem(num_id=5, ilvl=0)
+
+    def test_based_on_chain_inherits_numbering(self, style_numbered_docx):
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Inherited number"))
+            assert loc.list == ListItem(num_id=5, ilvl=0)
+
+    def test_style_ilvl_comes_through(self, style_numbered_docx):
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Leveled number"))
+            assert loc.list == ListItem(num_id=5, ilvl=1)
+
+    def test_direct_num_pr_overrides_style(self, style_numbered_docx):
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Direct wins"))
+            assert loc.list == ListItem(num_id=9, ilvl=2)
+
+    def test_direct_num_id_zero_disables_style_numbering(self, style_numbered_docx):
+        """Word's "remove numbering from this styled paragraph" marker: a
+        present direct ``numId=0`` decides — the style's numbering must
+        NOT leak back in as a fallback.
+        """
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Direct disable"))
+            assert loc.list is None
+
+    def test_direct_ilvl_only_block_is_not_merged_with_style(self, style_numbered_docx):
+        """A direct ``w:numPr`` carrying only ``w:ilvl`` (no ``w:numId``)
+        decides by presence: no ``ListItem``, and the style's ``numId`` is
+        not merged in — the documented non-merge limitation.
+        """
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Ilvl only"))
+            assert loc.list is None
+
+    def test_style_num_id_zero_terminates_chain(self, style_numbered_docx):
+        """A style whose own ``numId=0`` disables the numbering it would
+        otherwise inherit via ``basedOn``.
+        """
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Disabled style"))
+            assert loc.list is None
+
+    def test_based_on_cycle_degrades_to_none(self, style_numbered_docx):
+        """A ``basedOn`` cycle must terminate (visited guard), yielding no
+        numbering."""
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Cycle styled"))
+            assert loc.list is None
+
+    def test_non_paragraph_styles_are_ignored(self, style_numbered_docx):
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Char styled"))
+            assert loc.list is None
+
+    def test_typeless_style_contributes_numbering(self, style_numbered_docx):
+        """A ``w:style`` without ``w:type`` defaults to *paragraph*
+        (ECMA-376), so its numbering must resolve."""
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Typeless number"))
+            assert loc.list == ListItem(num_id=5, ilvl=0)
+
+    def test_plain_paragraph_reports_none(self, style_numbered_docx):
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Plain paragraph"))
+            assert loc.list is None
+
+    def test_batch_equivalence_with_per_call_accessor(self, style_numbered_docx):
+        with Document.open(style_numbered_docx) as doc:
+            entries = doc.list_paragraph_locations()
+            for ref, loc in entries:
+                assert loc == doc.get_paragraph_location(ref)
+            assert any(loc.list is not None for _, loc in entries)
+
+
+class TestStyleMissingTypeDefaultsToParagraph:
+    """A ``w:style`` without ``w:type`` defaults to *paragraph* (ECMA-376)."""
+
+    _STYLES_XML = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:styles {_W_NS}>"
+        # No w:type attribute — must still contribute its outline level.
+        '<w:style w:styleId="TypelessHead">'
+        '<w:name w:val="Typeless Head"/>'
+        '<w:pPr><w:outlineLvl w:val="2"/></w:pPr>'
+        "</w:style>"
+        "</w:styles>"
+    )
+
+    _DOCUMENT_XML = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:document {_W_NS}>"
+        "<w:body>"
+        f"<w:p>{_p_style('TypelessHead')}<w:r><w:t>Typeless heading</w:t></w:r></w:p>"
+        "</w:body>"
+        "</w:document>"
+    )
+
+    @pytest.fixture
+    def typeless_docx(self, simple_docx, tmp_path) -> Path:
+        dest = tmp_path / "typeless-style.docx"
+        replace_docx_parts(
+            simple_docx,
+            dest,
+            {"word/document.xml": self._DOCUMENT_XML, "word/styles.xml": self._STYLES_XML},
+        )
+        return dest
+
+    def test_typeless_style_resolves_outline_level(self, typeless_docx):
+        with Document.open(typeless_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Typeless heading"))
+            assert loc.style == "TypelessHead"
+            assert loc.outline_level == 2
+
+
 class TestMissingStylesPart:
     """A document without ``word/styles.xml`` degrades gracefully."""
 
@@ -1121,6 +1318,25 @@ class TestMissingStylesPart:
             assert entries
             for ref, loc in entries:
                 assert loc == doc.get_paragraph_location(ref)
+
+    def test_style_numbering_degrades_to_none(self, simple_docx, tmp_path):
+        """A pStyle-numbered paragraph reports ``list=None`` when there is
+        no ``word/styles.xml`` to resolve the style's numbering from.
+        """
+        body = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            f"<w:p>{_p_style('ListNumber')}<w:r><w:t>Styled number</w:t></w:r></w:p>"
+            "</w:body>"
+            "</w:document>"
+        )
+        dest = tmp_path / "no-styles-numbered.docx"
+        replace_docx_parts(simple_docx, dest, {"word/document.xml": body, "word/styles.xml": None})
+        with Document.open(dest) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Styled number"))
+            assert loc.style == "ListNumber"
+            assert loc.list is None
 
 
 class TestListParagraphLocationsStyleInfo:

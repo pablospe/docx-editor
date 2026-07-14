@@ -24,11 +24,14 @@ from .xml_editor import (
     TextMap,
     TextMapMatch,
     TextPosition,
+    _escape_xml,
     build_text_map,
     compute_paragraph_hash,
     find_in_text_map,
+    get_rPr_xml,
     get_text_node_data,
     rebuild_run_fragments,
+    render_plain_wt,
 )
 
 
@@ -590,12 +593,8 @@ class RevisionManager:
         if not text_map.positions:
             # Empty paragraph — append insertion
             # Get rPr from any existing run, or use empty
-            rPr_xml = ""
             runs = paragraph.getElementsByTagName("w:r")
-            if runs:
-                rPr_elems = runs[0].getElementsByTagName("w:rPr")
-                if rPr_elems:
-                    rPr_xml = rPr_elems[0].toxml()
+            rPr_xml = get_rPr_xml(runs[0]) if runs else ""
 
             ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
             # Insert before w:sectPr if present, else append
@@ -826,11 +825,7 @@ class RevisionManager:
             run = run.parentNode
         if not run:
             return None, ""
-        rPr_xml = ""
-        rPr_elems = run.getElementsByTagName("w:rPr")
-        if rPr_elems:
-            rPr_xml = rPr_elems[0].toxml()
-        return run, rPr_xml
+        return run, get_rPr_xml(run)
 
     def _get_node_text(self, node) -> str:
         """Get text content of a w:t node by concatenating ALL child text nodes.
@@ -1027,9 +1022,7 @@ class RevisionManager:
                         fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(after)}</w:t></w:r>")
                 else:
                     # Unmatched sibling — preserve
-                    wt_text = self._get_node_text(wt)
-                    if wt_text:
-                        fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                    fragments.extend(render_plain_wt(wt, run_rPr))
                 return fragments
 
             # Emit the run's children in document order (w:t split around the
@@ -1380,10 +1373,7 @@ class RevisionManager:
                 _set_xml_space_preserve(first_node)
                 run = self._find_ancestor(first_node, "w:r")
                 if ins_elem and run:
-                    rPr_xml = ""
-                    rPr_elems = run.getElementsByTagName("w:rPr")
-                    if rPr_elems:
-                        rPr_xml = rPr_elems[0].toxml()
+                    rPr_xml = get_rPr_xml(run)
                     after_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r></w:ins>"
                     self.editor.insert_after(ins_elem, after_xml)
         else:
@@ -1484,10 +1474,7 @@ class RevisionManager:
                 fragments: list[str] = []
                 if id(wt) not in run_info["nodes"]:
                     # Unmatched sibling — preserve as-is
-                    wt_text = self._get_node_text(wt)
-                    if wt_text:
-                        fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
-                    return fragments
+                    return render_plain_wt(wt, run_rPr)
 
                 ng = run_info["nodes"][id(wt)]
                 node_text = self._get_node_text(ng["node"])
@@ -1580,9 +1567,7 @@ class RevisionManager:
                         fragments.append(f"<w:r>{rp_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
                 else:
                     # Unmatched sibling — preserve
-                    wt_text = self._get_node_text(wt)
-                    if wt_text:
-                        fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                    fragments.extend(render_plain_wt(wt, run_rPr))
                 return fragments
 
             # Emit the run's children in document order (matched w:t as
@@ -1734,9 +1719,7 @@ class RevisionManager:
                     fragments.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r>")
             else:
                 # Preserve unmatched sibling w:t
-                wt_text = self._get_node_text(wt)
-                if wt_text:
-                    fragments.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                fragments.extend(render_plain_wt(wt, rPr_xml))
             return fragments
 
         nodes = self.editor.replace_node(run, "".join(rebuild_run_fragments(run, rPr_xml, render_wt)))
@@ -1960,15 +1943,3 @@ def _tokenize_words(text: str) -> list[str]:
 def _set_xml_space_preserve(wt_elem) -> None:
     """Set xml:space='preserve' on a w:t element to preserve whitespace."""
     wt_elem.setAttribute("xml:space", "preserve")
-
-
-def _escape_xml(text: str) -> str:
-    """Escape text for safe XML inclusion."""
-    return (
-        text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
-    )

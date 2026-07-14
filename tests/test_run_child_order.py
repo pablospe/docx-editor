@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from docx_editor.track_changes import RevisionManager
-from docx_editor.xml_editor import DocxXMLEditor
+from docx_editor.xml_editor import DocxXMLEditor, compute_paragraph_hash
 
 NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 AUTHOR = "Test Author"
@@ -283,3 +283,64 @@ class TestTextboxNoDuplication:
         drawings = mgr.editor.dom.getElementsByTagName("w:drawing")
         assert len(drawings) == 1
         assert "boxed" in drawings[0].toxml()
+
+
+def _has_direct_rPr(run) -> bool:
+    """True if ``run`` has a direct w:rPr child."""
+    return any(c.nodeType == c.ELEMENT_NODE and c.tagName == "w:rPr" for c in run.childNodes)
+
+
+def _top_level_runs(paragraph) -> list:
+    """Direct runs of ``paragraph`` plus runs under direct w:ins/w:del wrappers."""
+    runs = []
+    for child in paragraph.childNodes:
+        if child.nodeType != child.ELEMENT_NODE:
+            continue
+        if child.tagName == "w:r":
+            runs.append(child)
+        elif child.tagName in ("w:ins", "w:del"):
+            runs.extend(r for r in child.childNodes if r.nodeType == r.ELEMENT_NODE and r.tagName == "w:r")
+    return runs
+
+
+class TestNestedRPrNoLeak:
+    """A w:rPr nested inside a drawing's text box must not leak into rebuilt
+    top-level runs when the outer run has no direct rPr (ISSUES.md #31)."""
+
+    def test_replace_does_not_inherit_textbox_rpr(self, temp_xml):
+        xml_path = temp_xml(
+            "<w:p><w:r><w:t>x</w:t>"
+            "<w:drawing><w:txbxContent><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>boxed</w:t></w:r></w:p></w:txbxContent></w:drawing>"
+            "<w:t>y</w:t></w:r></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+
+        mgr.replace_text("x", "X")
+
+        paragraph = mgr.editor.dom.getElementsByTagName("w:p")[0]
+        assert paragraph_tokens(mgr) == ["DEL(x)", "INS(X)", "DRAWING", "y"]
+        # The bold prop stays inside the drawing's text box — nowhere else.
+        assert paragraph.toxml().count("<w:b/>") == 1
+        assert "<w:b/>" in mgr.editor.dom.getElementsByTagName("w:drawing")[0].toxml()
+        for run in _top_level_runs(paragraph):
+            assert not _has_direct_rPr(run)
+
+    def test_empty_paragraph_insert_does_not_inherit_textbox_rpr(self, temp_xml):
+        """Insert into a paragraph with no visible text: the created <w:ins>
+        run must not adopt the drawing's nested rPr."""
+        xml_path = temp_xml(
+            "<w:p><w:r>"
+            "<w:drawing><w:txbxContent><w:p><w:r><w:rPr><w:b/></w:rPr></w:r></w:p></w:txbxContent></w:drawing>"
+            "</w:r></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        paragraph = mgr.editor.dom.getElementsByTagName("w:p")[0]
+        ref = f"P1#{compute_paragraph_hash(paragraph)}"
+
+        mgr.rewrite_paragraph(ref, "inserted")
+
+        assert paragraph.toxml().count("<w:b/>") == 1
+        ins_elems = [c for c in paragraph.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName == "w:ins"]
+        assert len(ins_elems) == 1
+        for run in _top_level_runs(paragraph):
+            assert not _has_direct_rPr(run)

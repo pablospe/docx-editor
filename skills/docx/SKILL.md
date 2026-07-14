@@ -234,8 +234,9 @@ visible = doc.get_visible_text()
 # inside paragraphs this equals what reject_all() would leave.
 original = doc.get_original_text()
 
-# Structural location: table cell, list item (raw numId/ilvl), heading context,
-# and section index. Base conventions are MIXED — read the comments:
+# Structural location: table cell, list item (numId/ilvl; style-inherited
+# numbering resolved), heading context, and section index. Base conventions
+# are MIXED — read the comments:
 loc = doc.get_paragraph_location("P3#b2c4")
 if loc.table:  # table.index, row, col are all 1-based
     print(f"table {loc.table.index} r{loc.table.row} c{loc.table.col}")
