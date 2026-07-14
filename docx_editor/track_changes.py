@@ -532,7 +532,7 @@ class RevisionManager:
                 local_occ += 1
         return count
 
-    def _find_document_wide(self, text: str, occurrence: int) -> TextMapMatch:
+    def _find_document_wide(self, text: str, occurrence: int = 0) -> TextMapMatch:
         """Document-wide nth-occurrence lookup via text maps.
 
         Raises:
