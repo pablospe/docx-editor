@@ -7,8 +7,8 @@ import pytest
 from conftest import find_ref
 
 from docx_editor import Document, TextNotFoundError
-from docx_editor.exceptions import RevisionError
 from docx_editor.track_changes import Revision, RevisionManager, _escape_xml
+from docx_editor.xml_editor import DocxXMLEditor, build_text_map
 
 
 def _attach_text_node(mock_elem, text):
@@ -676,19 +676,19 @@ class TestEscapeXml:
 class TestRevisionManagerErrorHandling:
     """Tests for error handling in RevisionManager."""
 
-    def test_get_nth_match_no_matches(self, clean_workspace):
-        """Test _get_nth_match raises error when no matches found."""
+    def test_replace_text_no_matches(self, clean_workspace):
+        """Test document-wide replace raises error when no matches found."""
         doc = Document.open(clean_workspace)
 
         with pytest.raises(TextNotFoundError) as exc_info:
-            doc._revision_manager._get_nth_match("nonexistent_xyz_123", 0)
+            doc._revision_manager.replace_text("nonexistent_xyz_123", "X")
 
         assert "not found" in str(exc_info.value).lower()
 
         doc.close()
 
-    def test_get_nth_match_occurrence_out_of_range(self, clean_workspace):
-        """Test _get_nth_match raises error for invalid occurrence."""
+    def test_replace_text_occurrence_out_of_range(self, clean_workspace):
+        """Test document-wide replace raises error for invalid occurrence."""
         doc = Document.open(clean_workspace)
 
         # "Sample" exists once in the document
@@ -698,65 +698,16 @@ class TestRevisionManagerErrorHandling:
             pytest.skip("Test text not found")
 
         with pytest.raises(TextNotFoundError) as exc_info:
-            doc._revision_manager._get_nth_match("Sample", occurrence=count + 10)
+            doc._revision_manager.replace_text("Sample", "X", occurrence=count + 10)
 
         assert "occurrence" in str(exc_info.value).lower()
+        assert exc_info.value.total_occurrences == count
 
         doc.close()
 
 
 class TestRevisionManagerWithMockedEditor:
     """Tests using mocked editor for edge cases."""
-
-    def test_replace_text_no_parent_run_raises_error(self):
-        """Test replace_text raises RevisionError when no parent w:r found."""
-        # Create mock editor
-        mock_editor = MagicMock()
-
-        # Create mock element without proper parent hierarchy
-        mock_elem = MagicMock()
-        mock_elem.parentNode = None  # No parent
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        manager = RevisionManager(mock_editor)
-
-        with pytest.raises(RevisionError) as exc_info:
-            manager.replace_text("test", "TEST")
-
-        assert "parent w:r" in str(exc_info.value).lower()
-
-    def test_suggest_deletion_no_parent_run_raises_error(self):
-        """Test suggest_deletion raises RevisionError when no parent w:r found."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_elem.parentNode = None
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        manager = RevisionManager(mock_editor)
-
-        with pytest.raises(RevisionError) as exc_info:
-            manager.suggest_deletion("test")
-
-        assert "parent w:r" in str(exc_info.value).lower()
-
-    def test_insert_text_no_parent_run_raises_error(self):
-        """Test _insert_text raises RevisionError when no parent w:r found."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_elem.parentNode = None
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        manager = RevisionManager(mock_editor)
-
-        with pytest.raises(RevisionError) as exc_info:
-            manager.insert_text_after("test", "new text")
-
-        assert "parent w:r" in str(exc_info.value).lower()
 
     def test_parse_revision_missing_id_returns_none(self):
         """Test _parse_revision returns None when w:id is missing."""
@@ -949,458 +900,78 @@ class TestComplexOperations:
         doc.close()
 
 
-class TestMockedEdgeCases:
-    """Tests for edge cases using mocks to reach uncovered branches."""
-
-    def test_replace_text_parent_traversal_loop(self):
-        """Test replace_text when elem.parentNode is not immediately w:r."""
-        mock_editor = MagicMock()
-
-        # Create a chain: elem -> intermediate_node -> run (w:r)
-        mock_elem = MagicMock()
-        mock_intermediate = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-        mock_run.getElementsByTagName.return_value = []  # No rPr
-
-        mock_intermediate.nodeName = "other"
-        mock_intermediate.parentNode = mock_run
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_intermediate
-        _attach_text_node(mock_elem, "hello world")
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        # Mock replace_node to return a node with w:ins
-        mock_ins_node = MagicMock()
-        mock_ins_node.nodeType = mock_ins_node.ELEMENT_NODE
-        mock_ins_node.tagName = "w:ins"
-        mock_ins_node.getAttribute.return_value = "42"
-
-        mock_editor.replace_node.return_value = [mock_ins_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.replace_text("hello", "HELLO")
-
-        assert result == 42
-
-    def test_suggest_deletion_parent_traversal_loop(self):
-        """Test suggest_deletion when elem.parentNode is not immediately w:r."""
-        mock_editor = MagicMock()
-
-        # Create a chain: elem -> intermediate_node -> run (w:r)
-        mock_elem = MagicMock()
-        mock_intermediate = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-        mock_run.getElementsByTagName.return_value = []  # No rPr
-
-        mock_intermediate.nodeName = "other"
-        mock_intermediate.parentNode = mock_run
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_intermediate
-        _attach_text_node(mock_elem, "hello world")
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        # Mock replace_node to return a node with w:del
-        mock_del_node = MagicMock()
-        mock_del_node.nodeType = mock_del_node.ELEMENT_NODE
-        mock_del_node.tagName = "w:del"
-        mock_del_node.getAttribute.return_value = "43"
-
-        mock_editor.replace_node.return_value = [mock_del_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.suggest_deletion("hello")
-
-        assert result == 43
-
-    def test_insert_text_parent_traversal_loop(self):
-        """Test _insert_text when elem.parentNode is not immediately w:r."""
-        mock_editor = MagicMock()
-
-        # Create a chain: elem -> intermediate_node -> run (w:r)
-        mock_elem = MagicMock()
-        mock_intermediate = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-        mock_run.getElementsByTagName.return_value = []  # No rPr
-
-        mock_intermediate.nodeName = "other"
-        mock_intermediate.parentNode = mock_run
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_intermediate
-        _attach_text_node(mock_elem, "anchor")
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        # Mock replace_node to return a node with w:ins
-        mock_ins_node = MagicMock()
-        mock_ins_node.nodeType = mock_ins_node.ELEMENT_NODE
-        mock_ins_node.tagName = "w:ins"
-        mock_ins_node.getAttribute.return_value = "44"
-
-        mock_editor.replace_node.return_value = [mock_ins_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.insert_text_after("anchor", "new text")
-
-        assert result == 44
-
-    def test_replace_text_with_rpr(self):
-        """Test replace_text preserves w:rPr when present."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-
-        # Mock rPr element
-        mock_rPr = MagicMock()
-        mock_rPr.toxml.return_value = "<w:rPr><w:b/></w:rPr>"
-        mock_run.getElementsByTagName.return_value = [mock_rPr]
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_run
-        _attach_text_node(mock_elem, "hello world")
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        mock_ins_node = MagicMock()
-        mock_ins_node.nodeType = mock_ins_node.ELEMENT_NODE
-        mock_ins_node.tagName = "w:ins"
-        mock_ins_node.getAttribute.return_value = "45"
-
-        mock_editor.replace_node.return_value = [mock_ins_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.replace_text("hello", "HELLO")
-
-        assert result == 45
-        # Verify rPr was included in the XML
-        call_args = mock_editor.replace_node.call_args[0][1]
-        assert "<w:rPr>" in call_args
-
-    def test_suggest_deletion_with_rpr(self):
-        """Test suggest_deletion preserves w:rPr when present."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-
-        # Mock rPr element
-        mock_rPr = MagicMock()
-        mock_rPr.toxml.return_value = "<w:rPr><w:i/></w:rPr>"
-        mock_run.getElementsByTagName.return_value = [mock_rPr]
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_run
-        _attach_text_node(mock_elem, "hello world")
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        mock_del_node = MagicMock()
-        mock_del_node.nodeType = mock_del_node.ELEMENT_NODE
-        mock_del_node.tagName = "w:del"
-        mock_del_node.getAttribute.return_value = "46"
-
-        mock_editor.replace_node.return_value = [mock_del_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.suggest_deletion("hello")
-
-        assert result == 46
-        # Verify rPr was included in the XML
-        call_args = mock_editor.replace_node.call_args[0][1]
-        assert "<w:rPr>" in call_args
-
-    def test_insert_text_with_rpr(self):
-        """Test _insert_text preserves w:rPr when present."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-
-        # Mock rPr element
-        mock_rPr = MagicMock()
-        mock_rPr.toxml.return_value = "<w:rPr><w:u/></w:rPr>"
-
-        def _get_by_tag(tag):
-            if tag == "w:rPr":
-                return [mock_rPr]
-            if tag == "w:t":
-                return [mock_elem]
-            return []
-
-        mock_run.getElementsByTagName.side_effect = _get_by_tag
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_run
-        _attach_text_node(mock_elem, "anchor")
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        mock_ins_node = MagicMock()
-        mock_ins_node.nodeType = mock_ins_node.ELEMENT_NODE
-        mock_ins_node.tagName = "w:ins"
-        mock_ins_node.getAttribute.return_value = "47"
-
-        mock_editor.replace_node.return_value = [mock_ins_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.insert_text_after("anchor", "new text")
-
-        assert result == 47
-        # Verify rPr was included in the XML
-        call_args = mock_editor.replace_node.call_args[0][1]
-        assert "<w:rPr>" in call_args
-
-    def test_replace_text_returns_minus_one_when_no_ins_found(self):
-        """Test replace_text returns -1 when w:ins not found in result."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-        mock_run.getElementsByTagName.return_value = []
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_run
-        _attach_text_node(mock_elem, "hello")
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        # Return nodes that don't include w:ins
-        mock_other_node = MagicMock()
-        mock_other_node.nodeType = mock_other_node.ELEMENT_NODE
-        mock_other_node.tagName = "w:r"
-
-        mock_editor.replace_node.return_value = [mock_other_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.replace_text("hello", "HELLO")
-
+class TestDocumentWideEditsRealXml:
+    """Real-XML edge-case coverage for the unified document-wide edit path."""
+
+    NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    INS_ATTRS = 'w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"'
+
+    def _manager(self, tmp_path, body_xml):
+        xml = f'<?xml version="1.0" encoding="utf-8"?><w:document {self.NS}><w:body>{body_xml}</w:body></w:document>'
+        xml_path = tmp_path / "doc.xml"
+        xml_path.write_text(xml)
+        editor = DocxXMLEditor(xml_path, rsid="00000000", author="Test Author")
+        return RevisionManager(editor)
+
+    def _accepted_text(self, mgr):
+        return "".join(build_text_map(p).text for p in mgr.editor.dom.getElementsByTagName("w:p"))
+
+    def test_suggest_deletion_preserves_rpr(self, tmp_path):
+        """Deleting text from a formatted run keeps the run properties."""
+        mgr = self._manager(tmp_path, "<w:p><w:r><w:rPr><w:i/></w:rPr><w:t>Hello world</w:t></w:r></w:p>")
+        mgr.suggest_deletion("Hello")
+        del_elems = mgr.editor.dom.getElementsByTagName("w:del")
+        assert len(del_elems) == 1
+        assert len(del_elems[0].getElementsByTagName("w:i")) == 1
+        # The preserved " world" run keeps its formatting too
+        for wt in mgr.editor.dom.getElementsByTagName("w:t"):
+            run = wt.parentNode
+            assert len(run.getElementsByTagName("w:i")) == 1
+
+    def test_insert_text_preserves_rpr(self, tmp_path):
+        """Inserting near a formatted anchor applies the anchor run's properties."""
+        mgr = self._manager(tmp_path, "<w:p><w:r><w:rPr><w:u/></w:rPr><w:t>anchor text</w:t></w:r></w:p>")
+        mgr.insert_text_after("anchor", " NEW")
+        ins_elems = mgr.editor.dom.getElementsByTagName("w:ins")
+        assert len(ins_elems) == 1
+        assert len(ins_elems[0].getElementsByTagName("w:u")) == 1
+
+    def test_replace_inside_ins_edits_in_place(self, tmp_path):
+        """Replacing text whose run sits under a w:ins wrapper splices in place."""
+        mgr = self._manager(tmp_path, f"<w:p><w:ins {self.INS_ATTRS}><w:r><w:t>hello world</w:t></w:r></w:ins></w:p>")
+        result = mgr.replace_text("hello", "HELLO")
+        assert result == -1  # no new revision created
+        assert self._accepted_text(mgr) == "HELLO world"
+        assert len(mgr.editor.dom.getElementsByTagName("w:del")) == 0
+
+    def test_delete_inside_ins_shrinks_insertion(self, tmp_path):
+        """Deleting text whose run sits under a w:ins wrapper shrinks the insertion."""
+        mgr = self._manager(tmp_path, f"<w:p><w:ins {self.INS_ATTRS}><w:r><w:t>hello world</w:t></w:r></w:ins></w:p>")
+        result = mgr.suggest_deletion("hello ")
         assert result == -1
+        assert self._accepted_text(mgr) == "world"
+        assert len(mgr.editor.dom.getElementsByTagName("w:del")) == 0
 
-    def test_suggest_deletion_returns_minus_one_when_no_del_found(self):
-        """Test suggest_deletion returns -1 when w:del not found in result."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-        mock_run.getElementsByTagName.return_value = []
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_run
-        _attach_text_node(mock_elem, "hello")
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        # Return nodes that don't include w:del
-        mock_other_node = MagicMock()
-        mock_other_node.nodeType = mock_other_node.ELEMENT_NODE
-        mock_other_node.tagName = "w:r"
-
-        mock_editor.replace_node.return_value = [mock_other_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.suggest_deletion("hello")
-
+    def test_insert_inside_ins_splices_without_nesting(self, tmp_path):
+        """Inserting at an anchor whose run sits under a w:ins wrapper avoids nested w:ins."""
+        mgr = self._manager(tmp_path, f"<w:p><w:ins {self.INS_ATTRS}><w:r><w:t>hello world</w:t></w:r></w:ins></w:p>")
+        result = mgr.insert_text_after("hello", "XX")
         assert result == -1
+        assert self._accepted_text(mgr) == "helloXX world"
+        ins_elems = mgr.editor.dom.getElementsByTagName("w:ins")
+        assert len(ins_elems) == 1
 
-    def test_insert_text_returns_minus_one_when_no_ins_found(self):
-        """Test _insert_text returns -1 when w:ins not found in result."""
-        mock_editor = MagicMock()
+    def test_replace_at_end_of_node_preserves_prefix(self, tmp_path):
+        """Replacing text at the end of a w:t keeps the preceding text."""
+        mgr = self._manager(tmp_path, "<w:p><w:r><w:t>prefix hello</w:t></w:r></w:p>")
+        mgr.replace_text("hello", "HELLO")
+        assert self._accepted_text(mgr) == "prefix HELLO"
 
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-        mock_run.getElementsByTagName.return_value = []
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_run
-        _attach_text_node(mock_elem, "anchor")
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        # Return nodes that don't include w:ins
-        mock_other_node = MagicMock()
-        mock_other_node.nodeType = mock_other_node.ELEMENT_NODE
-        mock_other_node.tagName = "w:r"
-
-        mock_editor.insert_after.return_value = [mock_other_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.insert_text_after("anchor", "text")
-
-        assert result == -1
-
-    def test_replace_text_text_mismatch_raises_error(self):
-        """Test replace_text raises error when text found by matcher but not in actual content."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-        mock_run.getElementsByTagName.return_value = []
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_run
-        # The matcher found "world" in this node, but actual content is different
-        _attach_text_node(mock_elem, "different content")
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        manager = RevisionManager(mock_editor)
-
-        with pytest.raises(TextNotFoundError):
-            manager.replace_text("world", "WORLD")
-
-    def test_suggest_deletion_text_mismatch_raises_error(self):
-        """Test suggest_deletion raises error when text found by matcher but not in actual content."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-        mock_run.getElementsByTagName.return_value = []
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_run
-        # The matcher found "world" in this node, but actual content is different
-        _attach_text_node(mock_elem, "different content")
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        manager = RevisionManager(mock_editor)
-
-        with pytest.raises(TextNotFoundError):
-            manager.suggest_deletion("world")
-
-    def test_replace_text_with_before_text_only(self):
-        """Test replace_text with text at end (only before_text, no after_text)."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-        mock_run.getElementsByTagName.return_value = []
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_run
-        _attach_text_node(mock_elem, "prefix hello")  # "hello" is at end
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        mock_ins_node = MagicMock()
-        mock_ins_node.nodeType = mock_ins_node.ELEMENT_NODE
-        mock_ins_node.tagName = "w:ins"
-        mock_ins_node.getAttribute.return_value = "48"
-
-        mock_editor.replace_node.return_value = [mock_ins_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.replace_text("hello", "HELLO")
-
-        assert result == 48
-        # Verify before_text run was included
-        call_args = mock_editor.replace_node.call_args[0][1]
-        assert "prefix" in call_args
-
-    def test_suggest_deletion_with_before_text_only(self):
-        """Test suggest_deletion with text at end (only before_text, no after_text)."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-        mock_run.getElementsByTagName.return_value = []
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_run
-        _attach_text_node(mock_elem, "prefix hello")  # "hello" is at end
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        mock_del_node = MagicMock()
-        mock_del_node.nodeType = mock_del_node.ELEMENT_NODE
-        mock_del_node.tagName = "w:del"
-        mock_del_node.getAttribute.return_value = "49"
-
-        mock_editor.replace_node.return_value = [mock_del_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.suggest_deletion("hello")
-
-        assert result == 49
-        # Verify before_text run was included
-        call_args = mock_editor.replace_node.call_args[0][1]
-        assert "prefix" in call_args
-
-    def test_suggest_deletion_with_after_text_only(self):
-        """Test suggest_deletion with text at start (only after_text, no before_text)."""
-        mock_editor = MagicMock()
-
-        mock_elem = MagicMock()
-        mock_run = MagicMock()
-
-        mock_run.nodeName = "w:r"
-        mock_run.parentNode = None
-        mock_run.getElementsByTagName.return_value = []
-
-        mock_elem.nodeName = "w:t"
-        mock_elem.parentNode = mock_run
-        _attach_text_node(mock_elem, "hello suffix")  # "hello" is at start
-
-        mock_editor.find_all_nodes.return_value = [mock_elem]
-
-        mock_del_node = MagicMock()
-        mock_del_node.nodeType = mock_del_node.ELEMENT_NODE
-        mock_del_node.tagName = "w:del"
-        mock_del_node.getAttribute.return_value = "50"
-
-        mock_editor.replace_node.return_value = [mock_del_node]
-
-        manager = RevisionManager(mock_editor)
-        result = manager.suggest_deletion("hello")
-
-        assert result == 50
-        # Verify after_text run was included
-        call_args = mock_editor.replace_node.call_args[0][1]
-        assert "suffix" in call_args
+    def test_delete_at_start_of_node_preserves_suffix(self, tmp_path):
+        """Deleting text at the start of a w:t keeps the following text."""
+        mgr = self._manager(tmp_path, "<w:p><w:r><w:t>hello suffix</w:t></w:r></w:p>")
+        mgr.suggest_deletion("hello")
+        assert self._accepted_text(mgr) == " suffix"
 
 
 class TestListRevisionsEdgeCases:
@@ -1849,10 +1420,9 @@ def _split_wt_text_nodes(doc, target_text, tag="w:t"):
 class TestMultiTextNodeWtElements:
     """Issue #9: w:t elements with multiple TEXT_NODE children (smart-quote split)."""
 
-    # The buggy paths in replace_text/suggest_deletion/_insert_text (lines 547,
-    # 650, 1389) are only reached when paragraph=None (via _get_nth_match).
-    # When paragraph= is passed, control routes through _replace_across_nodes
-    # which uses _get_node_text and avoids the bug.
+    # Both the document-wide (paragraph=None) and paragraph-scoped paths route
+    # through the text-map helpers, which read node text via _get_node_text and
+    # so tolerate w:t elements whose text is split across TEXT_NODE children.
 
     def test_set_node_text_consolidates_split_nodes(self, clean_workspace):
         """Direct contract test for _set_node_text: starts from a multi-TEXT_NODE
