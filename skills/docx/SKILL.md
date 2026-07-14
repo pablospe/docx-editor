@@ -224,6 +224,13 @@ match = doc.find_text("30 days")
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()
 
+# Structural location: table cell and/or list item (raw numId/ilvl)
+loc = doc.get_paragraph_location("P3#b2c4")
+if loc.table:
+    print(f"table {loc.table.index} r{loc.table.row} c{loc.table.col}")
+if loc.list:
+    print(f"list numId={loc.list.num_id} level={loc.list.ilvl}")
+
 # All edit methods return the new paragraph ref as a plain string.
 # Use it for follow-up edits on the same paragraph:
 new_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")

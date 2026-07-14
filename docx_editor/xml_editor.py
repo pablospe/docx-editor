@@ -157,16 +157,38 @@ class TableCell:
 
 
 @dataclass(frozen=True)
+class ListItem:
+    """Raw numbering reference of a list paragraph.
+
+    Values come straight from the paragraph's direct ``<w:pPr>/<w:numPr>``:
+    ``num_id`` keys into ``word/numbering.xml``; ``ilvl`` is the 0-based
+    indentation level (0 when ``<w:ilvl>`` is absent, per spec default).
+
+    Limitations of this raw extraction: numbering inherited via a paragraph
+    style (``w:pStyle``) is NOT resolved — a paragraph numbered only through
+    its style reports ``list=None``. Rendered display numbers ("7.2(a)")
+    are not computed (that requires resolving ``word/numbering.xml``).
+    """
+
+    num_id: int  # w:numPr/w:numId/@w:val — key into word/numbering.xml
+    ilvl: int  # w:numPr/w:ilvl/@w:val — 0-based level, 0 when absent
+
+
+@dataclass(frozen=True)
 class ParagraphLocation:
     """Structural location of a paragraph within the document body.
 
-    Currently reports only table membership. The shape is intentionally
+    Reports table membership and list membership. The shape is intentionally
     extensible: future releases may add other container kinds (header,
-    footer, footnote), section index, list position, etc., as plain
-    optional field additions.
+    footer, footnote), section index, etc., as plain optional field
+    additions.
+
+    ``list`` is the paragraph's raw numbering reference (see
+    :class:`ListItem`), or ``None`` for non-list paragraphs.
     """
 
     table: TableCell | None
+    list: ListItem | None = None
 
     @property
     def in_table(self) -> bool:
@@ -295,12 +317,54 @@ def _table_depth(tbl) -> int:
     return depth
 
 
+def _direct_child(elem, tag_name: str) -> Element | None:
+    """Return the first direct child element of ``elem`` named ``tag_name``."""
+    for child in elem.childNodes:
+        if child.nodeType == child.ELEMENT_NODE and child.tagName == tag_name:
+            return child
+    return None
+
+
+def _extract_list_item(paragraph) -> ListItem | None:
+    """Raw ``<w:pPr>/<w:numPr>`` of ``paragraph``, as a :class:`ListItem`.
+
+    Walks direct children only, so a stale ``w:numPr`` inside a
+    ``<w:pPrChange>`` revision record is never picked up. Returns ``None``
+    when there is no ``w:numPr``, when ``w:numId`` is absent or malformed,
+    or when ``w:numId`` is 0 (the spec's "numbering disabled" marker).
+    ``w:ilvl`` absent/malformed → level 0 (spec default).
+    """
+    ppr = _direct_child(paragraph, "w:pPr")
+    if ppr is None:
+        return None
+    numpr = _direct_child(ppr, "w:numPr")
+    if numpr is None:
+        return None
+    numid_elem = _direct_child(numpr, "w:numId")
+    if numid_elem is None:
+        return None
+    try:
+        num_id = int(numid_elem.getAttribute("w:val"))
+    except ValueError:
+        return None
+    if num_id < 1:
+        return None
+    ilvl = 0
+    ilvl_elem = _direct_child(numpr, "w:ilvl")
+    if ilvl_elem is not None:
+        try:
+            ilvl = max(0, int(ilvl_elem.getAttribute("w:val")))
+        except ValueError:
+            ilvl = 0
+    return ListItem(num_id=num_id, ilvl=ilvl)
+
+
 def _compute_paragraph_location(paragraph, table_index: dict | None = None) -> ParagraphLocation:
     """Compute the structural location of a ``<w:p>`` element.
 
-    Reports the innermost enclosing ``<w:tc>`` (and its table), or
-    ``ParagraphLocation(table=None)`` if the paragraph is not inside any
-    table cell.
+    Reports the innermost enclosing ``<w:tc>`` (and its table) plus the
+    paragraph's raw list membership (see :func:`_extract_list_item`), or
+    ``ParagraphLocation(table=None, list=None)`` for a plain body paragraph.
 
     ``table_index`` is an optional ``{tbl_node: 1-based-index}`` map (see
     :func:`_build_table_index`). When supplied, the enclosing table's index
@@ -308,14 +372,15 @@ def _compute_paragraph_location(paragraph, table_index: dict | None = None) -> P
     fast path. The result is identical to the ``None`` (per-call) path; a
     table missing from the map falls back to the rescan defensively.
     """
+    list_item = _extract_list_item(paragraph)
     tc = _innermost_ancestor(paragraph, "w:tc")
     if tc is None:
-        return ParagraphLocation(table=None)
+        return ParagraphLocation(table=None, list=list_item)
     tr = _innermost_ancestor(tc, "w:tr")
     tbl = _innermost_ancestor(tr, "w:tbl") if tr is not None else None
     if tr is None or tbl is None:
         # Malformed table structure — tolerate by treating as body content.
-        return ParagraphLocation(table=None)
+        return ParagraphLocation(table=None, list=list_item)
     if table_index is not None and tbl in table_index:
         index = table_index[tbl]
     else:
@@ -326,7 +391,8 @@ def _compute_paragraph_location(paragraph, table_index: dict | None = None) -> P
             row=_row_index_in_table(tbl, tr),
             col=_logical_col_in_row(tr, tc),
             depth=_table_depth(tbl),
-        )
+        ),
+        list=list_item,
     )
 
 
