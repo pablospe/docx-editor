@@ -763,3 +763,49 @@ class TestDirtyWorkspace:
 
         ws2 = Workspace(temp_docx, author="Test")  # must not raise
         ws2.close()
+
+
+class TestAtomicMetaSave:
+    """_save_meta() must never leave a truncated meta.json (issue #22)."""
+
+    def test_crash_mid_write_preserves_previous_meta(self, temp_docx, monkeypatch):
+        """A crash mid-write leaves the old meta.json intact — including the
+        write-ahead dirty flag, which a truncated file would destroy."""
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            ws.mark_dirty()  # dirty: true is now on disk
+
+            def exploding_dump(obj, fp, **kwargs):
+                fp.write("{ truncated garbage")
+                raise RuntimeError("simulated crash mid-write")
+
+            monkeypatch.setattr("docx_editor.workspace.json.dump", exploding_dump)
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                ws._save_meta()
+            monkeypatch.undo()
+
+            with open(ws.workspace_path / "meta.json") as f:
+                meta = json.load(f)  # still parses: the old file was never touched
+            assert meta["dirty"] is True
+            assert not (ws.workspace_path / "meta.json.tmp").exists()
+        finally:
+            ws.close()
+
+    def test_failed_write_leaves_workspace_adoptable(self, temp_docx, monkeypatch):
+        """After a crashed meta write, the next open must not see a corrupt
+        workspace (the pre-fix symptom was a misleading WorkspaceExistsError)."""
+        ws = Workspace(temp_docx, author="Test")
+
+        def exploding_dump(obj, fp, **kwargs):
+            fp.write("{ truncated garbage")
+            raise RuntimeError("simulated crash mid-write")
+
+        monkeypatch.setattr("docx_editor.workspace.json.dump", exploding_dump)
+        with pytest.raises(RuntimeError):
+            ws.meta["last_saved"] = "whenever"
+            ws._save_meta()
+        monkeypatch.undo()
+        ws.close(cleanup=False)
+
+        ws2 = Workspace(temp_docx, author="Test")  # adopts the intact meta
+        ws2.close()

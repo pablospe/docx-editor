@@ -114,9 +114,10 @@ class Workspace:
         meta: Dictionary containing workspace metadata
     """
 
-    # If you rename META_FILE, also update EXCLUDED_PATHS in ooxml/pack.py —
-    # otherwise the renamed file will be packed into the .docx and Word will
-    # flag it as "unreadable content" (issue #8).
+    # If you rename META_FILE, also update EXCLUDED_PATHS in ooxml/pack.py
+    # (both the file and its _save_meta ".tmp" twin) — otherwise the renamed
+    # file will be packed into the .docx and Word will flag it as "unreadable
+    # content" (issue #8).
     META_FILE = "meta.json"
 
     meta: dict[str, Any]
@@ -350,10 +351,27 @@ class Workspace:
             return None
 
     def _save_meta(self) -> None:
-        """Save metadata to meta.json."""
+        """Save metadata to meta.json atomically.
+
+        Written to a temp file in the same directory, fsynced, then renamed
+        over meta.json, so no crash can leave a truncated meta.json — a
+        truncated file destroys the write-ahead dirty flag and makes the next
+        open fail with a misleading WorkspaceExistsError (issue #22). The
+        fixed temp name assumes one writer per workspace (one live session);
+        EXCLUDED_PATHS in ooxml/pack.py keeps a crash-orphaned temp out of
+        the packed document.
+        """
         meta_path = self.workspace_path / self.META_FILE
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(self.meta, f, indent=2)
+        tmp_path = meta_path.with_name(meta_path.name + ".tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self.meta, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, meta_path)
+        finally:
+            # A failed write leaves only the intact old meta.json behind.
+            tmp_path.unlink(missing_ok=True)
 
     def mark_dirty(self) -> None:
         """Persist that the workspace may hold content not saved to the source.

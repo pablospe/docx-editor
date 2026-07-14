@@ -19,9 +19,11 @@ from ..exceptions import DocumentOpenError
 
 # Workspace-root paths that must not be packed into the output.
 # meta.json is workspace bookkeeping (see Workspace.META_FILE); packing it makes
-# Word flag the document as "unreadable content" on open. Paths are workspace-root
-# relative — a hypothetical subpart literally named "meta.json" is unaffected.
-EXCLUDED_PATHS = {Path("meta.json")}
+# Word flag the document as "unreadable content" on open. meta.json.tmp is
+# Workspace._save_meta's atomic-write staging file — a crash can orphan it.
+# Paths are workspace-root relative — a hypothetical subpart literally named
+# "meta.json" is unaffected.
+EXCLUDED_PATHS = {Path("meta.json"), Path("meta.json.tmp")}
 
 # The promotion temp file is named ".<destination name>.<8 random chars>.tmp"; this
 # is everything in that shape except the destination's own name.
