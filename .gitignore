@@ -225,5 +225,5 @@ benchmarks/corpus/files/
 benchmarks/corpus/out/
 benchmarks/corpus/work/
 benchmarks/corpus/loprofile/
-benchmarks/corpus/results.json
+benchmarks/corpus/results.json*
 benchmarks/corpus/srcgen/plain.odt

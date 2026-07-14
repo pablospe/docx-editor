@@ -10,7 +10,7 @@ Modes:
 Parent mode isolates each file in a subprocess with a hard timeout, so one
 hang/crash cannot kill the run. Results land in results.json next to this
 script, a summary table is printed, and the exit code is 1 if any file has
-a real failure (CI signal).
+a real failure — or if no corpus files were found at all (CI signal).
 
 Stages per file:
   input_validate  informational: does the *input* zip/XML parse cleanly?
@@ -351,10 +351,9 @@ def run_all(only: str | None, do_pdf: bool) -> int:
     PDF_DIR.mkdir(exist_ok=True)
     WORK_DIR.mkdir(exist_ok=True)
 
-    manifest = {}
-    manifest_path = HERE / "manifest.json"
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+    # Loaded unconditionally: must_reject enforcement lives in the manifest,
+    # and a missing manifest must not silently disable it.
+    manifest: dict[str, dict] = json.loads((HERE / "manifest.json").read_text())
 
     files = sorted(FILES_DIR.glob("*.docx"))
     if only:
@@ -366,6 +365,7 @@ def run_all(only: str | None, do_pdf: bool) -> int:
             print(f"no corpus files in {FILES_DIR} — run build_corpus.py first", file=sys.stderr)
         return 1
 
+    timeout = PER_FILE_TIMEOUT + (PDF_TIMEOUT if do_pdf else 0)
     results = []
     for i, f in enumerate(files, 1):
         t0 = time.time()
@@ -373,7 +373,7 @@ def run_all(only: str | None, do_pdf: bool) -> int:
         if not do_pdf:
             cmd.append("--no-pdf")
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=PER_FILE_TIMEOUT + PDF_TIMEOUT)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             if proc.returncode == 0 and proc.stdout.strip():
                 rec = json.loads(proc.stdout)
             else:
@@ -394,7 +394,7 @@ def run_all(only: str | None, do_pdf: bool) -> int:
                     "harness": {
                         "status": "fail",
                         "error_type": "Timeout",
-                        "error": f">{PER_FILE_TIMEOUT + PDF_TIMEOUT}s",
+                        "error": f">{timeout}s",
                     }
                 },
             }
@@ -407,18 +407,20 @@ def run_all(only: str | None, do_pdf: bool) -> int:
         prov = manifest.get(f.name, {})
         rec["provenance"] = prov
         # A file the manifest marks must_reject (e.g. external XML entities)
-        # must be refused by the library; accepting it is a failure.
-        if prov.get("must_reject") and "harness" not in rec["stages"]:
-            open_status = rec["stages"].get("open", {}).get("status")
-            if open_status != "rejected":
-                rec["stages"]["open"] = {
-                    "status": "fail",
-                    "error_type": "MustRejectViolation",
-                    "error": f"manifest marks this file must_reject, but open status was {open_status!r}",
-                }
+        # must be refused by the library; accepting it is a failure. A genuine
+        # open failure already counts as failed and keeps its own diagnostics.
+        if prov.get("must_reject") and rec["stages"].get("open", {}).get("status") == "pass":
+            rec["stages"]["open"] = {
+                "status": "fail",
+                "error_type": "MustRejectViolation",
+                "error": "manifest marks this file must_reject, but Document.open accepted it",
+            }
         results.append(rec)
-        # Rewrite results after every file so a killed run keeps partial diagnostics.
-        RESULTS_PATH.write_text(json.dumps(results, indent=2))
+        # Rewrite results after every file so a killed run keeps partial
+        # diagnostics; write-then-replace so a kill mid-write can't truncate it.
+        tmp_results = RESULTS_PATH.with_suffix(".json.tmp")
+        tmp_results.write_text(json.dumps(results, indent=2))
+        tmp_results.replace(RESULTS_PATH)
         statuses = summarize_row(rec)
         print(f"[{i:2d}/{len(files)}] {f.name:50s} {statuses}", flush=True)
 
