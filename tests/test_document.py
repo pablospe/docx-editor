@@ -5,12 +5,17 @@ import re
 import zipfile
 
 import pytest
-from conftest import NS, find_ref, replace_document_xml
+from conftest import ENTITY_DTD_XML, NS, find_ref, replace_document_xml
 from defusedxml.common import EntitiesForbidden
 
 import docx_editor
 from docx_editor import Document, SearchResult
-from docx_editor.exceptions import DocumentOpenError, WorkspaceSyncError
+from docx_editor.exceptions import (
+    DocumentOpenError,
+    DocxEditError,
+    InvalidDocumentError,
+    WorkspaceSyncError,
+)
 from docx_editor.workspace import Workspace
 
 
@@ -87,8 +92,22 @@ class TestDocumentOpen:
             '<!DOCTYPE w:document [<!ENTITY x SYSTEM "http://example.com/x">]>\n'
             f"<w:document {NS}><w:body><w:p><w:r><w:t>&x;</w:t></w:r></w:p></w:body></w:document>",
         )
-        with pytest.raises(EntitiesForbidden):
+        # The refusal now surfaces as the documented InvalidDocumentError;
+        # the EntitiesForbidden cause proves the entity was never expanded.
+        with pytest.raises(InvalidDocumentError) as excinfo:
             Document.open(evil, workspace_dir=tmp_path / "ws")
+        assert isinstance(excinfo.value.__cause__, EntitiesForbidden)
+
+    def test_document_open_invalid_xml_raises_invalid_document_error(self, simple_docx, temp_dir):
+        """ISSUES.md #35: malformed XML in a part surfaces as InvalidDocumentError."""
+        bad_docx = temp_dir / "bad.docx"
+        replace_document_xml(simple_docx, bad_docx, ENTITY_DTD_XML)
+
+        with pytest.raises(DocxEditError) as excinfo:
+            Document.open(bad_docx)
+
+        assert isinstance(excinfo.value, InvalidDocumentError)
+
 
 
 class TestDocumentSave:

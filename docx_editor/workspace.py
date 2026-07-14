@@ -580,28 +580,37 @@ class Workspace:
                 f"or pass workspace_dir=."
             ) from exc
 
-        # Unpack document
-        rsid = unpack_document(self.source_path, self.workspace_path)
+        try:
+            # Unpack document
+            rsid = unpack_document(self.source_path, self.workspace_path)
 
-        # Get source file info
-        source_stat = self.source_path.stat()
+            # Get source file info
+            source_stat = self.source_path.stat()
 
-        # Create metadata
-        self.meta = {
-            "source_path": str(self.source_path),
-            "source_mtime": source_stat.st_mtime,
-            "source_size": source_stat.st_size,
-            "source_sha256": _file_sha256(self.source_path),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "author": self._author,
-            "initials": self._author[0].upper() if self._author else "",
-            "rsid": rsid,
-            "next_comment_id": 0,
-            "next_change_id": 0,
-            "dirty": False,
-        }
+            # Create metadata
+            self.meta = {
+                "source_path": str(self.source_path),
+                "source_mtime": source_stat.st_mtime,
+                "source_size": source_stat.st_size,
+                "source_sha256": _file_sha256(self.source_path),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "author": self._author,
+                "initials": self._author[0].upper() if self._author else "",
+                "rsid": rsid,
+                "next_comment_id": 0,
+                "next_change_id": 0,
+                "dirty": False,
+            }
 
-        self._save_meta()
+            self._save_meta()
+        except BaseException:
+            # A partial workspace (no meta.json) would make the next open fail
+            # with a misleading WorkspaceExistsError. This method is only
+            # reached when the dir did not pre-exist, so nothing but our own
+            # partial output is removed; the advisory lock is a sibling file
+            # released by __init__'s handler, so rmtree composes cleanly.
+            shutil.rmtree(self.workspace_path, ignore_errors=True)
+            raise
 
     def _load_meta(self) -> dict[str, Any] | None:
         """Load metadata from meta.json."""

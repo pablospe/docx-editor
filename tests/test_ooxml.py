@@ -3,9 +3,11 @@
 import stat
 import sys
 import zipfile
+from xml.parsers.expat import ExpatError
 
 import pytest
-from conftest import NS, replace_document_xml
+from conftest import ENTITY_DTD_XML, NS, replace_document_xml
+from defusedxml.common import EntitiesForbidden
 
 from docx_editor.exceptions import DocumentNotFoundError, InvalidDocumentError
 from docx_editor.ooxml.pack import pack_document
@@ -168,6 +170,55 @@ class TestUnpack:
 
         with pytest.raises(InvalidDocumentError, match="Symlink inside output directory"):
             unpack_document(simple_docx, output)
+
+
+class TestUnpackParseErrors:
+    """ISSUES.md #35: parse-stage failures must raise InvalidDocumentError, not leak raw.
+
+    Each fixture contains exactly one bad XML part — rglob order is
+    nondeterministic, so a second bad part would make the "names the
+    offending part" assertion flaky.
+    """
+
+    def test_unpack_wraps_entity_dtd_in_invalid_document_error(self, temp_dir):
+        """Entity-bearing DTD (defusedxml refusal) surfaces as InvalidDocumentError."""
+        bad_zip = temp_dir / "bad.docx"
+        _build_zip(bad_zip, [("word/document.xml", ENTITY_DTD_XML.encode("utf-8"))])
+        output = temp_dir / "output"
+
+        with pytest.raises(InvalidDocumentError, match=r"Invalid XML in word/document\.xml") as excinfo:
+            unpack_document(bad_zip, output)
+
+        assert isinstance(excinfo.value.__cause__, EntitiesForbidden)
+        # The partially-extracted dir this call created must be removed.
+        assert not output.exists()
+
+    def test_unpack_wraps_truncated_xml_in_invalid_document_error(self, temp_dir):
+        """Malformed/truncated XML (ExpatError) surfaces as InvalidDocumentError."""
+        bad_zip = temp_dir / "bad.docx"
+        _build_zip(bad_zip, [("word/document.xml", b"<w:document")])
+        output = temp_dir / "output"
+
+        with pytest.raises(InvalidDocumentError, match=r"Invalid XML in word/document\.xml") as excinfo:
+            unpack_document(bad_zip, output)
+
+        assert isinstance(excinfo.value.__cause__, ExpatError)
+        assert not output.exists()
+
+    def test_unpack_parse_failure_preserves_preexisting_output_dir(self, temp_dir):
+        """Cleanup must never delete a caller's pre-existing output directory."""
+        bad_zip = temp_dir / "bad.docx"
+        _build_zip(bad_zip, [("word/document.xml", ENTITY_DTD_XML.encode("utf-8"))])
+        output = temp_dir / "output"
+        output.mkdir()
+        sentinel = output / "keep.txt"
+        sentinel.write_text("user data")
+
+        with pytest.raises(InvalidDocumentError, match=r"Invalid XML in word/document\.xml"):
+            unpack_document(bad_zip, output)
+
+        assert output.exists()
+        assert sentinel.read_text() == "user data"
 
 
 SMART_TEXT = "“He said ‘hello’ — it’s fine”"
