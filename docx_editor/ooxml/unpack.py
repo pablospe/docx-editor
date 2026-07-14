@@ -75,7 +75,10 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
             if entry.is_symlink():
                 raise InvalidDocumentError(f"Symlink inside output directory: {entry}")
 
-    created_output_dir = not output_path.exists()
+    # Ownership of the output dir is claimed by the mkdir itself, not by a
+    # separate exists() check, so a directory created concurrently by someone
+    # else can never be adopted and then deleted by the failure cleanup.
+    created_output_dir = False
 
     try:
         # Validate ZIP entries before extractall (and before mkdir) so a
@@ -87,7 +90,11 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
                         raise InvalidDocumentError(f"Unsafe ZIP entry path: {info.filename!r} in {input_file}")
                     if _is_symlink_entry(info):
                         raise InvalidDocumentError(f"Symlink ZIP entry: {info.filename!r} in {input_file}")
-                output_path.mkdir(parents=True, exist_ok=True)
+                try:
+                    output_path.mkdir(parents=True)
+                    created_output_dir = True
+                except FileExistsError:
+                    pass
                 zf.extractall(output_path)
         except zipfile.BadZipFile as e:
             raise InvalidDocumentError(f"Not a valid .docx file: {input_file}") from e
