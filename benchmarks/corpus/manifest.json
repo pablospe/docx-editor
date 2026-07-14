@@ -1,0 +1,395 @@
+{
+  "local_OXML_TrackChanges_Test.docx": {
+    "kind": "local",
+    "producer": "docx-editor test fixture",
+    "source": "tests/test_data/OXML_TrackChanges_Test.docx",
+    "size": 10160,
+    "sha256": "a98aaeefb4bc04aa"
+  },
+  "local_empty.docx": {
+    "kind": "local",
+    "producer": "docx-editor test fixture",
+    "source": "tests/test_data/empty.docx",
+    "size": 36563,
+    "sha256": "587c1862b9fd37e1"
+  },
+  "local_long_content.docx": {
+    "kind": "local",
+    "producer": "docx-editor test fixture",
+    "source": "tests/test_data/long_content.docx",
+    "size": 37232,
+    "sha256": "3eff759d7a7449c1"
+  },
+  "local_search_fixture.docx": {
+    "kind": "local",
+    "producer": "docx-editor test fixture",
+    "source": "tests/test_data/search_fixture.docx",
+    "size": 37243,
+    "sha256": "affc23df904816a7"
+  },
+  "local_simple.docx": {
+    "kind": "local",
+    "producer": "docx-editor test fixture",
+    "source": "tests/test_data/simple.docx",
+    "size": 36717,
+    "sha256": "215879d451c0f2bc"
+  },
+  "local_special_chars.docx": {
+    "kind": "local",
+    "producer": "docx-editor test fixture",
+    "source": "tests/test_data/special_chars.docx",
+    "size": 36777,
+    "sha256": "1653528736d4144e"
+  },
+  "local_test_document_with_errors.docx": {
+    "kind": "local",
+    "producer": "docx-editor test fixture",
+    "source": "tests/test_data/test_document_with_errors.docx",
+    "size": 16978,
+    "sha256": "7bcd1b7837cc6309"
+  },
+  "local_tricky-track-changes.docx": {
+    "kind": "local",
+    "producer": "docx-editor test fixture",
+    "source": "tests/test_data/tricky-track-changes.docx",
+    "size": 14390,
+    "sha256": "d2a9a06e7c819b2a"
+  },
+  "local_with_tables.docx": {
+    "kind": "local",
+    "producer": "docx-editor test fixture",
+    "source": "tests/test_data/with_tables.docx",
+    "size": 36832,
+    "sha256": "c6cc8da39b6a0e4d"
+  },
+  "lo_from_txt.docx": {
+    "kind": "generated",
+    "producer": "LibreOffice (txt->docx)",
+    "source": "srcgen/plain.txt",
+    "size": 5203,
+    "sha256": "e0c1a7d57d20248c"
+  },
+  "lo_from_html.docx": {
+    "kind": "generated",
+    "producer": "LibreOffice (html->docx)",
+    "source": "srcgen/rich.html",
+    "size": 7508,
+    "sha256": "b93446988180decc"
+  },
+  "lo_from_html_unicode.docx": {
+    "kind": "generated",
+    "producer": "LibreOffice (html->docx)",
+    "source": "srcgen/unicode.html",
+    "size": 6071,
+    "sha256": "3c9769ba3b65f9a6"
+  },
+  "lo_from_rtf.docx": {
+    "kind": "generated",
+    "producer": "LibreOffice (rtf->docx)",
+    "source": "srcgen/doc.rtf",
+    "size": 5124,
+    "sha256": "de2b9c040937dff9"
+  },
+  "lo_from_odt.docx": {
+    "kind": "generated",
+    "producer": "LibreOffice (odt->docx)",
+    "source": "srcgen/plain.odt",
+    "size": 5328,
+    "sha256": "215043ff7023b9bd"
+  },
+  "lo_resave_tricky_track_changes.docx": {
+    "kind": "generated",
+    "producer": "LibreOffice (docx re-save)",
+    "source": "tests/test_data/tricky-track-changes.docx",
+    "size": 9744,
+    "sha256": "24fe2a20a1f29ba0"
+  },
+  "lo_resave_with_tables.docx": {
+    "kind": "generated",
+    "producer": "LibreOffice (docx re-save)",
+    "source": "tests/test_data/with_tables.docx",
+    "size": 20144,
+    "sha256": "5cd1d2c410bdeef0"
+  },
+  "lo_resave_oxml_trackchanges.docx": {
+    "kind": "generated",
+    "producer": "LibreOffice (docx re-save)",
+    "source": "tests/test_data/OXML_TrackChanges_Test.docx",
+    "size": 8678,
+    "sha256": "d2266e65564a75a1"
+  },
+  "pandoc_notes.docx": {
+    "kind": "generated",
+    "producer": "pandoc (md->docx)",
+    "source": "srcgen/notes.md",
+    "size": 10633,
+    "sha256": "11e5ee625f465667"
+  },
+  "pandoc_unicode.docx": {
+    "kind": "generated",
+    "producer": "pandoc (html->docx)",
+    "source": "srcgen/unicode.html",
+    "size": 10246,
+    "sha256": "a16fb876f0c6b8bf"
+  },
+  "pydocx_test.docx": {
+    "kind": "download",
+    "producer": "python-docx test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/python-openxml/python-docx/e45454602b53e8e572b179ccf1c91093ec9f4ed7/tests/test_files/test.docx",
+    "size": 31773,
+    "sha256": "fba1c76b66ff3098"
+  },
+  "pydocx_blk-inner-content.docx": {
+    "kind": "download",
+    "producer": "python-docx test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/python-openxml/python-docx/e45454602b53e8e572b179ccf1c91093ec9f4ed7/tests/test_files/blk-inner-content.docx",
+    "size": 11949,
+    "sha256": "16243dd05f686d6d"
+  },
+  "pydocx_sct-inner-content.docx": {
+    "kind": "download",
+    "producer": "python-docx test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/python-openxml/python-docx/e45454602b53e8e572b179ccf1c91093ec9f4ed7/tests/test_files/sct-inner-content.docx",
+    "size": 12051,
+    "sha256": "d92e9ca7b09fab7b"
+  },
+  "pydocx_having-images.docx": {
+    "kind": "download",
+    "producer": "python-docx test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/python-openxml/python-docx/e45454602b53e8e572b179ccf1c91093ec9f4ed7/tests/test_files/having-images.docx",
+    "size": 132875,
+    "sha256": "72f40baa1b89e484"
+  },
+  "mammoth_comments.docx": {
+    "kind": "download",
+    "producer": "mammoth test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/mwilliamson/python-mammoth/1cac2458ea3c0a68754f1cc86df3aee50b02782b/tests/test-data/comments.docx",
+    "size": 15526,
+    "sha256": "adc9f524d176f562"
+  },
+  "mammoth_endnotes.docx": {
+    "kind": "download",
+    "producer": "mammoth test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/mwilliamson/python-mammoth/1cac2458ea3c0a68754f1cc86df3aee50b02782b/tests/test-data/endnotes.docx",
+    "size": 4431,
+    "sha256": "8b0275a08427605e"
+  },
+  "mammoth_footnotes.docx": {
+    "kind": "download",
+    "producer": "mammoth test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/mwilliamson/python-mammoth/1cac2458ea3c0a68754f1cc86df3aee50b02782b/tests/test-data/footnotes.docx",
+    "size": 15936,
+    "sha256": "a3d786ba3ad53833"
+  },
+  "mammoth_simple-list.docx": {
+    "kind": "download",
+    "producer": "mammoth test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/mwilliamson/python-mammoth/1cac2458ea3c0a68754f1cc86df3aee50b02782b/tests/test-data/simple-list.docx",
+    "size": 13887,
+    "sha256": "ed3c015cf411d07b"
+  },
+  "mammoth_strict-format.docx": {
+    "kind": "download",
+    "producer": "mammoth test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/mwilliamson/python-mammoth/1cac2458ea3c0a68754f1cc86df3aee50b02782b/tests/test-data/strict-format.docx",
+    "size": 11692,
+    "sha256": "86d90f50d8fd3310"
+  },
+  "mammoth_tables.docx": {
+    "kind": "download",
+    "producer": "mammoth test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/mwilliamson/python-mammoth/1cac2458ea3c0a68754f1cc86df3aee50b02782b/tests/test-data/tables.docx",
+    "size": 13087,
+    "sha256": "9f75a82d36530d91"
+  },
+  "mammoth_text-box.docx": {
+    "kind": "download",
+    "producer": "mammoth test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/mwilliamson/python-mammoth/1cac2458ea3c0a68754f1cc86df3aee50b02782b/tests/test-data/text-box.docx",
+    "size": 15850,
+    "sha256": "a94f4c516bec29b7"
+  },
+  "mammoth_utf8-bom.docx": {
+    "kind": "download",
+    "producer": "mammoth test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/mwilliamson/python-mammoth/1cac2458ea3c0a68754f1cc86df3aee50b02782b/tests/test-data/utf8-bom.docx",
+    "size": 2836,
+    "sha256": "8b59e5faa2879369"
+  },
+  "poi_51921-Word-Crash067.docx": {
+    "kind": "download",
+    "producer": "Apache POI test fixture (Word, bug reports)",
+    "source": "https://raw.githubusercontent.com/apache/poi/63eda92cc63b39d4e8956e7775ccddb1f0d925cf/test-data/document/51921-Word-Crash067.docx",
+    "size": 20006,
+    "sha256": "422e62dfe18243e8"
+  },
+  "poi_Bug51170.docx": {
+    "kind": "download",
+    "producer": "Apache POI test fixture (Word, bug reports)",
+    "source": "https://raw.githubusercontent.com/apache/poi/63eda92cc63b39d4e8956e7775ccddb1f0d925cf/test-data/document/Bug51170.docx",
+    "size": 239621,
+    "sha256": "3a5f19e5bfdc7f25"
+  },
+  "poi_ComplexNumberedLists.docx": {
+    "kind": "download",
+    "producer": "Apache POI test fixture (Word, bug reports)",
+    "source": "https://raw.githubusercontent.com/apache/poi/63eda92cc63b39d4e8956e7775ccddb1f0d925cf/test-data/document/ComplexNumberedLists.docx",
+    "size": 14458,
+    "sha256": "297a085a7d433af2"
+  },
+  "poi_FieldCodes.docx": {
+    "kind": "download",
+    "producer": "Apache POI test fixture (Word, bug reports)",
+    "source": "https://raw.githubusercontent.com/apache/poi/63eda92cc63b39d4e8956e7775ccddb1f0d925cf/test-data/document/FieldCodes.docx",
+    "size": 17034,
+    "sha256": "9247f85ab90b15f1"
+  },
+  "poi_ExternalEntityInText.docx": {
+    "kind": "download",
+    "producer": "Apache POI test fixture (Word, bug reports)",
+    "source": "https://raw.githubusercontent.com/apache/poi/63eda92cc63b39d4e8956e7775ccddb1f0d925cf/test-data/document/ExternalEntityInText.docx",
+    "size": 12756,
+    "sha256": "5cf7340ffd6516c2",
+    "must_reject": true
+  },
+  "poi_HeaderFooterUnicode.docx": {
+    "kind": "download",
+    "producer": "Apache POI test fixture (Word, bug reports)",
+    "source": "https://raw.githubusercontent.com/apache/poi/63eda92cc63b39d4e8956e7775ccddb1f0d925cf/test-data/document/HeaderFooterUnicode.docx",
+    "size": 15079,
+    "sha256": "ec439ac0643294e1"
+  },
+  "poi_IllustrativeCases.docx": {
+    "kind": "download",
+    "producer": "Apache POI test fixture (Word, bug reports)",
+    "source": "https://raw.githubusercontent.com/apache/poi/63eda92cc63b39d4e8956e7775ccddb1f0d925cf/test-data/document/IllustrativeCases.docx",
+    "size": 22858,
+    "sha256": "4c2407d338f02a6a"
+  },
+  "poi_MultipleBodyBug.docx": {
+    "kind": "download",
+    "producer": "Apache POI test fixture (Word, bug reports)",
+    "source": "https://raw.githubusercontent.com/apache/poi/63eda92cc63b39d4e8956e7775ccddb1f0d925cf/test-data/document/MultipleBodyBug.docx",
+    "size": 102103,
+    "sha256": "7b34a3e9458daa3c"
+  },
+  "poi_SampleDoc.docx": {
+    "kind": "download",
+    "producer": "Apache POI test fixture (Word, bug reports)",
+    "source": "https://raw.githubusercontent.com/apache/poi/63eda92cc63b39d4e8956e7775ccddb1f0d925cf/test-data/document/SampleDoc.docx",
+    "size": 11611,
+    "sha256": "ea2c517bd7be4628"
+  },
+  "pandocfx_comments.docx": {
+    "kind": "download",
+    "producer": "pandoc test fixture (pandoc/Word mixed)",
+    "source": "https://raw.githubusercontent.com/jgm/pandoc/db8d64fe6f55f446bc36796d3dc20f823f55bc4e/test/docx/comments.docx",
+    "size": 17109,
+    "sha256": "b6df01371955a599"
+  },
+  "pandocfx_block_quotes.docx": {
+    "kind": "download",
+    "producer": "pandoc test fixture (pandoc/Word mixed)",
+    "source": "https://raw.githubusercontent.com/jgm/pandoc/db8d64fe6f55f446bc36796d3dc20f823f55bc4e/test/docx/block_quotes.docx",
+    "size": 12153,
+    "sha256": "f6901b01b1b7e289"
+  },
+  "pandocfx_char_styles.docx": {
+    "kind": "download",
+    "producer": "pandoc test fixture (pandoc/Word mixed)",
+    "source": "https://raw.githubusercontent.com/jgm/pandoc/db8d64fe6f55f446bc36796d3dc20f823f55bc4e/test/docx/char_styles.docx",
+    "size": 18059,
+    "sha256": "4befadc2fcc30221"
+  },
+  "pandocfx_lists.docx": {
+    "kind": "download",
+    "producer": "pandoc test fixture (pandoc/Word mixed)",
+    "source": "https://raw.githubusercontent.com/jgm/pandoc/db8d64fe6f55f446bc36796d3dc20f823f55bc4e/test/docx/lists.docx",
+    "size": 9473,
+    "sha256": "e5b1a7204be70bb0"
+  },
+  "pandocfx_nested_sdt.docx": {
+    "kind": "download",
+    "producer": "pandoc test fixture (pandoc/Word mixed)",
+    "source": "https://raw.githubusercontent.com/jgm/pandoc/db8d64fe6f55f446bc36796d3dc20f823f55bc4e/test/docx/nested_sdt.docx",
+    "size": 11694,
+    "sha256": "b52b096bda700e04"
+  },
+  "pandocfx_image_vml.docx": {
+    "kind": "download",
+    "producer": "pandoc test fixture (pandoc/Word mixed)",
+    "source": "https://raw.githubusercontent.com/jgm/pandoc/db8d64fe6f55f446bc36796d3dc20f823f55bc4e/test/docx/image_vml.docx",
+    "size": 23559,
+    "sha256": "8065acde23fe24fd"
+  },
+  "pandocfx_metadata.docx": {
+    "kind": "download",
+    "producer": "pandoc test fixture (pandoc/Word mixed)",
+    "source": "https://raw.githubusercontent.com/jgm/pandoc/db8d64fe6f55f446bc36796d3dc20f823f55bc4e/test/docx/metadata.docx",
+    "size": 26077,
+    "sha256": "6b2fcb3cb98842e8"
+  },
+  "locore_CommentDone.docx": {
+    "kind": "download",
+    "producer": "LibreOffice core ooxmlexport fixture (Word/LO mixed)",
+    "source": "https://raw.githubusercontent.com/LibreOffice/core/1c29ec6c2b2ec1f343545915ba66b7e9718b3792/sw/qa/extras/ooxmlexport/data/CommentDone.docx",
+    "size": 20946,
+    "sha256": "f0c35b661ee60f28"
+  },
+  "locore_CommentReply.docx": {
+    "kind": "download",
+    "producer": "LibreOffice core ooxmlexport fixture (Word/LO mixed)",
+    "source": "https://raw.githubusercontent.com/LibreOffice/core/1c29ec6c2b2ec1f343545915ba66b7e9718b3792/sw/qa/extras/ooxmlexport/data/CommentReply.docx",
+    "size": 10353,
+    "sha256": "cfc3a47bb7a51a20"
+  },
+  "locore_UnknownStyleInRedline.docx": {
+    "kind": "download",
+    "producer": "LibreOffice core ooxmlexport fixture (Word/LO mixed)",
+    "source": "https://raw.githubusercontent.com/LibreOffice/core/1c29ec6c2b2ec1f343545915ba66b7e9718b3792/sw/qa/extras/ooxmlexport/data/UnknownStyleInRedline.docx",
+    "size": 14030,
+    "sha256": "09bca1e884e68313"
+  },
+  "locore_cell-sdt-redline.docx": {
+    "kind": "download",
+    "producer": "LibreOffice core ooxmlexport fixture (Word/LO mixed)",
+    "source": "https://raw.githubusercontent.com/LibreOffice/core/1c29ec6c2b2ec1f343545915ba66b7e9718b3792/sw/qa/extras/ooxmlexport/data/cell-sdt-redline.docx",
+    "size": 11268,
+    "sha256": "04bdf9ad34de06c3"
+  },
+  "locore_TC-table-DnD-move.docx": {
+    "kind": "download",
+    "producer": "LibreOffice core ooxmlexport fixture (Word/LO mixed)",
+    "source": "https://raw.githubusercontent.com/LibreOffice/core/1c29ec6c2b2ec1f343545915ba66b7e9718b3792/sw/qa/extras/ooxmlexport/data/TC-table-DnD-move.docx",
+    "size": 12977,
+    "sha256": "32419eb1c66dc5ca"
+  },
+  "locore_99_Fields.docx": {
+    "kind": "download",
+    "producer": "LibreOffice core ooxmlexport fixture (Word/LO mixed)",
+    "source": "https://raw.githubusercontent.com/LibreOffice/core/1c29ec6c2b2ec1f343545915ba66b7e9718b3792/sw/qa/extras/ooxmlexport/data/99_Fields.docx",
+    "size": 15788,
+    "sha256": "957a5a8cc989cd31"
+  },
+  "locore_NumberedList.docx": {
+    "kind": "download",
+    "producer": "LibreOffice core ooxmlexport fixture (Word/LO mixed)",
+    "source": "https://raw.githubusercontent.com/LibreOffice/core/1c29ec6c2b2ec1f343545915ba66b7e9718b3792/sw/qa/extras/ooxmlexport/data/NumberedList.docx",
+    "size": 55519,
+    "sha256": "ebb078d791b6deb4"
+  },
+  "locore_floating-tables-anchor.docx": {
+    "kind": "download",
+    "producer": "LibreOffice core ooxmlexport fixture (Word/LO mixed)",
+    "source": "https://raw.githubusercontent.com/LibreOffice/core/1c29ec6c2b2ec1f343545915ba66b7e9718b3792/sw/qa/extras/ooxmlexport/data/floating-tables-anchor.docx",
+    "size": 16348,
+    "sha256": "428f189fb7afbd60"
+  },
+  "onlyoffice_sample.docx": {
+    "kind": "download",
+    "producer": "ONLYOFFICE sample template",
+    "source": "https://raw.githubusercontent.com/ONLYOFFICE/document-templates/71430c9f183489e8912f54f9dc859e369cf0dfb4/sample/sample.docx",
+    "size": 410390,
+    "sha256": "d678383aee1f2deb"
+  }
+}

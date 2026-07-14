@@ -36,6 +36,11 @@ publish: ## Publish a release to PyPI.
 .PHONY: build-and-publish
 build-and-publish: build publish ## Build and publish.
 
+.PHONY: corpus-check
+corpus-check: ## Assemble the docx corpus and run the round-trip harness (full run, incl. PDF stage)
+	@uv run python benchmarks/corpus/build_corpus.py
+	@uv run python benchmarks/corpus/corpus_harness.py
+
 .PHONY: docs-test
 docs-test: ## Test if documentation can be built without warnings or errors
 	@uv run mkdocs build -s

@@ -5,7 +5,8 @@ import re
 import zipfile
 
 import pytest
-from conftest import find_ref
+from conftest import NS, find_ref, replace_document_xml
+from defusedxml.common import EntitiesForbidden
 
 import docx_editor
 from docx_editor import Document, SearchResult
@@ -75,6 +76,19 @@ class TestDocumentOpen:
         doc2 = Document.open(clean_workspace, force_recreate=True, workspace_dir=tmp_path)
         assert doc2._workspace.workspace_path.parent == tmp_path
         doc2.close()
+
+    def test_open_rejects_external_entities(self, simple_docx, tmp_path):
+        """A document declaring XML entities must be refused, never expanded (XXE)."""
+        evil = tmp_path / "entities.docx"
+        replace_document_xml(
+            simple_docx,
+            evil,
+            '<?xml version="1.0"?>\n'
+            '<!DOCTYPE w:document [<!ENTITY x SYSTEM "http://example.com/x">]>\n'
+            f"<w:document {NS}><w:body><w:p><w:r><w:t>&x;</w:t></w:r></w:p></w:body></w:document>",
+        )
+        with pytest.raises(EntitiesForbidden):
+            Document.open(evil, workspace_dir=tmp_path / "ws")
 
 
 class TestDocumentSave:
