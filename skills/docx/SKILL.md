@@ -310,9 +310,21 @@ doc = Document.open("reviewed.docx", author=author)
 revisions = doc.list_revisions()
 for r in revisions:
     print(f"ID: {r.id}, Type: {r.type}, Author: {r.author}, Text: {r.text}")
+    # Location: which paragraph the revision lives in, and where in it
+    print(f"  at {r.paragraph_ref} occurrence={r.occurrence}")
+    # Nesting: e.g. a foreign deletion inside another author's insertion
+    print(f"  nested_under={r.nested_under} contains_ids={r.contains_ids}")
 
 # Filter by author
 their_changes = doc.list_revisions(author="OtherUser")
+
+# Filter to one paragraph (ref from list_paragraphs())
+para_changes = doc.list_revisions(paragraph="P3#a7b2")
+
+# r.paragraph_ref/r.occurrence plug straight into the anchor APIs
+# (occurrence is 0-based, same convention as replace/delete/add_comment):
+r = doc.list_revisions()[0]
+doc.add_comment(r.text, "please confirm", paragraph=r.paragraph_ref, occurrence=r.occurrence)
 
 # Accept or reject individual revisions (return True if found, False if not)
 doc.accept_revision(revision_id=1)
@@ -329,6 +341,34 @@ doc.reject_all(author="OtherUser")
 doc.save()
 doc.close()
 ```
+
+**`occurrence` is None when targeting-by-text does not apply**: empty revision
+text (paragraph-mark markers), a host insertion whose text was partly consumed
+by a nested deletion, or a nested deletion itself (its text never existed in
+the original document). Never treat `None` as `0` — in every `None` case,
+`nested_under`/`contains_ids` describe the revision instead.
+
+**Nested revisions**: when a reviewer deletes text inside another author's
+pending insertion (Word and this library both produce this), the deletion
+nests inside the insertion. The host insertion's `text` reports the full text
+it originally inserted; `contains_ids` lists the nested revision ids, and the
+nested deletion's `nested_under` points back at its host. Accepting the host
+insertion keeps its content **and** the nested deletion pending; rejecting the
+host removes the nested deletion along with it. Predict the outcome, then
+verify with `get_markup_text()`.
+
+### Inline markup view (verify redlines without pandoc)
+
+```python
+# Every paragraph on one line; revisions wrapped inline:
+#   Keep [ins#4:Reviewer]added[/ins][del#3:Reviewer]removed[/del]
+# Nesting renders naturally:
+#   [ins#1:A]kept [del#9:B]gone[/del][/ins]
+print(doc.get_markup_text())
+```
+
+A human/agent verification view, not a parseable format (author names are not
+escaped; tabs/breaks are not rendered).
 
 ## Redlining Workflow (Document Review)
 
