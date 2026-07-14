@@ -612,7 +612,7 @@ def get_text_node_data(elem) -> str:
     return "".join(c.data for c in elem.childNodes if c.nodeType == c.TEXT_NODE)
 
 
-def rebuild_run_fragments(run, rPr_xml: str, render_wt) -> list[str]:
+def rebuild_run_fragments(run, rPr_xml: str, render_wt: Callable[[Element], list[str]]) -> list[str]:
     """Rebuild ``run``'s children as XML fragments, preserving document order.
 
     Iterates *direct* children of ``run`` (not descendants, so ``w:t`` nodes

@@ -1480,16 +1480,16 @@ class RevisionManager:
 
             # Render ALL w:t nodes in this run, preserving unmatched ones.
             # Keyword-only defaults bind this iteration's state (B023).
-            def render_wt(wt_node, *, run_info=run_info, run_rPr=rPr_xml, node_items=node_items, rid=rid) -> list[str]:
+            def render_wt(wt, *, run_info=run_info, run_rPr=rPr_xml, node_items=node_items, rid=rid) -> list[str]:
                 fragments: list[str] = []
-                if id(wt_node) not in run_info["nodes"]:
+                if id(wt) not in run_info["nodes"]:
                     # Unmatched sibling — preserve as-is
-                    wt_text = self._get_node_text(wt_node)
+                    wt_text = self._get_node_text(wt)
                     if wt_text:
                         fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
                     return fragments
 
-                ng = run_info["nodes"][id(wt_node)]
+                ng = run_info["nodes"][id(wt)]
                 node_text = self._get_node_text(ng["node"])
                 first_offset = ng["first"]
                 last_offset = ng["last"]

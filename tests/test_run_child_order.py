@@ -20,6 +20,8 @@ DATE = "2024-01-01T00:00:00Z"
 
 @pytest.fixture
 def temp_xml(tmp_path):
+    """Fixture that returns a function to create temp XML files."""
+
     def _create_xml(body_xml: str) -> Path:
         xml = f'<?xml version="1.0" encoding="utf-8"?><w:document {NS}><w:body>{body_xml}</w:body></w:document>'
         xml_path = tmp_path / "test_doc.xml"
