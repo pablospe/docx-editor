@@ -186,11 +186,11 @@ def _smart_quote_document() -> str:
 
 
 class TestUnpackUtf8:
-    """Unpack must write UTF-8 workspace XML so non-ASCII text stays literal.
+    """Issue #9: unpack must write UTF-8 workspace XML so non-ASCII text stays literal.
 
     With ascii output, toprettyxml escapes non-ASCII characters as numeric
     character references, which the line-tracking parser fragments into
-    multiple TEXT_NODEs (ISSUES.md #18, root cause of issue #9).
+    multiple TEXT_NODEs — the root cause of the issue #9 bug class.
     """
 
     def test_unpack_preserves_non_ascii_text(self, simple_docx, temp_dir):
