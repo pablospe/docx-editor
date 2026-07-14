@@ -26,7 +26,7 @@ jobs:
         run: uv run python benchmarks/corpus/build_corpus.py
 
       - name: Run round-trip harness
-        run: uv run python benchmarks/corpus/corpus_harness.py --no-pdf
+        run: uv run python benchmarks/corpus/corpus_harness.py
 
       - name: Upload results
         uses: actions/upload-artifact@v4

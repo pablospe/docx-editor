@@ -249,7 +249,8 @@
     "producer": "Apache POI test fixture (Word, bug reports)",
     "source": "https://raw.githubusercontent.com/apache/poi/63eda92cc63b39d4e8956e7775ccddb1f0d925cf/test-data/document/ExternalEntityInText.docx",
     "size": 12756,
-    "sha256": "5cf7340ffd6516c2"
+    "sha256": "5cf7340ffd6516c2",
+    "must_reject": true
   },
   "poi_HeaderFooterUnicode.docx": {
     "kind": "download",

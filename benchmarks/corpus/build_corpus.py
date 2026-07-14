@@ -63,7 +63,7 @@ def download(url: str, dest: Path, expected_sha: str) -> str | None:
     try:
         with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as r:
             data = r.read(MAX_SIZE + 1)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return f"download failed: {e}"
     if len(data) > MAX_SIZE:
         return "too large (>2MB)"
@@ -122,6 +122,8 @@ def pandoc_convert(pandoc: str, src: Path, dest: Path) -> str | None:
 
 def generate(name: str, tools: dict[str, str | None]) -> str | None:
     """Generate one kind=generated corpus file. Returns an error string or None."""
+    if name not in RECIPES:
+        return f"no generation recipe for {name}"
     tool_name, source = RECIPES[name]
     tool = tools[tool_name]
     if tool is None:

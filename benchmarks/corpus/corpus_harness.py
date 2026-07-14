@@ -79,13 +79,13 @@ def validate_docx(path: Path) -> dict:
                 if n.endswith((".xml", ".rels")):
                     try:
                         safe_minidom.parseString(z.read(n))
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         return {
                             "ok": False,
                             "error_type": type(e).__name__,
                             "error": f"part {n}: {e}",
                         }
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"ok": False, "error_type": type(e).__name__, "error": str(e)[:300]}
     return {"ok": True}
 
@@ -141,7 +141,7 @@ def run_single(path: Path, do_pdf: bool) -> dict:
     try:
         doc = Document.open(path, author="CorpusHarness", workspace_dir=work, force_recreate=True)
         stages["open"] = {"status": "pass"}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         rec = err_record(e)
         if not input_ok:
             rec["status"] = "rejected"
@@ -161,7 +161,7 @@ def run_single(path: Path, do_pdf: bool) -> dict:
                 "visible_chars": len(visible),
                 "revisions": len(revs),
             }
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             stages["read"] = err_record(e)
             fail_rest("read")
             return result
@@ -193,7 +193,7 @@ def run_single(path: Path, do_pdf: bool) -> dict:
                     "ref": target.ref,
                     "revisions_after_edit": revisions_after_edit,
                 }
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 stages["edit"] = err_record(e)
                 fail_rest("edit")
                 return result
@@ -212,14 +212,14 @@ def run_single(path: Path, do_pdf: bool) -> dict:
                 }
                 fail_rest("save1")
                 return result
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             stages["save1"] = err_record(e)
             fail_rest("save1")
             return result
     finally:
         try:
             doc.close(cleanup=True)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     # Stage 5: reopen + deep assertions + accept_all
@@ -260,7 +260,7 @@ def run_single(path: Path, do_pdf: bool) -> dict:
                 fail_rest("reopen")
                 return result
             stages["reopen"] = {"status": "pass", "accepted": accepted}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             stages["reopen"] = err_record(e)
             fail_rest("reopen")
             return result
@@ -279,7 +279,7 @@ def run_single(path: Path, do_pdf: bool) -> dict:
                 }
                 fail_rest("save2")
                 return result
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             stages["save2"] = err_record(e)
             fail_rest("save2")
             return result
@@ -287,7 +287,7 @@ def run_single(path: Path, do_pdf: bool) -> dict:
         if doc2 is not None:
             try:
                 doc2.close(cleanup=True)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     # Stage 7: PDF conversion of the final output
@@ -359,6 +359,12 @@ def run_all(only: str | None, do_pdf: bool) -> int:
     files = sorted(FILES_DIR.glob("*.docx"))
     if only:
         files = [f for f in files if only in f.name]
+    if not files:
+        if only:
+            print(f"no corpus files match --only {only!r}", file=sys.stderr)
+        else:
+            print(f"no corpus files in {FILES_DIR} — run build_corpus.py first", file=sys.stderr)
+        return 1
 
     results = []
     for i, f in enumerate(files, 1):
@@ -392,18 +398,30 @@ def run_all(only: str | None, do_pdf: bool) -> int:
                     }
                 },
             }
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             rec = {
                 "file": f.name,
                 "stages": {"harness": {"status": "fail", "error_type": type(e).__name__, "error": str(e)}},
             }
         rec["duration_s"] = round(time.time() - t0, 1)
-        rec["provenance"] = manifest.get(f.name, {})
+        prov = manifest.get(f.name, {})
+        rec["provenance"] = prov
+        # A file the manifest marks must_reject (e.g. external XML entities)
+        # must be refused by the library; accepting it is a failure.
+        if prov.get("must_reject") and "harness" not in rec["stages"]:
+            open_status = rec["stages"].get("open", {}).get("status")
+            if open_status != "rejected":
+                rec["stages"]["open"] = {
+                    "status": "fail",
+                    "error_type": "MustRejectViolation",
+                    "error": f"manifest marks this file must_reject, but open status was {open_status!r}",
+                }
         results.append(rec)
+        # Rewrite results after every file so a killed run keeps partial diagnostics.
+        RESULTS_PATH.write_text(json.dumps(results, indent=2))
         statuses = summarize_row(rec)
         print(f"[{i:2d}/{len(files)}] {f.name:50s} {statuses}", flush=True)
 
-    RESULTS_PATH.write_text(json.dumps(results, indent=2))
     print(f"\nresults written to {RESULTS_PATH}\n")
     print_summary(results)
     return sum(1 for r in results if file_failed(r))

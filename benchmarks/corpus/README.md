@@ -32,8 +32,8 @@ cannot kill the run. Results are written to `results.json` and a summary table
 is printed. Row marks: `.` pass, `F` fail, `s` skip, `r` rejected, `-` not run.
 
 A weekly GitHub Actions workflow (`.github/workflows/corpus.yml`) runs the full
-corpus with LibreOffice and pandoc installed; trigger it manually with
-`workflow_dispatch` after changes.
+corpus — including the PDF stage — with LibreOffice and pandoc installed;
+trigger it manually with `workflow_dispatch` after changes.
 
 ## Failure semantics
 
@@ -41,8 +41,15 @@ corpus with LibreOffice and pandoc installed; trigger it manually with
   `Document.open` is **rejected** (`r`), not a failure — refusing a broken
   document is correct library behavior (e.g. `poi_ExternalEntityInText.docx`,
   which contains external XML entities).
+- A manifest entry can set `"must_reject": true`: the library **must** refuse
+  that file, and a run where it is accepted fails with `MustRejectViolation`.
+  This pins the rejection of `poi_ExternalEntityInText.docx`, so a parser
+  regression that starts expanding entities cannot slip through as "one more
+  passing file".
 - The harness exits nonzero if any file has a real failure (failed stage or
-  harness error). Baseline: 55 clean + 1 rejected → exit 0.
+  harness error), and if the corpus directory is empty or a `--only` filter
+  matches nothing (a run that tested nothing must not look green).
+  Baseline: 55 clean + 1 rejected → exit 0.
 
 ## Provenance policy
 
@@ -67,6 +74,7 @@ corpus with LibreOffice and pandoc installed; trigger it manually with
 1. Add a manifest entry: `kind`, `producer`, source (for downloads: a
    raw.githubusercontent.com URL pinned to a full commit SHA), `size`, and the
    truncated sha256 of the content — or add a generation recipe in
-   `build_corpus.py` plus a source file in `srcgen/`.
+   `build_corpus.py` plus a source file in `srcgen/`. Add `"must_reject": true`
+   for an intentionally invalid file the library must refuse.
 2. Keep files ≤ 2MB.
 3. Re-run `uv run python benchmarks/corpus/build_corpus.py`.
