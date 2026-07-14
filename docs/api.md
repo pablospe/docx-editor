@@ -342,17 +342,17 @@ stale, the entire batch is rejected before any edits are applied.
 - `operations` (list[EditOperation]): Edit operations to apply
 - `dry_run` (bool): If True, validate every operation without applying any edits and return one [`EditValidationResult`](#editvalidationresult) per operation, in input order; the document is left unchanged. Each operation is validated independently against the current document — sequential effects between multiple operations on the same paragraph are **not** simulated. Defaults to False.
 
-**Returns:** Updated paragraph references in input order (list[str]); with `dry_run=True`, a list[[`EditValidationResult`](#editvalidationresult)] instead
+**Returns:** Updated paragraph references in input order (list[str]); with `dry_run=True`, a list of [`EditValidationResult`](#editvalidationresult) instead
 
 **Example:**
 
 ```python
 from docx_editor import EditOperation
 
-new_refs = doc.batch_edit([
+ops = [
     EditOperation.replace("old", "new", paragraph="P2#f3c1"),
     EditOperation.delete("remove this", paragraph="P5#d4e5"),
-])
+]
 
 # Pre-flight the batch, then apply
 results = doc.batch_edit(ops, dry_run=True)
@@ -584,7 +584,7 @@ Save the document.
 
 - `path` (str | Path, optional): Output path. Defaults to original source path.
 - `validate` (bool): If True, validate with LibreOffice before saving. Defaults to False.
-- `force` (bool): If True, skip save-time safety checks. By default `save()` refuses to overwrite the source if it changed on disk since it was opened (raising `WorkspaceSyncError`), or to write a destination that appears open in Word — a `~$` owner file exists next to it (raising [`DocumentOpenError`](#documentopenerror)). Pass `force=True` only for a confirmed-stale lock left by a crashed session. Defaults to False.
+- `force` (bool): If True, skip save-time safety checks. By default `save()` refuses to overwrite the source if it changed on disk since it was opened (raising [`WorkspaceSyncError`](#workspacesyncerror)), or to write a destination that appears open in Word — a `~$` owner file exists next to it (raising [`DocumentOpenError`](#documentopenerror)). Pass `force=True` only for a confirmed-stale lock left by a crashed session. Defaults to False.
 
 **Returns:** Path to the saved document (Path)
 
@@ -757,6 +757,12 @@ from docx_editor import EditValidationResult
 ### Example
 
 ```python
+from docx_editor import EditOperation
+
+ops = [
+    EditOperation.replace("old", "new", paragraph="P2#f3c1"),
+    EditOperation.delete("remove this", paragraph="P5#d4e5"),
+]
 results = doc.batch_edit(ops, dry_run=True)
 for r in results:
     if not r.valid:

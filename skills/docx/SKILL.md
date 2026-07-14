@@ -29,7 +29,7 @@ What do you need to do?
     - Tracked changes (redlining)
     - Comments (add, reply, resolve)
     - Accept/reject revisions
-    - Review received redlines (see "Reviewing someone else's redlines")
+    - Review received redlines (see "Reviewing Someone Else's Redlines")
 ```
 
 ## Reading and analyzing content
@@ -254,9 +254,10 @@ locations = doc.list_paragraph_locations()
 new_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
 doc.replace("net", "gross", paragraph=new_ref)  # chain without list_paragraphs()
 
-# occurrence is 0-based everywhere (0 = first, the default). Edit methods and
-# add_comment count occurrences within the target paragraph; find_text counts
-# document-wide.
+# occurrence is 0-based everywhere (0 = first, the default). Edit methods
+# count occurrences within the target paragraph; find_text counts document-wide.
+# add_comment counts within the paragraph when paragraph= is given, and
+# document-wide (like find_text) when paragraph=None.
 doc.replace("thirty", "sixty", paragraph="P4#a1d2", occurrence=1)  # 2nd "thirty"
 
 # Delete text (creates tracked deletion)
@@ -291,8 +292,9 @@ doc = Document.open("document.docx", author=author)
 
 # Add a comment anchored to text (returns the new comment's ID).
 # Full signature: add_comment(anchor_text, comment, *, paragraph=None, occurrence=0)
-# paragraph=None searches the whole document; occurrence is 0-based within the
-# paragraph. The anchor is located with the same visible-text search the edit
+# paragraph=None searches the whole document and counts occurrence document-wide;
+# pass paragraph= to scope both the search and the occurrence count to it.
+# The anchor is located with the same visible-text search the edit
 # methods use, so anchors spanning run boundaries are found.
 cid = doc.add_comment("ambiguous term", "Please clarify this term")
 cid2 = doc.add_comment("term", "Anchored to the 2nd 'term' in P3",
@@ -381,6 +383,9 @@ after `reject_all()` (for revisions inside paragraphs). Snapshot before acting,
 compare after:
 
 ```python
+import os
+author = os.environ.get("USER") or "Reviewer"
+
 doc = Document.open("redlined.docx", author=author)
 expected = doc.get_visible_text()   # the accept-all outcome
 doc.accept_all(author="OtherUser")  # resolve their changes only
@@ -509,11 +514,12 @@ from docx_editor import Document, EditOperation
 
 with Document.open("file.docx", author=author) as doc:
     refs = doc.list_paragraphs()
-    new_refs = doc.batch_edit([
+    ops = [
         EditOperation.replace("old term", "new term", paragraph="P2#f3c1"),
         EditOperation.delete("remove this", paragraph="P5#d4e5"),
         EditOperation.insert_after("Section 5", " (amended)", paragraph="P3#b2c4"),
-    ])
+    ]
+    new_refs = doc.batch_edit(ops)
     # new_refs[0] = "P2#c3d4" — fresh ref for paragraph 2
     doc.save()
 ```
@@ -525,7 +531,7 @@ If any hash is stale, the entire batch is rejected before any edits are applied.
 **Pre-flight with `dry_run=True`** — validates every operation without applying
 anything and returns `list[EditValidationResult]` (fields: `index`, `paragraph`,
 `valid`, `error`), one per operation in input order. The document is left
-unchanged:
+unchanged (`ops` is the `EditOperation` list built above):
 
 ```python
 results = doc.batch_edit(ops, dry_run=True)
@@ -542,11 +548,11 @@ Each operation is validated independently against the current document —
 on the same paragraph.
 
 **Multiple operations on the same paragraph** apply sequentially in input
-order: each op's find/anchor text and `occurrence` resolve against the
-paragraph's visible text *as left by the previous ops in the batch* (a tracked
-delete removes text from that view; an insert adds to it). Across different
-paragraphs, ops are applied in reverse document order — a behavior that keeps
-one `list_paragraphs()` snapshot valid for the whole batch.
+order: each operation's find/anchor text and `occurrence` resolve against the
+paragraph's visible text *as left by the previous operations in the batch* (a
+tracked delete removes text from that view; an insert adds to it). Across
+different paragraphs, operations are applied in reverse document order — a
+behavior that keeps one `list_paragraphs()` snapshot valid for the whole batch.
 
 ### Error Handling & Recovery
 
