@@ -427,6 +427,10 @@ class Document:
         excludes itself. Headings inside table cells participate in
         document order.
 
+        Heading context is derived from whole-document scans on every
+        call; to locate many paragraphs, prefer
+        :meth:`list_paragraph_locations`, which precomputes it once.
+
         Args:
             ref: Paragraph reference from :meth:`list_paragraphs` (e.g.,
                 ``"P3#a7b2"``).
@@ -448,17 +452,15 @@ class Document:
                 was captured).
 
         Example:
-            for entry in doc.list_paragraphs():
-                ref = entry.split("|")[0]
-                loc = doc.get_paragraph_location(ref)
-                if loc.in_table:
-                    cell = loc.table
-                    print(f"{ref}: table {cell.index} r{cell.row} c{cell.col}")
-                if loc.list:
-                    print(f"{ref}: list numId={loc.list.num_id} level={loc.list.ilvl}")
-                if loc.outline_level is not None:
-                    print(f"{ref}: heading level {loc.outline_level + 1}")
-                print(f"{ref}: under {' > '.join(loc.heading_path) or '(no heading)'}")
+            loc = doc.get_paragraph_location("P3#a7b2")
+            if loc.in_table:
+                cell = loc.table
+                print(f"table {cell.index} r{cell.row} c{cell.col}")
+            if loc.list:
+                print(f"list numId={loc.list.num_id} level={loc.list.ilvl}")
+            if loc.outline_level is not None:
+                print(f"heading level {loc.outline_level + 1}")
+            print(f"under {' > '.join(loc.heading_path) or '(no heading)'}")
         """
         self._ensure_open()
         parsed = ParagraphRef.parse(ref)
