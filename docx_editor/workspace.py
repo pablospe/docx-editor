@@ -143,6 +143,9 @@ class Workspace:
             DocumentNotFoundError: If the source document doesn't exist
             InvalidDocumentError: If the file is not a .docx file
             WorkspaceExistsError: If workspace exists and create=True
+            WorkspaceSyncError: If create=True and an existing workspace holds
+                unsaved changes from a previous session, or the source document
+                changed on disk since the workspace was created
         """
         # Keep the name the caller actually opened. If they opened a symlink, that is
         # the name Word was told to open — and therefore the name its ~$ owner file
@@ -358,9 +361,10 @@ class Workspace:
         Call this *before* mutating workspace content on disk (write-ahead), so
         that even a crash mid-mutation leaves the flag set. A dirty workspace is
         refused for adoption by a later ``Workspace(create=True)`` — otherwise a
-        previous session's edits would silently carry into the new session even
-        though the source document itself is unchanged. The flag is cleared only
-        by a successful save() back to the source.
+        previous session's edits could silently carry into the new session (the
+        staleness check cannot catch this case: the source itself may be
+        unchanged). The flag is cleared only by a successful save() back to the
+        source.
 
         Document.save() and Workspace.save() both call this themselves; callers
         that mutate workspace files directly must call it before touching disk,
@@ -411,6 +415,12 @@ class Workspace:
         force: bool = False,
     ) -> Path:
         """Pack workspace back to a .docx file.
+
+        The workspace is flagged as holding unsaved changes (see
+        :meth:`mark_dirty`) before any check or write runs; only a successful
+        save back to the source clears the flag. A failed save, or a save to a
+        different destination, leaves the workspace refused for adoption by a
+        later ``Workspace(create=True)``.
 
         Args:
             destination: Output path (defaults to original source path)

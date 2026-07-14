@@ -543,6 +543,8 @@ Save the document.
 
 **Returns:** Path to the saved document (Path)
 
+After saving to a different path (or a save that fails), the workspace is flagged as holding unsaved changes; a later `Document.open()` of the source raises `WorkspaceSyncError` until the workspace is saved back to the source or discarded with `force_recreate=True`. See [`WorkspaceSyncError`](#workspacesyncerror) below.
+
 **Example:**
 
 ```python
