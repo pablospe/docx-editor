@@ -1914,8 +1914,9 @@ class RevisionManager:
                 the filter matches on ``paragraph_ref``.
 
         Returns:
-            List of Revision objects sorted by id, with location and nesting
-            fields populated — see :class:`Revision`.
+            List of Revision objects sorted by id — see :class:`Revision`.
+            Nesting fields are always populated; the location fields
+            (``paragraph_ref``/``occurrence``) unless ``with_location=False``.
 
         Raises:
             ValueError: If ``paragraph`` is malformed
