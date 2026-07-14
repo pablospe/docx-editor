@@ -25,6 +25,7 @@ from .xml_editor import (
     _build_table_index,
     _compute_heading_paths,
     _compute_paragraph_location,
+    _compute_section_indexes,
     build_text_map,
     compute_paragraph_hash,
 )
@@ -427,8 +428,14 @@ class Document:
         excludes itself. Headings inside table cells participate in
         document order.
 
-        Heading context is derived from whole-document scans on every
-        call; to locate many paragraphs, prefer
+        ``location.section`` is the paragraph's 1-based section index. A
+        paragraph carrying a direct ``w:pPr/w:sectPr`` closes a section
+        and belongs to the section it closes; the next paragraph starts
+        the following one. The body-level ``w:sectPr`` defines the final
+        section. Single-section documents report ``1`` everywhere.
+
+        Heading and section context is derived from whole-document scans
+        on every call; to locate many paragraphs, prefer
         :meth:`list_paragraph_locations`, which precomputes it once.
 
         Args:
@@ -442,7 +449,8 @@ class Document:
             ``location.list`` is a :class:`ListItem` for list paragraphs,
             ``None`` otherwise. ``location.style``,
             ``location.outline_level`` and ``location.heading_path`` carry
-            the paragraph's heading context as described above.
+            the paragraph's heading context, and ``location.section`` its
+            1-based section index, as described above.
 
         Raises:
             ValueError: If ``ref`` has an invalid format.
@@ -461,6 +469,7 @@ class Document:
             if loc.outline_level is not None:
                 print(f"heading level {loc.outline_level + 1}")
             print(f"under {' > '.join(loc.heading_path) or '(no heading)'}")
+            print(f"section {loc.section}")
         """
         self._ensure_open()
         parsed = ParagraphRef.parse(ref)
@@ -477,17 +486,19 @@ class Document:
             raise HashMismatchError(parsed.index, parsed.hash, actual_hash, preview)
         style_outlines = self._style_outline_map()
         heading_path = _compute_heading_paths(paragraphs[: parsed.index], style_outlines)[-1]
-        return _compute_paragraph_location(p, style_outlines=style_outlines, heading_path=heading_path)
+        section = _compute_section_indexes(paragraphs[: parsed.index])[-1]
+        return _compute_paragraph_location(p, style_outlines=style_outlines, heading_path=heading_path, section=section)
 
     def list_paragraph_locations(self) -> list[tuple[str, ParagraphLocation]]:
         """List every paragraph paired with its structural location.
 
         Batch counterpart to :meth:`get_paragraph_location`: precomputes
-        table indices, style outline levels, and heading paths once instead
-        of re-scanning the document per ref. Each entry is ``(ref,
-        location)`` where ``ref`` is the same ``"P{i}#{hash}"`` token
-        emitted by :meth:`list_paragraphs` (the part before ``|``) and
-        accepted by :meth:`get_paragraph_location` and the editing methods.
+        table indexes, style outline levels, heading paths, and section
+        indexes once instead of re-scanning the document per ref. Each
+        entry is ``(ref, location)`` where ``ref`` is the same
+        ``"P{i}#{hash}"`` token emitted by :meth:`list_paragraphs` (the
+        part before ``|``) and accepted by :meth:`get_paragraph_location`
+        and the editing methods.
 
         Returns:
             List of ``(ref, ParagraphLocation)`` tuples in document order.
@@ -496,9 +507,10 @@ class Document:
             ``location.list`` is a :class:`ListItem` for paragraphs with a
             direct ``w:pPr/w:numPr``, ``None`` otherwise (raw values; no
             style-inherited numbering, no rendered display numbers).
-            ``location.style``, ``location.outline_level`` and
-            ``location.heading_path`` carry the paragraph's heading context
-            with the same semantics as :meth:`get_paragraph_location`.
+            ``location.style``, ``location.outline_level``,
+            ``location.heading_path`` and ``location.section`` carry the
+            paragraph's heading and section context with the same
+            semantics as :meth:`get_paragraph_location`.
 
         Example:
             for ref, loc in doc.list_paragraph_locations():
@@ -508,6 +520,7 @@ class Document:
                 if loc.list:
                     print(f"{ref}: list numId={loc.list.num_id} level={loc.list.ilvl}")
                 print(f"{ref}: under {' > '.join(loc.heading_path) or '(no heading)'}")
+                print(f"{ref}: section {loc.section}")
         """
         self._ensure_open()
         dom = self._document_editor.dom
@@ -515,12 +528,15 @@ class Document:
         style_outlines = self._style_outline_map()
         paragraphs = dom.getElementsByTagName("w:p")
         heading_paths = _compute_heading_paths(paragraphs, style_outlines)
+        section_indexes = _compute_section_indexes(paragraphs)
         result = []
-        for i, (p, path) in enumerate(zip(paragraphs, heading_paths, strict=True), start=1):
+        for i, (p, path, section) in enumerate(zip(paragraphs, heading_paths, section_indexes, strict=True), start=1):
             ref = f"P{i}#{compute_paragraph_hash(p)}"
             result.append((
                 ref,
-                _compute_paragraph_location(p, table_index, style_outlines=style_outlines, heading_path=path),
+                _compute_paragraph_location(
+                    p, table_index, style_outlines=style_outlines, heading_path=path, section=section
+                ),
             ))
         return result
 

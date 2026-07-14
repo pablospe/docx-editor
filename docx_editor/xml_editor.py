@@ -178,9 +178,9 @@ class ListItem:
 class ParagraphLocation:
     """Structural location of a paragraph within the document body.
 
-    Reports table membership, list membership, and heading context. The
-    shape is intentionally extensible: future releases may add other
-    container kinds (header, footer, footnote), section index, etc., as
+    Reports table membership, list membership, heading context, and
+    section index. The shape is intentionally extensible: future releases
+    may add other container kinds (header, footer, footnote), etc., as
     plain optional field additions.
 
     ``list`` is the paragraph's raw numbering reference (see
@@ -200,6 +200,13 @@ class ParagraphLocation:
     contains this paragraph, outermost first (e.g. ``("Chapter one",
     "Termination")``), using each heading's current visible text. A
     heading's own path lists only its ancestors, never itself.
+
+    ``section`` is the paragraph's 1-based section index. A paragraph
+    whose ``w:pPr`` carries a direct ``w:sectPr`` closes a section — the
+    carrying paragraph belongs to the section it closes, and the next
+    paragraph starts the following one. The body-level ``w:sectPr``
+    defines the final section. Every paragraph belongs to exactly one
+    section; single-section documents report ``1`` everywhere.
     """
 
     table: TableCell | None
@@ -207,6 +214,7 @@ class ParagraphLocation:
     style: str | None = None
     outline_level: int | None = None
     heading_path: tuple[str, ...] = ()
+    section: int = 1
 
     @property
     def in_table(self) -> bool:
@@ -490,11 +498,31 @@ def _compute_heading_paths(paragraphs, style_outlines: dict[str, int]) -> list[t
     return paths
 
 
+def _compute_section_indexes(paragraphs) -> list[int]:
+    """1-based section index for each of ``paragraphs`` (document order).
+
+    A direct ``<w:pPr>/<w:sectPr>`` closes the current section — the
+    carrying paragraph still belongs to it; the next paragraph starts the
+    following section. The body-level ``<w:sectPr>`` (final section) needs
+    no handling: the running counter already names it. Direct-child walk
+    only, so ``<w:pPrChange>`` decoys are ignored.
+    """
+    indexes = []
+    section = 1
+    for p in paragraphs:
+        indexes.append(section)
+        ppr = _direct_child(p, "w:pPr")
+        if ppr is not None and _direct_child(ppr, "w:sectPr") is not None:
+            section += 1
+    return indexes
+
+
 def _compute_paragraph_location(
     paragraph,
     table_index: dict | None = None,
     style_outlines: dict[str, int] | None = None,
     heading_path: tuple[str, ...] = (),
+    section: int = 1,
 ) -> ParagraphLocation:
     """Compute the structural location of a ``<w:p>`` element.
 
@@ -511,8 +539,9 @@ def _compute_paragraph_location(
     ``style_outlines`` is an optional precomputed ``{style_id:
     outline_level}`` map (see :func:`_build_style_outline_map`) used to
     resolve style-defined outline levels; ``None`` behaves like ``{}``.
-    ``heading_path`` is threaded through verbatim — computing it needs
-    whole-document context (see :func:`_compute_heading_paths`).
+    ``heading_path`` and ``section`` are threaded through verbatim —
+    computing them needs whole-document context (see
+    :func:`_compute_heading_paths` and :func:`_compute_section_indexes`).
     """
     list_item = _extract_list_item(paragraph)
     style = _extract_style(paragraph)
@@ -520,14 +549,24 @@ def _compute_paragraph_location(
     tc = _innermost_ancestor(paragraph, "w:tc")
     if tc is None:
         return ParagraphLocation(
-            table=None, list=list_item, style=style, outline_level=outline_level, heading_path=heading_path
+            table=None,
+            list=list_item,
+            style=style,
+            outline_level=outline_level,
+            heading_path=heading_path,
+            section=section,
         )
     tr = _innermost_ancestor(tc, "w:tr")
     tbl = _innermost_ancestor(tr, "w:tbl") if tr is not None else None
     if tr is None or tbl is None:
         # Malformed table structure — tolerate by treating as body content.
         return ParagraphLocation(
-            table=None, list=list_item, style=style, outline_level=outline_level, heading_path=heading_path
+            table=None,
+            list=list_item,
+            style=style,
+            outline_level=outline_level,
+            heading_path=heading_path,
+            section=section,
         )
     if table_index is not None and tbl in table_index:
         index = table_index[tbl]
@@ -544,6 +583,7 @@ def _compute_paragraph_location(
         style=style,
         outline_level=outline_level,
         heading_path=heading_path,
+        section=section,
     )
 
 
