@@ -37,6 +37,7 @@ except PackageNotFoundError:  # pragma: no cover - source tree without installat
 from .comments import Comment
 from .document import Document
 from .exceptions import (
+    AmbiguousTextError,
     BatchOperationError,
     CommentError,
     DocumentNotFoundError,
@@ -88,6 +89,7 @@ __all__ = [
     "RevisionError",
     "CommentError",
     "TextNotFoundError",
+    "AmbiguousTextError",
     "HashMismatchError",
     "ParagraphIndexError",
     "BatchOperationError",

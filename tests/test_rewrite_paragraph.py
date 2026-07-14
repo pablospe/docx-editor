@@ -807,15 +807,45 @@ class TestBatchRewrite:
         doc, _ = rewrite_doc
         refs = doc.list_paragraphs()
 
-        with pytest.raises(HashMismatchError):
+        with pytest.raises(BatchOperationError) as exc:
             doc.batch_rewrite([
                 (refs[0].split("|")[0], "Good text"),
                 ("P3#0000", "Bad hash"),
             ])
+        assert exc.value.operation_index == 1
+        assert isinstance(exc.value.original, HashMismatchError)
 
         # Verify no changes were applied (P1 unchanged)
         vis = doc.get_visible_text()
         assert "The committee shall review" in vis
+
+    def test_apply_phase_failure_rolls_back(self, rewrite_doc, monkeypatch):
+        """A mid-apply failure leaves the document untouched (atomic contract).
+
+        No such failure is reachable today (upfront validation precludes them
+        all), so one is simulated to pin the snapshot/rollback plumbing."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+        before = doc.get_visible_text()
+        mgr = doc._revision_manager
+        real = mgr.rewrite_paragraph
+        calls = {"n": 0}
+
+        def flaky(ref_str, new_text):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise ValueError("simulated mid-batch failure")
+            return real(ref_str, new_text)
+
+        monkeypatch.setattr(mgr, "rewrite_paragraph", flaky)
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_rewrite([
+                (refs[0].split("|")[0], "First rewritten."),
+                (refs[2].split("|")[0], "Third rewritten."),
+            ])
+        assert isinstance(exc.value.original, ValueError)
+        # Reverse-index order applied P3 first; its rewrite must be rolled back.
+        assert doc.get_visible_text() == before
 
     def test_batch_rejected_on_duplicate(self, rewrite_doc):
         """Duplicate paragraph in batch raises BatchOperationError."""

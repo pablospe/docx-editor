@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from docx_editor import (
+    AmbiguousTextError,
     BatchOperationError,
     Document,
     EditOperation,
@@ -128,8 +129,10 @@ class TestBatchEdit:
             ),
         ]
 
-        with pytest.raises(HashMismatchError):
+        with pytest.raises(BatchOperationError) as exc:
             doc.batch_edit(ops)
+        assert exc.value.operation_index == 1
+        assert isinstance(exc.value.original, HashMismatchError)
 
         # Verify NO edits were applied
         vis = doc.get_visible_text()
@@ -279,12 +282,14 @@ class TestBatchEdit:
             doc.batch_edit(ops)
 
     def test_batch_replace_text_not_found(self, multi_para_doc):
-        """Replace with non-existent text raises TextNotFoundError."""
+        """Replace with non-existent text raises BatchOperationError wrapping TextNotFoundError."""
         doc, _ = multi_para_doc
         ref = doc.list_paragraphs()[0].split("|")[0]
         ops = [EditOperation(action="replace", find="NONEXISTENT", replace_with="x", paragraph=ref)]
-        with pytest.raises(TextNotFoundError):
+        with pytest.raises(BatchOperationError) as exc:
             doc.batch_edit(ops)
+        assert exc.value.operation_index == 0
+        assert isinstance(exc.value.original, TextNotFoundError)
 
     def test_batch_delete_missing_text(self, multi_para_doc):
         """Delete without text raises BatchOperationError."""
@@ -295,12 +300,14 @@ class TestBatchEdit:
             doc.batch_edit(ops)
 
     def test_batch_delete_text_not_found(self, multi_para_doc):
-        """Delete with non-existent text raises TextNotFoundError."""
+        """Delete with non-existent text raises BatchOperationError wrapping TextNotFoundError."""
         doc, _ = multi_para_doc
         ref = doc.list_paragraphs()[0].split("|")[0]
         ops = [EditOperation(action="delete", text="NONEXISTENT", paragraph=ref)]
-        with pytest.raises(TextNotFoundError):
+        with pytest.raises(BatchOperationError) as exc:
             doc.batch_edit(ops)
+        assert exc.value.operation_index == 0
+        assert isinstance(exc.value.original, TextNotFoundError)
 
     def test_batch_insert_missing_anchor(self, multi_para_doc):
         """Insert without anchor raises BatchOperationError."""
@@ -311,12 +318,14 @@ class TestBatchEdit:
             doc.batch_edit(ops)
 
     def test_batch_insert_anchor_not_found(self, multi_para_doc):
-        """Insert with non-existent anchor raises TextNotFoundError."""
+        """Insert with non-existent anchor raises BatchOperationError wrapping TextNotFoundError."""
         doc, _ = multi_para_doc
         ref = doc.list_paragraphs()[0].split("|")[0]
         ops = [EditOperation(action="insert_after", anchor="NONEXISTENT", text="x", paragraph=ref)]
-        with pytest.raises(TextNotFoundError):
+        with pytest.raises(BatchOperationError) as exc:
             doc.batch_edit(ops)
+        assert exc.value.operation_index == 0
+        assert isinstance(exc.value.original, TextNotFoundError)
 
     def test_batch_unknown_action(self, multi_para_doc):
         """Unknown action raises BatchOperationError."""
@@ -654,6 +663,153 @@ class TestStructuredBatchOperationError:
             doc.batch_edit(ops)
 
 
+class TestSingleExceptionContract:
+    """batch_edit raises ONLY BatchOperationError for per-op failures — both
+    phases — so one recovery path (`ops.pop(e.operation_index)`) always works.
+    The underlying typed exception stays reachable via `original`/`__cause__`."""
+
+    def test_malformed_ref_wrapped_with_index(self, multi_para_doc):
+        """Validation-phase ValueError from ParagraphRef.parse is wrapped."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        ops = [
+            EditOperation(action="replace", find="item 1", replace_with="x", paragraph=refs[0].split("|")[0]),
+            EditOperation(action="replace", find="item 2", replace_with="x", paragraph="garbage-ref"),
+        ]
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_edit(ops)
+        assert exc.value.operation_index == 1
+        assert isinstance(exc.value.original, ValueError)
+        assert exc.value.__cause__ is exc.value.original
+        assert "Invalid paragraph reference" in exc.value.reason
+
+    def test_ambiguous_op_wrapped_and_rolled_back(self, multi_para_doc):
+        """An ambiguous target inside a batch wraps AmbiguousTextError; the
+        document is unchanged afterwards."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        before = doc.get_visible_text()
+        ops = [
+            EditOperation(action="replace", find="item 1", replace_with="ONE", paragraph=refs[0].split("|")[0]),
+            # "committee" appears twice in every paragraph — ambiguous without occurrence
+            EditOperation(action="replace", find="committee", replace_with="x", paragraph=refs[1].split("|")[0]),
+        ]
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_edit(ops)
+        assert exc.value.operation_index == 1
+        assert isinstance(exc.value.original, AmbiguousTextError)
+        assert exc.value.original.total_occurrences == 2
+        assert doc.get_visible_text() == before
+
+    def test_stale_hash_original_carries_usable_actual_hash(self, multi_para_doc):
+        """`e.original.actual_hash` re-targets the stale op without list_paragraphs()."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        stale_ref = refs[4].split("|")[0]
+        doc.replace("item 5", "CHANGED", paragraph=stale_ref)
+
+        ops = [EditOperation(action="replace", find="CHANGED", replace_with="FIXED", paragraph=stale_ref)]
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_edit(ops)
+        original = exc.value.original
+        assert isinstance(original, HashMismatchError)
+
+        # Re-target using the structured fields alone.
+        fresh_ref = f"P{original.paragraph_index}#{original.actual_hash}"
+        ops[exc.value.operation_index] = EditOperation(
+            action="replace", find="CHANGED", replace_with="FIXED", paragraph=fresh_ref
+        )
+        doc.batch_edit(ops)
+        assert "FIXED" in doc.get_visible_text()
+
+    def test_documented_recovery_loop(self, multi_para_doc):
+        """The SKILL.md recovery pattern: pop the failing op, retry, succeed."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        ops = [
+            EditOperation(action="replace", find="item 2", replace_with="TWO", paragraph=refs[1].split("|")[0]),
+            EditOperation(action="replace", find="MISSING", replace_with="x", paragraph=refs[3].split("|")[0]),
+            EditOperation(action="replace", find="item 6", replace_with="SIX", paragraph=refs[5].split("|")[0]),
+        ]
+
+        while ops:
+            try:
+                doc.batch_edit(ops)
+                break
+            except BatchOperationError as e:
+                ops.pop(e.operation_index)
+
+        vis = doc.get_visible_text()
+        assert "TWO" in vis
+        assert "SIX" in vis
+        assert "MISSING" not in vis
+
+
+class TestSameParagraphBatch:
+    """The documented pattern for several matches in ONE paragraph: batch the
+    ops in DESCENDING occurrence order — an edit never shifts the matches
+    before it. Ascending order breaks because each edit shifts the occurrence
+    numbering of the matches after it in the accepted text view."""
+
+    def test_descending_occurrence_order_hits_every_intended_match(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        results = [r for r in doc.find_all("committee") if r.paragraph_ref.startswith("P3#")]
+        assert [r.paragraph_occurrence for r in results] == [0, 1]
+
+        ops = [
+            EditOperation.replace(
+                r.text, f"EDIT{r.paragraph_occurrence}", paragraph=r.paragraph_ref, occurrence=r.paragraph_occurrence
+            )
+            for r in sorted(results, key=lambda r: r.paragraph_occurrence, reverse=True)
+        ]
+        doc.batch_edit(ops)
+        doc.accept_all()
+        assert (
+            "[P03] The EDIT0 shall review item 3. The report includes findings from the EDIT1."
+            in doc.get_visible_text()
+        )
+
+    def test_ascending_occurrence_order_fails_atomically(self, multi_para_doc):
+        """find_all order (ascending) is NOT batchable within a paragraph: the
+        first edit renumbers the rest, so a later op goes out of range and the
+        atomic contract rolls everything back."""
+        doc, _ = multi_para_doc
+        before = doc.get_visible_text()
+        results = [r for r in doc.find_all("committee") if r.paragraph_ref.startswith("P3#")]
+        ops = [
+            EditOperation.replace(r.text, "X", paragraph=r.paragraph_ref, occurrence=r.paragraph_occurrence)
+            for r in results
+        ]
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_edit(ops)
+        assert isinstance(exc.value.original, TextNotFoundError)
+        assert doc.get_visible_text() == before
+
+
+class TestBatchRewriteSingleExceptionContract:
+    """batch_rewrite honors the same single-exception contract."""
+
+    def test_stale_hash_wrapped_with_index(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        before = doc.get_visible_text()
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_rewrite([
+                (refs[0].split("|")[0], "New first paragraph."),
+                ("P5#0000", "Stale hash."),
+            ])
+        assert exc.value.operation_index == 1
+        assert isinstance(exc.value.original, HashMismatchError)
+        assert doc.get_visible_text() == before
+
+    def test_malformed_ref_wrapped_with_index(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_rewrite([("bogus", "text")])
+        assert exc.value.operation_index == 0
+        assert isinstance(exc.value.original, ValueError)
+
+
 class TestBatchEditRollback:
     """Mid-batch failure must leave the document untouched (atomic contract)."""
 
@@ -686,8 +842,10 @@ class TestBatchEditRollback:
             ),
         ]
 
-        with pytest.raises(TextNotFoundError):
+        with pytest.raises(BatchOperationError) as exc:
             doc.batch_edit(ops)
+        assert exc.value.operation_index == 1
+        assert isinstance(exc.value.original, TextNotFoundError)
 
         # Reverse-paragraph order means P9 applied before P7 failed; full-text
         # equality proves P9's mutation was rolled back.
@@ -744,7 +902,7 @@ class TestBatchEditRollback:
             ),
         ]
 
-        with pytest.raises(TextNotFoundError):
+        with pytest.raises(BatchOperationError):
             doc.batch_edit(ops)
 
         # The pre-batch P2 ref must still resolve — proves hashes did not drift.
@@ -779,7 +937,7 @@ class TestBatchEditRollback:
             ),
         ]
 
-        with pytest.raises(TextNotFoundError):
+        with pytest.raises(BatchOperationError):
             doc.batch_edit(ops)
 
         # After rollback, parse_position must still be present on every element
@@ -817,8 +975,9 @@ class TestBatchEditRollback:
         ]
 
         # Original edit error wins over the rollback failure.
-        with pytest.raises(TextNotFoundError):
+        with pytest.raises(BatchOperationError) as exc:
             doc.batch_edit(ops)
+        assert isinstance(exc.value.original, TextNotFoundError)
 
         # Reverse-paragraph order means the failing P6 op runs first and
         # raises before any mutation, so visible text is still unchanged

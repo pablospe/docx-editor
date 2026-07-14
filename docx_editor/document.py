@@ -210,9 +210,60 @@ class Document:
                     paragraph=match.paragraph_ref,
                     occurrence=match.paragraph_occurrence,
                 )
+
+        To enumerate every hit in one call, use :meth:`find_all`.
         """
         self._ensure_open()
         return self._revision_manager.find_text(text, occurrence)
+
+    def find_all(self, text: str, paragraph: str | None = None) -> list[SearchResult]:
+        """Find every match of ``text``, in document order.
+
+        One call replaces the N+1 ``find_text`` probes needed to enumerate N
+        hits, and each result carries exactly what a follow-up edit needs:
+        pass ``paragraph_ref`` as ``paragraph=`` and ``paragraph_occurrence``
+        as ``occurrence=`` to target that specific match.
+
+        Args:
+            text: Text to search for (must be non-empty).
+            paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope
+                the search. None searches the whole document.
+
+        Returns:
+            A list of SearchResult (see :meth:`find_text` for the fields),
+            empty when nothing matches — no-match is not an error here.
+
+        Raises:
+            ValueError: If ``text`` is empty or ``paragraph`` is malformed.
+            ParagraphIndexError: If ``paragraph``'s index is out of range.
+            HashMismatchError: If ``paragraph``'s hash is stale.
+
+        Example:
+            # Edit every match in one atomic batch. reversed() puts
+            # same-paragraph ops in the required descending occurrence order,
+            # so this is safe however the matches are distributed:
+            ops = [
+                EditOperation.replace(
+                    r.text,
+                    "60 days",
+                    paragraph=r.paragraph_ref,
+                    occurrence=r.paragraph_occurrence,
+                )
+                for r in reversed(doc.find_all("30 days"))
+            ]
+            doc.batch_edit(ops)
+
+        Editing one match at a time also works when every paragraph holds at
+        most one match; with several matches in one paragraph, an edit
+        invalidates the paragraph's remaining refs and shifts the occurrence
+        numbers of the matches after it, so either re-run find_all after each
+        edit or batch the same-paragraph ops in *descending* occurrence order
+        as above — an edit never shifts the matches before it. (Ascending
+        order mis-targets; descending is not valid for search strings that
+        overlap themselves, e.g. "aa" in "aaaa".)
+        """
+        self._ensure_open()
+        return self._revision_manager.find_all(text, paragraph=paragraph)
 
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.
@@ -634,7 +685,7 @@ class Document:
         self._ensure_open()
         return self._revision_manager.get_markup_text()
 
-    def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int = 0) -> str:
+    def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int | None = None) -> str:
         """Replace text with tracked changes.
 
         Creates a tracked deletion of the old text and insertion of the new text.
@@ -643,11 +694,21 @@ class Document:
             find: Text to find and replace
             replace_with: Replacement text
             paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
-            occurrence: Which occurrence within the paragraph (0 = first, 1 = second, etc.)
+            occurrence: Which occurrence within the paragraph (0 = first,
+                1 = second, etc.). Omitted → ``find`` must be unique in the
+                paragraph, else AmbiguousTextError (use find_all() to
+                enumerate the matches, or pass an explicit occurrence).
 
         Returns:
             New paragraph reference with updated hash (e.g., "P2#c3d4").
             Use this for follow-up edits without calling list_paragraphs().
+
+        Raises:
+            TextNotFoundError: If ``find`` is absent or ``occurrence`` is out
+                of range for the paragraph.
+            AmbiguousTextError: If ``occurrence`` is omitted and ``find``
+                matches more than once in the paragraph.
+            HashMismatchError: If the paragraph hash is stale.
 
         Example:
             new_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
@@ -657,16 +718,25 @@ class Document:
         self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
         return self._compute_new_ref(paragraph)
 
-    def delete(self, text: str, *, paragraph: str, occurrence: int = 0) -> str:
+    def delete(self, text: str, *, paragraph: str, occurrence: int | None = None) -> str:
         """Mark text as deleted with tracked changes.
 
         Args:
             text: Text to mark as deleted
             paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
-            occurrence: Which occurrence within the paragraph (0 = first, 1 = second, etc.)
+            occurrence: Which occurrence within the paragraph (0 = first,
+                1 = second, etc.). Omitted → ``text`` must be unique in the
+                paragraph, else AmbiguousTextError.
 
         Returns:
             New paragraph reference with updated hash (e.g., "P2#c3d4").
+
+        Raises:
+            TextNotFoundError: If ``text`` is absent or ``occurrence`` is out
+                of range for the paragraph.
+            AmbiguousTextError: If ``occurrence`` is omitted and ``text``
+                matches more than once in the paragraph.
+            HashMismatchError: If the paragraph hash is stale.
 
         Example:
             new_ref = doc.delete("obsolete clause", paragraph="P2#f3c1")
@@ -675,17 +745,26 @@ class Document:
         self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
         return self._compute_new_ref(paragraph)
 
-    def insert_after(self, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> str:
+    def insert_after(self, anchor: str, text: str, *, paragraph: str, occurrence: int | None = None) -> str:
         """Insert text after anchor with tracked changes.
 
         Args:
             anchor: Text to find as insertion point
             text: Text to insert after the anchor
             paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
-            occurrence: Which occurrence of anchor within the paragraph (0 = first)
+            occurrence: Which occurrence of anchor within the paragraph
+                (0 = first). Omitted → ``anchor`` must be unique in the
+                paragraph, else AmbiguousTextError.
 
         Returns:
             New paragraph reference with updated hash (e.g., "P2#c3d4").
+
+        Raises:
+            TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
+                out of range for the paragraph.
+            AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
+                matches more than once in the paragraph.
+            HashMismatchError: If the paragraph hash is stale.
 
         Example:
             new_ref = doc.insert_after("Section 5", " (as amended)", paragraph="P2#f3c1")
@@ -694,17 +773,26 @@ class Document:
         self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
         return self._compute_new_ref(paragraph)
 
-    def insert_before(self, anchor: str, text: str, *, paragraph: str, occurrence: int = 0) -> str:
+    def insert_before(self, anchor: str, text: str, *, paragraph: str, occurrence: int | None = None) -> str:
         """Insert text before anchor with tracked changes.
 
         Args:
             anchor: Text to find as insertion point
             text: Text to insert before the anchor
             paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
-            occurrence: Which occurrence of anchor within the paragraph (0 = first)
+            occurrence: Which occurrence of anchor within the paragraph
+                (0 = first). Omitted → ``anchor`` must be unique in the
+                paragraph, else AmbiguousTextError.
 
         Returns:
             New paragraph reference with updated hash (e.g., "P2#c3d4").
+
+        Raises:
+            TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
+                out of range for the paragraph.
+            AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
+                matches more than once in the paragraph.
+            HashMismatchError: If the paragraph hash is stale.
 
         Example:
             new_ref = doc.insert_before("Section 6", "New clause: ", paragraph="P2#f3c1")
@@ -743,6 +831,15 @@ class Document:
             When dry_run is False: list of new paragraph references with updated
             hashes, in input order.
             When dry_run is True: list of EditValidationResult, one per operation.
+
+        Raises:
+            BatchOperationError: The only exception a non-dry-run batch raises
+                for a failing operation — validation (malformed ref, stale
+                hash, bad index) and apply (missing text, ambiguous target)
+                failures alike. ``operation_index`` names the failing op and
+                ``original`` (also ``__cause__``) holds the underlying typed
+                exception (e.g. a HashMismatchError with ``actual_hash``).
+                The document is left unchanged.
 
         Example:
             new_refs = doc.batch_edit([
@@ -796,6 +893,10 @@ class Document:
         Returns:
             List of new paragraph references with updated hashes, in input order
 
+        Raises:
+            BatchOperationError: The only exception raised for a failing
+                rewrite; carries ``operation_index`` and ``original``.
+
         Example:
             refs = doc.list_paragraphs()
             new_refs = doc.batch_rewrite([
@@ -815,7 +916,7 @@ class Document:
         comment: str,
         *,
         paragraph: str | None = None,
-        occurrence: int = 0,
+        occurrence: int | None = None,
     ) -> int:
         """Add a comment anchored to specific text.
 
@@ -829,10 +930,19 @@ class Document:
             comment: The comment content.
             paragraph: Optional paragraph reference (e.g., ``"P3#a7b2"``) to
                 scope the search. ``None`` searches the whole document.
-            occurrence: Which occurrence to anchor to (0 = first).
+            occurrence: Which occurrence to anchor to (0 = first). Omitted →
+                ``anchor_text`` must be unique in the search scope, else
+                AmbiguousTextError.
 
         Returns:
             The comment ID.
+
+        Raises:
+            TextNotFoundError: If ``anchor_text`` is absent or ``occurrence``
+                is out of range for the scope.
+            AmbiguousTextError: If ``occurrence`` is omitted and
+                ``anchor_text`` matches more than once in the search scope.
+            HashMismatchError: If ``paragraph``'s hash is stale.
 
         Example:
             doc.add_comment("Section 5", "Please review this section")

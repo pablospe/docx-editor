@@ -12,6 +12,7 @@ from pathlib import Path
 from xml.dom.minidom import Element
 
 from .exceptions import (
+    AmbiguousTextError,
     CommentError,
     HashMismatchError,
     ParagraphIndexError,
@@ -25,6 +26,7 @@ from .xml_editor import (
     _generate_hex_id,
     build_text_map,
     compute_paragraph_hash,
+    count_in_text_map,
     find_in_text_map,
     get_rPr_xml,
     get_text_node_data,
@@ -126,7 +128,7 @@ class CommentManager:
         comment_text: str,
         *,
         paragraph: str | None = None,
-        occurrence: int = 0,
+        occurrence: int | None = None,
     ) -> int:
         """Add a comment anchored to specific text.
 
@@ -140,20 +142,24 @@ class CommentManager:
             comment_text: The comment content.
             paragraph: Optional paragraph reference (e.g., ``"P3#a7b2"``) to
                 scope the search. ``None`` searches the whole document.
-            occurrence: Which occurrence to anchor (0 = first).
+            occurrence: Which occurrence to anchor (0 = first). Omitted →
+                ``anchor_text`` must be unique in the search scope, else
+                AmbiguousTextError.
 
         Returns:
             The comment ID.
 
         Raises:
             TextNotFoundError: If the anchor text is not found.
+            AmbiguousTextError: If ``occurrence`` is omitted and
+                ``anchor_text`` matches more than once in the search scope.
             HashMismatchError: If a paragraph reference's hash is stale.
             ParagraphIndexError: If a paragraph reference's index is out of range.
             CommentError: If ``anchor_text`` is empty.
         """
         if not anchor_text:
             raise CommentError("anchor_text must not be empty")
-        _, match = self._find_anchor(anchor_text, paragraph, occurrence)
+        _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id
         para_id = _generate_hex_id()
@@ -175,13 +181,22 @@ class CommentManager:
 
         return comment_id
 
-    def _find_anchor(self, anchor_text: str, paragraph: str | None, occurrence: int) -> tuple[Element, TextMapMatch]:
+    def _locate_anchor(
+        self, anchor_text: str, paragraph: str | None, occurrence: int | None
+    ) -> tuple[Element, TextMapMatch]:
         """Locate ``anchor_text`` and return its paragraph + text-map match.
 
-        Mirrors ``RevisionManager._find_in_paragraph`` /
-        ``_find_across_boundaries`` so comment anchors and edit anchors find
-        the same text.
+        Mirrors ``RevisionManager._locate_in_paragraph`` /
+        ``_locate_document_wide`` so comment anchors and edit anchors find the
+        same text and fail the same way: ``occurrence=None`` requires a unique
+        anchor (else AmbiguousTextError), an explicit out-of-range occurrence
+        reports the actual total, and a negative occurrence is rejected with
+        ValueError.
         """
+        if occurrence is not None and occurrence < 0:
+            raise ValueError(f"occurrence must be >= 0, got {occurrence}")
+        occ = occurrence if occurrence is not None else 0
+
         if paragraph is not None:
             ref = ParagraphRef.parse(paragraph)
             paragraphs = self.document_editor.dom.getElementsByTagName("w:p")
@@ -196,29 +211,37 @@ class CommentManager:
                     preview += "..."
                 raise HashMismatchError(ref.index, ref.hash, actual, preview)
             text_map = build_text_map(p)
-            match = find_in_text_map(text_map, anchor_text, occurrence)
+            total = count_in_text_map(text_map, anchor_text)
+            match = find_in_text_map(text_map, anchor_text, occ)
             if match is not None:
-                return p, match
-            if occurrence > 0:
-                total = 0
-                while find_in_text_map(text_map, anchor_text, total) is not None:
-                    total += 1
-                if total > 0:
-                    raise TextNotFoundError(
+                if occurrence is None and total > 1:
+                    raise AmbiguousTextError(
                         anchor_text,
                         paragraph_ref=paragraph,
                         paragraph_preview=text_map.text,
-                        occurrence=occurrence,
                         total_occurrences=total,
                     )
+                return p, match
+            if total > 0:
+                raise TextNotFoundError(
+                    anchor_text,
+                    paragraph_ref=paragraph,
+                    paragraph_preview=text_map.text,
+                    occurrence=occ,
+                    total_occurrences=total,
+                )
             raise TextNotFoundError(
                 anchor_text,
                 paragraph_ref=paragraph,
                 paragraph_preview=text_map.text,
             )
 
-        # Document-wide search
+        # Document-wide search. With an explicit occurrence the scan returns at
+        # the requested match; with occurrence=None it runs to the end so
+        # `current` ends up as the document-wide total, which the ambiguity and
+        # out-of-range errors need.
         current = 0
+        found: tuple[Element, TextMapMatch] | None = None
         for p in self.document_editor.dom.getElementsByTagName("w:p"):
             text_map = build_text_map(p)
             local = 0
@@ -226,14 +249,20 @@ class CommentManager:
                 m = find_in_text_map(text_map, anchor_text, local)
                 if m is None:
                     break
-                if current == occurrence:
-                    return p, m
+                if current == occ:
+                    if occurrence is not None:
+                        return p, m
+                    found = (p, m)
                 current += 1
                 local += 1
-        if occurrence > 0 and current > 0:
+        if found is not None:
+            if occurrence is None and current > 1:
+                raise AmbiguousTextError(anchor_text, total_occurrences=current)
+            return found
+        if current > 0:
             raise TextNotFoundError(
                 anchor_text,
-                occurrence=occurrence,
+                occurrence=occ,
                 total_occurrences=current,
             )
         raise TextNotFoundError(anchor_text)

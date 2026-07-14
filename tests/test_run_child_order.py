@@ -275,7 +275,9 @@ class TestTextboxNoDuplication:
         )
         mgr = _make_manager(xml_path)
 
-        mgr.replace_text("x", "X")
+        # "boxed" also contains an "x", so the target is ambiguous without an
+        # explicit occurrence.
+        mgr.replace_text("x", "X", occurrence=0)
 
         paragraph = mgr.editor.dom.getElementsByTagName("w:p")[0]
         assert paragraph.toxml().count("boxed") == 1
@@ -315,7 +317,9 @@ class TestNestedRPrNoLeak:
         )
         mgr = _make_manager(xml_path)
 
-        mgr.replace_text("x", "X")
+        # "boxed" also contains an "x", so the target is ambiguous without an
+        # explicit occurrence.
+        mgr.replace_text("x", "X", occurrence=0)
 
         paragraph = mgr.editor.dom.getElementsByTagName("w:p")[0]
         assert paragraph_tokens(mgr) == ["DEL(x)", "INS(X)", "DRAWING", "y"]
