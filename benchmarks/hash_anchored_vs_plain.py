@@ -228,10 +228,13 @@ def benchmark_accuracy():
     shutil.copy(persist_path, d1)
     doc1 = Document.open(d1, force_recreate=True)
 
-    # Disrupting edit: replace BOTH 'committee' in P5
+    # Disrupting edit: replace BOTH 'committee' in P5 (occurrence=0 twice —
+    # after the first replace, the remaining match is the new first one)
     p5_ref = old_refs[5]
-    doc1.replace("committee", "BOARD", paragraph=p5_ref)
-    doc1.replace("committee", "BOARD", paragraph=old_refs[5].split("#")[0] + "#" + _get_fresh_hash(doc1, 5))
+    doc1.replace("committee", "BOARD", paragraph=p5_ref, occurrence=0)
+    doc1.replace(
+        "committee", "BOARD", paragraph=old_refs[5].split("#")[0] + "#" + _get_fresh_hash(doc1, 5), occurrence=0
+    )
 
     # Now try to edit P6-P15 using the OLD occurrence indices
     for para_idx in target_paras:
@@ -283,15 +286,17 @@ def benchmark_accuracy():
     doc2 = Document.open(d2, force_recreate=True)
 
     # Same disrupting edit
-    doc2.replace("committee", "BOARD", paragraph=p5_ref)
-    doc2.replace("committee", "BOARD", paragraph=old_refs[5].split("#")[0] + "#" + _get_fresh_hash(doc2, 5))
+    doc2.replace("committee", "BOARD", paragraph=p5_ref, occurrence=0)
+    doc2.replace(
+        "committee", "BOARD", paragraph=old_refs[5].split("#")[0] + "#" + _get_fresh_hash(doc2, 5), occurrence=0
+    )
 
     # Try to edit P6-P15 using OLD refs (from before edit)
     for para_idx in target_paras:
         old_ref = old_refs[para_idx]
         marker = f"[P{para_idx:02d}]"
         try:
-            doc2.replace("committee", "EDITED", paragraph=old_ref)
+            doc2.replace("committee", "EDITED", paragraph=old_ref, occurrence=0)
             hash_correct += 1
         except HashMismatchError:
             hash_rejected += 1

@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from docx_editor import (
+    AmbiguousTextError,
     BatchOperationError,
     Document,
     EditOperation,
@@ -40,6 +41,29 @@ def doc_path():
     shutil.copy(test_data, dest)
     yield dest
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _build_doc_with_paragraphs(doc_path: Path, texts: list[str]) -> Document:
+    """Replace the fixture document's body with one paragraph per entry."""
+    doc = Document.open(doc_path, force_recreate=True)
+    editor = doc._document_editor
+    body = editor.dom.getElementsByTagName("w:body")[0]
+    for p in list(editor.dom.getElementsByTagName("w:p")):
+        if p.parentNode == body:
+            body.removeChild(p)
+    sect_pr = editor.dom.getElementsByTagName("w:sectPr")
+    insert_before = sect_pr[0] if sect_pr else None
+    for text in texts:
+        xml = f'<w:p><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>'
+        for node in editor._parse_fragment(xml):
+            if insert_before:
+                body.insertBefore(node, insert_before)
+            else:
+                body.appendChild(node)
+    editor.save()
+    saved = doc.save()
+    doc.close()
+    return Document.open(saved, force_recreate=True)
 
 
 class TestTextNotFoundErrorQuality:
@@ -167,25 +191,7 @@ class TestBatchOperationErrorQuality:
     """
 
     def _build_batch_doc(self, doc_path: Path) -> Document:
-        doc = Document.open(doc_path, force_recreate=True)
-        editor = doc._document_editor
-        body = editor.dom.getElementsByTagName("w:body")[0]
-        for p in list(editor.dom.getElementsByTagName("w:p")):
-            if p.parentNode == body:
-                body.removeChild(p)
-        sect_pr = editor.dom.getElementsByTagName("w:sectPr")
-        insert_before = sect_pr[0] if sect_pr else None
-        for i in range(1, 4):
-            xml = f'<w:p><w:r><w:t xml:space="preserve">Paragraph {i} content.</w:t></w:r></w:p>'
-            for node in editor._parse_fragment(xml):
-                if insert_before:
-                    body.insertBefore(node, insert_before)
-                else:
-                    body.appendChild(node)
-        editor.save()
-        saved = doc.save()
-        doc.close()
-        return Document.open(saved, force_recreate=True)
+        return _build_doc_with_paragraphs(doc_path, [f"Paragraph {i} content." for i in range(1, 4)])
 
     def test_predispatch_failure_carries_operation_index(self, doc_path):
         """Structural validation inside batch_edit surfaces the index."""
@@ -229,8 +235,153 @@ class TestBatchOperationErrorQuality:
             doc.close()
 
 
+class TestAmbiguousTextErrorQuality:
+    """
+    Before: every edit method defaulted to occurrence=0, so an ambiguous
+    target was silently resolved to the first match — the agent got no
+    signal that it may have edited the wrong text.
+
+    After: an omitted occurrence requires the target to be unique in the
+    search scope. `AmbiguousTextError` carries `total_occurrences` and
+    names both recovery paths (explicit `occurrence=` or `find_all()`);
+    explicit `occurrence=0` keeps the old first-match behavior per call.
+    """
+
+    AMBIGUOUS = "alpha beta alpha gamma alpha."
+    UNIQUE = "one needle only."
+
+    def _build_doc(self, doc_path: Path) -> Document:
+        return _build_doc_with_paragraphs(doc_path, [self.AMBIGUOUS, self.UNIQUE])
+
+    def _edit_calls(self, doc: Document, paragraph: str):
+        """Every scoped edit method, called with an ambiguous target and no occurrence."""
+        return [
+            lambda: doc.replace("alpha", "x", paragraph=paragraph),
+            lambda: doc.delete("alpha", paragraph=paragraph),
+            lambda: doc.insert_after("alpha", "x", paragraph=paragraph),
+            lambda: doc.insert_before("alpha", "x", paragraph=paragraph),
+            lambda: doc.add_comment("alpha", "note", paragraph=paragraph),
+        ]
+
+    def test_scoped_ambiguous_target_raises_with_totals(self, doc_path):
+        """All five scoped methods raise AmbiguousTextError with the count."""
+        doc = self._build_doc(doc_path)
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            for call in self._edit_calls(doc, ref):
+                with pytest.raises(AmbiguousTextError) as exc:
+                    call()
+                err = exc.value
+                assert err.search_text == "alpha"
+                assert err.total_occurrences == 3
+                assert err.paragraph_ref == ref
+                assert err.paragraph_preview is not None
+                msg = str(err)
+                assert "matches 3 times" in msg
+                assert "occurrence=" in msg
+                assert "find_all()" in msg
+        finally:
+            doc.close()
+
+    def test_docwide_ambiguous_anchor_raises(self, doc_path):
+        """Document-wide add_comment with a repeated anchor raises too."""
+        doc = self._build_doc(doc_path)
+        try:
+            with pytest.raises(AmbiguousTextError) as exc:
+                doc.add_comment("alpha", "note")
+            err = exc.value
+            assert err.total_occurrences == 3
+            assert err.paragraph_ref is None
+            assert err.paragraph_preview is None
+            assert "in the document" in str(err)
+        finally:
+            doc.close()
+
+    def test_explicit_occurrence_zero_edits_first_silently(self, doc_path):
+        """occurrence=0 is the per-call opt-out: old first-match behavior."""
+        doc = self._build_doc(doc_path)
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            doc.replace("alpha", "FIRST", paragraph=ref, occurrence=0)
+            doc.accept_all()
+            assert "FIRST beta alpha gamma alpha." in doc.get_visible_text()
+        finally:
+            doc.close()
+
+    def test_unique_target_with_omitted_occurrence_works(self, doc_path):
+        """A unique target never trips the ambiguity check."""
+        doc = self._build_doc(doc_path)
+        try:
+            ref = doc.list_paragraphs()[1].split("|")[0]
+            doc.replace("needle", "thread", paragraph=ref)
+            doc.accept_all()
+            assert "one thread only." in doc.get_visible_text()
+        finally:
+            doc.close()
+
+    def test_ambiguity_surfaces_in_dry_run_error(self, doc_path):
+        """batch_edit(dry_run=True) reports the same ambiguity message."""
+        doc = self._build_doc(doc_path)
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            ops = [EditOperation.replace("alpha", "x", paragraph=ref)]
+            results = doc.batch_edit(ops, dry_run=True)
+            assert results[0].valid is False
+            error = results[0].error
+            assert error is not None
+            assert "matches 3 times" in error
+        finally:
+            doc.close()
+
+
+class TestOccurrenceOutOfRangeQuality:
+    """
+    Before: a scoped edit with an out-of-range occurrence raised
+    `TextNotFoundError` built with only ref + preview — the message said
+    "Text not found" while the preview visibly contained the text.
+
+    After: the scoped paths count total matches, so the error reports
+    "Only N occurrence(s) ... occurrence=X requested" with both fields
+    populated — never a self-contradicting "not found".
+    """
+
+    TEXT = "term one, term two."
+
+    def test_scoped_out_of_range_names_totals_not_notfound(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, [self.TEXT])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(TextNotFoundError) as exc:
+                doc.replace("term", "x", paragraph=ref, occurrence=9)
+            err = exc.value
+            assert err.occurrence == 9
+            assert err.total_occurrences == 2
+            msg = str(err)
+            assert "Only 2 occurrence(s)" in msg
+            assert "occurrence=9" in msg
+            assert "Text not found" not in msg
+        finally:
+            doc.close()
+
+    def test_dry_run_error_gets_the_same_fix(self, doc_path):
+        """EditValidationResult.error also reports totals, not 'not found'."""
+        doc = _build_doc_with_paragraphs(doc_path, [self.TEXT])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            ops = [EditOperation.replace("term", "x", paragraph=ref, occurrence=9)]
+            results = doc.batch_edit(ops, dry_run=True)
+            assert results[0].valid is False
+            error = results[0].error
+            assert error is not None
+            assert "Only 2 occurrence(s)" in error
+            assert "occurrence=9" in error
+            assert "Text not found" not in error
+        finally:
+            doc.close()
+
+
 class TestSharedBaseClass:
-    """All four structured errors inherit from `DocxEditError`.
+    """All structured errors inherit from `DocxEditError`.
 
     This means `except DocxEditError` is a correct catch-all for LLM
     consumers — no need to enumerate the leaf classes.
@@ -240,13 +391,20 @@ class TestSharedBaseClass:
         from docx_editor import DocxEditError, HashMismatchError
 
         assert issubclass(TextNotFoundError, DocxEditError)
+        assert issubclass(AmbiguousTextError, DocxEditError)
         assert issubclass(HashMismatchError, DocxEditError)
         assert issubclass(ParagraphIndexError, DocxEditError)
         assert issubclass(BatchOperationError, DocxEditError)
 
+    def test_ambiguous_is_not_a_textnotfound_subclass(self):
+        """The text WAS found — code catching TextNotFoundError to mean
+        'pick different text' must not swallow ambiguity."""
+        assert not issubclass(AmbiguousTextError, TextNotFoundError)
+
     def test_top_level_import_smoke(self):
         """Every structured error is importable from the top-level package."""
         from docx_editor import (  # noqa: F401
+            AmbiguousTextError,
             BatchOperationError,
             HashMismatchError,
             ParagraphIndexError,

@@ -226,6 +226,15 @@ for p in doc.list_paragraphs():
 # occurrence=match.paragraph_occurrence (edits count occurrences per paragraph).
 match = doc.find_text("30 days")
 
+# Enumerate EVERY match in one call (returns list[SearchResult], [] if none).
+# Each result plugs straight into a follow-up edit — no occurrence math needed:
+for r in doc.find_all("30 days"):
+    doc.replace(r.text, "60 days", paragraph=r.paragraph_ref,
+                occurrence=r.paragraph_occurrence)
+# Optionally scope to one paragraph: doc.find_all("term", paragraph="P2#f3c1")
+# (editing a paragraph invalidates its remaining refs — re-run find_all after
+# each edit when a paragraph has several matches, or use batch_edit)
+
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()
 
@@ -255,11 +264,17 @@ locations = doc.list_paragraph_locations()
 new_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
 doc.replace("net", "gross", paragraph=new_ref)  # chain without list_paragraphs()
 
-# occurrence is 0-based everywhere (0 = first, the default). Edit methods
-# count occurrences within the target paragraph; find_text counts document-wide.
-# add_comment counts within the paragraph when paragraph= is given, and
-# document-wide (like find_text) when paragraph=None.
+# occurrence is 0-based everywhere (0 = first). Edit methods count occurrences
+# within the target paragraph; find_text counts document-wide. add_comment
+# counts within the paragraph when paragraph= is given, and document-wide
+# (like find_text) when paragraph=None. find_all bridges the two conventions:
+# each result's paragraph_occurrence is already in edit-method coordinates.
+#
+# OMITTING occurrence means "the target is unique in the search scope".
+# If it matches more than once, the edit raises AmbiguousTextError instead of
+# silently editing the first match. Pick a match explicitly:
 doc.replace("thirty", "sixty", paragraph="P4#a1d2", occurrence=1)  # 2nd "thirty"
+doc.replace("thirty", "sixty", paragraph="P4#a1d2", occurrence=0)  # 1st, chosen on purpose
 
 # Delete text (creates tracked deletion)
 doc.delete("unnecessary clause", paragraph="P5#d4e5")
@@ -280,7 +295,7 @@ doc.close()
 
 **Multi-author documents:** Editing inside *another* author's pending insertion preserves their proposal, matching Word: deletions nest a `<w:del>` under your authorship inside their `<w:ins>`, and replacements/insertions put your text in your own sibling `<w:ins>` (splitting theirs when needed) instead of silently rewriting it. `accept_all(author=...)` / `reject_all(author=...)` then resolve each author's changes independently. Only your own pending insertions are edited in place.
 
-**Raises:** `TextNotFoundError` if the text is not found.
+**Raises:** `TextNotFoundError` if the text is not found (or the requested `occurrence` is out of range — the error then reports `total_occurrences`). `AmbiguousTextError` if `occurrence` is omitted and the target matches more than once in the search scope.
 
 ### Comments API
 
@@ -292,9 +307,11 @@ author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("document.docx", author=author)
 
 # Add a comment anchored to text (returns the new comment's ID).
-# Full signature: add_comment(anchor_text, comment, *, paragraph=None, occurrence=0)
+# Full signature: add_comment(anchor_text, comment, *, paragraph=None, occurrence=None)
 # paragraph=None searches the whole document and counts occurrence document-wide;
 # pass paragraph= to scope both the search and the occurrence count to it.
+# Like the edit methods, an omitted occurrence requires a unique anchor
+# (AmbiguousTextError otherwise).
 # The anchor is located with the same visible-text search the edit
 # methods use, so anchors spanning run boundaries are found.
 cid = doc.add_comment("ambiguous term", "Please clarify this term")
@@ -573,7 +590,11 @@ with Document.open("file.docx", author=author) as doc:
 
 Build operations with the typed constructors (`EditOperation.replace/.delete/.insert_after/.insert_before` — same signatures as the `Document` methods). They validate arguments immediately and raise `ValueError` with a field-specific message, instead of failing later at apply time.
 
-If any hash is stale, the entire batch is rejected before any edits are applied.
+**Single-exception contract:** whatever goes wrong with an operation — stale
+hash, malformed ref, missing text, ambiguous target — `batch_edit` (and
+`batch_rewrite`) raise **only** `BatchOperationError`, with `operation_index`
+naming the failing op and `original` (also `__cause__`) holding the underlying
+typed exception. The batch is atomic: nothing is applied on failure.
 
 **Pre-flight with `dry_run=True`** — validates every operation without applying
 anything and returns `list[EditValidationResult]` (fields: `index`, `paragraph`,
@@ -609,12 +630,14 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | ---------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `HashMismatchError`    | `paragraph_index`, `expected_hash`, `actual_hash`, `paragraph_preview`                  | Retry with `P{paragraph_index}#{actual_hash}`.                                                   |
 | `TextNotFoundError`    | `search_text`, `paragraph_ref`, `paragraph_preview`, `occurrence`, `total_occurrences`  | Use `paragraph_preview` to pick a substring that actually appears; if `total_occurrences` is set, retry with an `occurrence` < `total_occurrences`. |
+| `AmbiguousTextError`   | `search_text`, `paragraph_ref`, `paragraph_preview`, `total_occurrences`                | The target matched more than once with no `occurrence` given. Enumerate with `find_all()` and pick, or pass an explicit `occurrence` (0-based).      |
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` or call `list_paragraphs()` to pick a valid ref.                 |
-| `BatchOperationError`  | `operation_index`, `reason`                                                             | Fix the op at `operations[operation_index]` (or drop it) and retry the batch.                    |
+| `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref). Batch methods never raise the inner types directly. |
 | `DocumentOpenError`    | `path`, `owner_file`                                                                    | **Do not retry blindly.** The destination is open in Word. Stop and tell the user to close it. Only pass `force=True` if the user confirms the `~$` lock is stale (crashed session). |
 
 ```python
 from docx_editor import (
+    AmbiguousTextError,
     BatchOperationError,
     HashMismatchError,
     ParagraphIndexError,
@@ -628,6 +651,11 @@ except HashMismatchError as e:
 except TextNotFoundError as e:
     # e.paragraph_preview shows the current paragraph content for recovery
     ...
+except AmbiguousTextError as e:
+    # Target matched e.total_occurrences times — enumerate and pick
+    r = doc.find_all("stale text", paragraph=e.paragraph_ref)[0]
+    doc.replace("stale text", "new text", paragraph=r.paragraph_ref,
+                occurrence=r.paragraph_occurrence)
 except ParagraphIndexError as e:
     # Clamp to a valid 1-indexed paragraph number (guard the empty-doc case)
     if e.total_paragraphs == 0:
@@ -635,10 +663,20 @@ except ParagraphIndexError as e:
     safe_idx = max(1, min(e.index, e.total_paragraphs))
     ref = doc.list_paragraphs()[safe_idx - 1].split("|")[0]
     doc.replace("stale text", "new text", paragraph=ref)
-except BatchOperationError as e:
-    # Drop or fix the failing op and retry the batch
-    ops.pop(e.operation_index)
-    doc.batch_edit(ops)
+
+# Batch recovery — BatchOperationError is the ONLY exception batch_edit raises
+# per failing op, so this loop handles every failure mode:
+while ops:
+    try:
+        doc.batch_edit(ops)
+        break
+    except BatchOperationError as e:
+        if isinstance(e.original, HashMismatchError):
+            # Re-target the stale op instead of dropping it
+            op = ops[e.operation_index]
+            op.paragraph = f"P{e.original.paragraph_index}#{e.original.actual_hash}"
+        else:
+            ops.pop(e.operation_index)  # drop the failing op and retry
 ```
 
 **Saving safely (`DocumentOpenError`).** `save()` is atomic — it writes to a temp

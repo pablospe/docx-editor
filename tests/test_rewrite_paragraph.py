@@ -807,11 +807,13 @@ class TestBatchRewrite:
         doc, _ = rewrite_doc
         refs = doc.list_paragraphs()
 
-        with pytest.raises(HashMismatchError):
+        with pytest.raises(BatchOperationError) as exc:
             doc.batch_rewrite([
                 (refs[0].split("|")[0], "Good text"),
                 ("P3#0000", "Bad hash"),
             ])
+        assert exc.value.operation_index == 1
+        assert isinstance(exc.value.original, HashMismatchError)
 
         # Verify no changes were applied (P1 unchanged)
         vis = doc.get_visible_text()

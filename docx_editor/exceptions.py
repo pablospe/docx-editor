@@ -151,7 +151,7 @@ class TextNotFoundError(DocxEditError):
             if the search was document-wide.
         paragraph_preview: Current visible text of the scoped paragraph
             (truncated to 80 chars with "..." suffix), or None if unscoped.
-        occurrence: 1-indexed occurrence number requested (for nth-match
+        occurrence: 0-based occurrence index requested (for nth-match
             lookups), or None otherwise.
         total_occurrences: Actual number of occurrences found, or None for
             non-occurrence lookups.
@@ -185,8 +185,50 @@ class TextNotFoundError(DocxEditError):
             msg = f"Text not found: '{search_text}'"
 
         if self.paragraph_preview is not None:
-            msg += f'. Current content: "{self.paragraph_preview}"'
+            sep = " " if msg.endswith(".") else ". "
+            msg += f'{sep}Current content: "{self.paragraph_preview}"'
 
+        super().__init__(msg)
+
+
+class AmbiguousTextError(DocxEditError):
+    """Raised when an edit target matches more than once and no occurrence was chosen.
+
+    Edit methods called without an explicit ``occurrence`` require the target
+    text to be unique within the search scope; otherwise the intended match is
+    ambiguous and editing the first one silently risks changing the wrong text.
+    Pass ``occurrence=`` (0-based) to pick a match, or enumerate every match
+    with ``find_all()``.
+
+    Attributes:
+        search_text: The text that matched multiple times.
+        paragraph_ref: Paragraph reference the search was scoped to, or None
+            if the search was document-wide.
+        paragraph_preview: Current visible text of the scoped paragraph
+            (truncated to 80 chars with "..." suffix), or None if unscoped.
+        total_occurrences: Number of matches found in the search scope.
+    """
+
+    def __init__(
+        self,
+        search_text: str,
+        *,
+        paragraph_ref: str | None = None,
+        paragraph_preview: str | None = None,
+        total_occurrences: int,
+    ):
+        self.search_text = search_text
+        self.paragraph_ref = paragraph_ref
+        self.paragraph_preview = _truncate_preview(paragraph_preview) if paragraph_preview is not None else None
+        self.total_occurrences = total_occurrences
+
+        scope = f"paragraph {paragraph_ref}" if paragraph_ref is not None else "the document"
+        msg = (
+            f"'{search_text}' matches {total_occurrences} times in {scope}. "
+            f"Pass occurrence= (0-based) to pick one, or use find_all() to list every match."
+        )
+        if self.paragraph_preview is not None:
+            msg += f' Current content: "{self.paragraph_preview}"'
         super().__init__(msg)
 
 
@@ -213,17 +255,21 @@ class ParagraphIndexError(DocxEditError):
 
 
 class BatchOperationError(DocxEditError):
-    """Raised when a single operation in a batch fails validation.
+    """Raised when a single operation in a batch fails (validation or apply).
 
     Attributes:
         operation_index: 0-indexed position of the failing operation in the
             input list.
         reason: Human-readable description of why the operation was rejected.
+        original: The underlying exception that caused the failure (also set
+            as ``__cause__``), or None. Typed recovery data stays reachable
+            through it, e.g. ``e.original.actual_hash`` for a stale hash.
     """
 
-    def __init__(self, operation_index: int, reason: str):
+    def __init__(self, operation_index: int, reason: str, *, original: Exception | None = None):
         self.operation_index = operation_index
         self.reason = reason
+        self.original = original
         super().__init__(f"Operation {operation_index}: {reason}")
 
 

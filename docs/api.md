@@ -222,6 +222,33 @@ if match:
     )
 ```
 
+#### `find_all(text, paragraph=None)`
+
+Find every match of `text`, in document order. One call replaces the N+1
+`find_text` probes needed to enumerate N hits, and each result carries exactly
+what a follow-up edit needs.
+
+**Parameters:**
+
+- `text` (str): Text to search for (must be non-empty)
+- `paragraph` (str, optional): Paragraph reference (e.g. `P2#f3c1`) to scope the search. `None` searches the whole document. Defaults to None.
+
+**Returns:** list of [`SearchResult`](#searchresult), empty when nothing matches (no-match is not an error for an enumeration API)
+
+**Raises:** `ValueError` if `text` is empty or `paragraph` is malformed; [`ParagraphIndexError`](#exceptions) / [`HashMismatchError`](#exceptions) for an out-of-range or stale `paragraph`.
+
+**Example:**
+
+```python
+for r in doc.find_all("30 days"):
+    doc.replace(r.text, "60 days",
+                paragraph=r.paragraph_ref, occurrence=r.paragraph_occurrence)
+```
+
+Editing a paragraph invalidates its remaining refs — when one paragraph holds
+several matches, re-run `find_all` after each edit or apply the edits with
+`batch_edit()`.
+
 #### `count_matches(text)`
 
 Count visible text matches across the document.
@@ -239,7 +266,7 @@ if doc.count_matches("Section 5") > 1:
     print("Use paragraph refs and occurrence to target the intended match")
 ```
 
-#### `replace(find, replace_with, *, paragraph, occurrence=0)`
+#### `replace(find, replace_with, *, paragraph, occurrence=None)`
 
 Replace text with tracked changes. When the target sits inside another author's pending insertion, that insertion is preserved: the matched text gets a nested `<w:del>` under your authorship and the replacement lands in your own sibling `<w:ins>` (Word's behavior), instead of silently rewriting the other author's proposal.
 
@@ -248,7 +275,7 @@ Replace text with tracked changes. When the target sits inside another author's 
 - `find` (str): Text to find and replace
 - `replace_with` (str): Replacement text
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
-- `occurrence` (int): Which occurrence within the paragraph, 0-based (0 = first). Defaults to 0.
+- `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
 **Returns:** Updated paragraph reference (str)
 
@@ -259,7 +286,7 @@ ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
 doc.replace("net", "gross", paragraph=ref)
 ```
 
-#### `delete(text, *, paragraph, occurrence=0)`
+#### `delete(text, *, paragraph, occurrence=None)`
 
 Mark text as deleted with tracked changes. Deleting text inside another author's pending insertion nests a `<w:del>` under your authorship inside their `<w:ins>`, preserving their proposal; only your own pending insertions are edited in place.
 
@@ -267,7 +294,7 @@ Mark text as deleted with tracked changes. Deleting text inside another author's
 
 - `text` (str): Text to mark as deleted
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
-- `occurrence` (int): Which occurrence within the paragraph, 0-based (0 = first). Defaults to 0.
+- `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
 **Returns:** Updated paragraph reference (str)
 
@@ -277,7 +304,7 @@ Mark text as deleted with tracked changes. Deleting text inside another author's
 ref = doc.delete("obsolete clause", paragraph="P5#d4e5")
 ```
 
-#### `insert_after(anchor, text, *, paragraph, occurrence=0)`
+#### `insert_after(anchor, text, *, paragraph, occurrence=None)`
 
 Insert text after anchor with tracked changes. An anchor inside another author's pending insertion produces your own sibling `<w:ins>` (splitting theirs when the anchor falls mid-content) rather than splicing your words into their proposal.
 
@@ -286,7 +313,7 @@ Insert text after anchor with tracked changes. An anchor inside another author's
 - `anchor` (str): Text to find as insertion point
 - `text` (str): Text to insert after the anchor
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
-- `occurrence` (int): Which occurrence within the paragraph, 0-based (0 = first). Defaults to 0.
+- `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
 **Returns:** Updated paragraph reference (str)
 
@@ -296,7 +323,7 @@ Insert text after anchor with tracked changes. An anchor inside another author's
 ref = doc.insert_after("Section 5", " (as amended)", paragraph="P3#b2c4")
 ```
 
-#### `insert_before(anchor, text, *, paragraph, occurrence=0)`
+#### `insert_before(anchor, text, *, paragraph, occurrence=None)`
 
 Insert text before anchor with tracked changes. Foreign pending insertions are treated the same as in `insert_after()`.
 
@@ -305,7 +332,7 @@ Insert text before anchor with tracked changes. Foreign pending insertions are t
 - `anchor` (str): Text to find as insertion point
 - `text` (str): Text to insert before the anchor
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
-- `occurrence` (int): Which occurrence within the paragraph, 0-based (0 = first). Defaults to 0.
+- `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
 **Returns:** Updated paragraph reference (str)
 
@@ -344,6 +371,8 @@ stale, the entire batch is rejected before any edits are applied.
 
 **Returns:** Updated paragraph references in input order (list[str]); with `dry_run=True`, a list of [`EditValidationResult`](#editvalidationresult) instead
 
+**Raises:** [`BatchOperationError`](#batchoperationerror) — the only exception a non-dry-run batch raises for a failing operation, whatever the underlying cause (stale hash, malformed ref, missing text, ambiguous target). `operation_index` names the failing op; `original` (also `__cause__`) holds the underlying typed exception. The batch is atomic: nothing is applied on failure.
+
 **Example:**
 
 ```python
@@ -380,6 +409,8 @@ Rewrite multiple paragraphs after validating paragraph hashes up front.
 
 **Returns:** Updated paragraph references in input order (list[str])
 
+**Raises:** [`BatchOperationError`](#batchoperationerror) — same single-exception contract as `batch_edit()`.
+
 **Example:**
 
 ```python
@@ -391,7 +422,7 @@ new_refs = doc.batch_rewrite([
 
 ### Comment Methods
 
-#### `add_comment(anchor_text, comment, *, paragraph=None, occurrence=0)`
+#### `add_comment(anchor_text, comment, *, paragraph=None, occurrence=None)`
 
 Add a comment anchored to specific text. Anchors are located with the same
 visible-text search used by `count_matches()` and the tracked-change edit
@@ -403,7 +434,7 @@ smart-quote splits, `w:ins` wrappers) are found.
 - `anchor_text` (str): Text to attach the comment to
 - `comment` (str): The comment content
 - `paragraph` (str, optional): Paragraph reference (e.g. `P3#a7b2`) to scope the search. `None` searches the whole document. Defaults to None.
-- `occurrence` (int): Which occurrence to anchor to, 0-based (0 = first). Defaults to 0.
+- `occurrence` (int | None): Which occurrence to anchor to, 0-based (0 = first), counted within `paragraph` when given and document-wide otherwise. Omitted → the anchor must be unique in the search scope, else [`AmbiguousTextError`](#ambiguoustexterror).
 
 **Returns:** The comment ID (int). IDs are allocated sequentially starting at 0 in a document with no existing comments — always use the returned ID rather than guessing.
 
@@ -697,19 +728,19 @@ from docx_editor import EditOperation
 
 ### Constructors
 
-#### `EditOperation.replace(find, replace_with, *, paragraph, occurrence=0)`
+#### `EditOperation.replace(find, replace_with, *, paragraph, occurrence=None)`
 
 - `find` (str): Text to find and replace. Must be non-empty.
 - `replace_with` (str): Replacement text. Empty string is allowed (replacing
   with nothing is a valid tracked deletion).
 
-#### `EditOperation.delete(text, *, paragraph, occurrence=0)`
+#### `EditOperation.delete(text, *, paragraph, occurrence=None)`
 
 - `text` (str): Text to mark as deleted. Must be non-empty.
 
-#### `EditOperation.insert_after(anchor, text, *, paragraph, occurrence=0)`
+#### `EditOperation.insert_after(anchor, text, *, paragraph, occurrence=None)`
 
-#### `EditOperation.insert_before(anchor, text, *, paragraph, occurrence=0)`
+#### `EditOperation.insert_before(anchor, text, *, paragraph, occurrence=None)`
 
 - `anchor` (str): Text to find as insertion point. Must be non-empty.
 - `text` (str): Text to insert.
@@ -717,7 +748,7 @@ from docx_editor import EditOperation
 All constructors also take:
 
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
-- `occurrence` (int): Which occurrence within the paragraph, 0-based (0 = first). Defaults to 0. Must be >= 0.
+- `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph at apply time; if it matches more than once, the batch fails with a [`BatchOperationError`](#batchoperationerror) wrapping an [`AmbiguousTextError`](#ambiguoustexterror). Must be >= 0 when given.
 
 **Raises:** `ValueError` at construction time if the paragraph ref is malformed,
 `occurrence` is negative, a search-target argument (`find`, delete `text`,
@@ -777,7 +808,8 @@ if all(r.valid for r in results):
 
 ## SearchResult
 
-The result of `Document.find_text()`. Carries no XML/DOM internals.
+The result of `Document.find_text()` (a single match, or None) and
+`Document.find_all()` (a list of them). Carries no XML/DOM internals.
 
 ```python
 from docx_editor import SearchResult
@@ -833,7 +865,11 @@ genuinely need the internals (raw DOM positions), import them from
 
 ### `TextNotFoundError`
 
-Raised when the specified text is not found in the document.
+Raised when the specified text is not found in the document, or when an
+explicit `occurrence` is out of range — the error then carries `occurrence`
+and `total_occurrences` and its message reports the actual count instead of
+claiming the text is absent. Other structured fields: `search_text`,
+`paragraph_ref`, `paragraph_preview`.
 
 ```python
 from docx_editor.exceptions import TextNotFoundError
@@ -842,6 +878,47 @@ try:
     doc.replace("nonexistent text", "new text", paragraph="P2#f3c1")
 except TextNotFoundError as e:
     print(f"Text not found: {e}")
+```
+
+### `AmbiguousTextError`
+
+Raised when an edit target matches more than once in the search scope and no
+`occurrence` was given. Not a `TextNotFoundError` subclass — the text *was*
+found. Structured fields: `search_text`, `paragraph_ref` (None when
+document-wide), `paragraph_preview` (None when document-wide),
+`total_occurrences`.
+
+```python
+from docx_editor.exceptions import AmbiguousTextError
+
+try:
+    doc.replace("term", "clause", paragraph="P2#f3c1")
+except AmbiguousTextError as e:
+    r = doc.find_all("term", paragraph=e.paragraph_ref)[0]
+    doc.replace("term", "clause", paragraph=r.paragraph_ref,
+                occurrence=r.paragraph_occurrence)
+```
+
+### `BatchOperationError`
+
+The only exception `batch_edit()` / `batch_rewrite()` raise for a failing
+operation. Structured fields: `operation_index` (0-based position of the
+failing op), `reason` (human-readable message), `original` (the underlying
+typed exception, also set as `__cause__`).
+
+```python
+from docx_editor.exceptions import BatchOperationError, HashMismatchError
+
+while ops:
+    try:
+        doc.batch_edit(ops)
+        break
+    except BatchOperationError as e:
+        if isinstance(e.original, HashMismatchError):
+            op = ops[e.operation_index]
+            op.paragraph = f"P{e.original.paragraph_index}#{e.original.actual_hash}"
+        else:
+            ops.pop(e.operation_index)
 ```
 
 ### `CommentError`
