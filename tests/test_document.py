@@ -109,7 +109,6 @@ class TestDocumentOpen:
         assert isinstance(excinfo.value, InvalidDocumentError)
 
 
-
 class TestDocumentSave:
     """Tests for saving documents."""
 
