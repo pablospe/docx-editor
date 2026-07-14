@@ -29,6 +29,7 @@ What do you need to do?
     - Tracked changes (redlining)
     - Comments (add, reply, resolve)
     - Accept/reject revisions
+    - Review received redlines (see "Reviewing Someone Else's Redlines")
 ```
 
 ## Reading and analyzing content
@@ -187,7 +188,9 @@ with Document.open("contract.docx", author=author) as doc:
 
     doc.save()  # Overwrites original
     # or doc.save("reviewed.docx")  # Save to new file
-# Workspace is cleaned up automatically on normal exit
+# Workspace is cleaned up automatically on normal exit — WITHOUT saving.
+# There is no dirty check: unsaved edits are silently discarded, so always
+# call save() before the block ends.
 # On exception, the workspace is preserved for inspection in the user cache
 # dir (~/.cache/docx-editor/<hash>/ on Linux; error messages print the exact path)
 ```
@@ -198,8 +201,8 @@ Without context manager:
 doc = Document.open("contract.docx", author=author)
 refs = doc.list_paragraphs()
 # ... edits using paragraph references ...
-doc.save()
-doc.close()
+doc.save()   # save first —
+doc.close()  # close() deletes the workspace without saving; unsaved edits are lost
 ```
 
 ### Track Changes API
@@ -226,22 +229,37 @@ match = doc.find_text("30 days")
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()
 
+# Inverse view: deleted text included, inserted text excluded. Read-only —
+# refs, hashes, and edits keep working on the visible view. For revisions
+# inside paragraphs this equals what reject_all() would leave.
+original = doc.get_original_text()
+
 # Structural location: table cell, list item (numId/ilvl; style-inherited
-# numbering resolved), heading context, and section index
+# numbering resolved), heading context, and section index. Base conventions
+# are MIXED — read the comments:
 loc = doc.get_paragraph_location("P3#b2c4")
-if loc.table:
+if loc.table:  # table.index, row, col are all 1-based
     print(f"table {loc.table.index} r{loc.table.row} c{loc.table.col}")
-if loc.list:
+if loc.list:  # ilvl is 0-based (0 == top level)
     print(f"list numId={loc.list.num_id} level={loc.list.ilvl}")
-if loc.outline_level is not None:  # 0-based; 0 == Heading 1
+if loc.outline_level is not None:  # 0-based; 0 == Heading 1; None == body text
     print(f"heading level {loc.outline_level + 1}: style={loc.style}")
 print(" > ".join(loc.heading_path))  # e.g. "Chapter one > Termination"
 print(loc.section)  # 1-based section index; sectPr-carrying paragraph closes its section
+
+# One-pass batch variant: [(ref, ParagraphLocation), ...] for every paragraph
+locations = doc.list_paragraph_locations()
 
 # All edit methods return the new paragraph ref as a plain string.
 # Use it for follow-up edits on the same paragraph:
 new_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
 doc.replace("net", "gross", paragraph=new_ref)  # chain without list_paragraphs()
+
+# occurrence is 0-based everywhere (0 = first, the default). Edit methods
+# count occurrences within the target paragraph; find_text counts document-wide.
+# add_comment counts within the paragraph when paragraph= is given, and
+# document-wide (like find_text) when paragraph=None.
+doc.replace("thirty", "sixty", paragraph="P4#a1d2", occurrence=1)  # 2nd "thirty"
 
 # Delete text (creates tracked deletion)
 doc.delete("unnecessary clause", paragraph="P5#d4e5")
@@ -273,8 +291,18 @@ import os
 author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("document.docx", author=author)
 
-# Add a comment anchored to text (returns comment ID)
-doc.add_comment("ambiguous term", "Please clarify this term")
+# Add a comment anchored to text (returns the new comment's ID).
+# Full signature: add_comment(anchor_text, comment, *, paragraph=None, occurrence=0)
+# paragraph=None searches the whole document and counts occurrence document-wide;
+# pass paragraph= to scope both the search and the occurrence count to it.
+# The anchor is located with the same visible-text search the edit
+# methods use, so anchors spanning run boundaries are found.
+cid = doc.add_comment("ambiguous term", "Please clarify this term")
+cid2 = doc.add_comment("term", "Anchored to the 2nd 'term' in P3",
+                       paragraph="P3#b2c4", occurrence=1)
+
+# Comment IDs are allocated sequentially starting at 0 (in a document with no
+# existing comments) — always use the ID returned by add_comment, don't guess.
 
 # List all comments (returns list[Comment] objects)
 comments = doc.list_comments()
@@ -286,12 +314,12 @@ for c in comments:
 # Filter by author
 my_comments = doc.list_comments(author="Reviewer")
 
-# Reply to a comment (returns new comment ID)
-doc.reply_to_comment(comment_id=1, reply="I agree, needs clarification")
+# Reply to a comment (returns the reply's new comment ID)
+doc.reply_to_comment(cid, "I agree, needs clarification")
 
 # Resolve or delete comments (return True if found, False if not)
-doc.resolve_comment(comment_id=1)
-doc.delete_comment(comment_id=2)
+doc.resolve_comment(cid)
+doc.delete_comment(cid2)
 
 doc.save()
 doc.close()
@@ -314,9 +342,10 @@ for r in revisions:
 # Filter by author
 their_changes = doc.list_revisions(author="OtherUser")
 
-# Accept or reject individual revisions (return True if found, False if not)
-doc.accept_revision(revision_id=1)
-doc.reject_revision(revision_id=2)
+# Accept or reject individual revisions (return True if found, False if not).
+# Use IDs from list_revisions() — don't guess numbering.
+doc.accept_revision(revisions[0].id)
+doc.reject_revision(their_changes[0].id)
 
 # Accept or reject all revisions (returns count of revisions processed)
 doc.accept_all()
@@ -329,6 +358,47 @@ doc.reject_all(author="OtherUser")
 doc.save()
 doc.close()
 ```
+
+### Reviewing Someone Else's Redlines
+
+When a document arrives with pending tracked changes from other authors:
+
+**Anchors match visible text.** `find_text`, the edit methods, and
+`add_comment` all search the view with pending insertions included and pending
+deletions excluded — target the text as it reads with all changes showing
+(exactly what `get_visible_text()` returns).
+
+**Nested revisions** (one author edited inside another author's pending
+insertion):
+
+- *Accepting* the insertion unwraps it in place — a deletion another author
+  nested inside it survives as an independent pending deletion.
+- *Rejecting* the insertion removes everything inside it — nested deletions
+  disappear with it.
+- `accept_all()` / `reject_all()` resolve nesting fully (they re-scan until no
+  revisions remain), and `author=` filters process each author's changes
+  independently.
+
+**Predict, then verify.** `get_visible_text()` is the document as it will read
+after `accept_all()`; `get_original_text()` is the document as it will read
+after `reject_all()` (for revisions inside paragraphs). Snapshot before acting,
+compare after:
+
+```python
+import os
+author = os.environ.get("USER") or "Reviewer"
+
+doc = Document.open("redlined.docx", author=author)
+expected = doc.get_visible_text()   # the accept-all outcome
+doc.accept_all(author="OtherUser")  # resolve their changes only
+assert doc.get_visible_text() == expected
+doc.save("resolved.docx")
+doc.close()
+```
+
+To act on a subset, target revisions by ID: `list_revisions()` (optionally
+`author=`-filtered), pick by `.text`/`.type`, then `accept_revision(id)` /
+`reject_revision(id)`. There is no paragraph-scoped revision filter today.
 
 ## Redlining Workflow (Document Review)
 
@@ -446,11 +516,12 @@ from docx_editor import Document, EditOperation
 
 with Document.open("file.docx", author=author) as doc:
     refs = doc.list_paragraphs()
-    new_refs = doc.batch_edit([
+    ops = [
         EditOperation.replace("old term", "new term", paragraph="P2#f3c1"),
         EditOperation.delete("remove this", paragraph="P5#d4e5"),
         EditOperation.insert_after("Section 5", " (amended)", paragraph="P3#b2c4"),
-    ])
+    ]
+    new_refs = doc.batch_edit(ops)
     # new_refs[0] = "P2#c3d4" — fresh ref for paragraph 2
     doc.save()
 ```
@@ -458,6 +529,32 @@ with Document.open("file.docx", author=author) as doc:
 Build operations with the typed constructors (`EditOperation.replace/.delete/.insert_after/.insert_before` — same signatures as the `Document` methods). They validate arguments immediately and raise `ValueError` with a field-specific message, instead of failing later at apply time.
 
 If any hash is stale, the entire batch is rejected before any edits are applied.
+
+**Pre-flight with `dry_run=True`** — validates every operation without applying
+anything and returns `list[EditValidationResult]` (fields: `index`, `paragraph`,
+`valid`, `error`), one per operation in input order. The document is left
+unchanged (`ops` is the `EditOperation` list built above):
+
+```python
+results = doc.batch_edit(ops, dry_run=True)
+if all(r.valid for r in results):
+    new_refs = doc.batch_edit(ops)
+else:
+    for r in results:
+        if not r.valid:
+            print(f"op {r.index} on {r.paragraph}: {r.error}")
+```
+
+Each operation is validated independently against the current document —
+`dry_run` does **not** simulate the sequential effects of multiple operations
+on the same paragraph.
+
+**Multiple operations on the same paragraph** apply sequentially in input
+order: each operation's find/anchor text and `occurrence` resolve against the
+paragraph's visible text *as left by the previous operations in the batch* (a
+tracked delete removes text from that view; an insert adds to it). Across
+different paragraphs, operations are applied in reverse document order — a
+behavior that keeps one `list_paragraphs()` snapshot valid for the whole batch.
 
 ### Error Handling & Recovery
 
@@ -613,6 +710,10 @@ docx-session exec "paras = doc.list_paragraphs(); print('\n'.join(str(p) for p i
 docx-session exec "ref = doc.replace('30 days', '45 days', paragraph='P2#f3c1'); ref"
 docx-session exec "doc.add_comment('45 days', 'Extended per negotiation.', paragraph=ref)"
 docx-session exec "doc.save(); doc.close()"
+
+# Check whether a session is running: prints "running"/"not running";
+# exit code 0 if running, 3 if not
+docx-session status
 
 docx-session stop
 ```
