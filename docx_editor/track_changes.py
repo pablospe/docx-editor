@@ -958,9 +958,9 @@ class RevisionManager:
                     first_child = ins_elem.firstChild
                     if first_child:
                         self.editor.insert_before(first_child, new_run_xml)
-                    else:
+                    else:  # pragma: no cover - removing all content deletes the ins outright
                         self.editor.append_to(ins_elem, new_run_xml)
-                elif ins_parent:
+                elif ins_parent:  # pragma: no branch - an ins removed from the DOM had a parent
                     # ins_elem was fully removed — wrap replacement in a new <w:ins>
                     ins_wrapper_xml = f"<w:ins>{new_run_xml}</w:ins>"
                     if ins_next:
@@ -976,19 +976,18 @@ class RevisionManager:
 
             first_rPr = parts[0][1]
             replacement_xml = f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>"
-            if last_del is None:
-                # Degenerate: no deletion was created — nothing to anchor to
+            if last_del is None:  # pragma: no cover - a foreign group always creates a del
                 return first_id
             del_ins = self._find_ancestor(last_del, "w:ins")
             if del_ins is not None:
                 self._split_ins_after_child(del_ins, last_del)
                 new_nodes = self.editor.insert_after(del_ins, replacement_xml)
-            else:
+            else:  # pragma: no cover - Site D positions are inside ins, so the del is nested
                 new_nodes = self.editor.insert_after(last_del, replacement_xml)
             for node in new_nodes:
-                if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
+                if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
                     return int(node.getAttribute("w:id"))
-            return first_id
+            return first_id  # pragma: no cover - the fragment always yields a w:ins
 
         # Use first run's rPr for the insertion
         first_rPr = parts[0][1]
@@ -1210,7 +1209,7 @@ class RevisionManager:
                 del_id, group_last_del = self._delete_regular_segment(group)
                 if first_del_id == -1:
                     first_del_id = del_id
-                if group_last_del is not None:
+                if group_last_del is not None:  # pragma: no branch - a foreign group always creates a del
                     last_del = group_last_del
         return first_del_id, last_del
 
@@ -1248,7 +1247,7 @@ class RevisionManager:
         very start of the insertion's content).
         """
         run, rPr_xml = self._get_run_info(edge_node)
-        if not run:
+        if not run:  # pragma: no cover - a w:t node always sits inside a run
             return None
         node_text = self._get_node_text(edge_node)
 
@@ -1310,16 +1309,16 @@ class RevisionManager:
             new_nodes = self.editor.insert_after(ins_elem, own_ins_xml)
         else:
             boundary = self._split_foreign_ins_at(edge_node, offset)
-            if boundary is None:
+            if boundary is None:  # pragma: no cover - non-boundary offsets never split at the start
                 new_nodes = self.editor.insert_before(ins_elem, own_ins_xml)
             else:
                 self._split_ins_after_child(ins_elem, boundary)
                 new_nodes = self.editor.insert_after(ins_elem, own_ins_xml)
 
         for node in new_nodes:
-            if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
+            if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
                 return int(node.getAttribute("w:id"))
-        return -1
+        return -1  # pragma: no cover - the fragment always yields a w:ins
 
     def _remove_from_insertion(self, positions: list) -> None:
         """Remove matched text from inside a <w:ins> element.

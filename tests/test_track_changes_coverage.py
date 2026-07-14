@@ -336,3 +336,55 @@ class TestReplaceSameContextInsAppendNoFirstChild:
         mgr.replace_text("XY", "NEW")
         text = _get_text_content(mgr)
         assert "NEW" in text
+
+
+class TestSplitInsAfterChildDescendant:
+    """_split_ins_after_child walks a descendant up to the direct child before splitting."""
+
+    def test_split_after_descendant_wt(self, temp_xml):
+        xml_path = temp_xml(
+            '<w:p><w:ins w:id="1" w:author="Other Author" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>AB</w:t></w:r><w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        ins = mgr.editor.dom.getElementsByTagName("w:ins")[0]
+        first_wt = ins.getElementsByTagName("w:t")[0]  # descendant, not direct child
+
+        mgr._split_ins_after_child(ins, first_wt)
+
+        ins_elems = mgr.editor.dom.getElementsByTagName("w:ins")
+        assert len(ins_elems) == 2
+        assert all(e.getAttribute("w:author") == "Other Author" for e in ins_elems)
+        assert ins_elems[0].getAttribute("w:id") != ins_elems[1].getAttribute("w:id")
+        halves = ["".join(wt.firstChild.data for wt in e.getElementsByTagName("w:t")) for e in ins_elems]
+        assert halves == ["AB", "CD"]
+
+
+class TestSplitForeignInsAtRunBoundaries:
+    """_split_foreign_ins_at run-boundary paths with text-node siblings between runs."""
+
+    def test_split_before_run_skips_text_siblings(self, temp_xml):
+        # Whitespace text node between the runs: the previous-element walk must skip it
+        xml_path = temp_xml(
+            '<w:p><w:ins w:id="1" w:author="Other Author" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>AB</w:t></w:r> <w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        cd_wt = mgr.editor.dom.getElementsByTagName("w:ins")[0].getElementsByTagName("w:t")[1]
+
+        boundary = mgr._split_foreign_ins_at(cd_wt, 0)
+
+        assert boundary is not None
+        assert boundary.tagName == "w:r"
+        assert boundary.getElementsByTagName("w:t")[0].firstChild.data == "AB"
+
+    def test_split_at_content_start_returns_none(self, temp_xml):
+        # Only a text node precedes the run: the split point is the very start
+        xml_path = temp_xml(
+            '<w:p><w:ins w:id="1" w:author="Other Author" w:date="2024-01-01T00:00:00Z">'
+            " <w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        cd_wt = mgr.editor.dom.getElementsByTagName("w:ins")[0].getElementsByTagName("w:t")[0]
+
+        assert mgr._split_foreign_ins_at(cd_wt, 0) is None

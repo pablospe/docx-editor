@@ -217,6 +217,26 @@ class TestDeleteInsideForeignIns:
         assert len(dels) == 1
         assert change_id == int(dels[0].getAttribute("w:id"))
 
+    def test_delete_across_two_foreign_insertions(self, temp_xml):
+        """A match spanning two adjacent foreign insertions nests a del in each."""
+        body = (
+            f"<w:p>{_foreign_ins('<w:r><w:t>abc </w:t></w:r>', ins_id=1)}"
+            f"{_foreign_ins('<w:r><w:t>def</w:t></w:r>', ins_id=2)}</w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+
+        manager.suggest_deletion("abc def")
+
+        _assert_no_nested_ins(manager)
+        assert _visible_text(manager) == ""
+        a_ins = [e for e in _ins_elems(manager) if e.getAttribute("w:author") == AUTHOR_A]
+        assert len(a_ins) == 2
+        nested = [d for ins in a_ins for d in _nested_dels(ins)]
+        assert len(nested) == 2
+        assert all(d.getAttribute("w:author") == AUTHOR_B for d in nested)
+        assert _del_text(nested[0]) == "abc "
+        assert _del_text(nested[1]) == "def"
+
 
 class TestReplaceInsideForeignIns:
     """B replacing text inside A's insertion: nested del + sibling B ins."""
@@ -320,6 +340,53 @@ class TestInsertInsideForeignIns:
         assert len(b_ins) == 1
         assert _ins_visible_text(b_ins[0]) == "brave "
         assert change_id == int(b_ins[0].getAttribute("w:id"))
+
+    def test_insert_after_at_run_boundary_inside_foreign_ins(self, temp_xml):
+        """Anchor ends exactly at a run boundary (not the ins end): no mid-run split."""
+        xml_path = temp_xml(f"<w:p>{_foreign_ins('<w:r><w:t>Hello</w:t></w:r><w:r><w:t> world</w:t></w:r>')}</w:p>")
+        manager = _make_manager(xml_path)
+
+        manager.insert_text_after("Hello", "X")
+
+        _assert_no_nested_ins(manager)
+        assert _visible_text(manager) == "HelloX world"
+        ins_elems = _ins_elems(manager)
+        a_ins = [e for e in ins_elems if e.getAttribute("w:author") == AUTHOR_A]
+        b_ins = [e for e in ins_elems if e.getAttribute("w:author") == AUTHOR_B]
+        assert len(a_ins) == 2
+        assert len(b_ins) == 1
+        assert _ins_visible_text(a_ins[0]) == "Hello"
+        assert _ins_visible_text(a_ins[1]) == " world"
+
+    def test_insert_before_at_run_boundary_inside_foreign_ins(self, temp_xml):
+        """Anchor starts exactly at a run boundary (not the ins start): no mid-run split."""
+        xml_path = temp_xml(f"<w:p>{_foreign_ins('<w:r><w:t>Hello </w:t></w:r><w:r><w:t>world</w:t></w:r>')}</w:p>")
+        manager = _make_manager(xml_path)
+
+        manager.insert_text_before("world", "X")
+
+        _assert_no_nested_ins(manager)
+        assert _visible_text(manager) == "Hello Xworld"
+        ins_elems = _ins_elems(manager)
+        a_ins = [e for e in ins_elems if e.getAttribute("w:author") == AUTHOR_A]
+        b_ins = [e for e in ins_elems if e.getAttribute("w:author") == AUTHOR_B]
+        assert len(a_ins) == 2
+        assert len(b_ins) == 1
+        assert _ins_visible_text(a_ins[0]) == "Hello "
+        assert _ins_visible_text(a_ins[1]) == "world"
+
+    def test_insert_mid_run_with_non_text_child(self, temp_xml):
+        """Mid-run split of a run that also carries a w:tab (front-hoisted, see #20)."""
+        xml_path = temp_xml(f"<w:p>{_foreign_ins('<w:r><w:tab/><w:t>Hello world</w:t></w:r>')}</w:p>")
+        manager = _make_manager(xml_path)
+
+        manager.insert_text_after("Hello", "X")
+
+        _assert_no_nested_ins(manager)
+        assert _visible_text(manager) == "HelloX world"
+        a_ins = [e for e in _ins_elems(manager) if e.getAttribute("w:author") == AUTHOR_A]
+        assert len(a_ins) == 2
+        assert len(a_ins[0].getElementsByTagName("w:tab")) == 1
 
     def test_insert_before_at_ins_start_no_split(self, temp_xml):
         xml_path = temp_xml(f"<w:p>{_foreign_ins('<w:r><w:t>Hello</w:t></w:r>')}</w:p>")
