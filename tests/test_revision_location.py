@@ -230,6 +230,20 @@ class TestNestedRevisions:
         assert host.occurrence is None
         assert _rev(manager, 2).nested_under == 1
 
+    def test_partial_consume_host_unlocatable_even_when_following_text_matches(self, temp_xml):
+        """Following visible text spelling the deleted suffix must not fake a match.
+
+        The host's visible span is only "Hello "; the "world" completing
+        "Hello world" belongs to the run AFTER the insertion. An occurrence
+        here would anchor across the revision boundary — must be None.
+        """
+        ins_content = "<w:r><w:t>Hello </w:t></w:r>" + _del("<w:r><w:delText>world</w:delText></w:r>", del_id=2)
+        body = f"<w:p>{_ins(ins_content, ins_id=1)}<w:r><w:t>world peace</w:t></w:r></w:p>"
+        manager = _make_manager(temp_xml(body))
+        host = _rev(manager, 1)
+        assert host.text == "Hello world"
+        assert host.occurrence is None
+
     def test_unnested_revisions_have_default_nesting_fields(self, temp_xml):
         body = (
             "<w:p><w:r><w:t>keep </w:t></w:r>"
@@ -257,6 +271,28 @@ class TestNestedRevisions:
         assert len(hosts) == 1
         assert nested_del.nested_under == hosts[0].id
         assert nested_del.id in hosts[0].contains_ids
+
+
+class TestWithLocationFlag:
+    """with_location=False skips location work for id-only callers."""
+
+    def test_with_location_false_leaves_location_unset(self, temp_xml):
+        body = f"<w:p><w:r><w:t>keep </w:t></w:r>{_ins('<w:r><w:t>new</w:t></w:r>', ins_id=1)}</w:p>"
+        manager = _make_manager(temp_xml(body))
+        (rev,) = manager.list_revisions(with_location=False)
+        assert rev.paragraph_ref is None
+        assert rev.occurrence is None
+        # Nesting state is cheap and still reported.
+        assert rev.nested_under is None
+        assert rev.contains_ids == ()
+
+    def test_paragraph_filter_overrides_with_location_false(self, temp_xml):
+        body = f"<w:p><w:r><w:t>keep </w:t></w:r>{_ins('<w:r><w:t>new</w:t></w:r>', ins_id=1)}</w:p>"
+        manager = _make_manager(temp_xml(body))
+        ref = _rev(manager, 1).paragraph_ref
+        assert ref is not None
+        (rev,) = manager.list_revisions(paragraph=ref, with_location=False)
+        assert rev.paragraph_ref == ref
 
 
 class TestParagraphFilter:

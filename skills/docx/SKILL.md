@@ -350,8 +350,10 @@ their_changes = doc.list_revisions(author="OtherUser")
 para_changes = doc.list_revisions(paragraph="P3#a7b2")
 
 # For INSERTIONS, r.paragraph_ref/r.occurrence plug straight into the anchor
-# APIs (occurrence is 0-based, same convention as replace/delete/add_comment):
-r = next(r for r in doc.list_revisions() if r.type == "insertion")
+# APIs (occurrence is 0-based, same convention as replace/delete/add_comment).
+# Filter on occurrence is not None — even an insertion can be unlocatable
+# (see the None cases below):
+r = next(r for r in doc.list_revisions() if r.type == "insertion" and r.occurrence is not None)
 doc.add_comment(r.text, "please confirm", paragraph=r.paragraph_ref, occurrence=r.occurrence)
 
 # Accept or reject individual revisions (return True if found, False if not).
@@ -410,7 +412,8 @@ print(doc.get_markup_text())
 ```
 
 A human/agent verification view, not a parseable format (author names are not
-escaped; tabs/breaks are not rendered).
+escaped; tabs/breaks are not rendered; text inside a drawing's text box
+appears both inline and again as its own line, same as `get_text()`).
 
 ### Reviewing Someone Else's Redlines
 

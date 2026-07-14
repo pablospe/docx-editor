@@ -132,13 +132,22 @@ class ParagraphInfo:
         return f"{self.ref}| {self.text}"
 
 
+def compute_text_hash(text: str) -> str:
+    """4-char hex CRC32 hash of a paragraph's visible text.
+
+    Single source of the hash formula behind ``"P{i}#{hash}"`` refs. Use
+    :func:`compute_paragraph_hash` unless the caller already holds the
+    paragraph's accepted-view text map.
+    """
+    return f"{zlib.crc32(text.encode('utf-8')) & 0xFFFF:04x}"
+
+
 def compute_paragraph_hash(paragraph) -> str:
     """Compute a 4-char hex content hash for a paragraph element.
 
     Uses CRC32 of the paragraph's visible text (from build_text_map).
     """
-    text = build_text_map(paragraph).text
-    return f"{zlib.crc32(text.encode('utf-8')) & 0xFFFF:04x}"
+    return compute_text_hash(build_text_map(paragraph).text)
 
 
 @dataclass(frozen=True)

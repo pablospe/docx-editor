@@ -619,7 +619,9 @@ class Document:
 
         A verification view for humans and agents (e.g. checking redlines
         without accepting them), not a parseable format: author names are
-        not escaped, and tabs/breaks are not rendered.
+        not escaped, tabs/breaks are not rendered, and text inside a
+        drawing's text box appears both inline in the host paragraph's line
+        and again as its own line (same as get_text()).
 
         Returns:
             The marked-up text content
@@ -932,7 +934,7 @@ class Document:
 
         Example:
             # Reviewer workflow: inspect one paragraph's revisions, then act.
-            for ref, location in doc.list_paragraph_locations():
+            for ref in doc.list_paragraphs(max_chars=0):
                 for r in doc.list_revisions(paragraph=ref):
                     print(f"{r.id}: {r.type} '{r.text}' by {r.author}")
             doc.accept_revision(3)

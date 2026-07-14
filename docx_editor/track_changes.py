@@ -27,6 +27,7 @@ from .xml_editor import (
     _escape_xml,
     build_text_map,
     compute_paragraph_hash,
+    compute_text_hash,
     find_in_text_map,
     get_rPr_xml,
     get_text_node_data,
@@ -245,7 +246,12 @@ class Revision:
 
 
 def _ancestor_paragraph(elem) -> Element | None:
-    """Nearest <w:p> ancestor of ``elem``, or None if outside any paragraph."""
+    """Nearest <w:p> ancestor of ``elem``, or None if outside any paragraph.
+
+    Not replaceable by ``xml_editor._innermost_ancestor``: this loop also
+    stops at the first non-element ancestor, so it terminates even on node
+    chains whose ``parentNode`` never yields None (mock DOMs in tests).
+    """
     node = elem.parentNode
     while node is not None and node.nodeType == node.ELEMENT_NODE:
         if node.tagName == "w:p":
@@ -322,8 +328,11 @@ def _occurrence_in_text_map(tm: TextMap, elem, text: str) -> int | None:
     Mirrors ``find_in_text_map``'s stepping (``idx + 1`` between matches) so
     the result plugs directly into the ``occurrence=`` parameter of the
     anchor APIs. Returns None when the revision's span cannot be equated
-    with ``text``: no position in the map belongs to ``elem``, or the map
-    text at the span's start doesn't spell ``text``.
+    with ``text``: no position in the map belongs to ``elem``, the map
+    text at the span's start doesn't spell ``text``, or the spelled-out
+    span extends beyond ``elem`` (e.g. a partially consumed host insertion
+    whose missing suffix happens to be spelled by the following text —
+    anchoring there would silently cross the revision boundary).
     """
     if not text:
         return None
@@ -331,6 +340,8 @@ def _occurrence_in_text_map(tm: TextMap, elem, text: str) -> int | None:
     if start is None:
         return None
     if not tm.text.startswith(text, start):
+        return None
+    if not all(_has_ancestor(pos.node, elem) for pos in tm.positions[start : start + len(text)]):
         return None
     count = 0
     idx = tm.text.find(text)
@@ -355,7 +366,9 @@ class _RevisionLocationContext:
         if index is None:
             return None
         if key not in self._refs:
-            self._refs[key] = f"P{index}#{compute_paragraph_hash(p)}"
+            # Hash from the cached accepted map, shared with the occurrence
+            # path, instead of compute_paragraph_hash (which builds its own).
+            self._refs[key] = f"P{index}#{compute_text_hash(self.text_map(p, 'accepted').text)}"
         return self._refs[key]
 
     def text_map(self, p, view: Literal["accepted", "original"]) -> TextMap:
@@ -1879,7 +1892,13 @@ class RevisionManager:
                 return int(node.getAttribute("w:id"))
         return -1
 
-    def list_revisions(self, author: str | None = None, paragraph: str | None = None) -> list[Revision]:
+    def list_revisions(
+        self,
+        author: str | None = None,
+        paragraph: str | None = None,
+        *,
+        with_location: bool = True,
+    ) -> list[Revision]:
         """List all tracked changes in the document.
 
         Args:
@@ -1887,6 +1906,12 @@ class RevisionManager:
             paragraph: If provided, a paragraph reference (e.g. "P3#a7b2")
                 from list_paragraphs(); only revisions inside that paragraph
                 are returned.
+            with_location: If False, skip computing ``paragraph_ref`` and
+                ``occurrence`` (they stay None) — the location work builds a
+                text map and hash per revision-bearing paragraph, wasted on
+                callers that only need ids (accept_all/reject_all re-list on
+                every pass). Forced True when ``paragraph`` is given, since
+                the filter matches on ``paragraph_ref``.
 
         Returns:
             List of Revision objects sorted by id, with location and nesting
@@ -1903,7 +1928,9 @@ class RevisionManager:
             self._resolve_paragraph(ref)  # validates index and hash
             paragraph_filter = f"P{ref.index}#{ref.hash}"
 
-        ctx = _RevisionLocationContext(self.editor.dom)
+        ctx = None
+        if with_location or paragraph_filter is not None:
+            ctx = _RevisionLocationContext(self.editor.dom)
 
         def matches(rev: Revision | None) -> bool:
             if rev is None:
@@ -1938,8 +1965,9 @@ class RevisionManager:
         nesting included (e.g. ``[ins#1:A]kept [del#9:B]gone[/del][/ins]``).
 
         A human/agent verification view, not a parseable format: author
-        names are not escaped, and tabs/breaks/drawings are not rendered
-        (same limitation as the text map).
+        names are not escaped, tabs/breaks are not rendered, and text inside
+        a drawing's text box appears both inline in the host paragraph's
+        line and again as its own line (same as get_text()).
         """
 
         def render(node) -> str:
@@ -2101,7 +2129,8 @@ class RevisionManager:
         while True:
             progressed = False
             # Process in reverse order by ID to avoid index issues
-            for rev in sorted(self.list_revisions(author=author), key=lambda r: r.id, reverse=True):
+            revisions = self.list_revisions(author=author, with_location=False)
+            for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
                 if self.accept_revision(rev.id):
                     count += 1
                     progressed = True
@@ -2128,7 +2157,8 @@ class RevisionManager:
         while True:
             progressed = False
             # Process in reverse order by ID to avoid index issues
-            for rev in sorted(self.list_revisions(author=author), key=lambda r: r.id, reverse=True):
+            revisions = self.list_revisions(author=author, with_location=False)
+            for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
                 if self.reject_revision(rev.id):
                     count += 1
                     progressed = True
