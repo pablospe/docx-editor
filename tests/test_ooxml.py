@@ -173,7 +173,7 @@ class TestUnpack:
 
 
 class TestUnpackParseErrors:
-    """Parse-stage failures must raise InvalidDocumentError, not leak raw (ISSUES.md #35).
+    """Parse-stage failures must raise InvalidDocumentError, not the raw parser exception (ISSUES.md #35).
 
     Each fixture contains exactly one bad XML part — rglob order is
     nondeterministic, so a second bad part would make the "names the
