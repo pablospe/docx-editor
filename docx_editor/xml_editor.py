@@ -612,6 +612,31 @@ def get_text_node_data(elem) -> str:
     return "".join(c.data for c in elem.childNodes if c.nodeType == c.TEXT_NODE)
 
 
+def rebuild_run_fragments(run, rPr_xml: str, render_wt) -> list[str]:
+    """Rebuild ``run``'s children as XML fragments, preserving document order.
+
+    Iterates *direct* children of ``run`` (not descendants, so ``w:t`` nodes
+    nested inside a drawing's text box stay inside the drawing):
+
+    - ``w:rPr`` is skipped — callers bake ``rPr_xml`` into every fragment.
+    - Non-text children (``w:tab``, ``w:br``, ``w:drawing``, field chars, …)
+      are preserved in place, each wrapped in its own run carrying ``rPr_xml``.
+    - Each direct ``w:t`` child is replaced by ``render_wt(wt)``'s fragments.
+    """
+    fragments: list[str] = []
+    for child in run.childNodes:
+        if child.nodeType != child.ELEMENT_NODE:
+            continue
+        tag = getattr(child, "tagName", "")
+        if tag == "w:rPr":
+            continue
+        if tag != "w:t":
+            fragments.append(f"<w:r>{rPr_xml}{child.toxml()}</w:r>")
+            continue
+        fragments.extend(render_wt(child))
+    return fragments
+
+
 def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted") -> TextMap:
     """Build a text map for a paragraph element.
 

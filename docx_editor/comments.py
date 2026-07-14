@@ -26,6 +26,7 @@ from .xml_editor import (
     compute_paragraph_hash,
     find_in_text_map,
     get_text_node_data,
+    rebuild_run_fragments,
 )
 
 # Path to template files
@@ -309,59 +310,47 @@ class CommentManager:
         text box are left untouched.
         """
         rPr_xml = _get_rPr_xml(run)
-        xml_parts: list[str] = []
 
-        for child in run.childNodes:
-            if child.nodeType != child.ELEMENT_NODE:
-                continue
-            tag = getattr(child, "tagName", "")
-            if tag == "w:rPr":
-                continue  # Already captured by rPr_xml
-            if tag != "w:t":
-                # Non-text content (w:tab, w:br, w:drawing, …) — preserve in
-                # its own run so document order is maintained.
-                xml_parts.append(f"<w:r>{rPr_xml}{child.toxml()}</w:r>")
-                continue
-
-            wt = child
+        def render_wt(wt) -> list[str]:
             wt_text = get_text_node_data(wt)
             is_start_here = bool(start_marker) and wt is start_node
             is_end_here = bool(end_marker) and wt is end_node
+            parts: list[str] = []
 
             if not is_start_here and not is_end_here:
                 if wt_text:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
-                continue
-
-            if is_start_here and is_end_here:
+                    parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+            elif is_start_here and is_end_here:
                 before = wt_text[:start_offset]
                 matched = wt_text[start_offset : end_offset + 1]
                 after = wt_text[end_offset + 1 :]
                 if before:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
-                xml_parts.append(start_marker)
+                    parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                parts.append(start_marker)
                 if matched:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(matched)}</w:t></w:r>")
-                xml_parts.append(end_marker)
+                    parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(matched)}</w:t></w:r>")
+                parts.append(end_marker)
                 if after:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+                    parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
             elif is_start_here:
                 before = wt_text[:start_offset]
                 after = wt_text[start_offset:]
                 if before:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
-                xml_parts.append(start_marker)
+                    parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                parts.append(start_marker)
                 if after:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+                    parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
             else:  # is_end_here only
                 before = wt_text[: end_offset + 1]
                 after = wt_text[end_offset + 1 :]
                 if before:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
-                xml_parts.append(end_marker)
+                    parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                parts.append(end_marker)
                 if after:
-                    xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+                    parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
+            return parts
 
+        xml_parts = rebuild_run_fragments(run, rPr_xml, render_wt)
         self.document_editor.replace_node(run, "".join(xml_parts))
 
     def reply_to_comment(self, parent_comment_id: int, reply_text: str) -> int:
