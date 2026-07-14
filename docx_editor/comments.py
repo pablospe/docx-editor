@@ -187,7 +187,7 @@ class CommentManager:
         """Locate ``anchor_text`` and return its paragraph + text-map match.
 
         Mirrors ``RevisionManager._locate_in_paragraph`` /
-        ``_find_document_wide`` so comment anchors and edit anchors find the
+        ``_locate_document_wide`` so comment anchors and edit anchors find the
         same text and fail the same way: ``occurrence=None`` requires a unique
         anchor (else AmbiguousTextError), an explicit out-of-range occurrence
         reports the actual total.

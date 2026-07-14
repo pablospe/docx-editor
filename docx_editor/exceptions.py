@@ -142,8 +142,18 @@ def _truncate_preview(text: str, limit: int = 80) -> str:
     return text[:limit] + "..."
 
 
+def _append_preview(msg: str, preview: str) -> str:
+    """Append the 'Current content' suffix with a period-safe separator."""
+    sep = " " if msg.endswith(".") else ". "
+    return f'{msg}{sep}Current content: "{preview}"'
+
+
 class TextNotFoundError(DocxEditError):
     """Raised when the target text cannot be found in the document.
+
+    Also raised when the text exists but an explicit ``occurrence`` is out of
+    range — the message then reports the actual count instead of claiming the
+    text is absent, and ``occurrence``/``total_occurrences`` are set.
 
     Attributes:
         search_text: The text that was being searched for.
@@ -185,8 +195,7 @@ class TextNotFoundError(DocxEditError):
             msg = f"Text not found: '{search_text}'"
 
         if self.paragraph_preview is not None:
-            sep = " " if msg.endswith(".") else ". "
-            msg += f'{sep}Current content: "{self.paragraph_preview}"'
+            msg = _append_preview(msg, self.paragraph_preview)
 
         super().__init__(msg)
 
@@ -228,7 +237,7 @@ class AmbiguousTextError(DocxEditError):
             f"Pass occurrence= (0-based) to pick one, or use find_all() to list every match."
         )
         if self.paragraph_preview is not None:
-            msg += f' Current content: "{self.paragraph_preview}"'
+            msg = _append_preview(msg, self.paragraph_preview)
         super().__init__(msg)
 
 

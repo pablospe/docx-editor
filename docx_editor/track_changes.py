@@ -691,12 +691,26 @@ class RevisionManager:
         # Sort by paragraph index descending
         parsed.sort(key=lambda x: x[1].index, reverse=True)
 
-        # Apply rewrites in reverse paragraph order
-        for original_idx, ref, new_text in parsed:
+        # Snapshot DOM before any mutation so we can roll back on partial
+        # failure — same atomicity contract as batch_edit.
+        snapshot = self.editor.dom.toxml(encoding=self.editor.encoding)
+
+        try:
+            # Apply rewrites in reverse paragraph order
+            for original_idx, ref, new_text in parsed:
+                try:
+                    self.rewrite_paragraph(f"P{ref.index}#{ref.hash}", new_text)
+                except (ValueError, DocxEditError) as e:
+                    raise BatchOperationError(original_idx, str(e), original=e) from e
+        except Exception:
+            # Restore via the line-tracking parser so parse_position is preserved.
+            # If rollback itself fails, surface the original edit error — it is
+            # the actionable one; a rollback failure is a secondary symptom.
             try:
-                self.rewrite_paragraph(f"P{ref.index}#{ref.hash}", new_text)
-            except (ValueError, DocxEditError) as e:
-                raise BatchOperationError(original_idx, str(e), original=e) from e
+                self.editor._reload_dom_from_bytes(snapshot)
+            except Exception:
+                pass
+            raise
 
     def rewrite_paragraph(self, ref_str: str, new_text: str) -> None:
         """Rewrite a paragraph's text, generating fine-grained tracked changes.
@@ -902,8 +916,13 @@ class RevisionManager:
             count += count_in_text_map(build_text_map(paragraph), text)
         return count
 
-    def _find_document_wide(self, text: str, occurrence: int | None = None) -> TextMapMatch:
+    def _locate_document_wide(self, text: str, occurrence: int | None = None) -> TextMapMatch:
         """Document-wide nth-occurrence lookup via text maps.
+
+        Totals come from :meth:`count_matches` rather than a single
+        ``count_in_text_map`` call (as ``_locate_in_paragraph`` uses) because
+        text maps are per-paragraph — there is no one document-wide map — and
+        the exact total is part of the error contract.
 
         Raises:
             TextNotFoundError: If the text is not found or occurrence doesn't
@@ -1061,7 +1080,7 @@ class RevisionManager:
             match = self._locate_in_paragraph(p, paragraph, find, occurrence)
             return self._replace_across_nodes(match, replace_with)
 
-        match = self._find_document_wide(find, occurrence)
+        match = self._locate_document_wide(find, occurrence)
         return self._replace_across_nodes(match, replace_with)
 
     def suggest_deletion(self, text: str, occurrence: int | None = None, paragraph: str | None = None) -> int:
@@ -1089,7 +1108,7 @@ class RevisionManager:
             match = self._locate_in_paragraph(p, paragraph, text, occurrence)
             return self._delete_across_nodes(match)
 
-        match = self._find_document_wide(text, occurrence)
+        match = self._locate_document_wide(text, occurrence)
         return self._delete_across_nodes(match)
 
     def _get_run_info(self, node) -> tuple[Element | None, str]:
@@ -1950,7 +1969,7 @@ class RevisionManager:
             match = self._locate_in_paragraph(p, paragraph, anchor, occurrence)
             return self._insert_near_match(match, text, position)
 
-        match = self._find_document_wide(anchor, occurrence)
+        match = self._locate_document_wide(anchor, occurrence)
         return self._insert_near_match(match, text, position)
 
     def _insert_near_match(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:
