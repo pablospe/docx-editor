@@ -172,6 +172,18 @@ class Workspace:
                 if existing_meta:
                     self._check_provenance(existing_meta)
                     self.meta = existing_meta
+                    # Checked before staleness: when both hold, the unsaved edits
+                    # are the data-loss-relevant fact to surface, not the mtime.
+                    if existing_meta.get("dirty"):
+                        raise WorkspaceSyncError(
+                            f"Workspace {self.workspace_path} holds unsaved changes from a "
+                            f"previous session (the source document itself is unchanged). "
+                            f"Adopting it would carry those edits into this session and the "
+                            f"next save would write them into {self.source_path}. Use "
+                            f"force_recreate=True (or delete the workspace) to discard them, "
+                            f"or Workspace(source, create=False).save(destination=...) to "
+                            f"rescue them first."
+                        )
                     # Same staleness predicate as save(), so a workspace can never
                     # open clean here and then fail sync_check() later at save time.
                     if not self.sync_check():
@@ -317,6 +329,7 @@ class Workspace:
             "rsid": rsid,
             "next_comment_id": 0,
             "next_change_id": 0,
+            "dirty": False,
         }
 
         self._save_meta()
@@ -338,6 +351,20 @@ class Workspace:
         meta_path = self.workspace_path / self.META_FILE
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(self.meta, f, indent=2)
+
+    def mark_dirty(self) -> None:
+        """Persist that the workspace may hold content not saved to the source.
+
+        Call this *before* mutating workspace content on disk (write-ahead), so
+        that even a crash mid-mutation leaves the flag set. A dirty workspace is
+        refused for adoption by a later ``Workspace(create=True)`` — otherwise a
+        previous session's edits would silently carry into the new session even
+        though the source document itself is unchanged. The flag is cleared only
+        by a successful save() back to the source.
+        """
+        if not self.meta.get("dirty"):
+            self.meta["dirty"] = True
+            self._save_meta()
 
     def _check_not_open(self, output_path: Path, *, saving_in_place: bool) -> None:
         """Raise DocumentOpenError if Word appears to have the destination open.
@@ -420,7 +447,13 @@ class Workspace:
         if not force:
             self._check_not_open(output_path, saving_in_place=destination is None)
 
-        # Update metadata before saving
+        # Update metadata before saving. A save to a non-source destination
+        # leaves the workspace holding content the source never received, so it
+        # is marked dirty ahead of the pack (not skipped by force= — this is
+        # bookkeeping, not a safety check). Only a later successful save back
+        # to the source clears it.
+        if not overwrites_source:
+            self.meta["dirty"] = True
         self.meta["last_saved"] = datetime.now(timezone.utc).isoformat()
         self._save_meta()
 
@@ -442,6 +475,9 @@ class Workspace:
             saved_stat = output_path.stat()
             self.meta["source_mtime"] = saved_stat.st_mtime
             self.meta["source_size"] = saved_stat.st_size
+            # The source now holds everything the workspace holds — the
+            # workspace is no longer ahead of it, so adoption is safe again.
+            self.meta["dirty"] = False
             self._save_meta()
 
         return output_path

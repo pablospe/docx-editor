@@ -117,9 +117,12 @@ class Document:
                 undeterminable home directory) or an existing workspace was
                 unpacked from a different document.
             WorkspaceSyncError: If the source document was modified since the
-                workspace was created. The message includes the workspace path.
-                Pass force_recreate=True to discard the stale workspace and
-                re-unpack from the current source.
+                workspace was created, or if a leftover workspace holds unsaved
+                changes from a previous session (e.g. it saved to a different
+                path, or a save failed, and the session never closed cleanly).
+                The message includes the workspace path. Pass
+                force_recreate=True to discard the workspace and re-unpack from
+                the current source.
 
         Example:
             doc = Document.open("contract.docx")
@@ -856,11 +859,25 @@ class Document:
                 force=True skips the ``~$`` check but cannot suppress the latter —
                 the OS still refuses the write.
 
+        Note:
+            The workspace is flagged as holding unsaved changes before anything
+            is written, and the flag is cleared only by a successful save back
+            to the source. So after a save to a different path, or a save that
+            raised partway, a later open() of the source refuses to adopt the
+            workspace (WorkspaceSyncError) instead of silently carrying this
+            session's edits over. Recover with force_recreate=True.
+
         Example:
             doc.save()  # Save to original path
             doc.save("contract_v2.docx")  # Save to new path
         """
         self._ensure_open()
+
+        # Write-ahead: flag the workspace before any editor flush touches it,
+        # so a save that fails (or a process that dies) after the flushes still
+        # leaves the flag on disk and a later open() refuses to adopt the
+        # diverged workspace. A successful save back to the source clears it.
+        self._workspace.mark_dirty()
 
         # Ensure comment relationships and content types
         self._ensure_comment_relationships()

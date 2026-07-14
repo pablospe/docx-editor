@@ -48,6 +48,7 @@ class TestWorkspaceCreation:
         assert "author" in meta
         assert "rsid" in meta
         assert len(meta["rsid"]) == 8  # RSID is 8 hex chars
+        assert meta["dirty"] is False  # fresh workspace holds nothing unsaved
 
         workspace.close()
 
@@ -675,3 +676,76 @@ class TestSaveStaleness:
         # And the documented recovery (drop the workspace) works.
         Workspace.delete(temp_docx)
         Workspace(temp_docx, author="Test").close()
+
+
+class TestDirtyWorkspace:
+    """Tests for the dirty flag guarding stale-workspace adoption (issue #31)."""
+
+    def _meta_on_disk(self, ws):
+        with open(ws.workspace_path / "meta.json") as f:
+            return json.load(f)
+
+    def test_save_elsewhere_sets_dirty_on_disk(self, temp_docx, temp_dir):
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            ws.save(destination=temp_dir / "elsewhere.docx")
+            assert self._meta_on_disk(ws)["dirty"] is True
+        finally:
+            ws.close()
+
+    def test_save_to_source_clears_dirty(self, temp_docx, temp_dir):
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            ws.save(destination=temp_dir / "elsewhere.docx")
+            ws.save()  # back to the source: workspace no longer ahead of it
+            assert self._meta_on_disk(ws)["dirty"] is False
+        finally:
+            ws.close()
+
+    def test_dirty_workspace_is_refused_for_adoption(self, temp_docx, temp_dir):
+        ws = Workspace(temp_docx, author="Test")
+        ws.save(destination=temp_dir / "elsewhere.docx")
+        ws.close(cleanup=False)
+
+        with pytest.raises(WorkspaceSyncError, match="unsaved changes"):
+            Workspace(temp_docx, author="Test")
+
+        Workspace.delete(temp_docx)
+
+    def test_dirty_workspace_rescue_via_create_false(self, temp_docx, temp_dir):
+        """The error message's rescue hatch must keep working: create=False
+        reattaches without adoption checks so the contents can be saved out."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.save(destination=temp_dir / "elsewhere.docx")
+        ws.close(cleanup=False)
+
+        rescue = Workspace(temp_docx, create=False)
+        out = rescue.save(destination=temp_dir / "rescued.docx")
+        assert out.exists()
+
+        Workspace.delete(temp_docx)
+
+    def test_mark_dirty_is_idempotent_and_persisted(self, temp_docx):
+        ws = Workspace(temp_docx, author="Test")
+        try:
+            ws.mark_dirty()
+            assert self._meta_on_disk(ws)["dirty"] is True
+            ws.mark_dirty()  # second call is a no-op, not an error
+            assert self._meta_on_disk(ws)["dirty"] is True
+        finally:
+            ws.close()
+
+    def test_pre_upgrade_meta_without_dirty_key_adopts(self, temp_docx):
+        """meta.json written before the flag existed must adopt exactly as before."""
+        ws = Workspace(temp_docx, author="Test")
+        ws.close(cleanup=False)
+
+        meta_path = ws.workspace_path / "meta.json"
+        with open(meta_path) as f:
+            meta = json.load(f)
+        del meta["dirty"]
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+
+        ws2 = Workspace(temp_docx, author="Test")  # must not raise
+        ws2.close()

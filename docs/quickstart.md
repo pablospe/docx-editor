@@ -23,7 +23,7 @@ with Document.open("contract.docx", author="Legal Team") as doc:
     doc.save()
 ```
 
-If the source `.docx` was modified outside this library since the workspace was created, `Document.open()` raises `WorkspaceSyncError` instead of silently discarding the workspace. The error message includes the workspace path. Pass `force_recreate=True` to acknowledge the divergence and re-unpack from the current source:
+If the source `.docx` was modified outside this library since the workspace was created, `Document.open()` raises `WorkspaceSyncError` instead of silently discarding the workspace. The same error is raised when a leftover workspace holds unsaved changes from a previous session — for example, one that saved to a different path (or whose save failed) and never called `close()` — since adopting it would carry those edits into the new session. The error message includes the workspace path. Pass `force_recreate=True` to acknowledge the divergence and re-unpack from the current source:
 
 ```python
 doc = Document.open("contract.docx", force_recreate=True)

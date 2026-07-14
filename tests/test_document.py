@@ -1,11 +1,13 @@
 """Tests for the main Document class."""
 
+import json
 import zipfile
 
 import pytest
 from conftest import find_ref
 
 from docx_editor import Document
+from docx_editor.exceptions import DocumentOpenError, WorkspaceSyncError
 from docx_editor.workspace import Workspace
 
 
@@ -104,6 +106,98 @@ class TestDocumentSave:
         # Sanity: real OOXML parts are still present.
         assert "word/document.xml" in names
         assert "[Content_Types].xml" in names
+
+
+class TestStaleWorkspaceAdoption:
+    """Regression tests for issue #31: a workspace left behind by a session
+    that saved elsewhere (or crashed mid-save) must not be silently adopted —
+    the next save would write the previous session's edits into a source
+    document the user never touched."""
+
+    def test_save_elsewhere_without_close_refuses_reopen(self, clean_workspace, temp_dir):
+        """The issue's two-run repro: RUN 1 edits and saves elsewhere, RUN 2
+        opens the clean source and must get an error, not RUN 1's edits."""
+        # RUN 1: edit, save to a different path, exit without close().
+        doc = Document.open(clean_workspace, author="Run One")
+        doc.replace("fox", "cat", paragraph=find_ref(doc, "fox"))
+        doc.save(temp_dir / "reviewed.docx")
+        workspace_path = doc.workspace_path
+        del doc  # no close()
+
+        # RUN 2: the untouched source must refuse the diverged workspace.
+        with pytest.raises(WorkspaceSyncError, match="unsaved changes") as excinfo:
+            Document.open(clean_workspace, author="Run Two")
+        assert str(workspace_path) in str(excinfo.value)
+
+        # The documented recovery opens clean: no leaked edits, no revisions.
+        doc2 = Document.open(clean_workspace, author="Run Two", force_recreate=True)
+        assert doc2.list_revisions() == []
+        assert "cat" not in doc2.get_visible_text()
+        doc2.close()
+
+    def test_save_in_place_without_close_reopens_clean(self, clean_workspace):
+        """An in-place save leaves source and workspace in agreement, so a
+        later open (even without close()) adopts the workspace as before."""
+        doc = Document.open(clean_workspace, author="Run One")
+        doc.replace("fox", "cat", paragraph=find_ref(doc, "fox"))
+        doc.save()
+        del doc  # no close()
+
+        doc2 = Document.open(clean_workspace, author="Run Two")
+        # replace() records a paired deletion + insertion.
+        assert len(doc2.list_revisions()) == 2
+        doc2.close()
+
+    def test_crash_with_no_edits_still_adopts(self, clean_workspace):
+        """Opening writes tracking infrastructure (people.xml, rsid) into the
+        workspace; that alone must not count as unsaved changes."""
+        doc = Document.open(clean_workspace, author="Run One")
+        del doc  # no edits, no save, no close()
+
+        doc2 = Document.open(clean_workspace, author="Run Two")
+        assert doc2.list_revisions() == []
+        doc2.close()
+
+    def test_failed_save_still_flags_workspace(self, clean_workspace):
+        """Write-ahead ordering: Document.save() flushes edits into the
+        workspace before packing, so a save that fails after the flush must
+        already have persisted the dirty flag."""
+        doc = Document.open(clean_workspace, author="Run One")
+        doc.replace("fox", "cat", paragraph=find_ref(doc, "fox"))
+
+        # Make the pack step refuse: a ~$ owner stub marks the source as open
+        # in Word. The editors have already flushed by the time it is checked.
+        owner_stub = clean_workspace.parent / f"~${clean_workspace.name}"
+        owner_stub.write_text("stub")
+        try:
+            with pytest.raises(DocumentOpenError):
+                doc.save()
+        finally:
+            owner_stub.unlink()
+        del doc  # no close()
+
+        with pytest.raises(WorkspaceSyncError, match="unsaved changes"):
+            Document.open(clean_workspace, author="Run Two")
+
+    def test_relative_path_save_to_source_refreshes_mtime(self, clean_workspace, monkeypatch):
+        """Regression for issue #31's adjacent bug (fixed in PR #33): saving to
+        the source via a relative path must refresh the recorded mtime so the
+        workspace is not reported stale on the next open."""
+        doc = Document.open(clean_workspace, author="Run One")
+        doc.replace("fox", "cat", paragraph=find_ref(doc, "fox"))
+        monkeypatch.chdir(clean_workspace.parent)
+        doc.save(clean_workspace.name)
+
+        with open(doc.workspace_path / "meta.json") as f:
+            meta = json.load(f)
+        assert meta["source_mtime"] == clean_workspace.stat().st_mtime
+        assert meta["dirty"] is False
+        del doc  # no close()
+
+        doc2 = Document.open(clean_workspace, author="Run Two")
+        # replace() records a paired deletion + insertion.
+        assert len(doc2.list_revisions()) == 2
+        doc2.close()
 
 
 class TestDocumentClose:
