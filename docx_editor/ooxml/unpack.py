@@ -86,7 +86,7 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
     for xml_file in xml_files:
         content = xml_file.read_text(encoding="utf-8")
         dom = defusedxml.minidom.parseString(content)
-        xml_file.write_bytes(dom.toprettyxml(indent="  ", encoding="ascii"))
+        xml_file.write_bytes(dom.toprettyxml(indent="  ", encoding="utf-8"))
 
     # Generate and return RSID for tracked changes
     suggested_rsid = "".join(random.choices("0123456789ABCDEF", k=8))

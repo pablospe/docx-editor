@@ -5,10 +5,12 @@ import sys
 import zipfile
 
 import pytest
+from conftest import NS, replace_document_xml
 
 from docx_editor.exceptions import DocumentNotFoundError, InvalidDocumentError
 from docx_editor.ooxml.pack import pack_document
 from docx_editor.ooxml.unpack import _is_symlink_entry, unpack_document
+from docx_editor.xml_editor import DocxXMLEditor
 
 
 def _build_zip(path, entries):
@@ -166,6 +168,57 @@ class TestUnpack:
 
         with pytest.raises(InvalidDocumentError, match="Symlink inside output directory"):
             unpack_document(simple_docx, output)
+
+
+SMART_TEXT = "“He said ‘hello’ — it’s fine”"
+
+
+def _smart_quote_document() -> str:
+    """One paragraph whose single <w:t> carries smart quotes and an em-dash."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:document {NS}>"
+        "<w:body>"
+        f"<w:p><w:r><w:t>{SMART_TEXT}</w:t></w:r></w:p>"
+        "</w:body>"
+        "</w:document>"
+    )
+
+
+class TestUnpackUtf8:
+    """Unpack must write UTF-8 workspace XML so non-ASCII text stays literal.
+
+    With ascii output, toprettyxml escapes non-ASCII characters as numeric
+    character references, which the line-tracking parser fragments into
+    multiple TEXT_NODEs (ISSUES.md #18, root cause of issue #9).
+    """
+
+    def test_unpack_preserves_non_ascii_text(self, simple_docx, temp_dir):
+        """Unpacked document.xml keeps smart quotes/em-dash literal, no charrefs."""
+        docx = temp_dir / "smart.docx"
+        replace_document_xml(simple_docx, docx, _smart_quote_document())
+
+        unpack_document(docx, temp_dir / "output")
+
+        content = (temp_dir / "output" / "word" / "document.xml").read_text(encoding="utf-8")
+        assert SMART_TEXT in content
+        assert "&#" not in content
+
+    def test_unpack_yields_single_text_node_per_wt(self, simple_docx, temp_dir):
+        """Each non-empty w:t parses to exactly one TEXT_NODE via the editor parser."""
+        docx = temp_dir / "smart.docx"
+        replace_document_xml(simple_docx, docx, _smart_quote_document())
+
+        unpack_document(docx, temp_dir / "output")
+
+        editor = DocxXMLEditor(temp_dir / "output" / "word" / "document.xml", rsid="00AABBCC", author="Test")
+        wts = editor.dom.getElementsByTagName("w:t")
+        assert wts
+        for wt in wts:
+            text_children = [c for c in wt.childNodes if c.nodeType == c.TEXT_NODE]
+            if text_children:
+                assert len(text_children) == 1
+        assert any(wt.firstChild is not None and wt.firstChild.data == SMART_TEXT for wt in wts)
 
 
 class TestPack:
