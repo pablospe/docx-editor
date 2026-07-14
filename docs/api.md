@@ -128,13 +128,13 @@ for start in range(1, count + 1, page_size):
 
 #### `get_paragraph_location(ref)`
 
-Report whether a paragraph lives in the document body or inside a table cell.
+Report whether a paragraph lives in the document body or inside a table cell, and whether it is a list item.
 
 **Parameters:**
 
 - `ref` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 
-**Returns:** `ParagraphLocation`. `location.in_table` is `False` for body paragraphs; `True` when the paragraph is inside a `<w:tc>` cell, in which case `location.table` carries the 1-based table index, row, `w:gridSpan`-aware logical column, and nesting depth.
+**Returns:** `ParagraphLocation`. `location.in_table` is `False` for body paragraphs; `True` when the paragraph is inside a `<w:tc>` cell, in which case `location.table` carries the 1-based table index, row, `w:gridSpan`-aware logical column, and nesting depth. `location.list` is a `ListItem(num_id, ilvl)` for paragraphs carrying a direct `w:pPr/w:numPr`, `None` otherwise — raw values only: numbering inherited via a paragraph style is not resolved, and rendered display numbers (e.g. "7.2(a)") are not computed.
 
 **Example:**
 
@@ -143,13 +143,15 @@ loc = doc.get_paragraph_location("P3#a7b2")
 if loc.in_table:
     cell = loc.table
     print(f"table {cell.index} r{cell.row} c{cell.col} (depth {cell.depth})")
+if loc.list:
+    print(f"list numId={loc.list.num_id} level={loc.list.ilvl}")
 ```
 
 #### `list_paragraph_locations()`
 
 Batch counterpart to `get_paragraph_location()`: pair every paragraph with its structural location in one pass, precomputing table indices once instead of rescanning the table hierarchy per ref.
 
-**Returns:** List of `(ref, ParagraphLocation)` tuples in document order, where `ref` is the same `P{index}#{hash}` token emitted by `list_paragraphs()`.
+**Returns:** List of `(ref, ParagraphLocation)` tuples in document order, where `ref` is the same `P{index}#{hash}` token emitted by `list_paragraphs()`. Each location carries the same table and list info as `get_paragraph_location()`.
 
 **Example:**
 
@@ -158,6 +160,8 @@ for ref, loc in doc.list_paragraph_locations():
     if loc.in_table:
         cell = loc.table
         print(f"{ref}: table {cell.index} r{cell.row} c{cell.col} (depth {cell.depth})")
+    if loc.list:
+        print(f"{ref}: list numId={loc.list.num_id} level={loc.list.ilvl}")
 ```
 
 #### `get_visible_text()`

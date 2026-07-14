@@ -359,12 +359,18 @@ class Document:
 
         Tells the caller whether a paragraph lives in the document body or
         inside a table cell, and — when in a table — gives its 1-based
-        coordinates (table index, row, logical column, depth).
+        coordinates (table index, row, logical column, depth). Also reports
+        list membership: ``location.list`` is a ``ListItem(num_id, ilvl)``
+        when the paragraph carries a direct ``w:pPr/w:numPr``, else ``None``.
 
         ``location.table.col`` is the *logical-grid* column, accounting for
         ``w:gridSpan`` of preceding cells in the same row. A cell that
         visually sits in column 4 reports ``col=4`` even when an earlier
         cell in the row spans 2 grid columns.
+
+        ``location.list`` holds raw values only: numbering inherited via a
+        paragraph style (``w:pStyle``) is not resolved, and rendered display
+        numbers (e.g. "7.2(a)") are not computed.
 
         Args:
             ref: Paragraph reference from :meth:`list_paragraphs` (e.g.,
@@ -374,6 +380,8 @@ class Document:
             :class:`ParagraphLocation`. ``location.in_table`` is ``False``
             for body paragraphs; ``True`` when the paragraph is inside a
             ``<w:tc>`` cell (in which case ``location.table`` is populated).
+            ``location.list`` is a :class:`ListItem` for list paragraphs,
+            ``None`` otherwise.
 
         Raises:
             ValueError: If ``ref`` has an invalid format.
@@ -389,6 +397,8 @@ class Document:
                 if loc.in_table:
                     cell = loc.table
                     print(f"{ref}: table {cell.index} r{cell.row} c{cell.col}")
+                if loc.list:
+                    print(f"{ref}: list numId={loc.list.num_id} level={loc.list.ilvl}")
         """
         self._ensure_open()
         parsed = ParagraphRef.parse(ref)
@@ -419,12 +429,17 @@ class Document:
             List of ``(ref, ParagraphLocation)`` tuples in document order.
             ``location.in_table`` is ``False`` for body paragraphs; ``True``
             when the paragraph is inside a ``<w:tc>`` cell.
+            ``location.list`` is a :class:`ListItem` for paragraphs with a
+            direct ``w:pPr/w:numPr``, ``None`` otherwise (raw values; no
+            style-inherited numbering, no rendered display numbers).
 
         Example:
             for ref, loc in doc.list_paragraph_locations():
                 if loc.in_table:
                     cell = loc.table
                     print(f"{ref}: table {cell.index} r{cell.row} c{cell.col}")
+                if loc.list:
+                    print(f"{ref}: list numId={loc.list.num_id} level={loc.list.ilvl}")
         """
         self._ensure_open()
         dom = self._document_editor.dom

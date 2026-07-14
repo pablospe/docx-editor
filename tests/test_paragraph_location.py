@@ -7,6 +7,8 @@ Covers:
     ``<w:tc>`` count
   * nested tables increment ``depth`` and produce a depth-first doc-wide
     table ``index``
+  * list paragraphs report ``ListItem(num_id, ilvl)`` from their direct
+    ``w:pPr/w:numPr``; non-list paragraphs report ``list=None``
   * stale refs raise ``HashMismatchError``; out-of-range refs raise
     ``ParagraphIndexError``
 
@@ -23,6 +25,7 @@ from conftest import replace_document_xml
 from docx_editor import (
     Document,
     HashMismatchError,
+    ListItem,
     ParagraphIndexError,
     ParagraphLocation,
     TableCell,
@@ -97,6 +100,50 @@ def gridspan_docx(simple_docx, tmp_path) -> Path:
     """A .docx whose body contains a gridSpan row and a nested table."""
     dest = tmp_path / "gridspan.docx"
     replace_document_xml(simple_docx, dest, _build_document_xml())
+    return dest
+
+
+def _num_pr(num_id: str, ilvl: str | None) -> str:
+    """``<w:pPr><w:numPr>...`` block with the given numId and optional ilvl."""
+    ilvl_xml = f'<w:ilvl w:val="{ilvl}"/>' if ilvl is not None else ""
+    return f'<w:pPr><w:numPr>{ilvl_xml}<w:numId w:val="{num_id}"/></w:numPr></w:pPr>'
+
+
+def _build_numbered_document_xml() -> str:
+    """Hand-written ``word/document.xml`` with numbered paragraphs.
+
+    Layout (unique text snippets for ``_ref_for_text``):
+
+      "Plain paragraph"    body, no numPr                  → list=None
+      "Numbered top"       numId=5, ilvl=0                 → ListItem(5, 0)
+      "Numbered nested"    numId=5, ilvl=1                 → ListItem(5, 1)
+      "Numbered deeper"    numId=5, ilvl=2                 → ListItem(5, 2)
+      "Numbered no ilvl"   numId=5, no <w:ilvl>            → ListItem(5, 0)
+      "Cell numbered"      table cell + numId=7, ilvl=0    → table AND list
+    """
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:document {_W_NS}>"
+        "<w:body>"
+        "<w:p><w:r><w:t>Plain paragraph</w:t></w:r></w:p>"
+        f"<w:p>{_num_pr('5', '0')}<w:r><w:t>Numbered top</w:t></w:r></w:p>"
+        f"<w:p>{_num_pr('5', '1')}<w:r><w:t>Numbered nested</w:t></w:r></w:p>"
+        f"<w:p>{_num_pr('5', '2')}<w:r><w:t>Numbered deeper</w:t></w:r></w:p>"
+        f"<w:p>{_num_pr('5', None)}<w:r><w:t>Numbered no ilvl</w:t></w:r></w:p>"
+        # --- a one-cell table whose paragraph is itself numbered ---
+        "<w:tbl><w:tr><w:tc>"
+        f"<w:p>{_num_pr('7', '0')}<w:r><w:t>Cell numbered</w:t></w:r></w:p>"
+        "</w:tc></w:tr></w:tbl>"
+        "</w:body>"
+        "</w:document>"
+    )
+
+
+@pytest.fixture
+def numbered_docx(simple_docx, tmp_path) -> Path:
+    """A .docx with numbered paragraphs at several levels, incl. one in a table."""
+    dest = tmp_path / "numbered.docx"
+    replace_document_xml(simple_docx, dest, _build_numbered_document_xml())
     return dest
 
 
@@ -587,3 +634,130 @@ class TestListParagraphLocations:
             assert entries  # simple.docx has at least one paragraph
             assert all(loc.table is None for _, loc in entries)
             assert all(loc.in_table is False for _, loc in entries)
+
+
+class TestParagraphLocationList:
+    """``location.list`` reports the raw ``w:pPr/w:numPr`` of the paragraph."""
+
+    def test_numbered_paragraph_reports_list_item(self, numbered_docx):
+        with Document.open(numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Numbered top"))
+            assert loc.list == ListItem(num_id=5, ilvl=0)
+
+    def test_returns_list_item_dataclass(self, numbered_docx):
+        """API contract: ``loc.list`` is a ``ListItem``, not a tuple or dict."""
+        with Document.open(numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Numbered top"))
+            assert isinstance(loc.list, ListItem)
+
+    def test_plain_paragraph_reports_none(self, numbered_docx):
+        with Document.open(numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Plain paragraph"))
+            assert loc.list is None
+
+    def test_nested_levels_report_ilvl(self, numbered_docx):
+        with Document.open(numbered_docx) as doc:
+            loc_1 = doc.get_paragraph_location(_ref_for_text(doc, "Numbered nested"))
+            loc_2 = doc.get_paragraph_location(_ref_for_text(doc, "Numbered deeper"))
+            assert loc_1.list == ListItem(num_id=5, ilvl=1)
+            assert loc_2.list == ListItem(num_id=5, ilvl=2)
+
+    def test_missing_ilvl_defaults_to_zero(self, numbered_docx):
+        """``<w:numPr>`` without ``<w:ilvl>`` → level 0 (spec default)."""
+        with Document.open(numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Numbered no ilvl"))
+            assert loc.list == ListItem(num_id=5, ilvl=0)
+
+
+class TestParagraphLocationListInTable:
+    """Table membership and list membership are independent axes."""
+
+    def test_cell_paragraph_reports_both(self, numbered_docx):
+        with Document.open(numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Cell numbered"))
+            assert loc.in_table is True
+            assert loc.table == TableCell(index=1, row=1, col=1, depth=1)
+            assert loc.list == ListItem(num_id=7, ilvl=0)
+
+
+class TestParagraphLocationListMalformed:
+    """Defensive paths in ``_extract_list_item`` — malformed or spec-edge
+    ``w:numPr`` blocks must degrade to ``None`` (or ilvl=0), never raise.
+    """
+
+    @staticmethod
+    def _doc_with_p_pr(p_pr_xml: str) -> str:
+        """Single paragraph carrying ``p_pr_xml`` (the ``<w:pPr>`` block under test)."""
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f"<w:document {_W_NS}>"
+            "<w:body>"
+            f"<w:p>{p_pr_xml}<w:r><w:t>Target</w:t></w:r></w:p>"
+            "</w:body>"
+            "</w:document>"
+        )
+
+    @staticmethod
+    def _open(simple_docx: Path, tmp_path: Path, body_xml: str) -> Document:
+        dest = tmp_path / "list-malformed.docx"
+        replace_document_xml(simple_docx, dest, body_xml)
+        return Document.open(dest)
+
+    def test_num_pr_without_num_id_reports_none(self, simple_docx, tmp_path):
+        body = self._doc_with_p_pr('<w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>')
+        with self._open(simple_docx, tmp_path, body) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
+            assert loc.list is None
+
+    def test_num_id_zero_reports_none(self, simple_docx, tmp_path):
+        """``numId=0`` is the spec's "numbering disabled" marker, not a list."""
+        body = self._doc_with_p_pr(_num_pr("0", "0"))
+        with self._open(simple_docx, tmp_path, body) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
+            assert loc.list is None
+
+    def test_non_integer_num_id_reports_none(self, simple_docx, tmp_path):
+        body = self._doc_with_p_pr(_num_pr("abc", "0"))
+        with self._open(simple_docx, tmp_path, body) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
+            assert loc.list is None
+
+    def test_num_id_without_val_reports_none(self, simple_docx, tmp_path):
+        body = self._doc_with_p_pr("<w:pPr><w:numPr><w:numId/></w:numPr></w:pPr>")
+        with self._open(simple_docx, tmp_path, body) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
+            assert loc.list is None
+
+    def test_non_integer_ilvl_falls_back_to_zero(self, simple_docx, tmp_path):
+        """Malformed ``w:ilvl`` doesn't discard the (valid) numId — level 0."""
+        body = self._doc_with_p_pr(_num_pr("5", "abc"))
+        with self._open(simple_docx, tmp_path, body) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
+            assert loc.list == ListItem(num_id=5, ilvl=0)
+
+    def test_stale_num_pr_inside_p_pr_change_is_ignored(self, simple_docx, tmp_path):
+        """``w:pPrChange`` nests a *former* ``w:pPr`` (revision record); a
+        ``w:numPr`` found only there must not be reported — direct-child
+        walk regression guard against descendant search.
+        """
+        body = self._doc_with_p_pr(
+            "<w:pPr>"
+            '<w:pPrChange w:id="1" w:author="A" w:date="2026-01-01T00:00:00Z">'
+            '<w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="9"/></w:numPr></w:pPr>'
+            "</w:pPrChange>"
+            "</w:pPr>"
+        )
+        with self._open(simple_docx, tmp_path, body) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Target"))
+            assert loc.list is None
+
+
+class TestListParagraphLocationsListInfo:
+    """Batch accessor carries the same list info as the per-call accessor."""
+
+    def test_equivalence_with_per_call_accessor(self, numbered_docx):
+        with Document.open(numbered_docx) as doc:
+            entries = doc.list_paragraph_locations()
+            for ref, loc in entries:
+                assert loc == doc.get_paragraph_location(ref)
+            assert any(loc.list is not None for _, loc in entries)
