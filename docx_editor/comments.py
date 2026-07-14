@@ -78,8 +78,10 @@ class CommentManager:
             initials: Author initials for new comments
             on_write: Optional write-ahead callback (e.g.
                 Workspace.mark_dirty) invoked before any comment-file write
-                touches the workspace on disk — both editor flushes and
-                template copies
+                touches the workspace on disk. Broader than XMLEditor's
+                ``on_save`` (which it is wired into for editor flushes) —
+                hence the different name — because it also covers non-editor
+                writes like template copies
         """
         self.workspace_path = workspace_path
         self.word_path = workspace_path / "word"

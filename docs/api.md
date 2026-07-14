@@ -687,9 +687,7 @@ from docx_editor.exceptions import WorkspaceSyncError
 
 ### `WorkspaceLockedError`
 
-Raised when opening a document whose workspace is locked by a live session — another process (or another `Document` object in the same process) already has it open. Two sessions sharing one workspace would silently overwrite each other's saves. Close the other session, or pass `force_recreate=True` to take the workspace over and discard its unsaved edits. Locks left behind by dead processes are reclaimed automatically and never raise.
-
-Attributes: `pid` (the PID recorded in the lock file, or `None` if unreadable) and `lock_path` (the lock file that blocked the open).
+Raised when opening a document whose workspace is locked by a live session — another process (or another `Document` object in the same process) already has it open. Two sessions sharing one workspace would silently overwrite each other's saves. Close the other session, or pass `force_recreate=True` to take the workspace over and discard its unsaved edits. Locks left behind by dead processes are reclaimed automatically and never raise. The exception carries `pid` and `lock_path` attributes.
 
 ```python
 from docx_editor.exceptions import WorkspaceLockedError

@@ -11,6 +11,7 @@ import getpass
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -27,6 +28,11 @@ from .exceptions import (
     WorkspaceSyncError,
 )
 from .ooxml import pack_document, unpack_document
+
+# One retry after reclaiming a stale lock; losing the O_EXCL race twice means a
+# live competitor, not another stale file (same pattern as _TEMP_NAME_ATTEMPTS
+# in ooxml/pack.py).
+_LOCK_ACQUIRE_ATTEMPTS = 2
 
 
 def _cache_root_from_env(name: str) -> Path | None:
@@ -132,12 +138,20 @@ def _pid_alive(pid: int) -> bool:
         STILL_ACTIVE = 259
         ERROR_ACCESS_DENIED = 5
 
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        # Explicit signatures: ctypes defaults every restype to c_int, which
+        # truncates a pointer-sized HANDLE on 64-bit Windows.
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+        kernel32.CloseHandle.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
         handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
             # Access denied: the process exists but belongs to someone else.
             # Any other failure (e.g. invalid parameter): no such process.
-            return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+            return ctypes.get_last_error() == ERROR_ACCESS_DENIED  # type: ignore[attr-defined]
         try:
             exit_code = ctypes.c_ulong()
             if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
@@ -206,12 +220,14 @@ class Workspace:
         Raises:
             DocumentNotFoundError: If the source document doesn't exist
             InvalidDocumentError: If the file is not a .docx file
+            WorkspaceLockedError: If a live session already holds this
+                document's workspace (see _acquire_lock). Checked first: a
+                live holder masks the sync/exists errors below until it
+                closes.
             WorkspaceExistsError: If workspace exists and create=True
             WorkspaceSyncError: If create=True and an existing workspace holds
                 unsaved changes from a previous session, or the source document
                 changed on disk since the workspace was created
-            WorkspaceLockedError: If a live session already holds this
-                document's workspace (see _acquire_lock)
         """
         # Keep the name the caller actually opened. If they opened a symlink, that is
         # the name Word was told to open — and therefore the name its ~$ owner file
@@ -245,6 +261,10 @@ class Workspace:
         # the dirty/staleness checks means a live holder masks those errors —
         # the correct priority: it is actively using the workspace.
         self._lock_path = self.workspace_path.with_name(self.workspace_path.name + ".lock")
+        # pid + random token: the pid feeds the liveness probe; the token
+        # identifies this specific instance so release stays ownership-aware
+        # even when a force_recreate takeover happens within one process.
+        self._lock_token = f"{os.getpid()}:{secrets.token_hex(8)}"
         self._lock_acquired = False
         try:
             # The shared cache base must exist to hold the sidecar (same mkdir
@@ -328,34 +348,58 @@ class Workspace:
                 f"Delete it or use force_recreate=True."
             )
 
-    def _read_lock_pid(self) -> int | None:
-        """PID recorded in the lock file, or None if absent/unreadable/corrupt."""
+    def _read_lock_content(self) -> str | None:
+        """Raw lock-file content, or None if the file is absent or unreadable."""
         try:
-            return int(self._lock_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            return self._lock_path.read_text(encoding="utf-8")
+        except OSError:
             return None
 
-    def _acquire_lock(self) -> None:
-        """Create the sidecar lock file holding this process's PID, exclusively.
+    @staticmethod
+    def _parse_lock_pid(content: str | None) -> int | None:
+        """PID from ``<pid>:<token>`` lock content (bare ``<pid>`` also parses).
 
-        A lock whose recorded process is still alive raises
-        WorkspaceLockedError; a dead or unreadable one is stale and reclaimed.
-        This is advisory protection against *accidental* concurrent opens, not
-        a hardened mutex: between probing a dead holder and unlinking its
-        stale file, another process may have reclaimed the lock, and the
-        unlink then removes that fresh lock. The O_EXCL retry bound means the
-        loser of that microsecond race errors out rather than proceeding, so
-        two sessions never both hold the lock.
+        Non-positive values count as corrupt: probing them would be dangerous
+        (``os.waitpid(-1)`` reaps an arbitrary child; ``os.kill(0/-N, 0)``
+        signals whole process groups), so they read as "no holder" and the
+        lock is reclaimed.
+        """
+        if content is None:
+            return None
+        try:
+            pid = int(content.split(":", 1)[0])
+        except ValueError:
+            return None
+        return pid if pid > 0 else None
+
+    def _read_lock_pid(self) -> int | None:
+        """PID recorded in the lock file, or None if absent/unreadable/corrupt."""
+        return self._parse_lock_pid(self._read_lock_content())
+
+    def _acquire_lock(self) -> None:
+        """Create the sidecar lock file naming this session, exclusively.
+
+        The file holds ``<pid>:<random token>``: the pid drives the liveness
+        probe, the token makes release ownership-aware (see _release_lock).
+        A lock naming a live process raises WorkspaceLockedError; a dead or
+        unreadable one is stale and reclaimed. This is advisory protection
+        against *accidental* concurrent opens, not a hardened mutex: the
+        lock's content is re-checked right before a stale file is unlinked,
+        which narrows — but cannot close — the window in which a racing
+        process's fresh lock is removed instead. A lost race degrades to the
+        pre-lock behavior (two sessions sharing a workspace); it cannot
+        corrupt data beyond that.
 
         Raises:
-            WorkspaceLockedError: A live process holds the lock, or two
+            WorkspaceLockedError: A live process holds the lock, or the
                 reclaim attempts lost the creation race.
         """
-        for _ in range(2):
+        for _ in range(_LOCK_ACQUIRE_ATTEMPTS):
             try:
                 fd = os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             except FileExistsError:
-                holder = self._read_lock_pid()
+                stale_content = self._read_lock_content()
+                holder = self._parse_lock_pid(stale_content)
                 if holder is not None and _pid_alive(holder):
                     if holder == os.getpid():
                         hint = "this process already has the document open — close() the other Document/Workspace first"
@@ -371,11 +415,14 @@ class Workspace:
                         pid=holder,
                         lock_path=self._lock_path,
                     ) from None
-                # Dead process or unreadable content: stale — reclaim and retry.
-                self._lock_path.unlink(missing_ok=True)
+                # Dead process or unreadable content: stale — reclaim and
+                # retry, unless another process already replaced the lock
+                # since it was read (see docstring: narrowed, not airtight).
+                if self._read_lock_content() == stale_content:
+                    self._lock_path.unlink(missing_ok=True)
                 continue
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(str(os.getpid()))
+                f.write(self._lock_token)
             self._lock_acquired = True
             return
 
@@ -390,15 +437,21 @@ class Workspace:
         )
 
     def _release_lock(self) -> None:
-        """Remove the sidecar lock file if this instance acquired it.
+        """Remove the sidecar lock file if this instance still owns it.
 
-        Independent of workspace cleanup: close(cleanup=False) keeps the
-        workspace but must still free it for the next session. No __del__
-        counterpart — a killed process leaves the file behind by design, and
-        the staleness probe in _acquire_lock reclaims it.
+        Ownership is verified by token, not just the _lock_acquired flag:
+        after a force_recreate takeover (Workspace.delete removes even a live
+        session's lock), the superseded session's close() must not unlink the
+        new session's lock — and the pid alone cannot tell them apart when
+        both live in one process. Release is independent of workspace cleanup:
+        close(cleanup=False) keeps the workspace but must still free it for
+        the next session. No __del__ counterpart — a killed process leaves the
+        file behind by design; the staleness probe in _acquire_lock reclaims
+        it.
         """
         if self._lock_acquired:
-            self._lock_path.unlink(missing_ok=True)
+            if self._read_lock_content() == self._lock_token:
+                self._lock_path.unlink(missing_ok=True)
             self._lock_acquired = False
 
     @classmethod
@@ -717,11 +770,13 @@ class Workspace:
         # shared (and may be a caller-supplied one via workspace_dir=/
         # DOCX_EDITOR_WORKSPACE_DIR), so it is left alone even when empty —
         # _create_workspace() recreates it on demand.
-        if cleanup and self.workspace_path.exists():
-            shutil.rmtree(self.workspace_path)
-        # Released in both cleanup modes: a kept workspace must still be
-        # adoptable by the next session.
-        self._release_lock()
+        try:
+            if cleanup and self.workspace_path.exists():
+                shutil.rmtree(self.workspace_path)
+        finally:
+            # Released in both cleanup modes, and even if rmtree fails: a
+            # kept (or half-removed) workspace must still be adoptable.
+            self._release_lock()
 
     def get_xml_path(self, relative_path: str) -> Path:
         """Get the full path to an XML file in the workspace.

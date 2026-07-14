@@ -869,6 +869,11 @@ class TestWorkspaceLock:
     def _lock_path(self, ws):
         return ws.workspace_path.with_name(ws.workspace_path.name + ".lock")
 
+    @staticmethod
+    def _lock_pid(lock):
+        """PID part of the "<pid>:<token>" lock content."""
+        return lock.read_text().split(":", 1)[0]
+
     def test_second_open_in_same_process_is_refused(self, temp_docx):
         ws = Workspace(temp_docx, author="Test")
         try:
@@ -882,7 +887,7 @@ class TestWorkspaceLock:
     def test_lock_holds_pid_and_close_releases_it(self, temp_docx):
         ws = Workspace(temp_docx, author="Test")
         lock = self._lock_path(ws)
-        assert lock.read_text() == str(os.getpid())
+        assert self._lock_pid(lock) == str(os.getpid())
 
         ws.close(cleanup=False)  # workspace kept — the lock must still go
         assert not lock.exists()
@@ -939,18 +944,21 @@ class TestWorkspaceLock:
 
         ws2 = Workspace(temp_docx, author="Test")  # reclaims silently
         try:
-            assert self._lock_path(ws2).read_text() == str(os.getpid())
+            assert self._lock_pid(self._lock_path(ws2)) == str(os.getpid())
         finally:
             ws2.close()
 
-    def test_corrupt_lock_content_is_reclaimed(self, temp_docx):
+    @pytest.mark.parametrize("content", ["not-a-pid", "0", "-1"])
+    def test_corrupt_lock_content_is_reclaimed(self, temp_docx, content):
+        """Unparseable and non-positive pids are corrupt, not holders — probing
+        them would be dangerous (waitpid(-1) reaps an arbitrary child)."""
         ws = Workspace(temp_docx, author="Test")
         ws.close(cleanup=False)
-        self._lock_path(ws).write_text("not-a-pid")
+        self._lock_path(ws).write_text(content)
 
         ws2 = Workspace(temp_docx, author="Test")
         try:
-            assert self._lock_path(ws2).read_text() == str(os.getpid())
+            assert self._lock_pid(self._lock_path(ws2)) == str(os.getpid())
         finally:
             ws2.close()
 
@@ -970,6 +978,7 @@ class TestWorkspaceLock:
             text=True,
         )
         try:
+            assert proc.stdout is not None  # stdout=PIPE guarantees it
             assert proc.stdout.readline().strip() == "READY"
             with pytest.raises(WorkspaceLockedError) as exc_info:
                 Workspace(temp_docx, author="Parent")
@@ -989,9 +998,39 @@ class TestWorkspaceLock:
 
         doc = Document.open(temp_docx, author="Test", force_recreate=True)
         try:
-            assert lock.read_text() == str(os.getpid())
+            assert self._lock_pid(lock) == str(os.getpid())
         finally:
             doc.close()
+
+    def test_superseded_session_close_keeps_new_lock(self, temp_docx):
+        """After a force_recreate takeover, the superseded session's close()
+        must not release the new session's lock (release is token-aware)."""
+        ws_old = Workspace(temp_docx, author="Test")
+        doc_new = Document.open(temp_docx, author="Test", force_recreate=True)
+        try:
+            ws_old.close(cleanup=False)  # superseded; must not unlink
+
+            lock = self._lock_path(ws_old)
+            assert lock.exists()
+            with pytest.raises(WorkspaceLockedError):  # new session still holds
+                Workspace(temp_docx, author="Test")
+        finally:
+            doc_new.close()
+
+    def test_close_releases_lock_even_if_cleanup_fails(self, temp_docx, monkeypatch):
+        ws = Workspace(temp_docx, author="Test")
+        lock = self._lock_path(ws)
+
+        def boom(path):
+            raise OSError("simulated rmtree failure")
+
+        monkeypatch.setattr("docx_editor.workspace.shutil.rmtree", boom)
+        with pytest.raises(OSError, match="simulated"):
+            ws.close()
+        monkeypatch.undo()
+
+        assert not lock.exists()
+        Workspace.delete(temp_docx)
 
     def test_delete_removes_lock_sidecar(self, temp_docx):
         ws = Workspace(temp_docx, author="Test")
