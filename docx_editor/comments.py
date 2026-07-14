@@ -21,12 +21,15 @@ from .xml_editor import (
     DocxXMLEditor,
     ParagraphRef,
     TextMapMatch,
+    _escape_xml,
     _generate_hex_id,
     build_text_map,
     compute_paragraph_hash,
     find_in_text_map,
+    get_rPr_xml,
     get_text_node_data,
     rebuild_run_fragments,
+    render_plain_wt,
 )
 
 # Path to template files
@@ -309,7 +312,7 @@ class CommentManager:
         markers is preserved, and so ``w:t`` nodes nested inside a drawing's
         text box are left untouched.
         """
-        rPr_xml = _get_rPr_xml(run)
+        rPr_xml = get_rPr_xml(run)
 
         def render_wt(wt) -> list[str]:
             wt_text = get_text_node_data(wt)
@@ -318,8 +321,7 @@ class CommentManager:
             parts: list[str] = []
 
             if not is_start_here and not is_end_here:
-                if wt_text:
-                    parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>")
+                parts.extend(render_plain_wt(wt, rPr_xml))
             elif is_start_here and is_end_here:
                 before = wt_text[:start_offset]
                 matched = wt_text[start_offset : end_offset + 1]
@@ -725,27 +727,3 @@ def _find_ancestor_run(node) -> Element | None:
             return parent
         parent = parent.parentNode
     return None
-
-
-def _get_rPr_xml(run) -> str:
-    """Serialize ``run``'s direct ``w:rPr`` child, or empty string.
-
-    Iterates direct children so a nested ``w:rPr`` deep inside a ``w:drawing``
-    text-box descendant is not picked up by mistake.
-    """
-    for child in run.childNodes:
-        if child.nodeType == child.ELEMENT_NODE and getattr(child, "tagName", "") == "w:rPr":
-            return child.toxml()
-    return ""
-
-
-def _escape_xml(text: str) -> str:
-    """Escape text for safe XML inclusion."""
-    return (
-        text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
-    )

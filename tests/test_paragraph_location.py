@@ -1126,6 +1126,11 @@ class TestStyleNumberingChain:
         '<w:style w:type="character" w:styleId="CharNum">'
         '<w:pPr><w:numPr><w:numId w:val="5"/></w:numPr></w:pPr>'
         "</w:style>"
+        # No w:type attribute — defaults to paragraph (ECMA-376), so its
+        # numbering must still contribute.
+        '<w:style w:styleId="TypelessNum">'
+        '<w:pPr><w:numPr><w:numId w:val="5"/></w:numPr></w:pPr>'
+        "</w:style>"
         "</w:styles>"
     )
 
@@ -1148,6 +1153,7 @@ class TestStyleNumberingChain:
         f"<w:p>{_p_style('DisabledNum')}<w:r><w:t>Disabled style</w:t></w:r></w:p>"
         f"<w:p>{_p_style('CycleA')}<w:r><w:t>Cycle styled</w:t></w:r></w:p>"
         f"<w:p>{_p_style('CharNum')}<w:r><w:t>Char styled</w:t></w:r></w:p>"
+        f"<w:p>{_p_style('TypelessNum')}<w:r><w:t>Typeless number</w:t></w:r></w:p>"
         "<w:p><w:r><w:t>Plain paragraph</w:t></w:r></w:p>"
         "</w:body>"
         "</w:document>"
@@ -1223,6 +1229,13 @@ class TestStyleNumberingChain:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Char styled"))
             assert loc.list is None
 
+    def test_typeless_style_contributes_numbering(self, style_numbered_docx):
+        """A ``w:style`` without ``w:type`` defaults to *paragraph*
+        (ECMA-376), so its numbering must resolve."""
+        with Document.open(style_numbered_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Typeless number"))
+            assert loc.list == ListItem(num_id=5, ilvl=0)
+
     def test_plain_paragraph_reports_none(self, style_numbered_docx):
         with Document.open(style_numbered_docx) as doc:
             loc = doc.get_paragraph_location(_ref_for_text(doc, "Plain paragraph"))
@@ -1234,6 +1247,46 @@ class TestStyleNumberingChain:
             for ref, loc in entries:
                 assert loc == doc.get_paragraph_location(ref)
             assert any(loc.list is not None for _, loc in entries)
+
+
+class TestStyleMissingTypeDefaultsToParagraph:
+    """A ``w:style`` without ``w:type`` defaults to *paragraph* (ECMA-376)."""
+
+    _STYLES_XML = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:styles {_W_NS}>"
+        # No w:type attribute — must still contribute its outline level.
+        '<w:style w:styleId="TypelessHead">'
+        '<w:name w:val="Typeless Head"/>'
+        '<w:pPr><w:outlineLvl w:val="2"/></w:pPr>'
+        "</w:style>"
+        "</w:styles>"
+    )
+
+    _DOCUMENT_XML = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:document {_W_NS}>"
+        "<w:body>"
+        f"<w:p>{_p_style('TypelessHead')}<w:r><w:t>Typeless heading</w:t></w:r></w:p>"
+        "</w:body>"
+        "</w:document>"
+    )
+
+    @pytest.fixture
+    def typeless_docx(self, simple_docx, tmp_path) -> Path:
+        dest = tmp_path / "typeless-style.docx"
+        replace_docx_parts(
+            simple_docx,
+            dest,
+            {"word/document.xml": self._DOCUMENT_XML, "word/styles.xml": self._STYLES_XML},
+        )
+        return dest
+
+    def test_typeless_style_resolves_outline_level(self, typeless_docx):
+        with Document.open(typeless_docx) as doc:
+            loc = doc.get_paragraph_location(_ref_for_text(doc, "Typeless heading"))
+            assert loc.style == "TypelessHead"
+            assert loc.outline_level == 2
 
 
 class TestMissingStylesPart:
