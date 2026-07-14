@@ -1047,6 +1047,62 @@ class TestWorkspaceLock:
         proc.wait()  # reaped by wait(): dead even as our own child
         assert _pid_alive(proc.pid) is False
 
+    @pytest.mark.skipif(not Path("/proc").exists(), reason="needs /proc to observe zombie state")
+    def test_zombie_child_reads_alive_unless_reaping(self):
+        """Without reap=True the probe must not waitpid an arbitrary pid — that
+        would steal the exit status of another component's child. The zombie
+        conservatively reads as alive; only the owning caller reaps."""
+        import time
+
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                state = Path(f"/proc/{proc.pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+                if state == "Z":
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail("child never became a zombie")
+
+            assert _pid_alive(proc.pid) is True  # unreaped: conservative
+            assert _pid_alive(proc.pid, reap=True) is False  # owner may reap
+        finally:
+            proc.wait()  # no-op if the reap above already collected it
+
+    def test_dropped_session_lock_is_freed_on_gc(self, temp_docx):
+        """A session dropped without close() must not lock its own process out
+        of the document forever — the lock names a live pid, so the staleness
+        probe would never reclaim it. The GC finalizer releases it."""
+        import gc
+
+        doc = Document.open(temp_docx, author="Test")
+        doc.save()  # workspace clean, so the reopen below adopts
+        del doc  # dropped without close()
+        gc.collect()  # refcounting already freed it on CPython; be explicit
+
+        doc2 = Document.open(temp_docx, author="Test")  # must not raise
+        doc2.close()
+
+    def test_dropped_dirty_session_is_rescuable_in_process(self, temp_docx, temp_dir):
+        """The rescue path documented by WorkspaceSyncError must work in the
+        same process after the dirty session is dropped without close()."""
+        import gc
+
+        doc = Document.open(temp_docx, author="Test")
+        doc.add_comment("fox", "unsaved edit")  # marks the workspace dirty
+        del doc
+        gc.collect()
+
+        # The dirty refusal (not a lock error) is what the user must see...
+        with pytest.raises(WorkspaceSyncError, match="unsaved changes"):
+            Document.open(temp_docx, author="Test")
+        # ...and its advertised rescue hatch must actually work.
+        rescue = Workspace(temp_docx, create=False)
+        out = rescue.save(destination=temp_dir / "rescued.docx")
+        assert out.exists()
+        rescue.close()
+
 
 class TestAtomicMetaSave:
     """_save_meta() must never leave a truncated meta.json (issue #22)."""

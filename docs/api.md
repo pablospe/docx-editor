@@ -555,7 +555,7 @@ doc.save("contract_v2.docx")  # Save to new path
 
 #### `close(cleanup=True)`
 
-Close the document and clean up workspace.
+Close the document and clean up workspace. Releases the advisory workspace lock in both cleanup modes — closing is what frees the document for another session to open (see [`WorkspaceLockedError`](#workspacelockederror)).
 
 **Parameters:**
 

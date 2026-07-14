@@ -901,6 +901,9 @@ class Document:
     def close(self, cleanup: bool = True) -> None:
         """Close the document and clean up workspace.
 
+        Releases the advisory workspace lock in both cleanup modes — closing
+        is what frees the document for another session to open.
+
         Args:
             cleanup: If True, delete the workspace folder
 

@@ -14,6 +14,7 @@ import os
 import secrets
 import shutil
 import sys
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -114,7 +115,7 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _pid_alive(pid: int) -> bool:
+def _pid_alive(pid: int, *, reap: bool = False) -> bool:
     """True if the process is still running.
 
     Decides whether a workspace lock (or a session pid file — see session.py)
@@ -127,9 +128,14 @@ def _pid_alive(pid: int) -> bool:
     the CTRL events calls TerminateProcess and would kill the process being
     checked — so the process is queried via the win32 API instead.
 
-    On POSIX, reaps first: when the pid is this process's own child (e.g. a
-    session kernel it spawned), an exited child lingers as a zombie and
-    ``os.kill(pid, 0)`` keeps succeeding on it forever.
+    Args:
+        pid: Process ID to probe.
+        reap: On POSIX, reap the pid first if it is this process's own exited
+            child — otherwise a zombie keeps ``os.kill(pid, 0)`` succeeding
+            forever. Only pass True when the caller owns that child (as
+            session.py does for its kernel): ``os.waitpid`` on an arbitrary
+            pid would steal the exit status of another component's child.
+            Without reaping, a zombie child conservatively reads as alive.
     """
     if os.name == "nt":  # pragma: no cover - CI is POSIX
         import ctypes
@@ -160,11 +166,12 @@ def _pid_alive(pid: int) -> bool:
         finally:
             kernel32.CloseHandle(handle)
 
-    try:
-        if os.waitpid(pid, os.WNOHANG)[0] == pid:
-            return False
-    except (ChildProcessError, OSError):
-        pass  # Not our child — normal for a pid from another process.
+    if reap:
+        try:
+            if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                return False
+        except (ChildProcessError, OSError):
+            pass  # Not our child — normal for a pid from another process.
 
     try:
         os.kill(pid, 0)
@@ -173,6 +180,22 @@ def _pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _release_lock_file(lock_path: Path, token: str) -> None:
+    """Unlink ``lock_path`` if it still holds ``token`` (ownership-aware).
+
+    Module-level so weakref.finalize can call it without keeping the
+    Workspace alive: a session dropped without close() frees its own lock at
+    garbage collection (or interpreter exit) instead of locking its process
+    out of the document until restart. A SIGKILLed process still leaves the
+    file behind; the liveness probe in _acquire_lock reclaims that case.
+    """
+    try:
+        if lock_path.read_text(encoding="utf-8") == token:
+            lock_path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 class Workspace:
@@ -266,6 +289,7 @@ class Workspace:
         # even when a force_recreate takeover happens within one process.
         self._lock_token = f"{os.getpid()}:{secrets.token_hex(8)}"
         self._lock_acquired = False
+        self._lock_finalizer: weakref.finalize | None = None
         try:
             # The shared cache base must exist to hold the sidecar (same mkdir
             # _create_workspace performs; owner-only, see there).
@@ -421,9 +445,21 @@ class Workspace:
                 if self._read_lock_content() == stale_content:
                     self._lock_path.unlink(missing_ok=True)
                 continue
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(self._lock_token)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(self._lock_token)
+            except OSError:
+                # The O_EXCL create succeeded but the token write failed
+                # (e.g. disk full): remove the empty file rather than orphan
+                # a lock that belongs to nobody.
+                self._lock_path.unlink(missing_ok=True)
+                raise
             self._lock_acquired = True
+            # Safety net for sessions dropped without close(): release the
+            # lock at garbage collection, or this process could never reopen
+            # (nor rescue) the document — the lock names its own live pid, so
+            # the staleness probe would never reclaim it.
+            self._lock_finalizer = weakref.finalize(self, _release_lock_file, self._lock_path, self._lock_token)
             return
 
         # Both attempts found a fresh lock after reclaiming a stale one:
@@ -445,13 +481,16 @@ class Workspace:
         new session's lock — and the pid alone cannot tell them apart when
         both live in one process. Release is independent of workspace cleanup:
         close(cleanup=False) keeps the workspace but must still free it for
-        the next session. No __del__ counterpart — a killed process leaves the
-        file behind by design; the staleness probe in _acquire_lock reclaims
-        it.
+        the next session. A session dropped without close() is covered by the
+        weakref finalizer registered at acquire time; a killed process leaves
+        the file behind by design, and the staleness probe in _acquire_lock
+        reclaims it.
         """
         if self._lock_acquired:
-            if self._read_lock_content() == self._lock_token:
-                self._lock_path.unlink(missing_ok=True)
+            if self._lock_finalizer is not None:
+                self._lock_finalizer()  # ownership-checked unlink; runs once
+            else:  # pragma: no cover - acquire always registers the finalizer
+                _release_lock_file(self._lock_path, self._lock_token)
             self._lock_acquired = False
 
     @classmethod
@@ -761,7 +800,10 @@ class Workspace:
         return output_path.resolve() == self.source_path
 
     def close(self, cleanup: bool = True) -> None:
-        """Close the workspace.
+        """Close the workspace and release its advisory lock.
+
+        The lock is released in both cleanup modes — closing is what frees
+        the document for the next session (see WorkspaceLockedError).
 
         Args:
             cleanup: If True, delete the workspace folder

@@ -219,11 +219,13 @@ def stop_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: float
     pid = _read_pid(connection_file)
     if pid is not None and os.name == "posix":
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and _pid_alive(pid):
+        # reap=True: the kernel may be this process's own child (library use),
+        # and only reaping detects its exit — a zombie otherwise polls as alive.
+        while time.monotonic() < deadline and _pid_alive(pid, reap=True):
             time.sleep(0.05)
         # Only signal a kernel that answered us: an unacknowledged PID may be stale
         # (crash, reboot) and since recycled to an unrelated process.
-        if acknowledged and _pid_alive(pid):
+        if acknowledged and _pid_alive(pid, reap=True):
             os.kill(pid, signal.SIGTERM)
 
     connection_file.unlink(missing_ok=True)
