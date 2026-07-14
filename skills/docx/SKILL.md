@@ -338,9 +338,23 @@ doc = Document.open("reviewed.docx", author=author)
 revisions = doc.list_revisions()
 for r in revisions:
     print(f"ID: {r.id}, Type: {r.type}, Author: {r.author}, Text: {r.text}")
+    # Location: which paragraph the revision lives in, and where in it
+    print(f"  at {r.paragraph_ref} occurrence={r.occurrence}")
+    # Nesting: e.g. a foreign deletion inside another author's insertion
+    print(f"  nested_under={r.nested_under} contains_ids={r.contains_ids}")
 
 # Filter by author
 their_changes = doc.list_revisions(author="OtherUser")
+
+# Filter to one paragraph (ref from list_paragraphs())
+para_changes = doc.list_revisions(paragraph="P3#a7b2")
+
+# For INSERTIONS, r.paragraph_ref/r.occurrence plug straight into the anchor
+# APIs (occurrence is 0-based, same convention as replace/delete/add_comment).
+# Filter on occurrence is not None — even an insertion can be unlocatable
+# (see the None cases below):
+r = next(r for r in doc.list_revisions() if r.type == "insertion" and r.occurrence is not None)
+doc.add_comment(r.text, "please confirm", paragraph=r.paragraph_ref, occurrence=r.occurrence)
 
 # Accept or reject individual revisions (return True if found, False if not).
 # Use IDs from list_revisions() — don't guess numbering.
@@ -359,17 +373,23 @@ doc.save()
 doc.close()
 ```
 
-### Reviewing Someone Else's Redlines
+**`occurrence` is None when targeting-by-text does not apply**: empty revision
+text (paragraph-mark markers), a host insertion whose text was partly consumed
+by a nested deletion, or a nested deletion itself (its text never existed in
+the original document). Never treat `None` as `0` — in every `None` case,
+`nested_under`/`contains_ids` describe the revision instead.
 
-When a document arrives with pending tracked changes from other authors:
+**Deletion occurrences count in the original (pre-revision) text**, where the
+deleted span still exists — they locate the deletion for reporting, but must
+NOT be passed to replace/delete/add_comment, which search the visible text
+(an earlier inserted copy of the same text would shift the count and silently
+anchor the wrong span). Only insertion occurrences feed the anchor APIs.
 
-**Anchors match visible text.** `find_text`, the edit methods, and
-`add_comment` all search the view with pending insertions included and pending
-deletions excluded — target the text as it reads with all changes showing
-(exactly what `get_visible_text()` returns).
-
-**Nested revisions** (one author edited inside another author's pending
-insertion):
+**Nested revisions**: when a reviewer deletes text inside another author's
+pending insertion (Word and this library both produce this), the deletion
+nests inside the insertion. The host insertion's `text` reports the full text
+it originally inserted; `contains_ids` lists the nested revision ids, and the
+nested deletion's `nested_under` points back at its host.
 
 - *Accepting* the insertion unwraps it in place — a deletion another author
   nested inside it survives as an independent pending deletion.
@@ -378,6 +398,31 @@ insertion):
 - `accept_all()` / `reject_all()` resolve nesting fully (they re-scan until no
   revisions remain), and `author=` filters process each author's changes
   independently.
+
+Predict the outcome, then verify with `get_markup_text()`.
+
+### Inline markup view (verify redlines without pandoc)
+
+```python
+# Every paragraph on one line; revisions wrapped inline:
+#   Keep [ins#4:Reviewer]added[/ins][del#3:Reviewer]removed[/del]
+# Nesting renders naturally:
+#   [ins#1:A]kept [del#9:B]gone[/del][/ins]
+print(doc.get_markup_text())
+```
+
+A human/agent verification view, not a parseable format (author names are not
+escaped; tabs/breaks are not rendered; text inside a drawing's text box
+appears both inline and again as its own line, same as `get_text()`).
+
+### Reviewing Someone Else's Redlines
+
+When a document arrives with pending tracked changes from other authors:
+
+**Anchors match visible text.** `find_text`, the edit methods, and
+`add_comment` all search the view with pending insertions included and pending
+deletions excluded — target the text as it reads with all changes showing
+(exactly what `get_visible_text()` returns).
 
 **Predict, then verify.** `get_visible_text()` is the document as it will read
 after `accept_all()`; `get_original_text()` is the document as it will read
@@ -397,8 +442,8 @@ doc.close()
 ```
 
 To act on a subset, target revisions by ID: `list_revisions()` (optionally
-`author=`-filtered), pick by `.text`/`.type`, then `accept_revision(id)` /
-`reject_revision(id)`. There is no paragraph-scoped revision filter today.
+`author=`- or `paragraph=`-filtered), pick by `.text`/`.type`/`.paragraph_ref`,
+then `accept_revision(id)` / `reject_revision(id)`.
 
 ## Redlining Workflow (Document Review)
 

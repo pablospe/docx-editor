@@ -31,7 +31,13 @@ from conftest import find_ref, replace_document_xml
 
 from docx_editor import Document, Revision
 
-# Ground truth for OXML_TrackChanges_Test.docx.
+# Ground truth for OXML_TrackChanges_Test.docx. Paragraph indexes account for
+# the fixture's two empty <w:p/> elements (before the title and before the
+# em-dash paragraph); hashes are CRC32 of each paragraph's visible text
+# including its trailing bracketed note run. None of the fixture's revisions
+# nest, so nested_under/contains_ids keep their defaults. Ids 1007/1008 carry
+# identical text in the same paragraph — type + occurrence (in each type's own
+# view) is what tells them apart.
 EXPECTED_REVISIONS = [
     Revision(
         id=1001,
@@ -39,6 +45,8 @@ EXPECTED_REVISIONS = [
         author="Test Author",
         date=datetime(2026, 1, 29, 16, 55, tzinfo=timezone.utc),
         text="inserted",
+        paragraph_ref="P3#e6b4",
+        occurrence=0,
     ),
     Revision(
         id=1002,
@@ -46,6 +54,8 @@ EXPECTED_REVISIONS = [
         author="Test Author",
         date=datetime(2026, 1, 29, 16, 56, tzinfo=timezone.utc),
         text="old ",
+        paragraph_ref="P4#1750",
+        occurrence=0,
     ),
     Revision(
         id=1003,
@@ -53,6 +63,8 @@ EXPECTED_REVISIONS = [
         author="Editor A",
         date=datetime(2026, 1, 29, 16, 57, tzinfo=timezone.utc),
         text="colour",
+        paragraph_ref="P5#a192",
+        occurrence=0,
     ),
     Revision(
         id=1004,
@@ -60,6 +72,8 @@ EXPECTED_REVISIONS = [
         author="Editor A",
         date=datetime(2026, 1, 29, 16, 57, 1, tzinfo=timezone.utc),
         text="color",
+        paragraph_ref="P5#a192",
+        occurrence=0,
     ),
     Revision(
         id=1005,
@@ -67,6 +81,8 @@ EXPECTED_REVISIONS = [
         author="Reviewer",
         date=datetime(2026, 1, 29, 16, 58, tzinfo=timezone.utc),
         text="reenter",
+        paragraph_ref="P6#975f",
+        occurrence=0,
     ),
     Revision(
         id=1006,
@@ -74,6 +90,8 @@ EXPECTED_REVISIONS = [
         author="Reviewer B",
         date=datetime(2026, 1, 29, 16, 59, tzinfo=timezone.utc),
         text="— or is it?",
+        paragraph_ref="P8#1b23",
+        occurrence=0,
     ),
     Revision(
         id=1007,
@@ -81,6 +99,8 @@ EXPECTED_REVISIONS = [
         author="Author A",
         date=datetime(2026, 1, 29, 17, 0, tzinfo=timezone.utc),
         text="DRAFT ",
+        paragraph_ref="P9#5772",
+        occurrence=0,
     ),
     Revision(
         id=1008,
@@ -88,6 +108,8 @@ EXPECTED_REVISIONS = [
         author="Author B",
         date=datetime(2026, 1, 29, 17, 0, 10, tzinfo=timezone.utc),
         text="DRAFT ",
+        paragraph_ref="P9#5772",
+        occurrence=0,
     ),
 ]
 

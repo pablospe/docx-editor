@@ -11,19 +11,6 @@ from docx_editor.track_changes import Revision, RevisionManager, _escape_xml
 from docx_editor.xml_editor import DocxXMLEditor, build_text_map
 
 
-def _attach_text_node(mock_elem, text):
-    """Configure a MagicMock to look like a w:t element with TEXT_NODE child.
-
-    Mirrors the real minidom structure so methods iterating ``childNodes``
-    and filtering by ``TEXT_NODE`` (e.g. ``_get_node_text``) work.
-    """
-    mock_elem.firstChild = MagicMock()
-    mock_elem.firstChild.data = text
-    # Make nodeType == TEXT_NODE evaluate True without depending on actual ints.
-    mock_elem.firstChild.nodeType = mock_elem.firstChild.TEXT_NODE
-    mock_elem.childNodes = [mock_elem.firstChild]
-
-
 class TestTrackedReplace:
     """Tests for tracked text replacement."""
 
@@ -373,7 +360,7 @@ class TestRevisionRepr:
             text="short text",
         )
         repr_str = repr(rev)
-        assert "+1:" in repr_str
+        assert "ins 1:" in repr_str
         assert "short text" in repr_str
         assert "TestAuthor" in repr_str
 
@@ -387,7 +374,7 @@ class TestRevisionRepr:
             text="deleted text",
         )
         repr_str = repr(rev)
-        assert "-2:" in repr_str
+        assert "del 2:" in repr_str
         assert "deleted text" in repr_str
         assert "TestAuthor" in repr_str
 
@@ -707,97 +694,57 @@ class TestRevisionManagerErrorHandling:
 
 
 class TestRevisionManagerWithMockedEditor:
-    """Tests using mocked editor for edge cases."""
+    """_parse_revision edge cases on real detached elements (editor mocked)."""
+
+    @staticmethod
+    def _revision_elem(xml: str):
+        """Parse an XML fragment and return its first element (w:ins/w:del)."""
+        import defusedxml.minidom
+
+        NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        dom = defusedxml.minidom.parseString(f"<root {NS}>{xml}</root>")
+        return dom.documentElement.firstChild
 
     def test_parse_revision_missing_id_returns_none(self):
         """Test _parse_revision returns None when w:id is missing."""
-        mock_editor = MagicMock()
-        manager = RevisionManager(mock_editor)
-
-        mock_elem = MagicMock()
-        mock_elem.getAttribute.return_value = ""  # Empty w:id
-
-        result = manager._parse_revision(mock_elem, "insertion")
-        assert result is None
+        manager = RevisionManager(MagicMock())
+        elem = self._revision_elem('<w:ins w:author="Test"><w:r><w:t>x</w:t></w:r></w:ins>')
+        assert manager._parse_revision(elem, "insertion") is None
 
     def test_parse_revision_invalid_date_uses_none(self):
         """Test _parse_revision handles invalid date gracefully."""
-        mock_editor = MagicMock()
-        manager = RevisionManager(mock_editor)
-
-        mock_elem = MagicMock()
-
-        def get_attr(name):
-            if name == "w:id":
-                return "1"
-            elif name == "w:author":
-                return "Test"
-            elif name == "w:date":
-                return "invalid-date-format"
-            return ""
-
-        mock_elem.getAttribute.side_effect = get_attr
-        mock_elem.getElementsByTagName.return_value = []
-
-        result = manager._parse_revision(mock_elem, "insertion")
+        manager = RevisionManager(MagicMock())
+        elem = self._revision_elem('<w:ins w:id="1" w:author="Test" w:date="invalid-date-format"/>')
+        result = manager._parse_revision(elem, "insertion")
         assert result is not None
         assert result.date is None  # Invalid date should be None
 
     def test_parse_revision_with_text_content(self):
         """Test _parse_revision extracts text content properly."""
-        mock_editor = MagicMock()
-        manager = RevisionManager(mock_editor)
-
-        mock_elem = MagicMock()
-
-        def get_attr(name):
-            if name == "w:id":
-                return "5"
-            elif name == "w:author":
-                return "Author"
-            elif name == "w:date":
-                return "2024-01-15T10:30:00Z"
-            return ""
-
-        mock_elem.getAttribute.side_effect = get_attr
-
-        # Mock text element with content
-        mock_text_elem = MagicMock()
-        _attach_text_node(mock_text_elem, "test content")
-
-        mock_elem.getElementsByTagName.return_value = [mock_text_elem]
-
-        result = manager._parse_revision(mock_elem, "insertion")
+        manager = RevisionManager(MagicMock())
+        elem = self._revision_elem(
+            '<w:ins w:id="5" w:author="Author" w:date="2024-01-15T10:30:00Z"><w:r><w:t>test content</w:t></w:r></w:ins>'
+        )
+        result = manager._parse_revision(elem, "insertion")
         assert result is not None
         assert result.text == "test content"
 
     def test_parse_revision_text_element_no_child(self):
-        """Test _parse_revision handles text elements with no firstChild."""
-        mock_editor = MagicMock()
-        manager = RevisionManager(mock_editor)
-
-        mock_elem = MagicMock()
-
-        def get_attr(name):
-            if name == "w:id":
-                return "6"
-            elif name == "w:author":
-                return "Author"
-            elif name == "w:date":
-                return ""
-            return ""
-
-        mock_elem.getAttribute.side_effect = get_attr
-
-        # Mock text element with no firstChild
-        mock_text_elem = MagicMock()
-        mock_text_elem.firstChild = None
-
-        mock_elem.getElementsByTagName.return_value = [mock_text_elem]
-
-        result = manager._parse_revision(mock_elem, "insertion")
+        """Test _parse_revision handles text elements with no text child."""
+        manager = RevisionManager(MagicMock())
+        elem = self._revision_elem('<w:ins w:id="6" w:author="Author"><w:r><w:t/></w:r></w:ins>')
+        result = manager._parse_revision(elem, "insertion")
         assert result is not None
         assert result.text == ""  # Empty text when no content
+
+    def test_parse_revision_without_ctx_leaves_location_unset(self):
+        """No location context (detached parse) → paragraph_ref/occurrence None."""
+        manager = RevisionManager(MagicMock())
+        elem = self._revision_elem('<w:ins w:id="7" w:author="Author"><w:r><w:t>text</w:t></w:r></w:ins>')
+        result = manager._parse_revision(elem, "insertion")
+        assert result is not None
+        assert result.paragraph_ref is None
+        assert result.occurrence is None
 
 
 class TestRestoreDeletionEdgeCases:

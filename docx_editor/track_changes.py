@@ -27,6 +27,7 @@ from .xml_editor import (
     _escape_xml,
     build_text_map,
     compute_paragraph_hash,
+    compute_text_hash,
     find_in_text_map,
     get_rPr_xml,
     get_text_node_data,
@@ -203,17 +204,179 @@ class _LocatedMatch:
 
 @dataclass
 class Revision:
-    """Represents a tracked change (insertion or deletion)."""
+    """Represents a tracked change (insertion or deletion).
+
+    Location and nesting fields are populated by ``list_revisions``:
+
+    - ``paragraph_ref``: hash-anchored reference (``"P{i}#{hash}"``) of the
+      containing paragraph, or None when the revision sits outside any
+      ``<w:p>`` (e.g. ``<w:trPr>`` row markers).
+    - ``occurrence``: 0-based occurrence index of ``text`` within the
+      containing paragraph, counted in the view where the revision's text
+      lives — the accepted (visible) view for insertions, the original
+      (pre-revision) view for deletions. For insertions it plugs directly
+      into the ``occurrence=`` parameter of replace()/delete()/
+      add_comment(). None whenever targeting-by-text does not apply: empty
+      text, a host insertion whose original text no longer matches its
+      visible span (a nested deletion consumed part of it), or a nested
+      deletion (its text never existed in the original document).
+    - ``nested_under``: id of the nearest enclosing revision (e.g. a foreign
+      deletion inside another author's pending insertion), else None.
+    - ``contains_ids``: ids of revisions nested inside this one, in document
+      order.
+    """
 
     id: int
     type: Literal["insertion", "deletion"]
     author: str
     date: datetime | None
     text: str
+    paragraph_ref: str | None = None
+    occurrence: int | None = None
+    nested_under: int | None = None
+    contains_ids: tuple[int, ...] = ()
 
     def __repr__(self) -> str:
-        type_symbol = "+" if self.type == "insertion" else "-"
-        return f"Revision({type_symbol}{self.id}: '{self.text[:30]}...' by {self.author})"
+        kind = "ins" if self.type == "insertion" else "del"
+        location = f" @{self.paragraph_ref}" if self.paragraph_ref else ""
+        preview = self.text[:30] + ("..." if len(self.text) > 30 else "")
+        nested = f", nested_under={self.nested_under}" if self.nested_under is not None else ""
+        contains = f", contains={list(self.contains_ids)}" if self.contains_ids else ""
+        return f"Revision({kind} {self.id}{location}: '{preview}' by {self.author}{nested}{contains})"
+
+
+def _ancestor_paragraph(elem) -> Element | None:
+    """Nearest <w:p> ancestor of ``elem``, or None if outside any paragraph.
+
+    Not replaceable by ``xml_editor._innermost_ancestor``: this loop also
+    stops at the first non-element ancestor, so it terminates even on node
+    chains whose ``parentNode`` never yields None (mock DOMs in tests).
+    """
+    node = elem.parentNode
+    while node is not None and node.nodeType == node.ELEMENT_NODE:
+        if node.tagName == "w:p":
+            return node
+        node = node.parentNode
+    return None
+
+
+def _nearest_revision_ancestor_id(elem) -> int | None:
+    """id of the closest <w:ins>/<w:del> ancestor carrying a w:id, else None."""
+    node = elem.parentNode
+    while node is not None and node.nodeType == node.ELEMENT_NODE:
+        if node.tagName in ("w:ins", "w:del"):
+            rev_id = node.getAttribute("w:id")
+            if rev_id:
+                return int(rev_id)
+        node = node.parentNode
+    return None
+
+
+def _descendant_revision_ids(elem) -> tuple[int, ...]:
+    """ids of all <w:ins>/<w:del> descendants of ``elem``, in document order."""
+    ids: list[int] = []
+
+    def walk(node) -> None:
+        for child in node.childNodes:
+            if child.nodeType != child.ELEMENT_NODE:
+                continue
+            if child.tagName in ("w:ins", "w:del"):
+                rev_id = child.getAttribute("w:id")
+                if rev_id:
+                    ids.append(int(rev_id))
+            walk(child)
+
+    walk(elem)
+    return tuple(ids)
+
+
+def _insertion_text_nodes(elem) -> list:
+    """All <w:t>/<w:delText> descendants of a <w:ins>, in document order.
+
+    Including <w:delText> means a host insertion whose content was later
+    deleted by a nested <w:del> still reports the full text it originally
+    inserted (plain <w:delText> never appears under <w:ins> otherwise).
+    """
+    nodes: list = []
+
+    def walk(node) -> None:
+        for child in node.childNodes:
+            if child.nodeType != child.ELEMENT_NODE:
+                continue
+            if child.tagName in ("w:t", "w:delText"):
+                nodes.append(child)
+            else:
+                walk(child)
+
+    walk(elem)
+    return nodes
+
+
+def _has_ancestor(node, ancestor) -> bool:
+    """True if ``ancestor`` is ``node`` itself or one of its ancestors."""
+    current = node
+    while current is not None:
+        if current is ancestor:
+            return True
+        current = current.parentNode
+    return False
+
+
+def _occurrence_in_text_map(tm: TextMap, elem, text: str) -> int | None:
+    """0-based occurrence index of ``text`` at ``elem``'s own span in ``tm``.
+
+    Mirrors ``find_in_text_map``'s stepping (``idx + 1`` between matches) so
+    the result plugs directly into the ``occurrence=`` parameter of the
+    anchor APIs. Returns None when the revision's span cannot be equated
+    with ``text``: no position in the map belongs to ``elem``, the map
+    text at the span's start doesn't spell ``text``, or the spelled-out
+    span extends beyond ``elem`` (e.g. a partially consumed host insertion
+    whose missing suffix happens to be spelled by the following text —
+    anchoring there would silently cross the revision boundary).
+    """
+    if not text:
+        return None
+    start = next((i for i, pos in enumerate(tm.positions) if _has_ancestor(pos.node, elem)), None)
+    if start is None:
+        return None
+    if not tm.text.startswith(text, start):
+        return None
+    if not all(_has_ancestor(pos.node, elem) for pos in tm.positions[start : start + len(text)]):
+        return None
+    count = 0
+    idx = tm.text.find(text)
+    while idx != -1 and idx < start:
+        count += 1
+        idx = tm.text.find(text, idx + 1)
+    return count
+
+
+class _RevisionLocationContext:
+    """Per-``list_revisions``-call cache of paragraph indexes, refs, and text maps."""
+
+    def __init__(self, dom):
+        self._p_index = {id(p): i for i, p in enumerate(dom.getElementsByTagName("w:p"), start=1)}
+        self._refs: dict[int, str] = {}
+        self._maps: dict[tuple[int, str], TextMap] = {}
+
+    def paragraph_ref(self, p) -> str | None:
+        """Hash-anchored ref ("P{i}#{hash}") of ``p``; None if not indexed."""
+        key = id(p)
+        index = self._p_index.get(key)
+        if index is None:
+            return None
+        if key not in self._refs:
+            # Hash from the cached accepted map, shared with the occurrence
+            # path, instead of compute_paragraph_hash (which builds its own).
+            self._refs[key] = f"P{index}#{compute_text_hash(self.text_map(p, 'accepted').text)}"
+        return self._refs[key]
+
+    def text_map(self, p, view: Literal["accepted", "original"]) -> TextMap:
+        """Cached text map of ``p`` for ``view``."""
+        key = (id(p), view)
+        if key not in self._maps:
+            self._maps[key] = build_text_map(p, view=view)
+        return self._maps[key]
 
 
 class RevisionManager:
@@ -1729,35 +1892,117 @@ class RevisionManager:
                 return int(node.getAttribute("w:id"))
         return -1
 
-    def list_revisions(self, author: str | None = None) -> list[Revision]:
+    def list_revisions(
+        self,
+        author: str | None = None,
+        paragraph: str | None = None,
+        *,
+        with_location: bool = True,
+    ) -> list[Revision]:
         """List all tracked changes in the document.
 
         Args:
             author: If provided, filter by author name
+            paragraph: If provided, a paragraph reference (e.g. "P3#a7b2")
+                from list_paragraphs(); only revisions inside that paragraph
+                are returned.
+            with_location: If False, skip computing ``paragraph_ref`` and
+                ``occurrence`` (they stay None) — the location work builds a
+                text map and hash per revision-bearing paragraph, wasted on
+                callers that only need ids (accept_all/reject_all re-list on
+                every pass). Forced True when ``paragraph`` is given, since
+                the filter matches on ``paragraph_ref``.
 
         Returns:
-            List of Revision objects
+            List of Revision objects sorted by id — see :class:`Revision`.
+            Nesting fields are always populated; the location fields
+            (``paragraph_ref``/``occurrence``) unless ``with_location=False``.
+
+        Raises:
+            ValueError: If ``paragraph`` is malformed
+            ParagraphIndexError: If the paragraph index is out of range
+            HashMismatchError: If the paragraph hash doesn't match current content
         """
+        paragraph_filter = None
+        if paragraph is not None:
+            ref = ParagraphRef.parse(paragraph)
+            self._resolve_paragraph(ref)  # validates index and hash
+            paragraph_filter = f"P{ref.index}#{ref.hash}"
+
+        ctx = None
+        if with_location or paragraph_filter is not None:
+            ctx = _RevisionLocationContext(self.editor.dom)
+
+        def matches(rev: Revision | None) -> bool:
+            if rev is None:
+                return False
+            if author is not None and rev.author != author:
+                return False
+            return paragraph_filter is None or rev.paragraph_ref == paragraph_filter
+
         revisions = []
 
         # Find all insertions
         for ins_elem in self.editor.dom.getElementsByTagName("w:ins"):
-            rev = self._parse_revision(ins_elem, "insertion")
-            if rev and (author is None or rev.author == author):
+            rev = self._parse_revision(ins_elem, "insertion", ctx)
+            if matches(rev):
                 revisions.append(rev)
 
         # Find all deletions
         for del_elem in self.editor.dom.getElementsByTagName("w:del"):
-            rev = self._parse_revision(del_elem, "deletion")
-            if rev and (author is None or rev.author == author):
+            rev = self._parse_revision(del_elem, "deletion", ctx)
+            if matches(rev):
                 revisions.append(rev)
 
         # Sort by ID
         revisions.sort(key=lambda r: r.id)
         return revisions
 
-    def _parse_revision(self, elem, rev_type: Literal["insertion", "deletion"]) -> Revision | None:
-        """Parse a w:ins or w:del element into a Revision object."""
+    def get_markup_text(self) -> str:
+        """Render document text with inline revision markup.
+
+        Each paragraph is one line; tracked changes wrap their content as
+        ``[ins#{id}:{author}]...[/ins]`` / ``[del#{id}:{author}]...[/del]``,
+        nesting included (e.g. ``[ins#1:A]kept [del#9:B]gone[/del][/ins]``).
+
+        A human/agent verification view, not a parseable format: author
+        names are not escaped, tabs/breaks are not rendered, and text inside
+        a drawing's text box appears both inline in the host paragraph's
+        line and again as its own line (same as get_text()).
+        """
+
+        def render(node) -> str:
+            parts: list[str] = []
+            for child in node.childNodes:
+                if child.nodeType != child.ELEMENT_NODE:
+                    continue
+                if child.tagName in ("w:ins", "w:del"):
+                    kind = "ins" if child.tagName == "w:ins" else "del"
+                    rev_id = child.getAttribute("w:id") or "?"
+                    rev_author = child.getAttribute("w:author") or "Unknown"
+                    parts.append(f"[{kind}#{rev_id}:{rev_author}]{render(child)}[/{kind}]")
+                elif child.tagName in ("w:t", "w:delText"):
+                    parts.append(get_text_node_data(child))
+                else:
+                    parts.append(render(child))
+            return "".join(parts)
+
+        return "\n".join(render(p) for p in self.editor.dom.getElementsByTagName("w:p"))
+
+    def _parse_revision(
+        self,
+        elem,
+        rev_type: Literal["insertion", "deletion"],
+        ctx: _RevisionLocationContext | None = None,
+    ) -> Revision | None:
+        """Parse a w:ins or w:del element into a Revision object.
+
+        Args:
+            elem: The <w:ins>/<w:del> element
+            rev_type: Which kind of revision ``elem`` is
+            ctx: Per-call location cache from list_revisions. None (detached
+                elements, unit tests) leaves paragraph_ref/occurrence unset.
+        """
         rev_id = elem.getAttribute("w:id")
         if not rev_id:
             return None
@@ -1772,7 +2017,7 @@ class RevisionManager:
 
         # Extract text content
         if rev_type == "insertion":
-            text_elems = elem.getElementsByTagName("w:t")
+            text_elems = _insertion_text_nodes(elem)
         else:
             text_elems = elem.getElementsByTagName("w:delText")
             if not text_elems:
@@ -1781,14 +2026,30 @@ class RevisionManager:
                 # no w:delText at all; mixed content reads only w:delText.
                 text_elems = elem.getElementsByTagName("w:t")
 
-        text_parts = [self._get_node_text(t_elem) for t_elem in text_elems]
+        text = "".join(self._get_node_text(t_elem) for t_elem in text_elems)
+
+        paragraph_ref = None
+        occurrence = None
+        if ctx is not None:
+            paragraph = _ancestor_paragraph(elem)
+            if paragraph is not None:
+                paragraph_ref = ctx.paragraph_ref(paragraph)
+                if text:
+                    # Insertions live in the visible text; deletions in the
+                    # original (pre-revision) text.
+                    view: Literal["accepted", "original"] = "accepted" if rev_type == "insertion" else "original"
+                    occurrence = _occurrence_in_text_map(ctx.text_map(paragraph, view), elem, text)
 
         return Revision(
             id=int(rev_id),
             type=rev_type,
             author=author,
             date=date,
-            text="".join(text_parts),
+            text=text,
+            paragraph_ref=paragraph_ref,
+            occurrence=occurrence,
+            nested_under=_nearest_revision_ancestor_id(elem),
+            contains_ids=_descendant_revision_ids(elem),
         )
 
     def accept_revision(self, revision_id: int) -> bool:
@@ -1869,7 +2130,8 @@ class RevisionManager:
         while True:
             progressed = False
             # Process in reverse order by ID to avoid index issues
-            for rev in sorted(self.list_revisions(author=author), key=lambda r: r.id, reverse=True):
+            revisions = self.list_revisions(author=author, with_location=False)
+            for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
                 if self.accept_revision(rev.id):
                     count += 1
                     progressed = True
@@ -1896,7 +2158,8 @@ class RevisionManager:
         while True:
             progressed = False
             # Process in reverse order by ID to avoid index issues
-            for rev in sorted(self.list_revisions(author=author), key=lambda r: r.id, reverse=True):
+            revisions = self.list_revisions(author=author, with_location=False)
+            for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
                 if self.reject_revision(rev.id):
                     count += 1
                     progressed = True
