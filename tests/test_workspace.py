@@ -9,7 +9,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import find_ref
 
+from docx_editor.document import Document
 from docx_editor.exceptions import (
     DocumentNotFoundError,
     InvalidDocumentError,
@@ -748,6 +750,41 @@ class TestDirtyWorkspace:
             assert self._meta_on_disk(ws)["dirty"] is True
         finally:
             ws.close()
+
+    def test_fresh_document_open_does_not_mark_dirty(self, temp_docx):
+        """Open-time tracking setup writes (people.xml, settings, rels) are
+        deterministic bookkeeping — they must not flag the workspace, or every
+        crashed-but-unedited session would force force_recreate at next open."""
+        doc = Document.open(temp_docx, author="Test")
+        try:
+            assert self._meta_on_disk(doc)["dirty"] is False
+        finally:
+            doc.close(cleanup=False)
+
+        # And the untouched workspace still adopts.
+        Document.open(temp_docx, author="Test").close()
+
+    def test_in_memory_edit_does_not_mark_dirty(self, temp_docx):
+        """DOM edits die with the process — only disk writes need the flag."""
+        doc = Document.open(temp_docx, author="Test")
+        try:
+            doc.replace("fox", "cat", paragraph=find_ref(doc, "fox"))
+            assert self._meta_on_disk(doc)["dirty"] is False
+
+            doc.save()  # flag set write-ahead, cleared by the in-place save
+            assert self._meta_on_disk(doc)["dirty"] is False
+        finally:
+            doc.close()
+
+    def test_add_comment_marks_dirty_before_save(self, temp_docx):
+        """add_comment() copies comment templates into the workspace on disk —
+        a post-open write, so it is flagged even though save() hasn't run."""
+        doc = Document.open(temp_docx, author="Test")
+        try:
+            doc.add_comment("fox", "needs review")
+            assert self._meta_on_disk(doc)["dirty"] is True
+        finally:
+            doc.close()
 
     def test_pre_upgrade_meta_without_dirty_key_adopts(self, temp_docx):
         """meta.json written before the flag existed must adopt exactly as before."""

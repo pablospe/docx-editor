@@ -57,12 +57,16 @@ class Document:
         self._workspace = workspace
         self._closed = False
 
-        # Create the document editor
+        # Create the document editor. Every post-open workspace write goes
+        # through an editor (or the comment manager's template copies), so
+        # routing mark_dirty through their write-ahead hooks enforces the
+        # dirty-flag contract mechanically at the write layer.
         self._document_editor = DocxXMLEditor(
             workspace.document_xml_path,
             rsid=workspace.rsid,
             author=workspace.author,
             initials=workspace.initials,
+            on_save=workspace.mark_dirty,
         )
 
         # Initialize managers
@@ -72,6 +76,7 @@ class Document:
             self._document_editor,
             workspace.author,
             workspace.initials,
+            on_write=workspace.mark_dirty,
         )
 
         # Setup tracking infrastructure
@@ -921,7 +926,18 @@ class Document:
             raise ValueError("Document is closed")
 
     def _setup_tracking(self) -> None:
-        """Set up tracked changes infrastructure in the document."""
+        """Set up tracked changes infrastructure in the document.
+
+        Runs at every open. Its writes (people.xml, [Content_Types].xml,
+        document.xml.rels, settings.xml rsids) deliberately do NOT mark the
+        workspace dirty: they are deterministic bookkeeping that an adopting
+        session re-produces identically (each helper checks before adding; the
+        rsid comes from meta), not unsaved user content. Marking dirty here
+        would flag every workspace the moment it is opened, so any session
+        that crashed without editing would force force_recreate on the next
+        open with no data-loss risk behind it. All post-open writes DO mark
+        dirty first — see the on_save/on_write hooks in __init__.
+        """
         # Ensure people.xml exists
         people_path = self._workspace.word_path / "people.xml"
         if not people_path.exists():
@@ -1071,6 +1087,7 @@ class Document:
             rels_path,
             rsid=self._workspace.rsid,
             author=self._workspace.author,
+            on_save=self._workspace.mark_dirty,
         )
 
         # Check if already exists
@@ -1125,6 +1142,7 @@ class Document:
             content_types_path,
             rsid=self._workspace.rsid,
             author=self._workspace.author,
+            on_save=self._workspace.mark_dirty,
         )
 
         # Check if already exists
