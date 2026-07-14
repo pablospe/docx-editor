@@ -179,13 +179,22 @@ class Document:
             - ``paragraph_ref``: hash-anchored ref like "P3#a7b2", directly
               usable as the ``paragraph=`` argument of follow-up edits. Valid
               until that paragraph is edited.
+            - ``paragraph_occurrence``: occurrence index of this match within
+              its paragraph — pass as the ``occurrence=`` of a follow-up edit
+              (edit methods count occurrences within the paragraph, not
+              document-wide).
             - ``spans_revision``: True if the match crosses a tracked-revision
               boundary (e.g. part of it is inside a tracked insertion).
 
         Example:
             match = doc.find_text("30 days")
             if match:
-                doc.replace("30 days", "60 days", paragraph=match.paragraph_ref)
+                doc.replace(
+                    "30 days",
+                    "60 days",
+                    paragraph=match.paragraph_ref,
+                    occurrence=match.paragraph_occurrence,
+                )
         """
         self._ensure_open()
         return self._revision_manager.find_text(text, occurrence)

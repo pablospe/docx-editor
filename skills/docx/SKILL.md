@@ -219,7 +219,8 @@ for p in doc.list_paragraphs():
 #         P3#b2c4| Section 3. Terms and conditions...
 
 # Find text (returns SearchResult or None, works across element boundaries).
-# match.paragraph_ref is directly usable as the paragraph= of a follow-up edit.
+# Chain into an edit with paragraph=match.paragraph_ref plus
+# occurrence=match.paragraph_occurrence (edits count occurrences per paragraph).
 match = doc.find_text("30 days")
 
 # Get all visible text (inserted text included, deleted text excluded)

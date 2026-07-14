@@ -172,13 +172,29 @@ class SearchResult:
     ``paragraph_ref`` is computed at search time and is directly usable as the
     ``paragraph=`` argument of follow-up edits; like refs from
     ``list_paragraphs()``, it is valid until that paragraph is edited.
+
+    ``find_text``'s ``occurrence`` counts matches document-wide, while edit
+    methods count within one paragraph — ``paragraph_occurrence`` bridges the
+    two: pass it as the ``occurrence=`` of a follow-up edit to target exactly
+    the match ``find_text`` located.
     """
 
     start: int  # Start offset in the paragraph's visible text
     end: int  # Exclusive end offset, same coordinate space
     text: str  # The matched text
     paragraph_ref: str  # Hash-anchored ref like "P3#a7b2"
+    paragraph_occurrence: int  # Occurrence index of this match within its paragraph
     spans_revision: bool  # True if the match crosses a tracked-revision boundary
+
+
+@dataclass(frozen=True)
+class _LocatedMatch:
+    """Internal: a text-map match plus the paragraph identity needed for refs."""
+
+    match: TextMapMatch
+    paragraph_index: int  # 1-based document-order index of the containing w:p
+    paragraph: Element  # The containing w:p element
+    paragraph_occurrence: int  # Occurrence index of the match within that paragraph
 
 
 @dataclass
@@ -702,16 +718,14 @@ class RevisionManager:
                 local_occ += 1
         return None
 
-    def _find_across_boundaries_located(
-        self, text: str, occurrence: int = 0
-    ) -> tuple[TextMapMatch, int, Element] | None:
+    def _find_across_boundaries_located(self, text: str, occurrence: int = 0) -> _LocatedMatch | None:
         """Find the nth occurrence of text across element boundaries.
 
         Searches across all paragraphs using text maps, keeping paragraph
         identity so callers can build hash-anchored refs.
 
         Returns:
-            (match, 1-based paragraph index, w:p element), or None.
+            A _LocatedMatch, or None if not found.
         """
         current_occurrence = 0
         for idx, paragraph in enumerate(self.editor.dom.getElementsByTagName("w:p"), start=1):
@@ -722,7 +736,12 @@ class RevisionManager:
                 if match is None:
                     break
                 if current_occurrence == occurrence:
-                    return match, idx, paragraph
+                    return _LocatedMatch(
+                        match=match,
+                        paragraph_index=idx,
+                        paragraph=paragraph,
+                        paragraph_occurrence=local_occ,
+                    )
                 current_occurrence += 1
                 local_occ += 1
         return None
@@ -734,7 +753,7 @@ class RevisionManager:
         Returns TextMapMatch or None.
         """
         located = self._find_across_boundaries_located(text, occurrence)
-        return located[0] if located is not None else None
+        return located.match if located is not None else None
 
     def find_text(self, text: str, occurrence: int = 0) -> SearchResult | None:
         """Find the nth occurrence of text, as a public SearchResult.
@@ -745,13 +764,13 @@ class RevisionManager:
         located = self._find_across_boundaries_located(text, occurrence)
         if located is None:
             return None
-        match, idx, paragraph = located
         return SearchResult(
-            start=match.start,
-            end=match.end,
-            text=match.text,
-            paragraph_ref=f"P{idx}#{compute_paragraph_hash(paragraph)}",
-            spans_revision=match.spans_boundary,
+            start=located.match.start,
+            end=located.match.end,
+            text=located.match.text,
+            paragraph_ref=f"P{located.paragraph_index}#{compute_paragraph_hash(located.paragraph)}",
+            paragraph_occurrence=located.paragraph_occurrence,
+            spans_revision=located.match.spans_boundary,
         )
 
     def replace_text(self, find: str, replace_with: str, occurrence: int = 0, paragraph: str | None = None) -> int:

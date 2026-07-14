@@ -684,6 +684,7 @@ class TestDocumentFindText:
         assert not match.spans_revision
         assert re.fullmatch(r"P\d+#[0-9a-f]{4}", match.paragraph_ref)
         assert 0 <= match.start < match.end
+        assert match.paragraph_occurrence == 0
         doc.close()
 
     def test_find_text_not_found(self, clean_workspace):
@@ -712,6 +713,25 @@ class TestDocumentFindText:
         assert match is not None
         doc.replace("fox", "cat", paragraph=match.paragraph_ref)
         assert "cat" in doc.get_visible_text()
+        doc.close()
+
+    def test_find_text_paragraph_occurrence_chains_into_edit(self, clean_workspace):
+        """paragraph_occurrence pins which in-paragraph match a follow-up edit targets.
+
+        find_text's occurrence counts document-wide; edit methods count within
+        the paragraph. Without passing paragraph_occurrence through, the edit
+        would silently target the paragraph's first match instead of the one
+        find_text located.
+        """
+        doc = Document.open(clean_workspace)
+        # "he" appears twice in the fox paragraph: in "The" and in "the lazy"
+        match = doc.find_text("he", occurrence=1)
+        assert match is not None
+        assert match.paragraph_occurrence == 1
+        doc.replace("he", "XX", paragraph=match.paragraph_ref, occurrence=match.paragraph_occurrence)
+        text = doc.get_visible_text()
+        assert "tXX lazy" in text
+        assert "The quick" in text  # the paragraph's first match is untouched
         doc.close()
 
     def test_find_text_after_close_raises(self, clean_workspace):

@@ -202,8 +202,11 @@ match = doc.find_text("Aim: To")
 if match:
     if match.spans_revision:
         print("Text spans a tracked-revision boundary")
-    # The ref is directly usable for a follow-up edit
-    doc.replace("Aim: To", "Goal: To", paragraph=match.paragraph_ref)
+    # The ref + in-paragraph occurrence pin the exact match for a follow-up edit
+    doc.replace(
+        "Aim: To", "Goal: To",
+        paragraph=match.paragraph_ref, occurrence=match.paragraph_occurrence,
+    )
 ```
 
 #### `count_matches(text)`
@@ -674,7 +677,9 @@ All constructors also take:
 - `occurrence` (int): Which occurrence within the paragraph. Defaults to 0. Must be >= 0.
 
 **Raises:** `ValueError` at construction time if the paragraph ref is malformed,
-`occurrence` is negative, or a required text argument is empty/missing. Each
+`occurrence` is negative, a search-target argument (`find`, delete `text`,
+`anchor`) is empty, or a payload argument (`replace_with`, insert `text`) is
+`None` — payloads may be empty strings, search targets may not. Each
 signature mirrors the corresponding `Document` method 1:1, so
 `doc.replace(...)` translates mechanically to `EditOperation.replace(...)`.
 
@@ -706,19 +711,26 @@ from docx_editor import SearchResult
 | `end` | int | Exclusive end offset, same coordinate space |
 | `text` | str | The matched text |
 | `paragraph_ref` | str | Hash-anchored ref like `P3#a7b2`, usable as the `paragraph=` argument of follow-up edits |
+| `paragraph_occurrence` | int | Occurrence index of this match within its paragraph, usable as the `occurrence=` argument of follow-up edits |
 | `spans_revision` | bool | True if the match crosses a tracked-revision boundary |
 
 `start`/`end` are offsets within the matched paragraph's visible text, **not**
-document-wide offsets (`find_text`'s `occurrence` parameter, by contrast, counts
-matches document-wide). `paragraph_ref` is computed at search time and — like
-refs from `list_paragraphs()` — goes stale once that paragraph is edited.
+document-wide offsets. Coordinate systems differ between search and edit:
+`find_text`'s `occurrence` counts matches document-wide, while edit methods
+count within one paragraph — `paragraph_occurrence` bridges the two, so always
+pass it alongside `paragraph_ref` when chaining into an edit. `paragraph_ref`
+is computed at search time and — like refs from `list_paragraphs()` — goes
+stale once that paragraph is edited.
 
 ### Example
 
 ```python
 match = doc.find_text("30 days")
 if match:
-    doc.replace("30 days", "60 days", paragraph=match.paragraph_ref)
+    doc.replace(
+        "30 days", "60 days",
+        paragraph=match.paragraph_ref, occurrence=match.paragraph_occurrence,
+    )
 ```
 
 ---
