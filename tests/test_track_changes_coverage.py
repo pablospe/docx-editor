@@ -64,7 +64,8 @@ class TestSuggestDeletionInsideInsRemovesEntireIns:
 
     def test_delete_entire_single_wt_inside_ins(self, temp_xml):
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"><w:r><w:t>Hello</w:t></w:r></w:ins></w:p>'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>Hello</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
         mgr.suggest_deletion("Hello")
@@ -107,7 +108,7 @@ class TestReplaceSameContextAllInsideIns:
     def test_replace_across_runs_all_inside_ins_no_remaining(self, temp_xml):
         # Two runs inside w:ins, replace spanning both fully -> empties ins, appends
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>AB</w:t></w:r><w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
@@ -124,7 +125,7 @@ class TestReplaceMixedStateNoDelFound:
         # After _remove_from_insertion, no w:del exists, so insert after marker (line 499).
         xml_path = temp_xml(
             "<w:p>"
-            '<w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>Hello</w:t></w:r></w:ins>"
             "<w:r><w:t> world</w:t></w:r>"
             "</w:p>"
@@ -141,7 +142,8 @@ class TestRemoveFromInsertionMiddleSplit:
 
     def test_remove_middle_from_single_node_ins(self, temp_xml):
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"><w:r><w:t>ABCDE</w:t></w:r></w:ins></w:p>'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>ABCDE</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
         # Delete "BCD" from middle of "ABCDE" inside w:ins
@@ -159,9 +161,9 @@ class TestRemoveFromInsertionSoleWtRemovesIns:
 
     def test_cross_boundary_delete_entire_ins_sole_wt(self, temp_xml):
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>AB</w:t></w:r></w:ins>"
-            '<w:ins w:id="2" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:ins w:id="2" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
@@ -177,7 +179,7 @@ class TestRemoveFromInsertionMultiWtRemoveJustNode:
     def test_remove_one_wt_from_multi_wt_ins_via_cross_boundary(self, temp_xml):
         # Two w:t nodes in same ins, delete one entirely via cross-boundary
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>AB</w:t></w:r>"
             "<w:r><w:t>CD</w:t></w:r>"
             "</w:ins></w:p>"
@@ -197,7 +199,7 @@ class TestRemoveFromInsertionMultiNodeNoBeforeNoAfter:
     def test_multi_node_removal_no_before_no_after(self, temp_xml):
         # Three runs inside w:ins, delete spanning all three fully
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>AB</w:t></w:r>"
             "<w:r><w:t>CD</w:t></w:r>"
             "<w:r><w:t>EF</w:t></w:r>"
@@ -211,7 +213,7 @@ class TestRemoveFromInsertionMultiNodeNoBeforeNoAfter:
     def test_multi_node_removal_with_before_and_after(self, temp_xml):
         # Three runs inside w:ins, delete middle portion spanning all three
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>xxAB</w:t></w:r>"
             "<w:r><w:t>CD</w:t></w:r>"
             "<w:r><w:t>EFyy</w:t></w:r>"
@@ -280,7 +282,7 @@ class TestInsertNearMatchInsideInsBeforePosition:
 
     def test_insert_before_cross_boundary_inside_ins(self, temp_xml):
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>Hello </w:t></w:r><w:r><w:t>world</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
@@ -309,7 +311,7 @@ class TestDeleteMixedState:
         xml_path = temp_xml(
             "<w:p>"
             "<w:r><w:t>Hello </w:t></w:r>"
-            '<w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>world</w:t></w:r></w:ins>"
             "</w:p>"
         )
@@ -327,10 +329,62 @@ class TestReplaceSameContextInsAppendNoFirstChild:
     def test_replace_all_inside_ins_removes_then_appends(self, temp_xml):
         # Two runs both inside ins, replace entire content.
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>X</w:t></w:r><w:r><w:t>Y</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
         mgr.replace_text("XY", "NEW")
         text = _get_text_content(mgr)
         assert "NEW" in text
+
+
+class TestSplitInsAfterChildDescendant:
+    """_split_ins_after_child walks a descendant up to the direct child before splitting."""
+
+    def test_split_after_descendant_wt(self, temp_xml):
+        xml_path = temp_xml(
+            '<w:p><w:ins w:id="1" w:author="Other Author" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>AB</w:t></w:r><w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        ins = mgr.editor.dom.getElementsByTagName("w:ins")[0]
+        first_wt = ins.getElementsByTagName("w:t")[0]  # descendant, not direct child
+
+        mgr._split_ins_after_child(ins, first_wt)
+
+        ins_elems = mgr.editor.dom.getElementsByTagName("w:ins")
+        assert len(ins_elems) == 2
+        assert all(e.getAttribute("w:author") == "Other Author" for e in ins_elems)
+        assert ins_elems[0].getAttribute("w:id") != ins_elems[1].getAttribute("w:id")
+        halves = ["".join(wt.firstChild.data for wt in e.getElementsByTagName("w:t")) for e in ins_elems]
+        assert halves == ["AB", "CD"]
+
+
+class TestSplitForeignInsAtRunBoundaries:
+    """_split_foreign_ins_at run-boundary paths with text-node siblings between runs."""
+
+    def test_split_before_run_skips_text_siblings(self, temp_xml):
+        # Whitespace text node between the runs: the previous-element walk must skip it
+        xml_path = temp_xml(
+            '<w:p><w:ins w:id="1" w:author="Other Author" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>AB</w:t></w:r> <w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        cd_wt = mgr.editor.dom.getElementsByTagName("w:ins")[0].getElementsByTagName("w:t")[1]
+
+        boundary = mgr._split_foreign_ins_at(cd_wt, 0)
+
+        assert boundary is not None
+        assert boundary.tagName == "w:r"
+        assert boundary.getElementsByTagName("w:t")[0].firstChild.data == "AB"
+
+    def test_split_at_content_start_returns_none(self, temp_xml):
+        # Only a text node precedes the run: the split point is the very start
+        xml_path = temp_xml(
+            '<w:p><w:ins w:id="1" w:author="Other Author" w:date="2024-01-01T00:00:00Z">'
+            " <w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        cd_wt = mgr.editor.dom.getElementsByTagName("w:ins")[0].getElementsByTagName("w:t")[0]
+
+        assert mgr._split_foreign_ins_at(cd_wt, 0) is None

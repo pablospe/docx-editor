@@ -612,12 +612,17 @@ class RevisionManager:
             if not run:
                 return
 
-            # If inside <w:ins>, splice text directly
+            # Inside our own <w:ins>: splice text directly; a foreign
+            # author's insertion gets our own sibling <w:ins> instead
             ins_ancestor = self._find_ancestor(run, "w:ins")
             if ins_ancestor:
-                node_text = self._get_node_text(last_pos.node)
-                self._set_node_text(last_pos.node, node_text + text)
-                _set_xml_space_preserve(last_pos.node)
+                if self._owns_ins(ins_ancestor):
+                    node_text = self._get_node_text(last_pos.node)
+                    self._set_node_text(last_pos.node, node_text + text)
+                    _set_xml_space_preserve(last_pos.node)
+                else:
+                    node_text = self._get_node_text(last_pos.node)
+                    self._insert_own_ins_within_foreign_ins(ins_ancestor, last_pos.node, len(node_text), text, rPr_xml)
                 return
 
             ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
@@ -630,13 +635,17 @@ class RevisionManager:
         if not run:
             return
 
-        # If inside <w:ins>, splice text directly
+        # Inside our own <w:ins>: splice text directly; a foreign author's
+        # insertion gets our own sibling <w:ins> (splitting theirs mid-content)
         ins_ancestor = self._find_ancestor(run, "w:ins")
         if ins_ancestor:
-            node_text = self._get_node_text(pos.node)
-            offset = pos.offset_in_node
-            self._set_node_text(pos.node, node_text[:offset] + text + node_text[offset:])
-            _set_xml_space_preserve(pos.node)
+            if self._owns_ins(ins_ancestor):
+                node_text = self._get_node_text(pos.node)
+                offset = pos.offset_in_node
+                self._set_node_text(pos.node, node_text[:offset] + text + node_text[offset:])
+                _set_xml_space_preserve(pos.node)
+            else:
+                self._insert_own_ins_within_foreign_ins(ins_ancestor, pos.node, pos.offset_in_node, text, rPr_xml)
             return
 
         # Split the run at the offset and insert <w:ins> between
@@ -927,34 +936,58 @@ class RevisionManager:
         if not parts:
             return -1
 
-        # Site D: If all positions inside <w:ins>, edit in-place
+        # Site D: all positions inside <w:ins> — dispatch on insertion ownership
         if all(p.is_inside_ins for p in match.positions):
             first_node = match.positions[0].node
             ins_elem = self._find_ancestor(first_node, "w:ins")
-            # Save parent/next sibling before removal may detach ins_elem
-            ins_parent = ins_elem.parentNode if ins_elem else None
-            ins_next = ins_elem.nextSibling if ins_elem else None
+            ins_groups = self._group_positions_by_ins(match.positions)
 
-            self._remove_from_insertion(match.positions)
+            if all(g_ins is None or self._owns_ins(g_ins) for g_ins, _ in ins_groups):
+                # All our own — edit in place (historical behavior)
+                # Save parent/next sibling before removal may detach ins_elem
+                ins_parent = ins_elem.parentNode if ins_elem else None
+                ins_next = ins_elem.nextSibling if ins_elem else None
+
+                self._remove_from_insertion(match.positions)
+
+                first_rPr = parts[0][1]
+                new_run_xml = f"<w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r>"
+
+                if ins_elem and ins_elem.parentNode:
+                    # ins_elem still in DOM — insert replacement inside it
+                    first_child = ins_elem.firstChild
+                    if first_child:
+                        self.editor.insert_before(first_child, new_run_xml)
+                    else:  # pragma: no cover - removing all content deletes the ins outright
+                        self.editor.append_to(ins_elem, new_run_xml)
+                elif ins_parent:  # pragma: no branch - an ins removed from the DOM had a parent
+                    # ins_elem was fully removed — wrap replacement in a new <w:ins>
+                    ins_wrapper_xml = f"<w:ins>{new_run_xml}</w:ins>"
+                    if ins_next:
+                        self.editor.insert_before(ins_next, ins_wrapper_xml)
+                    else:
+                        self.editor.append_to(ins_parent, ins_wrapper_xml)
+                return -1
+
+            # Foreign insertion(s) involved — preserve them: nest our deletion
+            # inside, then place our replacement <w:ins> right after it,
+            # splitting the foreign ins when trailing content follows.
+            first_id, last_del = self._delete_from_ins_positions(match.positions)
 
             first_rPr = parts[0][1]
-            new_run_xml = f"<w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r>"
-
-            if ins_elem and ins_elem.parentNode:
-                # ins_elem still in DOM — insert replacement inside it
-                first_child = ins_elem.firstChild
-                if first_child:
-                    self.editor.insert_before(first_child, new_run_xml)
-                else:
-                    self.editor.append_to(ins_elem, new_run_xml)
-            elif ins_parent:
-                # ins_elem was fully removed — wrap replacement in a new <w:ins>
-                ins_wrapper_xml = f"<w:ins>{new_run_xml}</w:ins>"
-                if ins_next:
-                    self.editor.insert_before(ins_next, ins_wrapper_xml)
-                else:
-                    self.editor.append_to(ins_parent, ins_wrapper_xml)
-            return -1
+            replacement_xml = f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>"
+            if last_del is None:  # pragma: no cover - a foreign group always creates a del
+                return first_id
+            del_ins = self._find_ancestor(last_del, "w:ins")
+            if del_ins is not None:
+                self._split_ins_after_child(del_ins, last_del)
+                new_nodes = self.editor.insert_after(del_ins, replacement_xml)
+            else:  # pragma: no cover - Site D positions are inside ins, so the del is nested
+                new_nodes = self.editor.insert_after(last_del, replacement_xml)
+            for node in new_nodes:
+                if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
+                    return int(node.getAttribute("w:id"))
+            return first_id  # pragma: no cover - the fragment always yields a w:ins
 
         # Use first run's rPr for the insertion
         first_rPr = parts[0][1]
@@ -1065,9 +1098,11 @@ class RevisionManager:
         ref_node.parentNode.insertBefore(marker, ref_node)  # type: ignore[union-attr]
 
         # Process each segment to delete/remove the matched text
+        # (author-aware: foreign insertions get a nested <w:del>, our own are
+        # edited in place)
         for is_inside_ins, positions in segments:
             if is_inside_ins:
-                self._remove_from_insertion(positions)
+                self._delete_from_ins_positions(positions)
             else:
                 self._delete_regular_segment(positions)
 
@@ -1109,6 +1144,181 @@ class RevisionManager:
                 return parent
             parent = parent.parentNode
         return None
+
+    def _owns_ins(self, ins_elem) -> bool:
+        """Whether ``ins_elem`` is the current author's own pending insertion.
+
+        A missing or empty ``w:author`` reads as foreign: we must never
+        destructively edit an insertion we cannot attribute to ourselves.
+        Comparison is exact string equality — differing Unicode normalization
+        or case reads as foreign, which fails safe (we nest instead of
+        destroy).
+        """
+        author = ins_elem.getAttribute("w:author")
+        return bool(author) and author == self.editor.author
+
+    def _ins_identity_attrs(self, ins_elem) -> str:
+        """Serialize the identity attributes of an insertion for re-creation.
+
+        Returns ``w:author``/``w:date``/``w16du:dateUtc`` (those present) as an
+        XML attribute string, so a re-created half of a split ``w:ins`` keeps
+        the original author's identity; attribute injection only adds a
+        fresh ``w:id``.
+        """
+        parts = []
+        for attr in ("w:author", "w:date", "w16du:dateUtc"):
+            value = ins_elem.getAttribute(attr)
+            if value:
+                parts.append(f' {attr}="{_escape_xml(value)}"')
+        return "".join(parts)
+
+    def _group_positions_by_ins(self, positions: list) -> list[tuple[Element | None, list[TextPosition]]]:
+        """Group contiguous positions by their ancestor <w:ins> element.
+
+        Positions are in document order, so positions sharing an ins element
+        are contiguous; adjacent distinct ins elements form separate groups.
+        A group's element is None for positions outside any insertion.
+        """
+        groups: list[tuple[Element | None, list[TextPosition]]] = []
+        current_ins = None
+        for pos in positions:
+            ins_elem = self._find_ancestor(pos.node, "w:ins")
+            if not groups or ins_elem is not current_ins:
+                groups.append((ins_elem, [pos]))
+                current_ins = ins_elem
+            else:
+                groups[-1][1].append(pos)
+        return groups
+
+    def _delete_from_ins_positions(self, positions: list) -> tuple[int, Element | None]:
+        """Author-aware deletion of match positions that sit inside <w:ins>.
+
+        Our own insertions are edited in place (text physically removed, as
+        before). A foreign author's insertion is preserved: the matched text
+        is wrapped in a nested <w:del> carrying our authorship — Word's own
+        representation for deleting another reviewer's pending insertion.
+
+        Returns (first created del id or -1, last created del element or None).
+        """
+        first_del_id = -1
+        last_del: Element | None = None
+        for ins_elem, group in self._group_positions_by_ins(positions):
+            if ins_elem is None or self._owns_ins(ins_elem):
+                self._remove_from_insertion(group)
+            else:
+                del_id, group_last_del = self._delete_regular_segment(group)
+                if first_del_id == -1:
+                    first_del_id = del_id
+                if group_last_del is not None:  # pragma: no branch - a foreign group always creates a del
+                    last_del = group_last_del
+        return first_del_id, last_del
+
+    def _split_ins_after_child(self, ins_elem, child) -> None:
+        """Split ``ins_elem`` after ``child``, keeping the author's identity.
+
+        Everything following ``child`` moves into a fresh sibling <w:ins>
+        that copies this insertion's w:author/w:date (fresh w:id via
+        attribute injection). ``ins_elem`` is typically another author's
+        insertion — the copied identity keeps both halves attributed to
+        them. No-op when nothing follows ``child``. ``child`` may be a
+        descendant; the split happens after the direct child containing it.
+        """
+        while child.parentNode is not ins_elem:
+            child = child.parentNode
+        trailing = []
+        node = child.nextSibling
+        while node is not None:
+            trailing.append(node)
+            node = node.nextSibling
+        if not any(n.nodeType == n.ELEMENT_NODE for n in trailing):
+            return
+        children_xml = "".join(n.toxml() for n in trailing)
+        for n in trailing:
+            ins_elem.removeChild(n)
+        identity_xml = self._ins_identity_attrs(ins_elem)
+        self.editor.insert_after(ins_elem, f"<w:ins{identity_xml}>{children_xml}</w:ins>")
+
+    def _split_foreign_ins_at(self, edge_node, offset: int) -> Element | None:
+        """Make (edge_node, offset) fall on a child boundary of its <w:ins>.
+
+        Splits the run containing ``edge_node`` at ``offset`` when the split
+        point falls mid-run. Returns the last element that belongs to the
+        left side of the split point (None when the split point is at the
+        very start of the insertion's content).
+        """
+        run, rPr_xml = self._get_run_info(edge_node)
+        if not run:  # pragma: no cover - a w:t node always sits inside a run
+            return None
+        node_text = self._get_node_text(edge_node)
+
+        run_wts = list(run.getElementsByTagName("w:t"))
+        edge_idx = next(i for i, wt in enumerate(run_wts) if wt is edge_node)
+        left_texts = [self._get_node_text(wt) for wt in run_wts[:edge_idx]]
+        if node_text[:offset]:
+            left_texts.append(node_text[:offset])
+        right_texts = []
+        if node_text[offset:]:
+            right_texts.append(node_text[offset:])
+        right_texts += [self._get_node_text(wt) for wt in run_wts[edge_idx + 1 :]]
+
+        if not right_texts:
+            # Split point is at the end of this run — run boundary already
+            return run
+        if not left_texts:
+            # Split point is immediately before this run
+            # (isinstance so ty narrows minidom's sibling union — the usual
+            # nodeType comparison doesn't)
+            prev = run.previousSibling
+            while prev is not None:
+                if isinstance(prev, Element):
+                    return prev
+                prev = prev.previousSibling
+            return None
+
+        # Mid-run: rebuild as left/right runs (non-text children front-hoisted,
+        # matching the existing sites — interleaving is issue #20's follow-up)
+        xml_parts = []
+        non_text_xml = self._get_non_text_children_xml(run)
+        if non_text_xml:
+            xml_parts.append(f"<w:r>{rPr_xml}{non_text_xml}</w:r>")
+        xml_parts += [f"<w:r>{rPr_xml}<w:t>{_escape_xml(t)}</w:t></w:r>" for t in left_texts]
+        left_len = len(xml_parts)
+        xml_parts += [f"<w:r>{rPr_xml}<w:t>{_escape_xml(t)}</w:t></w:r>" for t in right_texts]
+
+        new_nodes = self.editor.replace_node(run, "".join(xml_parts))
+        elements = [n for n in new_nodes if n.nodeType == n.ELEMENT_NODE]
+        return elements[left_len - 1]
+
+    def _insert_own_ins_within_foreign_ins(self, ins_elem, edge_node, offset: int, text: str, rPr_xml: str) -> int:
+        """Insert our own <w:ins> at (edge_node, offset) inside a foreign ins.
+
+        Never splices into the foreign insertion (that would credit the other
+        author) and never nests <w:ins> in <w:ins> (invalid OOXML). Boundary
+        offsets produce a plain sibling; mid-insertion offsets split the
+        foreign ins into two identity-preserving halves with our ins between.
+
+        Returns the new insertion's change id.
+        """
+        own_ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
+        wt_nodes = self._get_wt_nodes_in_ancestor(ins_elem)
+        node_text = self._get_node_text(edge_node)
+
+        if edge_node is wt_nodes[0] and offset == 0:
+            new_nodes = self.editor.insert_before(ins_elem, own_ins_xml)
+        elif edge_node is wt_nodes[-1] and offset == len(node_text):
+            new_nodes = self.editor.insert_after(ins_elem, own_ins_xml)
+        else:
+            boundary = self._split_foreign_ins_at(edge_node, offset)
+            if boundary is None:  # pragma: no cover - non-boundary offsets never split at the start
+                new_nodes = self.editor.insert_before(ins_elem, own_ins_xml)
+            else:
+                self._split_ins_after_child(ins_elem, boundary)
+                new_nodes = self.editor.insert_after(ins_elem, own_ins_xml)
+
+        for node in new_nodes:
+            if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
+                return int(node.getAttribute("w:id"))
+        return -1  # pragma: no cover - the fragment always yields a w:ins
 
     def _remove_from_insertion(self, positions: list) -> None:
         """Remove matched text from inside a <w:ins> element.
@@ -1220,14 +1430,17 @@ class RevisionManager:
             return []
         return ancestor.getElementsByTagName("w:t")
 
-    def _delete_regular_segment(self, positions: list) -> int:
-        """Delete regular (non-insertion) text by wrapping in <w:del>.
+    def _delete_regular_segment(self, positions: list) -> tuple[int, Element | None]:
+        """Wrap matched text in <w:del> in place, run by run.
 
         Groups positions by run first, then by w:t node within each run,
         so that each run is removed exactly once even when it contains
-        multiple w:t nodes involved in the match.
+        multiple w:t nodes involved in the match. The rebuilt runs stay at
+        the original location, so this serves both regular top-level text
+        and nesting a deletion inside a foreign author's <w:ins> (the new
+        <w:del> is stamped with the current author either way).
 
-        Returns the w:id of the first <w:del> element created, or -1.
+        Returns (first created del id or -1, last created del element or None).
         """
         # Group positions by run, then by node within each run
         run_groups: OrderedDict[int, dict] = OrderedDict()
@@ -1253,6 +1466,7 @@ class RevisionManager:
 
         total = len(all_node_groups)
         first_del_id = -1
+        last_del: Element | None = None
         processed_runs: set[int] = set()
 
         for _global_idx, (run_info, _) in enumerate(all_node_groups):
@@ -1316,13 +1530,13 @@ class RevisionManager:
                 run.parentNode.removeChild(run)
             processed_runs.add(rid)
 
-            if first_del_id == -1:
-                for n in nodes:
-                    if n.nodeType == n.ELEMENT_NODE and n.tagName == "w:del":
+            for n in nodes:
+                if n.nodeType == n.ELEMENT_NODE and n.tagName == "w:del":
+                    if first_del_id == -1:
                         first_del_id = int(n.getAttribute("w:id"))
-                        break
+                    last_del = n
 
-        return first_del_id
+        return first_del_id, last_del
 
     def _delete_across_nodes(self, match: TextMapMatch) -> int:
         """Delete text spanning multiple w:t elements."""
@@ -1336,10 +1550,11 @@ class RevisionManager:
         if not parts:
             return -1
 
-        # Site F: If all positions inside <w:ins>, remove from insertion directly
+        # Site F: all positions inside <w:ins> — author-aware dispatch (our own
+        # insertions edited in place, foreign ones get a nested <w:del>)
         if all(p.is_inside_ins for p in match.positions):
-            self._remove_from_insertion(match.positions)
-            return -1
+            first_id, _ = self._delete_from_ins_positions(match.positions)
+            return first_id
 
         # Group parts by run, using node ids from _build_cross_boundary_parts
         matched_node_ids = {nid for _, _, _, _, _, nid in parts}
@@ -1410,11 +1625,11 @@ class RevisionManager:
         first_del_id = -1
         for is_inside_ins, positions in segments:
             if is_inside_ins:
-                self._remove_from_insertion(positions)
+                del_id, _ = self._delete_from_ins_positions(positions)
             else:
-                del_id = self._delete_regular_segment(positions)
-                if first_del_id == -1:
-                    first_del_id = del_id
+                del_id, _ = self._delete_regular_segment(positions)
+            if first_del_id == -1:
+                first_del_id = del_id
 
         return first_del_id
 
@@ -1495,13 +1710,17 @@ class RevisionManager:
         if not run:
             return -1
 
-        # If the edge run is inside <w:ins>, splice text at the exact offset
-        # (no wrapper, so no nested <w:ins>)
-        if self._find_ancestor(run, "w:ins"):
-            node_text = self._get_node_text(edge.node)
-            self._set_node_text(edge.node, node_text[:offset] + text + node_text[offset:])
-            _set_xml_space_preserve(edge.node)
-            return -1
+        # Edge run inside <w:ins>: splice into our own insertion (no wrapper,
+        # so no nested <w:ins>); a foreign author's insertion gets our own
+        # sibling <w:ins>, splitting theirs when the anchor falls mid-content.
+        ins_ancestor = self._find_ancestor(run, "w:ins")
+        if ins_ancestor:
+            if self._owns_ins(ins_ancestor):
+                node_text = self._get_node_text(edge.node)
+                self._set_node_text(edge.node, node_text[:offset] + text + node_text[offset:])
+                _set_xml_space_preserve(edge.node)
+                return -1
+            return self._insert_own_ins_within_foreign_ins(ins_ancestor, edge.node, offset, text, rPr_xml)
 
         # Rebuild the edge run: split its w:t at the offset and wrap text in <w:ins>
         ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"

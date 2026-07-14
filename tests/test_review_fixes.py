@@ -53,7 +53,7 @@ class TestSiteDPreserveInsWrapper:
         # Two runs inside w:ins, replace all text -> ins_elem gets fully removed
         # Replacement should still be inside a w:ins
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>AB</w:t></w:r><w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
@@ -94,7 +94,7 @@ class TestRemoveFromInsertionPreservesSiblingWt:
         # which spans the first run's two w:t nodes, then the second run's w:t is safe.
         # Instead: put KEEP after the matched nodes so the text map is "REMOVEALSOKEEP".
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>REMOVE</w:t></w:r>"
             "<w:r><w:t>ALSO</w:t><w:t>KEEP</w:t></w:r>"
             "</w:ins></w:p>"
@@ -109,7 +109,7 @@ class TestRemoveFromInsertionPreservesSiblingWt:
     def test_truncated_nodes_get_xml_space_preserve(self, temp_xml):
         # Multi-node removal where first/last nodes are truncated
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>xxAB</w:t></w:r>"
             "<w:r><w:t>CDyy</w:t></w:r>"
             "</w:ins></w:p>"
@@ -185,7 +185,7 @@ class TestSiteDAttributeInjection:
         # When replacing text across runs inside <w:ins>, the new run should get
         # w:rsidR injected by DocxXMLEditor's attribute injection.
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>AB</w:t></w:r><w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
@@ -203,7 +203,7 @@ class TestSiteDAttributeInjection:
         # When ins_elem stays in DOM (partial removal), the inserted run should
         # also get attribute injection.
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>xxAB</w:t></w:r><w:r><w:t>CDyy</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
@@ -292,7 +292,7 @@ class TestMixedStateMarkerPlacement:
         xml_path = temp_xml(
             "<w:p>"
             "<w:r><w:t>xxAB</w:t></w:r>"
-            '<w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>CD</w:t></w:r></w:ins>"
             "</w:p>"
         )
@@ -311,7 +311,8 @@ class TestSingleNodeRemovalXmlSpaceAndGuard:
     def test_truncate_before_sets_xml_space(self, temp_xml):
         # Delete prefix from " Hello" inside ins -> after_text=" Hello"[len(""):] needs xml:space
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"><w:r><w:t>AB cd</w:t></w:r></w:ins></w:p>'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>AB cd</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
         mgr.suggest_deletion("AB")
@@ -325,7 +326,8 @@ class TestSingleNodeRemovalXmlSpaceAndGuard:
 
     def test_truncate_after_sets_xml_space(self, temp_xml):
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"><w:r><w:t>cd AB</w:t></w:r></w:ins></w:p>'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>cd AB</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
         mgr.suggest_deletion("AB")
@@ -339,7 +341,7 @@ class TestSingleNodeRemovalXmlSpaceAndGuard:
     def test_full_removal_preserves_run_with_tab(self, temp_xml):
         # Run has w:t + w:tab; removing w:t should keep run alive for the tab
         xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>GONE</w:t><w:tab/></w:r>"
             "<w:r><w:t>STAY</w:t></w:r></w:ins></w:p>"
         )
@@ -495,7 +497,7 @@ class TestInsertPlacementMidNode:
         # Anchor inside an existing insertion: splice at the exact offset, no nested w:ins.
         mgr = _make_manager(
             temp_xml(
-                '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+                '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
                 "<w:r><w:t>Hello world</w:t></w:r></w:ins></w:p>"
             )
         )

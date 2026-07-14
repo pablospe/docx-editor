@@ -241,7 +241,7 @@ if doc.count_matches("Section 5") > 1:
 
 #### `replace(find, replace_with, *, paragraph, occurrence=0)`
 
-Replace text with tracked changes.
+Replace text with tracked changes. When the target sits inside another author's pending insertion, that insertion is preserved: the matched text gets a nested `<w:del>` under your authorship and the replacement lands in your own sibling `<w:ins>` (Word's behavior), instead of silently rewriting the other author's proposal.
 
 **Parameters:**
 
@@ -261,7 +261,7 @@ doc.replace("net", "gross", paragraph=ref)
 
 #### `delete(text, *, paragraph, occurrence=0)`
 
-Mark text as deleted with tracked changes.
+Mark text as deleted with tracked changes. Deleting text inside another author's pending insertion nests a `<w:del>` under your authorship inside their `<w:ins>`, preserving their proposal; only your own pending insertions are edited in place.
 
 **Parameters:**
 
@@ -279,7 +279,7 @@ ref = doc.delete("obsolete clause", paragraph="P5#d4e5")
 
 #### `insert_after(anchor, text, *, paragraph, occurrence=0)`
 
-Insert text after anchor with tracked changes.
+Insert text after anchor with tracked changes. An anchor inside another author's pending insertion produces your own sibling `<w:ins>` (splitting theirs when the anchor falls mid-content) rather than splicing your words into their proposal.
 
 **Parameters:**
 
@@ -298,7 +298,7 @@ ref = doc.insert_after("Section 5", " (as amended)", paragraph="P3#b2c4")
 
 #### `insert_before(anchor, text, *, paragraph, occurrence=0)`
 
-Insert text before anchor with tracked changes.
+Insert text before anchor with tracked changes. Foreign pending insertions are treated the same as in `insert_after()`.
 
 **Parameters:**
 

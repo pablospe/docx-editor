@@ -1,7 +1,10 @@
-"""Tests for nested w:ins prevention.
+"""Tests for same-author in-place editing inside w:ins.
 
-These tests verify that operations inside existing w:ins elements do not create
-nested w:ins or w:del elements, which are invalid in OOXML.
+These tests verify that operations inside the current author's *own* w:ins
+elements edit the insertion in place: no nested w:ins (invalid OOXML) and no
+w:del inside our own w:ins (our own pending text is simply rewritten, not
+counter-proposed). Edits inside *another* author's w:ins legitimately nest a
+w:del — that behavior is covered by test_foreign_ins_edits.py.
 """
 
 from pathlib import Path
@@ -42,6 +45,11 @@ def _make_manager(xml_path: Path) -> RevisionManager:
 
 def _assert_no_nested_ins(manager: RevisionManager) -> None:
     """Assert no w:ins or w:del is nested inside another w:ins.
+
+    All fixtures here are authored by the manager's own author ("Test
+    Author"), so in-place editing must never nest anything: no w:ins in
+    w:ins (invalid OOXML), and no w:del in our *own* w:ins (nested w:del is
+    reserved for edits inside a foreign author's insertion).
 
     Args:
         manager: RevisionManager to check
@@ -97,7 +105,7 @@ class TestReplaceInsideIns:
     def test_replace_inside_ins(self, temp_xml):
         """Test single-element replace inside w:ins."""
         body_xml = (
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>Hello world</w:t></w:r></w:ins></w:p>"
         )
         xml_path = temp_xml(body_xml)
@@ -120,7 +128,7 @@ class TestDeleteInsideIns:
     def test_delete_inside_ins(self, temp_xml):
         """Test single-element delete inside w:ins."""
         body_xml = (
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>Hello world</w:t></w:r></w:ins></w:p>"
         )
         xml_path = temp_xml(body_xml)
@@ -143,7 +151,8 @@ class TestInsertInsideIns:
     def test_insert_after_inside_ins(self, temp_xml):
         """Test insert_after with anchor inside w:ins."""
         body_xml = (
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"><w:r><w:t>Hello</w:t></w:r></w:ins></w:p>'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>Hello</w:t></w:r></w:ins></w:p>"
         )
         xml_path = temp_xml(body_xml)
         manager = _make_manager(xml_path)
@@ -161,7 +170,8 @@ class TestInsertInsideIns:
     def test_insert_before_inside_ins(self, temp_xml):
         """Test insert_before with anchor inside w:ins."""
         body_xml = (
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z"><w:r><w:t>Hello</w:t></w:r></w:ins></w:p>'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>Hello</w:t></w:r></w:ins></w:p>"
         )
         xml_path = temp_xml(body_xml)
         manager = _make_manager(xml_path)
@@ -183,7 +193,7 @@ class TestCrossBoundaryInsideIns:
     def test_cross_boundary_replace_all_inside_ins(self, temp_xml):
         """Test replace spanning two runs both inside w:ins (site D)."""
         body_xml = (
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>Hello </w:t></w:r><w:r><w:t>world</w:t></w:r></w:ins></w:p>"
         )
         xml_path = temp_xml(body_xml)
@@ -202,7 +212,7 @@ class TestCrossBoundaryInsideIns:
     def test_cross_boundary_delete_all_inside_ins(self, temp_xml):
         """Test delete spanning two runs both inside w:ins (site F)."""
         body_xml = (
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>Hello </w:t></w:r><w:r><w:t>world</w:t></w:r></w:ins></w:p>"
         )
         xml_path = temp_xml(body_xml)
@@ -221,7 +231,7 @@ class TestCrossBoundaryInsideIns:
     def test_cross_boundary_insert_near_match_inside_ins(self, temp_xml):
         """Test insert near cross-boundary match inside w:ins (sites H/I)."""
         body_xml = (
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>Hello </w:t></w:r><w:r><w:t>world</w:t></w:r></w:ins></w:p>"
         )
         xml_path = temp_xml(body_xml)
@@ -244,7 +254,7 @@ class TestMixedBoundaryScenarios:
     def test_replace_crossing_ins_boundary_start(self, temp_xml):
         """Test replace that starts inside w:ins and ends outside."""
         body_xml = (
-            '<w:p><w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>Hello</w:t></w:r></w:ins><w:r><w:t> world</w:t></w:r></w:p>"
         )
         xml_path = temp_xml(body_xml)
@@ -263,7 +273,7 @@ class TestMixedBoundaryScenarios:
     def test_replace_crossing_ins_boundary_end(self, temp_xml):
         """Test replace that starts outside w:ins and ends inside."""
         body_xml = (
-            '<w:p><w:r><w:t>Hello </w:t></w:r><w:ins w:id="1" w:author="A" '
+            '<w:p><w:r><w:t>Hello </w:t></w:r><w:ins w:id="1" w:author="Test Author" '
             'w:date="2024-01-01T00:00:00Z"><w:r><w:t>world</w:t></w:r></w:ins></w:p>'
         )
         xml_path = temp_xml(body_xml)
@@ -282,7 +292,7 @@ class TestMixedBoundaryScenarios:
     def test_replace_surrounding_ins(self, temp_xml):
         """Test replace that contains an entire w:ins element."""
         body_xml = (
-            '<w:p><w:r><w:t>Hello </w:t></w:r><w:ins w:id="1" w:author="A" '
+            '<w:p><w:r><w:t>Hello </w:t></w:r><w:ins w:id="1" w:author="Test Author" '
             'w:date="2024-01-01T00:00:00Z"><w:r><w:t>big</w:t></w:r></w:ins>'
             "<w:r><w:t> world</w:t></w:r></w:p>"
         )
