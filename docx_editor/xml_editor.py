@@ -9,7 +9,8 @@ import io
 import random
 import re
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1207,10 +1208,16 @@ class DocxXMLEditor(XMLEditor):
         self.rsid = rsid
         self.author = author
         self.initials = initials or author[0].upper() if author else ""
+        # Highest change id ever seen or assigned by this editor instance.
+        # Keeps id allocation monotonic: removing the max-id element mid-
+        # operation must not let its id be reissued (id-keyed bookkeeping
+        # such as revision groups would silently point at the wrong element).
+        self._max_change_id = -1
+        self._tracked_change_collector: list[Element] | None = None
 
     def _get_next_change_id(self) -> int:
         """Get the next available change ID by checking all tracked change elements."""
-        max_id = -1
+        max_id = self._max_change_id
         for tag in ("w:ins", "w:del"):
             elements = self.dom.getElementsByTagName(tag)
             for elem in elements:
@@ -1220,7 +1227,29 @@ class DocxXMLEditor(XMLEditor):
                         max_id = max(max_id, int(change_id))
                     except ValueError:
                         pass
-        return max_id + 1
+        self._max_change_id = max_id + 1
+        return self._max_change_id
+
+    @contextmanager
+    def collect_tracked_changes(self) -> Iterator[list[Element]]:
+        """Collect every newly created <w:ins>/<w:del> seen by attribute injection.
+
+        While the context is active, ``_inject_attributes_to_nodes`` appends
+        each tracked-change element whose ``w:id`` it freshly assigned to the
+        yielded list. Elements arriving with a ``w:id`` already set are
+        pre-existing revisions passing back through injection (re-serialized
+        during an insertion split) and are deliberately not collected. Does
+        not nest — the collector is a single slot, and nested capture would
+        misattribute elements to the outer collection.
+        """
+        if self._tracked_change_collector is not None:
+            raise RuntimeError("collect_tracked_changes() does not nest")
+        collected: list[Element] = []
+        self._tracked_change_collector = collected
+        try:
+            yield collected
+        finally:
+            self._tracked_change_collector = None
 
     def _ensure_w16du_namespace(self) -> None:
         """Ensure w16du namespace is declared on the root element."""
@@ -1296,8 +1325,14 @@ class DocxXMLEditor(XMLEditor):
                     elem.setAttribute("w:rsidR", self.rsid)
 
         def add_tracked_change_attrs(elem) -> None:
-            # Auto-assign w:id if not present
-            if not elem.hasAttribute("w:id"):
+            # A pre-set w:id means the element is not new — it is pre-existing
+            # markup passing back through injection (e.g. re-serialized when a
+            # foreign <w:ins> is split around it). Only freshly-created
+            # elements (fragments never pre-set w:id) get ids assigned and are
+            # reported to the collector; collecting re-serialized revisions
+            # would misattribute them to the operation doing the splitting.
+            is_new = not elem.hasAttribute("w:id")
+            if is_new:
                 elem.setAttribute("w:id", str(self._get_next_change_id()))
             if not elem.hasAttribute("w:author"):
                 elem.setAttribute("w:author", self.author)
@@ -1307,6 +1342,8 @@ class DocxXMLEditor(XMLEditor):
             if elem.tagName in ("w:ins", "w:del") and not elem.hasAttribute("w16du:dateUtc"):
                 self._ensure_w16du_namespace()
                 elem.setAttribute("w16du:dateUtc", timestamp)
+            if is_new and self._tracked_change_collector is not None:
+                self._tracked_change_collector.append(elem)
 
         def add_comment_attrs(elem) -> None:
             if not elem.hasAttribute("w:author"):
