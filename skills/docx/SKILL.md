@@ -585,7 +585,7 @@ refs_only = doc.list_paragraphs(max_chars=0)         # "P1#a7b2", no preview
 
 The `paragraph` argument is **required** for all edit methods. If the paragraph content has changed since you called `list_paragraphs()`, a `HashMismatchError` is raised — preventing edits to the wrong location.
 
-**Every edit method returns the new paragraph ref as a plain string.** Chain edits without calling `list_paragraphs()` again:
+**Every edit method returns an `EditResult` — a `str` subclass whose value is the new paragraph ref (plus `group_id`/`revision_ids`).** Chain edits without calling `list_paragraphs()` again:
 
 ```python
 # Chain 3 edits on the same paragraph — no list_paragraphs() between them:

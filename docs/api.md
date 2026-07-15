@@ -387,7 +387,7 @@ stale, the entire batch is rejected before any edits are applied.
 - `operations` (list[EditOperation]): Edit operations to apply
 - `dry_run` (bool): If True, validate every operation without applying any edits and return one [`EditValidationResult`](#editvalidationresult) per operation, in input order; the document is left unchanged. Each operation is validated independently against the current document — sequential effects between multiple operations on the same paragraph are **not** simulated. Defaults to False.
 
-**Returns:** Updated paragraph references in input order (list of [`EditResult`](#editresult)) — each operation is its own revision group, so one op can be accepted and another rejected; with `dry_run=True`, a list of [`EditValidationResult`](#editvalidationresult) instead
+**Returns:** Updated paragraph references in input order (list of [`EditResult`](#editresult)) — each operation that creates revisions gets its own revision group, so one op can be accepted and another rejected (`group_id` is `None` for an op that created no new revisions, e.g. text spliced into one of your own pending insertions); with `dry_run=True`, a list of [`EditValidationResult`](#editvalidationresult) instead
 
 **Raises:** [`BatchOperationError`](#batchoperationerror) — the only exception a non-dry-run batch raises for a failing operation, whatever the underlying cause (stale hash, malformed ref, missing text, ambiguous target). `operation_index` names the failing op; `original` (also `__cause__`) holds the underlying typed exception. The batch is atomic: nothing is applied on failure.
 

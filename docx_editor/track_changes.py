@@ -382,7 +382,6 @@ class _GroupCapture:
     """Filled in by ``RevisionManager._grouped`` when its with-block exits."""
 
     group_id: int | None = None
-    revision_ids: tuple[int, ...] = ()
 
 
 def _occurrence_in_text_map(tm: TextMap, elem, text: str) -> int | None:
@@ -461,7 +460,11 @@ class RevisionManager:
         # unit. In-memory only — groups live for the lifetime of this manager
         # (i.e. the open Document); nothing is written into the .docx.
         self._groups: dict[int, tuple[int, ...]] = {}
-        self._revision_groups: dict[int, int] = {}
+        # Maps revision id -> group id. A None value means explicitly
+        # ungrouped: a split-off tail of a pre-session insertion, registered
+        # so the active _grouped capture cannot claim it (membership is
+        # key-based) while group_id_of/list_revisions still report None.
+        self._revision_groups: dict[int, int | None] = {}
         self._group_counter = 1
 
     @contextmanager
@@ -473,9 +476,10 @@ class RevisionManager:
         authored by us — a split half of a *foreign* insertion gets a fresh
         id but keeps the foreign author, and must not join our group —
         (ii) still attached to the DOM, excluding create-then-remove churn,
-        and (iii) not already registered to an earlier group — a split-off
-        tail of one of our *own* insertions is adopted into its origin
-        group by _adopt_split_tail, not claimed by the splitting operation.
+        and (iii) not already registered by ``_adopt_split_tail`` — a
+        split-off tail of one of our *own* insertions is adopted into its
+        origin group (or marked ungrouped when the origin predates this
+        session), never claimed by the splitting operation.
         A group id is allocated only when that filtered set is non-empty;
         it is exposed on the yielded _GroupCapture after the block exits.
         If the operation raises, nothing is registered.
@@ -510,7 +514,6 @@ class RevisionManager:
             for rev_id in members:
                 self._revision_groups[rev_id] = group_id
             capture.group_id = group_id
-            capture.revision_ids = tuple(members)
 
     def _adopt_split_tail(self, original_ins, new_nodes) -> None:
         """Keep a split-off tail of one of our own insertions in its origin group.
@@ -519,28 +522,30 @@ class RevisionManager:
         the trailing half is re-created as a fresh <w:ins> with a fresh w:id.
         That tail is leftover content of the *original* insertion's operation,
         not of the operation doing the splitting — so it joins the original
-        insertion's group (when it has one), keeping reject_group/accept_group
-        of that earlier operation complete. Registering it here also stops
-        the active ``_grouped`` capture from claiming it (its id is already
-        in ``_revision_groups`` when the capture filters members).
+        insertion's group, keeping reject_group/accept_group of that earlier
+        operation complete. When the origin has no group (a pre-session
+        insertion by this author), the tail is registered as explicitly
+        ungrouped (None) instead. Either registration stops the active
+        ``_grouped`` capture from claiming the tail for the splitting
+        operation — otherwise rejecting that operation's group would rip a
+        leftover piece out of a pre-existing insertion.
         """
         try:
             origin_group = self._revision_groups.get(int(original_ins.getAttribute("w:id")))
         except ValueError:  # pragma: no cover - our own ins always has a numeric id
-            return
-        if origin_group is None:
-            return
+            origin_group = None
         for node in new_nodes:
             if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
                 tail_id = int(node.getAttribute("w:id"))
-                self._groups[origin_group] = (*self._groups[origin_group], tail_id)
                 self._revision_groups[tail_id] = origin_group
+                if origin_group is not None:
+                    self._groups[origin_group] = (*self._groups[origin_group], tail_id)
 
-    def _registry_snapshot(self) -> tuple[int, dict[int, tuple[int, ...]], dict[int, int]]:
+    def _registry_snapshot(self) -> tuple[int, dict[int, tuple[int, ...]], dict[int, int | None]]:
         """Snapshot the group registry for rollback alongside a DOM snapshot."""
         return (self._group_counter, dict(self._groups), dict(self._revision_groups))
 
-    def _restore_registry(self, snapshot: tuple[int, dict[int, tuple[int, ...]], dict[int, int]]) -> None:
+    def _restore_registry(self, snapshot: tuple[int, dict[int, tuple[int, ...]], dict[int, int | None]]) -> None:
         """Restore the group registry captured by ``_registry_snapshot``."""
         self._group_counter, self._groups, self._revision_groups = snapshot
 
@@ -2378,8 +2383,9 @@ class RevisionManager:
                     view: Literal["accepted", "original"] = "accepted" if rev_type == "insertion" else "original"
                     occurrence = _occurrence_in_text_map(ctx.text_map(paragraph, view), elem, text)
 
+        rev_id_int = int(rev_id)
         return Revision(
-            id=int(rev_id),
+            id=rev_id_int,
             type=rev_type,
             author=author,
             date=date,
@@ -2388,7 +2394,7 @@ class RevisionManager:
             occurrence=occurrence,
             nested_under=_nearest_revision_ancestor_id(elem),
             contains_ids=_descendant_revision_ids(elem),
-            group_id=self._revision_groups.get(int(rev_id)),
+            group_id=self._revision_groups.get(rev_id_int),
         )
 
     def accept_revision(self, revision_id: int) -> bool:

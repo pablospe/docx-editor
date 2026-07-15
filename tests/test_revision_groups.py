@@ -417,6 +417,53 @@ class TestOwnInsertionSplits:
         assert _paragraph_text(doc, 1) == original
         assert doc.list_revisions() == []
 
+    def test_presession_middle_delete_leaves_tail_ungrouped(self, temp_docx):
+        # The origin insertion predates this session (reopen dropped its
+        # group), so its split-off tail has no group to join — and must not
+        # be claimed into a phantom group by the delete operation.
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            doc.insert_after("fox", " AAA MID BBB", paragraph=ref)
+            doc.save()
+
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            result = doc.delete("MID ", paragraph=ref)
+
+            assert result.group_id is None
+            assert doc._revision_manager._groups == {}
+            revisions = doc.list_revisions()
+            assert len(revisions) == 2  # truncated head + split-off tail
+            assert all(rev.group_id is None for rev in revisions)
+
+    def test_presession_rewrite_does_not_claim_split_tail(self, temp_docx):
+        # Same defect through the public rewrite path: without tail
+        # registration, the rewrite's EditResult.group_id would hold ONLY
+        # the pre-session insertion's tail, and reject_group (the documented
+        # undo idiom) would rip out pre-existing text instead of undoing
+        # the rewrite.
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            doc.insert_after("fox", " alpha beta gamma", paragraph=ref)
+            doc.save()
+
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            current = _paragraph_text(doc, 1)
+            result = doc.rewrite_paragraph(ref, current.replace("beta", "BETA"))
+
+            # The only physical change happens inside our own pre-session
+            # insertion — no trackable revisions, so no group at all.
+            assert result.group_id is None
+            assert doc._revision_manager._groups == {}
+            assert all(rev.group_id is None for rev in doc.list_revisions())
+            # Placement-agnostic content check: replacement position inside
+            # an own insertion is the pre-existing ISSUES.md #31 ordering
+            # bug, out of scope here.
+            text = _paragraph_text(doc, 1)
+            assert "BETA" in text and "beta" not in text
+            assert "alpha" in text and "gamma" in text
+
 
 class TestMonotonicChangeIds:
     def test_removed_max_id_is_not_reused(self, temp_xml):
