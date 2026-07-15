@@ -926,7 +926,8 @@ class Document:
         All paragraph hashes are validated before any rewrites are applied.
         If any hash is stale, the entire batch is rejected before any changes
         are made. Once validation passes, rewrites are applied sequentially.
-        Each rewrite gets its own revision group (see rewrite_paragraph).
+        Each rewrite gets its own revision group, or ``group_id=None`` when
+        it created no revisions (see rewrite_paragraph).
 
         Args:
             rewrites: List of (ref, new_text) tuples
@@ -934,7 +935,9 @@ class Document:
         Returns:
             List of EditResult (new paragraph references with updated hashes),
             in input order, each carrying its rewrite's
-            ``group_id``/``revision_ids``.
+            ``group_id``/``revision_ids`` (``group_id`` is None for a rewrite
+            that made no change or whose changes fully merged into your own
+            pending insertions).
 
         Raises:
             BatchOperationError: The only exception raised for a failing

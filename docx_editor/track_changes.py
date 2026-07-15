@@ -1454,7 +1454,8 @@ class RevisionManager:
                     for node in new_nodes:
                         if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
                             return int(node.getAttribute("w:id"))
-                return -1  # pragma: no cover - the wrapper fragment always yields a w:ins
+                # Reached by the splice-in-place branch: no new revision.
+                return -1
 
             # Foreign insertion(s) involved — preserve them: nest our deletion
             # inside, then place our replacement <w:ins> right after it,

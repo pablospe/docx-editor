@@ -425,7 +425,7 @@ Rewrite multiple paragraphs after validating paragraph hashes up front.
 
 - `rewrites` (list[tuple[str, str]]): Pairs of paragraph ref and desired text
 
-**Returns:** Updated paragraph references in input order (list of [`EditResult`](#editresult)); each rewrite gets its own revision group
+**Returns:** Updated paragraph references in input order (list of [`EditResult`](#editresult)); each rewrite gets its own revision group (`group_id` is `None` for a rewrite that made no change or whose changes fully merged into your own pending insertions)
 
 **Raises:** [`BatchOperationError`](#batchoperationerror) — same single-exception contract as `batch_edit()`.
 
