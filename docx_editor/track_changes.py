@@ -196,8 +196,9 @@ class EditResult(str):
       operation created, usable with ``accept_group``/``reject_group``.
       None when the operation created no new revisions — e.g. text spliced
       into one of your own pending insertions (physically merged, so it is
-      inseparable from the earlier operation at the XML level), or a
-      rewrite that found no differences. Groups live only for the current
+      inseparable from the earlier operation at the XML level), a rewrite
+      that found no differences, or a rewrite whose changes all landed
+      inside your own pending insertions. Groups live only for the current
       open Document (see ``Document.accept_group``).
     - ``revision_ids``: the w:ids of the group's member revisions, in
       creation order, as of this edit's return; ``()`` when ``group_id`` is
@@ -471,8 +472,10 @@ class RevisionManager:
     def _grouped(self) -> Iterator[_GroupCapture]:
         """Register every revision the wrapped operation creates as one group.
 
-        Captures the <w:ins>/<w:del> elements processed by attribute
-        injection during the with-block, then keeps those that are (i)
+        Captures the <w:ins>/<w:del> elements newly created during the
+        with-block (freshly assigned ``w:id``; pre-existing revisions
+        re-serialized by insertion splits are never collected), then keeps
+        those that are (i)
         authored by us — a split half of a *foreign* insertion gets a fresh
         id but keeps the foreign author, and must not join our group —
         (ii) still attached to the DOM, excluding create-then-remove churn,
@@ -1451,7 +1454,7 @@ class RevisionManager:
                     for node in new_nodes:
                         if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
                             return int(node.getAttribute("w:id"))
-                return -1
+                return -1  # pragma: no cover - the wrapper fragment always yields a w:ins
 
             # Foreign insertion(s) involved — preserve them: nest our deletion
             # inside, then place our replacement <w:ins> right after it,

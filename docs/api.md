@@ -368,7 +368,7 @@ resolve them as a unit with [`accept_group()`](#accept_groupgroup_id) /
 - `ref` (str): Paragraph reference from `list_paragraphs()`
 - `new_text` (str): Desired paragraph text
 
-**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`; `group_id` is `None` when `new_text` equals the current text)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`; `group_id` is `None` when `new_text` equals the current text, or when every change landed inside your own pending insertions and was merged in place)
 
 **Example:**
 
@@ -864,7 +864,7 @@ from docx_editor import EditResult
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `group_id` | int or None | Revision group holding every revision this edit created, for [`accept_group()`](#accept_groupgroup_id) / [`reject_group()`](#reject_groupgroup_id). None when the edit created no new revisions (e.g. text spliced into one of your own pending insertions, or a no-change rewrite). Valid only while this Document stays open. |
+| `group_id` | int or None | Revision group holding every revision this edit created, for [`accept_group()`](#accept_groupgroup_id) / [`reject_group()`](#reject_groupgroup_id). None when the edit created no new revisions (e.g. text spliced into one of your own pending insertions, a no-change rewrite, or a rewrite whose changes all merged into your own pending insertions). Valid only while this Document stays open. |
 | `revision_ids` | tuple[int, ...] | The `w:id`s of the group's member revisions, in creation order; `()` when `group_id` is None |
 
 ### Example

@@ -909,7 +909,8 @@ class Document:
             EditResult — the new paragraph reference with updated hash (e.g.,
             "P2#c3d4"), carrying ``group_id``/``revision_ids`` of all the
             revisions the rewrite created (``group_id`` is None when
-            new_text equals the current text).
+            new_text equals the current text, or when every change landed
+            inside your own pending insertions and was merged in place).
 
         Example:
             result = doc.rewrite_paragraph("P2#f3c1", "The board shall approve the proposal.")

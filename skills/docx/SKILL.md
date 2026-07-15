@@ -389,7 +389,7 @@ doc.accept_revision(revisions[0].id)
 doc.reject_revision(their_changes[0].id)
 
 # Accept or reject one edit's revisions as a unit (returns count processed).
-# Every edit method returns an EditResult carrying group_id; ALWAYS prefer
+# Every edit method returns an EditResult carrying group_id; prefer
 # groups over per-id calls for rewrite_paragraph — one rewrite creates many
 # revisions (one per diff hunk), and accepting only some of them by id
 # garbles the paragraph. Raises RevisionError for an unknown group id.

@@ -1232,13 +1232,15 @@ class DocxXMLEditor(XMLEditor):
 
     @contextmanager
     def collect_tracked_changes(self) -> Iterator[list[Element]]:
-        """Collect every <w:ins>/<w:del> element processed by attribute injection.
+        """Collect every newly created <w:ins>/<w:del> seen by attribute injection.
 
         While the context is active, ``_inject_attributes_to_nodes`` appends
-        each tracked-change element it touches (whether or not its ``w:id``
-        was auto-assigned) to the yielded list. Does not nest — the collector
-        is a single slot, and nested capture would misattribute elements to
-        the outer collection.
+        each tracked-change element whose ``w:id`` it freshly assigned to the
+        yielded list. Elements arriving with a ``w:id`` already set are
+        pre-existing revisions passing back through injection (re-serialized
+        during an insertion split) and are deliberately not collected. Does
+        not nest — the collector is a single slot, and nested capture would
+        misattribute elements to the outer collection.
         """
         if self._tracked_change_collector is not None:
             raise RuntimeError("collect_tracked_changes() does not nest")
@@ -1323,8 +1325,14 @@ class DocxXMLEditor(XMLEditor):
                     elem.setAttribute("w:rsidR", self.rsid)
 
         def add_tracked_change_attrs(elem) -> None:
-            # Auto-assign w:id if not present
-            if not elem.hasAttribute("w:id"):
+            # A pre-set w:id means the element is not new — it is pre-existing
+            # markup passing back through injection (e.g. re-serialized when a
+            # foreign <w:ins> is split around it). Only freshly-created
+            # elements (fragments never pre-set w:id) get ids assigned and are
+            # reported to the collector; collecting re-serialized revisions
+            # would misattribute them to the operation doing the splitting.
+            is_new = not elem.hasAttribute("w:id")
+            if is_new:
                 elem.setAttribute("w:id", str(self._get_next_change_id()))
             if not elem.hasAttribute("w:author"):
                 elem.setAttribute("w:author", self.author)
@@ -1334,7 +1342,7 @@ class DocxXMLEditor(XMLEditor):
             if elem.tagName in ("w:ins", "w:del") and not elem.hasAttribute("w16du:dateUtc"):
                 self._ensure_w16du_namespace()
                 elem.setAttribute("w16du:dateUtc", timestamp)
-            if self._tracked_change_collector is not None:
+            if is_new and self._tracked_change_collector is not None:
                 self._tracked_change_collector.append(elem)
 
         def add_comment_attrs(elem) -> None:

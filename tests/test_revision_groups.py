@@ -358,6 +358,38 @@ class TestForeignInsGrouping:
         member_types = {revisions[rid].type for rid in members}
         assert member_types == {"deletion", "insertion"}
 
+    def test_split_foreign_ins_does_not_claim_presession_nested_del(self, temp_xml):
+        # A's pending insertion contains B's PRE-SESSION deletion (no group —
+        # e.g. made before a save/reopen). B then inserts inside A's
+        # insertion before the deletion: the split re-serializes A's
+        # trailing content INCLUDING B's old <w:del>, running it back
+        # through attribute injection. That pre-existing deletion must not
+        # join B's insert group — rejecting the insert would silently
+        # resurrect "beta ".
+        body = (
+            f'<w:p><w:ins w:id="1" w:author="{AUTHOR_A}" w:date="{DATE_A}">'
+            "<w:r><w:t>alpha </w:t></w:r>"
+            f'<w:del w:id="2" w:author="{AUTHOR_B}" w:date="{DATE_A}">'
+            "<w:r><w:delText>beta </w:delText></w:r></w:del>"
+            "<w:r><w:t>gamma</w:t></w:r></w:ins></w:p>"
+        )
+        manager = _make_manager(temp_xml(body), author=AUTHOR_B)
+
+        change_id = manager.insert_text_after("alpha", "NEW ")
+
+        group_id = manager.group_id_of(change_id)
+        assert group_id is not None
+        members = manager.group_revisions(group_id)
+        assert members == (change_id,)  # only the new insertion, not del#2
+
+        revisions = {rev.id: rev for rev in manager.list_revisions()}
+        assert revisions[2].group_id is None  # pre-session del stays ungrouped
+
+        # Undoing the insert must leave the pre-existing deletion untouched.
+        manager.reject_group(group_id)
+        remaining = {rev.id for rev in manager.list_revisions()}
+        assert 2 in remaining
+
     def test_delete_inside_foreign_ins_groups_nested_del(self, temp_xml):
         body = (
             f'<w:p><w:ins w:id="1" w:author="{AUTHOR_A}" w:date="{DATE_A}">'
