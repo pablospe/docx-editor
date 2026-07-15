@@ -267,8 +267,8 @@ print(loc.section)  # 1-based section index; sectPr-carrying paragraph closes it
 # One-pass batch variant: [(ref, ParagraphLocation), ...] for every paragraph
 locations = doc.list_paragraph_locations()
 
-# All edit methods return the new paragraph ref as a plain string.
-# Use it for follow-up edits on the same paragraph:
+# All edit methods return an EditResult — a str subclass whose value is the
+# new paragraph ref. Use it anywhere a ref string is expected:
 new_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
 doc.replace("net", "gross", paragraph=new_ref)  # chain without list_paragraphs()
 
@@ -291,15 +291,15 @@ doc.delete("unnecessary clause", paragraph="P5#d4e5")
 doc.insert_after("Section 3.", " Additional terms apply.", paragraph="P3#b2c4")
 doc.insert_before("Section 3.", "See also: ", paragraph="P3#b2c4")
 
-# To accept/reject a specific edit, use list_revisions() to get the change ID:
-revisions = doc.list_revisions()
-doc.accept_revision(revisions[-1].id)
+# To accept/reject a specific edit as a unit, use its revision group:
+result = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+doc.reject_group(result.group_id)   # undo the whole edit (del + ins together)
 
 doc.save("edited.docx")
 doc.close()
 ```
 
-**Return values:** All edit methods return the new paragraph reference as a plain `str` (e.g., `"P2#c3d4"`). Use this for follow-up edits on the same paragraph without calling `list_paragraphs()` again. To get change IDs for accept/reject, use `doc.list_revisions()`.
+**Return values:** All edit methods return an `EditResult` — a `str` subclass whose value is the new paragraph reference (e.g., `"P2#c3d4"`); use it for follow-up edits on the same paragraph without calling `list_paragraphs()` again. It also carries `group_id` (the revision group holding every revision the edit created — pass to `accept_group()`/`reject_group()`) and `revision_ids` (the members' change ids). `group_id` is `None` when the edit created no new revisions (e.g. text spliced into one of your own pending insertions).
 
 **Multi-author documents:** Editing inside *another* author's pending insertion preserves their proposal, matching Word: deletions nest a `<w:del>` under your authorship inside their `<w:ins>`, and replacements/insertions put your text in your own sibling `<w:ins>` (splitting theirs when needed) instead of silently rewriting it. `accept_all(author=...)` / `reject_all(author=...)` then resolve each author's changes independently. Only your own pending insertions are edited in place.
 
@@ -367,6 +367,8 @@ for r in revisions:
     print(f"  at {r.paragraph_ref} occurrence={r.occurrence}")
     # Nesting: e.g. a foreign deletion inside another author's insertion
     print(f"  nested_under={r.nested_under} contains_ids={r.contains_ids}")
+    # Group: revisions created by the same edit in this session share it
+    print(f"  group_id={r.group_id}")
 
 # Filter by author
 their_changes = doc.list_revisions(author="OtherUser")
@@ -385,6 +387,20 @@ doc.add_comment(r.text, "please confirm", paragraph=r.paragraph_ref, occurrence=
 # Use IDs from list_revisions() — don't guess numbering.
 doc.accept_revision(revisions[0].id)
 doc.reject_revision(their_changes[0].id)
+
+# Accept or reject one edit's revisions as a unit (returns count processed).
+# Every edit method returns an EditResult carrying group_id; ALWAYS prefer
+# groups over per-id calls for rewrite_paragraph — one rewrite creates many
+# revisions (one per diff hunk), and accepting only some of them by id
+# garbles the paragraph. Raises RevisionError for an unknown group id.
+result = doc.rewrite_paragraph("P3#a7b2", "Entirely new paragraph text.")
+doc.reject_group(result.group_id)   # undo the whole rewrite, or:
+# doc.accept_group(result.group_id) # apply it in full
+
+# Groups are in-memory and per-open-Document: after close()/reopen,
+# revisions report group_id=None and old group ids raise RevisionError.
+# save() keeps groups alive (the Document stays open). Foreign/pre-session
+# revisions never have a group — resolve those by id or author.
 
 # Accept or reject all revisions (returns count of revisions processed)
 doc.accept_all()
@@ -468,7 +484,9 @@ doc.close()
 
 To act on a subset, target revisions by ID: `list_revisions()` (optionally
 `author=`- or `paragraph=`-filtered), pick by `.text`/`.type`/`.paragraph_ref`,
-then `accept_revision(id)` / `reject_revision(id)`.
+then `accept_revision(id)` / `reject_revision(id)`. For edits made in the
+current session, prefer `accept_group()`/`reject_group()` with the
+`EditResult.group_id` — it resolves everything one edit created, in one call.
 
 ## Redlining Workflow (Document Review)
 

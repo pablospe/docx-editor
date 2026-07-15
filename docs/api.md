@@ -288,7 +288,7 @@ Replace text with tracked changes. When the target sits inside another author's 
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
-**Returns:** Updated paragraph reference (str)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`)
 
 **Example:**
 
@@ -307,7 +307,7 @@ Mark text as deleted with tracked changes. Deleting text inside another author's
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
-**Returns:** Updated paragraph reference (str)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`)
 
 **Example:**
 
@@ -326,7 +326,7 @@ Insert text after anchor with tracked changes. An anchor inside another author's
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
-**Returns:** Updated paragraph reference (str)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`)
 
 **Example:**
 
@@ -345,7 +345,7 @@ Insert text before anchor with tracked changes. Foreign pending insertions are t
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
-**Returns:** Updated paragraph reference (str)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`)
 
 **Example:**
 
@@ -357,17 +357,24 @@ ref = doc.insert_before("Section 6", "New clause: ", paragraph="P4#a7b2")
 
 Rewrite a paragraph using tracked changes generated from a word-level diff.
 
+A rewrite typically produces many revisions (one per diff hunk), none of which
+is a self-contained edit — accepting only some of them by id garbles the
+paragraph. All of one rewrite's revisions therefore share a revision group;
+resolve them as a unit with [`accept_group()`](#accept_groupgroup_id) /
+[`reject_group()`](#reject_groupgroup_id).
+
 **Parameters:**
 
 - `ref` (str): Paragraph reference from `list_paragraphs()`
 - `new_text` (str): Desired paragraph text
 
-**Returns:** Updated paragraph reference (str)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`; `group_id` is `None` when `new_text` equals the current text)
 
 **Example:**
 
 ```python
-ref = doc.rewrite_paragraph("P2#f3c1", "Payment is due within 60 days after invoice receipt.")
+result = doc.rewrite_paragraph("P2#f3c1", "Payment is due within 60 days after invoice receipt.")
+doc.reject_group(result.group_id)  # changed your mind — undo the whole rewrite
 ```
 
 #### `batch_edit(operations, *, dry_run=False)`
@@ -380,7 +387,7 @@ stale, the entire batch is rejected before any edits are applied.
 - `operations` (list[EditOperation]): Edit operations to apply
 - `dry_run` (bool): If True, validate every operation without applying any edits and return one [`EditValidationResult`](#editvalidationresult) per operation, in input order; the document is left unchanged. Each operation is validated independently against the current document — sequential effects between multiple operations on the same paragraph are **not** simulated. Defaults to False.
 
-**Returns:** Updated paragraph references in input order (list[str]); with `dry_run=True`, a list of [`EditValidationResult`](#editvalidationresult) instead
+**Returns:** Updated paragraph references in input order (list of [`EditResult`](#editresult)) — each operation is its own revision group, so one op can be accepted and another rejected; with `dry_run=True`, a list of [`EditValidationResult`](#editvalidationresult) instead
 
 **Raises:** [`BatchOperationError`](#batchoperationerror) — the only exception a non-dry-run batch raises for a failing operation, whatever the underlying cause (stale hash, malformed ref, missing text, ambiguous target). `operation_index` names the failing op; `original` (also `__cause__`) holds the underlying typed exception. The batch is atomic: nothing is applied on failure.
 
@@ -418,7 +425,7 @@ Rewrite multiple paragraphs after validating paragraph hashes up front.
 
 - `rewrites` (list[tuple[str, str]]): Pairs of paragraph ref and desired text
 
-**Returns:** Updated paragraph references in input order (list[str])
+**Returns:** Updated paragraph references in input order (list of [`EditResult`](#editresult)); each rewrite gets its own revision group
 
 **Raises:** [`BatchOperationError`](#batchoperationerror) — same single-exception contract as `batch_edit()`.
 
@@ -583,6 +590,65 @@ Reject a revision by ID.
 doc.reject_revision(1)
 ```
 
+#### `accept_group(group_id)`
+
+Accept every revision created by one logical edit operation.
+
+Each edit method (`replace()`, `delete()`, `insert_after()`, `insert_before()`,
+`rewrite_paragraph()`, and every operation of a batch) registers the revisions
+it creates as one **revision group**; the returned [`EditResult`](#editresult)
+carries the `group_id`, and `list_revisions()` stamps it on each member
+revision. Accepting the group applies the whole edit — the safe alternative to
+resolving a multi-revision edit (especially a rewrite) revision by revision,
+which garbles the text if only some are applied.
+
+Groups are **in-memory and per-open-Document**: after `close()`/reopen,
+revisions report `group_id=None` and old group ids raise
+[`RevisionError`](#revisionerror). `save()` does not invalidate groups (the
+Document stays open and revision ids are preserved). Revisions authored
+outside the current session (foreign reviewers, previous sessions) have no
+group — accept/reject them by id or author as before. If groups ever need to
+survive across sessions, the workspace `meta.json` (which never enters the
+`.docx`) is the natural extension point; that persistence is intentionally not
+implemented today.
+
+**Parameters:**
+
+- `group_id` (int): Group id from an `EditResult` (or a `Revision.group_id`)
+
+**Returns:** Number of revisions accepted (int). Members already resolved individually are skipped (and not counted).
+
+**Raises:** [`RevisionError`](#revisionerror) if the group id is unknown (never allocated, or allocated by a previous session on this document).
+
+**Example:**
+
+```python
+result = doc.rewrite_paragraph(ref, "New text.")
+doc.accept_group(result.group_id)  # apply the whole rewrite
+```
+
+#### `reject_group(group_id)`
+
+Reject every revision created by one logical edit operation — the counterpart
+of [`accept_group()`](#accept_groupgroup_id). Rejecting the group undoes the
+whole edit, restoring the exact pre-edit text (deletions restored, insertions
+removed). Same group semantics and lifetime as `accept_group()`.
+
+**Parameters:**
+
+- `group_id` (int): Group id from an `EditResult` (or a `Revision.group_id`)
+
+**Returns:** Number of revisions rejected (int). Members already resolved individually are skipped (and not counted).
+
+**Raises:** [`RevisionError`](#revisionerror) if the group id is unknown.
+
+**Example:**
+
+```python
+result = doc.rewrite_paragraph(ref, "New text.")
+doc.reject_group(result.group_id)  # undo the whole rewrite
+```
+
 #### `accept_all(author=None)`
 
 Accept all revisions.
@@ -714,6 +780,7 @@ from docx_editor import Revision
 | `author` | str | The revision author |
 | `date` | datetime or None | When the revision was made |
 | `text` | str | The inserted or deleted text |
+| `group_id` | int or None | Revision group of the edit that created it in this session (see [`accept_group()`](#accept_groupgroup_id)); None for foreign or pre-session revisions |
 
 ### Example
 
@@ -776,6 +843,40 @@ new_refs = doc.batch_edit([
     EditOperation.delete("obsolete clause", paragraph="P5#d4e5"),
     EditOperation.insert_after("Section 5", " (as amended)", paragraph="P7#b1c2"),
 ])
+```
+
+---
+
+## EditResult
+
+The return value of every tracked-edit method (`replace()`, `delete()`,
+`insert_after()`, `insert_before()`, `rewrite_paragraph()`, and the elements of
+`batch_edit()` / `batch_rewrite()` results). A `str` **subclass** — the string
+value is the new hash-anchored paragraph reference (e.g. `"P2#c3d4"`), so an
+`EditResult` works unchanged anywhere a ref string is expected — with the
+edit's revision-group info attached.
+
+```python
+from docx_editor import EditResult
+```
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `group_id` | int or None | Revision group holding every revision this edit created, for [`accept_group()`](#accept_groupgroup_id) / [`reject_group()`](#reject_groupgroup_id). None when the edit created no new revisions (e.g. text spliced into one of your own pending insertions, or a no-change rewrite). Valid only while this Document stays open. |
+| `revision_ids` | tuple[int, ...] | The `w:id`s of the group's member revisions, in creation order; `()` when `group_id` is None |
+
+### Example
+
+```python
+result = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
+print(str(result))         # "P2#c3d4" — the new paragraph ref
+print(result.group_id)     # 1
+print(result.revision_ids) # (0, 1) — the del and the ins
+
+doc.replace("net", "gross", paragraph=result)  # usable as a plain ref
+doc.reject_group(result.group_id)              # undo the first edit entirely
 ```
 
 ---

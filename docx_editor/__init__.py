@@ -56,7 +56,7 @@ from .exceptions import (
     WorkspaceSyncError,
     XMLError,
 )
-from .track_changes import EditOperation, EditValidationResult, Revision, SearchResult
+from .track_changes import EditOperation, EditResult, EditValidationResult, Revision, SearchResult
 from .xml_editor import (
     ListItem,
     ParagraphInfo,
@@ -70,6 +70,7 @@ __all__ = [
     # Main classes
     "Document",
     "EditOperation",
+    "EditResult",
     "EditValidationResult",
     "Revision",
     "SearchResult",

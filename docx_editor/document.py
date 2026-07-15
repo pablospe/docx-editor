@@ -13,7 +13,14 @@ from xml.dom.minidom import Element
 
 from .comments import Comment, CommentManager
 from .exceptions import HashMismatchError, ParagraphIndexError
-from .track_changes import EditOperation, EditValidationResult, Revision, RevisionManager, SearchResult
+from .track_changes import (
+    EditOperation,
+    EditResult,
+    EditValidationResult,
+    Revision,
+    RevisionManager,
+    SearchResult,
+)
 from .workspace import Workspace
 from .xml_editor import (
     DocxXMLEditor,
@@ -46,8 +53,15 @@ class Document:
         from docx_editor import Document
 
         doc = Document.open("contract.docx")
-        doc.replace("30 days", "60 days")
+        ref = doc.find_text("30 days").paragraph_ref
+        result = doc.replace("30 days", "60 days", paragraph=ref)
         doc.add_comment("Section 5", "Please review")
+
+        # Every edit's revisions form a group — accept/reject them as a unit
+        # (group ids live only while this Document is open):
+        result = doc.rewrite_paragraph(result, "The board shall approve.")
+        doc.reject_group(result.group_id)  # undo the whole rewrite
+
         doc.save()
         doc.close()
     """
@@ -291,6 +305,11 @@ class Document:
         p = self._document_editor.dom.getElementsByTagName("w:p")[ref.index - 1]
         new_hash = compute_paragraph_hash(p)
         return f"P{ref.index}#{new_hash}"
+
+    def _edit_result(self, old_ref: str, group_id: int | None) -> EditResult:
+        """Build an EditResult from a mutated paragraph's old ref and its group."""
+        revision_ids = self._revision_manager.group_revisions(group_id) if group_id is not None else ()
+        return EditResult(self._compute_new_ref(old_ref), group_id=group_id, revision_ids=revision_ids)
 
     def paragraph_count(self) -> int:
         """Return the total number of paragraphs in the document.
@@ -685,7 +704,7 @@ class Document:
         self._ensure_open()
         return self._revision_manager.get_markup_text()
 
-    def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int | None = None) -> str:
+    def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int | None = None) -> EditResult:
         """Replace text with tracked changes.
 
         Creates a tracked deletion of the old text and insertion of the new text.
@@ -700,8 +719,10 @@ class Document:
                 enumerate the matches, or pass an explicit occurrence).
 
         Returns:
-            New paragraph reference with updated hash (e.g., "P2#c3d4").
-            Use this for follow-up edits without calling list_paragraphs().
+            EditResult — the new paragraph reference with updated hash (e.g.,
+            "P2#c3d4"; usable anywhere a ref string is expected), carrying
+            ``group_id``/``revision_ids`` of the revisions this edit created
+            for accept_group()/reject_group().
 
         Raises:
             TextNotFoundError: If ``find`` is absent or ``occurrence`` is out
@@ -715,10 +736,10 @@ class Document:
             doc.replace("other text", "new text", paragraph=new_ref)
         """
         self._ensure_open()
-        self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
-        return self._compute_new_ref(paragraph)
+        change_id = self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
+        return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
-    def delete(self, text: str, *, paragraph: str, occurrence: int | None = None) -> str:
+    def delete(self, text: str, *, paragraph: str, occurrence: int | None = None) -> EditResult:
         """Mark text as deleted with tracked changes.
 
         Args:
@@ -729,7 +750,9 @@ class Document:
                 paragraph, else AmbiguousTextError.
 
         Returns:
-            New paragraph reference with updated hash (e.g., "P2#c3d4").
+            EditResult — the new paragraph reference with updated hash (e.g.,
+            "P2#c3d4"), carrying ``group_id``/``revision_ids`` of the
+            revisions this edit created.
 
         Raises:
             TextNotFoundError: If ``text`` is absent or ``occurrence`` is out
@@ -742,10 +765,10 @@ class Document:
             new_ref = doc.delete("obsolete clause", paragraph="P2#f3c1")
         """
         self._ensure_open()
-        self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
-        return self._compute_new_ref(paragraph)
+        change_id = self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
+        return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
-    def insert_after(self, anchor: str, text: str, *, paragraph: str, occurrence: int | None = None) -> str:
+    def insert_after(self, anchor: str, text: str, *, paragraph: str, occurrence: int | None = None) -> EditResult:
         """Insert text after anchor with tracked changes.
 
         Args:
@@ -757,7 +780,9 @@ class Document:
                 paragraph, else AmbiguousTextError.
 
         Returns:
-            New paragraph reference with updated hash (e.g., "P2#c3d4").
+            EditResult — the new paragraph reference with updated hash (e.g.,
+            "P2#c3d4"), carrying ``group_id``/``revision_ids`` of the
+            revisions this edit created.
 
         Raises:
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
@@ -770,10 +795,10 @@ class Document:
             new_ref = doc.insert_after("Section 5", " (as amended)", paragraph="P2#f3c1")
         """
         self._ensure_open()
-        self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
-        return self._compute_new_ref(paragraph)
+        change_id = self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
+        return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
-    def insert_before(self, anchor: str, text: str, *, paragraph: str, occurrence: int | None = None) -> str:
+    def insert_before(self, anchor: str, text: str, *, paragraph: str, occurrence: int | None = None) -> EditResult:
         """Insert text before anchor with tracked changes.
 
         Args:
@@ -785,7 +810,9 @@ class Document:
                 paragraph, else AmbiguousTextError.
 
         Returns:
-            New paragraph reference with updated hash (e.g., "P2#c3d4").
+            EditResult — the new paragraph reference with updated hash (e.g.,
+            "P2#c3d4"), carrying ``group_id``/``revision_ids`` of the
+            revisions this edit created.
 
         Raises:
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
@@ -798,18 +825,18 @@ class Document:
             new_ref = doc.insert_before("Section 6", "New clause: ", paragraph="P2#f3c1")
         """
         self._ensure_open()
-        self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
-        return self._compute_new_ref(paragraph)
+        change_id = self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
+        return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
     @overload
-    def batch_edit(self, operations: list[EditOperation], *, dry_run: Literal[False] = ...) -> list[str]: ...
+    def batch_edit(self, operations: list[EditOperation], *, dry_run: Literal[False] = ...) -> list[EditResult]: ...
 
     @overload
     def batch_edit(self, operations: list[EditOperation], *, dry_run: Literal[True]) -> list[EditValidationResult]: ...
 
     def batch_edit(
         self, operations: list[EditOperation], *, dry_run: bool = False
-    ) -> list[str] | list[EditValidationResult]:
+    ) -> list[EditResult] | list[EditValidationResult]:
         """Apply multiple edits atomically with upfront hash validation.
 
         All paragraph hashes are validated before any edits are applied.
@@ -828,8 +855,10 @@ class Document:
                 RevisionManager.validate_batch).
 
         Returns:
-            When dry_run is False: list of new paragraph references with updated
-            hashes, in input order.
+            When dry_run is False: list of EditResult (new paragraph references
+            with updated hashes), in input order. Each operation gets its own
+            revision group — accept one op and reject another via
+            accept_group()/reject_group().
             When dry_run is True: list of EditValidationResult, one per operation.
 
         Raises:
@@ -856,42 +885,55 @@ class Document:
         self._ensure_open()
         if dry_run:
             return self._revision_manager.validate_batch(operations)
-        self._revision_manager.batch_edit(operations)
-        return [self._compute_new_ref(op.paragraph) for op in operations]
+        change_ids = self._revision_manager.batch_edit(operations)
+        return [
+            self._edit_result(op.paragraph, self._revision_manager.group_id_of(change_id))
+            for op, change_id in zip(operations, change_ids, strict=True)
+        ]
 
-    def rewrite_paragraph(self, ref: str, new_text: str) -> str:
+    def rewrite_paragraph(self, ref: str, new_text: str) -> EditResult:
         """Rewrite a paragraph's text with automatic fine-grained tracked changes.
 
         Diffs the current paragraph text against new_text at word level and
         generates minimal tracked insertions, deletions, and replacements.
+        All revisions from one rewrite share a revision group, so the rewrite
+        can be accepted or rejected as a unit — accepting only some of a
+        rewrite's revisions by id garbles the paragraph (each one is a diff
+        hunk, not a self-contained edit).
 
         Args:
             ref: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
             new_text: Desired new text for the paragraph
 
         Returns:
-            The new paragraph reference with updated hash (e.g., "P2#c3d4").
-            Use this ref for follow-up edits without calling list_paragraphs().
+            EditResult — the new paragraph reference with updated hash (e.g.,
+            "P2#c3d4"), carrying ``group_id``/``revision_ids`` of all the
+            revisions the rewrite created (``group_id`` is None when
+            new_text equals the current text).
 
         Example:
-            new_ref = doc.rewrite_paragraph("P2#f3c1", "The board shall approve the proposal.")
+            result = doc.rewrite_paragraph("P2#f3c1", "The board shall approve the proposal.")
+            doc.reject_group(result.group_id)  # undo the whole rewrite
         """
         self._ensure_open()
-        self._revision_manager.rewrite_paragraph(ref, new_text)
-        return self._compute_new_ref(ref)
+        group_id = self._revision_manager.rewrite_paragraph(ref, new_text)
+        return self._edit_result(ref, group_id)
 
-    def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> list[str]:
+    def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> list[EditResult]:
         """Rewrite multiple paragraphs with upfront hash validation.
 
         All paragraph hashes are validated before any rewrites are applied.
         If any hash is stale, the entire batch is rejected before any changes
         are made. Once validation passes, rewrites are applied sequentially.
+        Each rewrite gets its own revision group (see rewrite_paragraph).
 
         Args:
             rewrites: List of (ref, new_text) tuples
 
         Returns:
-            List of new paragraph references with updated hashes, in input order
+            List of EditResult (new paragraph references with updated hashes),
+            in input order, each carrying its rewrite's
+            ``group_id``/``revision_ids``.
 
         Raises:
             BatchOperationError: The only exception raised for a failing
@@ -905,8 +947,8 @@ class Document:
             ])
         """
         self._ensure_open()
-        self._revision_manager.batch_rewrite(rewrites)
-        return [self._compute_new_ref(ref) for ref, _ in rewrites]
+        group_ids = self._revision_manager.batch_rewrite(rewrites)
+        return [self._edit_result(ref, group_id) for (ref, _), group_id in zip(rewrites, group_ids, strict=True)]
 
     # ==================== Comments API ====================
 
@@ -1035,7 +1077,10 @@ class Document:
             must not be passed to those APIs; None when the text is not
             locatable, e.g. nested revisions), plus ``nested_under`` and
             ``contains_ids`` describing revision nesting (e.g. a foreign
-            deletion inside another author's pending insertion).
+            deletion inside another author's pending insertion), and
+            ``group_id`` linking revisions created by the same edit
+            operation in this session (None for foreign or pre-session
+            revisions).
 
         Raises:
             ValueError: If ``paragraph`` is malformed
@@ -1087,6 +1132,65 @@ class Document:
         """
         self._ensure_open()
         return self._revision_manager.reject_revision(revision_id)
+
+    def accept_group(self, group_id: int) -> int:
+        """Accept every revision created by one logical edit operation.
+
+        Each edit method (replace, delete, insert_after/before,
+        rewrite_paragraph, and each operation of a batch) registers the
+        revisions it creates as one revision group; its EditResult carries
+        the ``group_id``. Accepting the group applies the whole edit —
+        resolving a multi-revision edit (especially a rewrite) revision by
+        revision can leave the text garbled if only some are applied.
+
+        Groups are in-memory and live only while this Document is open:
+        after close()/reopen, revisions report ``group_id=None`` and old
+        group ids raise. save() does not invalidate groups.
+
+        Args:
+            group_id: Group id from an EditResult (or a Revision's
+                ``group_id``)
+
+        Returns:
+            Number of revisions accepted. Members already resolved
+            individually are skipped (and not counted).
+
+        Raises:
+            RevisionError: If the group id is unknown (never allocated, or
+                allocated by a previous session on this document).
+
+        Example:
+            result = doc.rewrite_paragraph(ref, "New text.")
+            doc.accept_group(result.group_id)  # apply the whole rewrite
+        """
+        self._ensure_open()
+        return self._revision_manager.accept_group(group_id)
+
+    def reject_group(self, group_id: int) -> int:
+        """Reject every revision created by one logical edit operation.
+
+        The counterpart of :meth:`accept_group` — rejecting the group undoes
+        the whole edit, restoring the exact pre-edit text (deletions are
+        restored, insertions removed).
+
+        Args:
+            group_id: Group id from an EditResult (or a Revision's
+                ``group_id``)
+
+        Returns:
+            Number of revisions rejected. Members already resolved
+            individually are skipped (and not counted).
+
+        Raises:
+            RevisionError: If the group id is unknown (never allocated, or
+                allocated by a previous session on this document).
+
+        Example:
+            result = doc.rewrite_paragraph(ref, "New text.")
+            doc.reject_group(result.group_id)  # undo the whole rewrite
+        """
+        self._ensure_open()
+        return self._revision_manager.reject_group(group_id)
 
     def accept_all(self, author: str | None = None) -> int:
         """Accept all revisions.

@@ -6,6 +6,8 @@ Provides RevisionManager for creating and managing tracked changes (insertions/d
 import difflib
 import re
 from collections import OrderedDict
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -180,6 +182,40 @@ class EditValidationResult:
     error: str | None = None  # human-readable reason when not valid
 
 
+class EditResult(str):
+    """Result of a tracked edit: the new paragraph ref plus revision-group info.
+
+    Subclasses ``str`` — the string value *is* the new hash-anchored
+    paragraph reference (e.g. ``"P2#c3d4"``), so an EditResult works
+    unchanged anywhere a ref string is expected (``paragraph=`` of
+    follow-up edits, equality with plain strings, dict keys).
+
+    Extra attributes:
+
+    - ``group_id``: id of the revision group holding every revision this
+      operation created, usable with ``accept_group``/``reject_group``.
+      None when the operation created no new revisions — e.g. text spliced
+      into one of your own pending insertions (physically merged, so it is
+      inseparable from the earlier operation at the XML level), or a
+      rewrite that found no differences. Groups live only for the current
+      open Document (see ``Document.accept_group``).
+    - ``revision_ids``: the w:ids of the group's member revisions, in
+      creation order, as of this edit's return; ``()`` when ``group_id`` is
+      None. A later edit that splits one of these insertions adds the
+      split-off half to the group — ``Document.list_revisions`` reflects
+      live membership.
+    """
+
+    group_id: int | None
+    revision_ids: tuple[int, ...]
+
+    def __new__(cls, ref: str, group_id: int | None = None, revision_ids: tuple[int, ...] = ()) -> "EditResult":
+        result = super().__new__(cls, ref)
+        result.group_id = group_id
+        result.revision_ids = revision_ids
+        return result
+
+
 @dataclass(frozen=True)
 class SearchResult:
     """Public result of ``Document.find_text`` / ``find_all`` — no DOM internals.
@@ -237,6 +273,10 @@ class Revision:
       deletion inside another author's pending insertion), else None.
     - ``contains_ids``: ids of revisions nested inside this one, in document
       order.
+    - ``group_id``: id of the revision group this revision was created in
+      (all revisions from one logical edit share it — see
+      ``Document.accept_group``). None for revisions that predate the open
+      Document session or were authored elsewhere.
     """
 
     id: int
@@ -248,6 +288,7 @@ class Revision:
     occurrence: int | None = None
     nested_under: int | None = None
     contains_ids: tuple[int, ...] = ()
+    group_id: int | None = None
 
     def __repr__(self) -> str:
         kind = "ins" if self.type == "insertion" else "del"
@@ -255,7 +296,8 @@ class Revision:
         preview = self.text[:30] + ("..." if len(self.text) > 30 else "")
         nested = f", nested_under={self.nested_under}" if self.nested_under is not None else ""
         contains = f", contains={list(self.contains_ids)}" if self.contains_ids else ""
-        return f"Revision({kind} {self.id}{location}: '{preview}' by {self.author}{nested}{contains})"
+        group = f", group={self.group_id}" if self.group_id is not None else ""
+        return f"Revision({kind} {self.id}{location}: '{preview}' by {self.author}{nested}{contains}{group})"
 
 
 def _ancestor_paragraph(elem) -> Element | None:
@@ -335,6 +377,14 @@ def _has_ancestor(node, ancestor) -> bool:
     return False
 
 
+@dataclass
+class _GroupCapture:
+    """Filled in by ``RevisionManager._grouped`` when its with-block exits."""
+
+    group_id: int | None = None
+    revision_ids: tuple[int, ...] = ()
+
+
 def _occurrence_in_text_map(tm: TextMap, elem, text: str) -> int | None:
     """0-based occurrence index of ``text`` at ``elem``'s own span in ``tm``.
 
@@ -406,6 +456,112 @@ class RevisionManager:
             editor: DocxXMLEditor instance for word/document.xml
         """
         self.editor = editor
+        # Revision groups: every revision created by one logical operation
+        # shares a group id, so callers can accept/reject the operation as a
+        # unit. In-memory only — groups live for the lifetime of this manager
+        # (i.e. the open Document); nothing is written into the .docx.
+        self._groups: dict[int, tuple[int, ...]] = {}
+        self._revision_groups: dict[int, int] = {}
+        self._group_counter = 1
+
+    @contextmanager
+    def _grouped(self) -> Iterator[_GroupCapture]:
+        """Register every revision the wrapped operation creates as one group.
+
+        Captures the <w:ins>/<w:del> elements processed by attribute
+        injection during the with-block, then keeps those that are (i)
+        authored by us — a split half of a *foreign* insertion gets a fresh
+        id but keeps the foreign author, and must not join our group —
+        (ii) still attached to the DOM, excluding create-then-remove churn,
+        and (iii) not already registered to an earlier group — a split-off
+        tail of one of our *own* insertions is adopted into its origin
+        group by _adopt_split_tail, not claimed by the splitting operation.
+        A group id is allocated only when that filtered set is non-empty;
+        it is exposed on the yielded _GroupCapture after the block exits.
+        If the operation raises, nothing is registered.
+        """
+        capture = _GroupCapture()
+        with self.editor.collect_tracked_changes() as collected:
+            yield capture
+        members: list[int] = []
+        seen: set[int] = set()
+        for elem in collected:
+            if elem.getAttribute("w:author") != self.editor.author:
+                continue
+            if not _has_ancestor(elem, self.editor.dom):
+                continue
+            try:
+                # Ids we assign are always numeric; a non-numeric one was
+                # copied from a nonconforming producer's element — leave it
+                # ungrouped rather than fail the edit (same tolerance as
+                # _get_next_change_id).
+                rev_id = int(elem.getAttribute("w:id"))
+            except ValueError:
+                continue
+            if rev_id in self._revision_groups:
+                continue
+            if rev_id not in seen:
+                seen.add(rev_id)
+                members.append(rev_id)
+        if members:
+            group_id = self._group_counter
+            self._group_counter += 1
+            self._groups[group_id] = tuple(members)
+            for rev_id in members:
+                self._revision_groups[rev_id] = group_id
+            capture.group_id = group_id
+            capture.revision_ids = tuple(members)
+
+    def _adopt_split_tail(self, original_ins, new_nodes) -> None:
+        """Keep a split-off tail of one of our own insertions in its origin group.
+
+        Editing the middle of our own pending insertion physically splits it:
+        the trailing half is re-created as a fresh <w:ins> with a fresh w:id.
+        That tail is leftover content of the *original* insertion's operation,
+        not of the operation doing the splitting — so it joins the original
+        insertion's group (when it has one), keeping reject_group/accept_group
+        of that earlier operation complete. Registering it here also stops
+        the active ``_grouped`` capture from claiming it (its id is already
+        in ``_revision_groups`` when the capture filters members).
+        """
+        try:
+            origin_group = self._revision_groups.get(int(original_ins.getAttribute("w:id")))
+        except ValueError:  # pragma: no cover - our own ins always has a numeric id
+            return
+        if origin_group is None:
+            return
+        for node in new_nodes:
+            if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
+                tail_id = int(node.getAttribute("w:id"))
+                self._groups[origin_group] = (*self._groups[origin_group], tail_id)
+                self._revision_groups[tail_id] = origin_group
+
+    def _registry_snapshot(self) -> tuple[int, dict[int, tuple[int, ...]], dict[int, int]]:
+        """Snapshot the group registry for rollback alongside a DOM snapshot."""
+        return (self._group_counter, dict(self._groups), dict(self._revision_groups))
+
+    def _restore_registry(self, snapshot: tuple[int, dict[int, tuple[int, ...]], dict[int, int]]) -> None:
+        """Restore the group registry captured by ``_registry_snapshot``."""
+        self._group_counter, self._groups, self._revision_groups = snapshot
+
+    def group_id_of(self, revision_id: int) -> int | None:
+        """Group id of a revision created through this manager, or None."""
+        return self._revision_groups.get(revision_id)
+
+    def group_revisions(self, group_id: int) -> tuple[int, ...]:
+        """Member revision ids of ``group_id``, in creation order.
+
+        Raises:
+            RevisionError: If the group id is unknown to this manager (groups
+                exist only for edits made through the current open Document).
+        """
+        members = self._groups.get(group_id)
+        if members is None:
+            raise RevisionError(
+                f"Unknown revision group: {group_id}. Groups exist only for edits made "
+                f"through the current open Document; they are not persisted in the file."
+            )
+        return members
 
     def _resolve_paragraph(self, ref: ParagraphRef):
         """Resolve a ParagraphRef to its <w:p> element, validating the hash.
@@ -519,14 +675,20 @@ class RevisionManager:
         # Stable sort preserves original order for same-paragraph edits
         parsed.sort(key=lambda x: x[1].index, reverse=True)
 
-        # Snapshot DOM before any mutation so we can roll back on partial failure.
+        # Snapshot DOM and group registry before any mutation so we can roll
+        # back on partial failure — without the registry snapshot, rollback
+        # would leave ghost groups pointing at reverted revision ids.
         snapshot = self.editor.dom.toxml(encoding=self.editor.encoding)
+        registry_snapshot = self._registry_snapshot()
 
         try:
             results = [0] * len(operations)
             for original_idx, _ref, op in parsed:
                 try:
-                    change_id = self._apply_single_edit(op)
+                    # Each op is its own logical edit: one group per op, so
+                    # callers can accept one op and reject another.
+                    with self._grouped():
+                        change_id = self._apply_single_edit(op)
                 except (ValueError, DocxEditError) as e:
                     raise BatchOperationError(original_idx, str(e), original=e) from e
                 results[original_idx] = change_id
@@ -539,6 +701,7 @@ class RevisionManager:
                 self.editor._reload_dom_from_bytes(snapshot)
             except Exception:
                 pass
+            self._restore_registry(registry_snapshot)
             raise
 
     def _resolve_action_target(self, op: EditOperation) -> str:
@@ -662,8 +825,13 @@ class RevisionManager:
 
         return None
 
-    def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> None:
+    def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> list[int | None]:
         """Rewrite multiple paragraphs with upfront hash validation.
+
+        Returns:
+            One revision group id per rewrite, in input order (None for
+            rewrites that created no revisions) — each rewrite gets its own
+            group via :meth:`rewrite_paragraph`.
 
         Raises:
             BatchOperationError: If any rewrite fails — validation (malformed
@@ -672,7 +840,7 @@ class RevisionManager:
                 ``__cause__``) with the underlying typed exception.
         """
         if not rewrites:
-            return
+            return []
 
         # Parse and validate all refs upfront
         parsed: list[tuple[int, ParagraphRef, str]] = []
@@ -694,17 +862,20 @@ class RevisionManager:
         # Sort by paragraph index descending
         parsed.sort(key=lambda x: x[1].index, reverse=True)
 
-        # Snapshot DOM before any mutation so we can roll back on partial
-        # failure — same atomicity contract as batch_edit.
+        # Snapshot DOM and group registry before any mutation so we can roll
+        # back on partial failure — same atomicity contract as batch_edit.
         snapshot = self.editor.dom.toxml(encoding=self.editor.encoding)
+        registry_snapshot = self._registry_snapshot()
 
         try:
             # Apply rewrites in reverse paragraph order
+            group_ids: list[int | None] = [None] * len(rewrites)
             for original_idx, ref, new_text in parsed:
                 try:
-                    self.rewrite_paragraph(f"P{ref.index}#{ref.hash}", new_text)
+                    group_ids[original_idx] = self.rewrite_paragraph(f"P{ref.index}#{ref.hash}", new_text)
                 except (ValueError, DocxEditError) as e:
                     raise BatchOperationError(original_idx, str(e), original=e) from e
+            return group_ids
         except Exception:
             # Restore via the line-tracking parser so parse_position is preserved.
             # If rollback itself fails, surface the original edit error — it is
@@ -713,22 +884,37 @@ class RevisionManager:
                 self.editor._reload_dom_from_bytes(snapshot)
             except Exception:
                 pass
+            self._restore_registry(registry_snapshot)
             raise
 
-    def rewrite_paragraph(self, ref_str: str, new_text: str) -> None:
+    def rewrite_paragraph(self, ref_str: str, new_text: str) -> int | None:
         """Rewrite a paragraph's text, generating fine-grained tracked changes.
 
         Diffs old vs new text at word level and applies minimal tracked changes
-        (insertions, deletions, replacements) to transform the paragraph.
+        (insertions, deletions, replacements) to transform the paragraph. All
+        revisions created by one call are registered as a single revision
+        group, so ``accept_group``/``reject_group`` can resolve the rewrite
+        as a unit.
 
         Args:
             ref_str: Paragraph reference string (e.g., "P3#a7b2")
             new_text: Desired new text for the paragraph
 
+        Returns:
+            The rewrite's revision group id, or None when no revisions were
+            created (old text already equals ``new_text``, or every change
+            was absorbed into this author's own pending insertions).
+
         Raises:
             HashMismatchError: If the paragraph hash doesn't match
             IndexError: If paragraph index is out of range
         """
+        with self._grouped() as capture:
+            self._rewrite_paragraph_inner(ref_str, new_text)
+        return capture.group_id
+
+    def _rewrite_paragraph_inner(self, ref_str: str, new_text: str) -> None:
+        """Diff-and-apply body of ``rewrite_paragraph`` (runs inside _grouped)."""
         ref = ParagraphRef.parse(ref_str)
         p = self._resolve_paragraph(ref)
         text_map = build_text_map(p)
@@ -1080,14 +1266,15 @@ class RevisionManager:
                 matches more than once in the search scope
             HashMismatchError: If the paragraph hash doesn't match
         """
-        if paragraph is not None:
-            ref = ParagraphRef.parse(paragraph)
-            p = self._resolve_paragraph(ref)
-            match = self._locate_in_paragraph(p, paragraph, find, occurrence)
-            return self._replace_across_nodes(match, replace_with)
+        with self._grouped():
+            if paragraph is not None:
+                ref = ParagraphRef.parse(paragraph)
+                p = self._resolve_paragraph(ref)
+                match = self._locate_in_paragraph(p, paragraph, find, occurrence)
+                return self._replace_across_nodes(match, replace_with)
 
-        match = self._locate_document_wide(find, occurrence)
-        return self._replace_across_nodes(match, replace_with)
+            match = self._locate_document_wide(find, occurrence)
+            return self._replace_across_nodes(match, replace_with)
 
     def suggest_deletion(self, text: str, occurrence: int | None = None, paragraph: str | None = None) -> int:
         """Mark text as deleted with tracked changes.
@@ -1108,14 +1295,15 @@ class RevisionManager:
                 matches more than once in the search scope
             HashMismatchError: If the paragraph hash doesn't match
         """
-        if paragraph is not None:
-            ref = ParagraphRef.parse(paragraph)
-            p = self._resolve_paragraph(ref)
-            match = self._locate_in_paragraph(p, paragraph, text, occurrence)
-            return self._delete_across_nodes(match)
+        with self._grouped():
+            if paragraph is not None:
+                ref = ParagraphRef.parse(paragraph)
+                p = self._resolve_paragraph(ref)
+                match = self._locate_in_paragraph(p, paragraph, text, occurrence)
+                return self._delete_across_nodes(match)
 
-        match = self._locate_document_wide(text, occurrence)
-        return self._delete_across_nodes(match)
+            match = self._locate_document_wide(text, occurrence)
+            return self._delete_across_nodes(match)
 
     def _get_run_info(self, node) -> tuple[Element | None, str]:
         """Get the parent w:r element and its rPr XML for a w:t node."""
@@ -1249,9 +1437,15 @@ class RevisionManager:
                     # ins_elem was fully removed — wrap replacement in a new <w:ins>
                     ins_wrapper_xml = f"<w:ins>{new_run_xml}</w:ins>"
                     if ins_next:
-                        self.editor.insert_before(ins_next, ins_wrapper_xml)
+                        new_nodes = self.editor.insert_before(ins_next, ins_wrapper_xml)
                     else:
-                        self.editor.append_to(ins_parent, ins_wrapper_xml)
+                        new_nodes = self.editor.append_to(ins_parent, ins_wrapper_xml)
+                    # The wrapper is a new revision holding this operation's
+                    # replacement text — return its id so the caller's
+                    # EditResult reaches the group that contains it.
+                    for node in new_nodes:
+                        if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
+                            return int(node.getAttribute("w:id"))
                 return -1
 
             # Foreign insertion(s) involved — preserve them: nest our deletion
@@ -1674,7 +1868,8 @@ class RevisionManager:
                 if ins_elem and run:
                     rPr_xml = get_rPr_xml(run)
                     after_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r></w:ins>"
-                    self.editor.insert_after(ins_elem, after_xml)
+                    new_nodes = self.editor.insert_after(ins_elem, after_xml)
+                    self._adopt_split_tail(ins_elem, new_nodes)
         else:
             # Multi-node: truncate first node to before, last node to after,
             # remove intermediate nodes entirely.
@@ -1969,14 +2164,15 @@ class RevisionManager:
         paragraph: str | None = None,
     ) -> int:
         """Insert text before or after anchor with tracked changes."""
-        if paragraph is not None:
-            ref = ParagraphRef.parse(paragraph)
-            p = self._resolve_paragraph(ref)
-            match = self._locate_in_paragraph(p, paragraph, anchor, occurrence)
-            return self._insert_near_match(match, text, position)
+        with self._grouped():
+            if paragraph is not None:
+                ref = ParagraphRef.parse(paragraph)
+                p = self._resolve_paragraph(ref)
+                match = self._locate_in_paragraph(p, paragraph, anchor, occurrence)
+                return self._insert_near_match(match, text, position)
 
-        match = self._locate_document_wide(anchor, occurrence)
-        return self._insert_near_match(match, text, position)
+            match = self._locate_document_wide(anchor, occurrence)
+            return self._insert_near_match(match, text, position)
 
     def _insert_near_match(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:
         """Insert text before/after a match, splitting the edge w:t at the match boundary."""
@@ -2192,6 +2388,7 @@ class RevisionManager:
             occurrence=occurrence,
             nested_under=_nearest_revision_ancestor_id(elem),
             contains_ids=_descendant_revision_ids(elem),
+            group_id=self._revision_groups.get(int(rev_id)),
         )
 
     def accept_revision(self, revision_id: int) -> bool:
@@ -2251,6 +2448,57 @@ class RevisionManager:
                 return True
 
         return False
+
+    def _resolve_group(self, group_id: int, resolve: Callable[[int], bool]) -> int:
+        """Apply ``resolve`` (accept/reject_revision) to every member of a group.
+
+        Same reverse-id, loop-until-no-progress pattern as accept_all/
+        reject_all, restricted to the group's members: nested members become
+        resolvable once their host is processed, and members already resolved
+        individually are simply skipped.
+        """
+        members = self.group_revisions(group_id)
+        count = 0
+        while True:
+            progressed = False
+            for rev_id in sorted(members, reverse=True):
+                if resolve(rev_id):
+                    count += 1
+                    progressed = True
+            if not progressed:
+                return count
+
+    def accept_group(self, group_id: int) -> int:
+        """Accept every revision in a revision group.
+
+        Args:
+            group_id: Group id from an edit's :class:`EditResult` (or a
+                Revision's ``group_id``).
+
+        Returns:
+            Number of revisions accepted. Members already resolved
+            individually are skipped (and not counted).
+
+        Raises:
+            RevisionError: If the group id is unknown to this manager.
+        """
+        return self._resolve_group(group_id, self.accept_revision)
+
+    def reject_group(self, group_id: int) -> int:
+        """Reject every revision in a revision group.
+
+        Args:
+            group_id: Group id from an edit's :class:`EditResult` (or a
+                Revision's ``group_id``).
+
+        Returns:
+            Number of revisions rejected. Members already resolved
+            individually are skipped (and not counted).
+
+        Raises:
+            RevisionError: If the group id is unknown to this manager.
+        """
+        return self._resolve_group(group_id, self.reject_revision)
 
     def accept_all(self, author: str | None = None) -> int:
         """Accept all revisions, optionally filtered by author.
