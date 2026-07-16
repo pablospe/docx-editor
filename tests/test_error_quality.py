@@ -521,15 +521,20 @@ class TestEmptySearchTextRejected:
         finally:
             doc.close()
 
-    def test_add_comment_still_rejects_empty_anchor_its_own_way(self, doc_path):
-        """add_comment pre-rejects empty anchors with CommentError, not ValueError."""
+    def test_add_comment_still_rejects_bad_anchors_its_own_way(self, doc_path):
+        """add_comment pre-rejects empty AND non-string anchors with CommentError,
+        not ValueError (its documented type) — and never a raw TypeError."""
         from docx_editor import CommentError
 
         doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
         try:
             ref = doc.list_paragraphs()[0].split("|")[0]
-            with pytest.raises(CommentError, match="anchor_text must not be empty"):
+            with pytest.raises(CommentError, match="anchor_text must be a non-empty string, got ''"):
                 doc.add_comment("", "note", paragraph=ref)
+            with pytest.raises(CommentError, match="anchor_text must be a non-empty string, got 123"):
+                doc.add_comment(123, "note", paragraph=ref)  # type: ignore[arg-type]
+            with pytest.raises(CommentError, match="anchor_text must be a non-empty string, got b'needle'"):
+                doc.add_comment(b"needle", "note")  # type: ignore[arg-type]
         finally:
             doc.close()
 

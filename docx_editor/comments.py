@@ -156,10 +156,10 @@ class CommentManager:
                 ``anchor_text`` matches more than once in the search scope.
             HashMismatchError: If a paragraph reference's hash is stale.
             ParagraphIndexError: If a paragraph reference's index is out of range.
-            CommentError: If ``anchor_text`` is empty.
+            CommentError: If ``anchor_text`` is not a non-empty string.
         """
-        if not anchor_text:
-            raise CommentError("anchor_text must not be empty")
+        if not isinstance(anchor_text, str) or not anchor_text:
+            raise CommentError(f"anchor_text must be a non-empty string, got {anchor_text!r}")
         _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id
