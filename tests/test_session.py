@@ -14,6 +14,7 @@ pytest.importorskip("ipykernel")
 
 from docx_editor.exceptions import SessionDeadError, SessionError  # noqa: E402
 from docx_editor.session import (  # noqa: E402
+    ExecResult,
     eval_code,
     exec_code,
     is_session_running,
@@ -193,6 +194,21 @@ class TestEval:
         assert captured.out == ""  # no envelope without a session
         assert "docx-session start" in captured.err
 
+    def test_eval_transport_no_result_raises(self, tmp_path, monkeypatch):
+        """A kernel reply with no execute_result is a transport bug, not a user error."""
+        from docx_editor import session as session_mod
+
+        monkeypatch.setattr(session_mod, "exec_code", lambda *a, **k: ExecResult(status="ok", result=None))
+        with pytest.raises(SessionError, match="returned no result"):
+            eval_code("1 + 1", connection_file=tmp_path / "unused.json")
+
+    def test_eval_transport_undecodable_reply_raises(self, tmp_path, monkeypatch):
+        from docx_editor import session as session_mod
+
+        monkeypatch.setattr(session_mod, "exec_code", lambda *a, **k: ExecResult(status="ok", result="{not a literal"))
+        with pytest.raises(SessionError, match="could not decode"):
+            eval_code("1 + 1", connection_file=tmp_path / "unused.json")
+
 
 class TestSessionStatus:
     """session_status(): richer detail than the boolean is_session_running()."""
@@ -211,6 +227,15 @@ class TestSessionStatus:
         assert st.pid is None
         assert st.state is None
         assert st.stale is False
+
+    def test_status_corrupt_connection_file_is_stale(self, tmp_path):
+        conn = tmp_path / "kernel.json"
+        conn.write_text("not json", encoding="utf-8")
+        conn.with_suffix(".pid").write_text("99999999", encoding="utf-8")
+        st = session_status(conn)
+        assert st.running is False
+        assert st.stale is True
+        assert st.pid == 99999999
 
     def test_main_status_prints_details(self, session_conn, capsys):
         assert main(["status", "--session-file", str(session_conn)]) == 0
@@ -323,6 +348,17 @@ class TestKernelDeath:
         finally:
             stop_session(conn)
 
+    def test_exec_mid_exec_death_cli_before_silence_probe(self, tmp_path, capsys):
+        """A timeout shorter than the silence probe still reports dead (deadline check)."""
+        conn = tmp_path / "kernel.json"
+        start_session(conn)
+        try:
+            code = "import os; os.kill(os.getpid(), 9)"
+            assert main(["exec", code, "--session-file", str(conn), "--timeout", "8"]) == 4
+            assert "docx-session stop" in capsys.readouterr().err
+        finally:
+            stop_session(conn)
+
 
 class TestStdinCode:
     """exec/eval accept '-' to read the code from stdin — no shell quoting to fight."""
@@ -354,6 +390,18 @@ class TestStdinCode:
         )
         assert proc.returncode == 0, proc.stderr
         assert "via stdin" in proc.stdout
+
+
+def test_exec_silent_code_survives_silence_probe(tmp_path):
+    """>10s of iopub silence with a live kernel must not be misreported dead."""
+    conn = tmp_path / "kernel.json"
+    start_session(conn)
+    try:
+        res = exec_code("import time; time.sleep(12); 'done'", connection_file=conn, timeout=60.0)
+        assert res.status == "ok"
+        assert res.result == "'done'"
+    finally:
+        stop_session(conn)
 
 
 def test_exec_stdin_does_not_wedge_session(tmp_path):
