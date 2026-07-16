@@ -31,7 +31,9 @@ Pure Python library for Word document track changes and comments, without requir
 ## Installation
 
 ```bash
-pip install docx-editor
+pip install docx-editor             # editing: track changes, comments, revisions
+pip install "docx-editor[create]"   # + python-docx, for creating new documents
+pip install "docx-editor[session]"  # + docx-session persistent CLI
 ```
 
 ## Claude Code Plugin
@@ -50,14 +52,14 @@ This plugin extends the [original Anthropic docx skill](https://github.com/anthr
 /plugin install docx-editor@docx-editor-marketplace
 
 # Install dependencies
-pip install docx-editor python-docx
+pip install "docx-editor[create]"
 ```
 
 ### Manual install (alternative)
 
 ```bash
 # Install dependencies
-pip install docx-editor python-docx
+pip install "docx-editor[create]"
 
 # Copy skill to Claude Code skills directory
 git clone https://github.com/pablospe/docx-editor /tmp/docx-editor
