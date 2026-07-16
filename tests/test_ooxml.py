@@ -246,6 +246,51 @@ class TestUnpackParseErrors:
         assert sentinel.read_text() == "user data"
 
 
+class TestUnpackMissingParts:
+    """Structurally deficient input must raise InvalidDocumentError before extraction (ISSUES.md #41)."""
+
+    def test_unpack_missing_document_xml_raises_invalid_document_error(self, temp_dir):
+        """A valid zip without word/document.xml is rejected pre-extraction."""
+        junk_zip = temp_dir / "junk.docx"
+        _build_zip(junk_zip, [("[Content_Types].xml", b"<Types/>")])
+        output = temp_dir / "output"
+
+        with pytest.raises(InvalidDocumentError, match=r"is not a valid \.docx: missing word/document\.xml") as excinfo:
+            unpack_document(junk_zip, output)
+
+        # Message names the document the caller opened, not a cache path.
+        assert str(junk_zip) in str(excinfo.value)
+        # Rejection happens before mkdir/extractall — filesystem untouched.
+        assert not output.exists()
+
+    def test_unpack_missing_part_preserves_preexisting_output_dir(self, temp_dir):
+        """Rejection must never delete a caller's pre-existing output directory."""
+        junk_zip = temp_dir / "junk.docx"
+        _build_zip(junk_zip, [("[Content_Types].xml", b"<Types/>")])
+        output = temp_dir / "output"
+        output.mkdir()
+        sentinel = output / "keep.txt"
+        sentinel.write_text("user data")
+
+        with pytest.raises(InvalidDocumentError, match=r"missing word/document\.xml"):
+            unpack_document(junk_zip, output)
+
+        assert output.exists()
+        assert sentinel.read_text() == "user data"
+
+    def test_unpack_directory_input_raises_invalid_document_error(self, temp_dir):
+        """A directory input raises the typed error, not raw IsADirectoryError."""
+        dir_input = temp_dir / "iamadir.docx"
+        dir_input.mkdir()
+
+        with pytest.raises(InvalidDocumentError, match="Is a directory") as excinfo:
+            unpack_document(dir_input, temp_dir / "output")
+
+        # Rejected by the explicit check, not by IsADirectoryError leaking
+        # out of zipfile and getting wrapped downstream.
+        assert excinfo.value.__cause__ is None
+
+
 SMART_TEXT = "“He said ‘hello’ — it’s fine”"
 
 

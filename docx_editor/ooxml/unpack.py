@@ -53,17 +53,22 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
 
     Raises:
         DocumentNotFoundError: If the input file doesn't exist
-        InvalidDocumentError: If the file is not a valid zip/docx, contains an
-            unsafe entry path or a symlink entry, a part contains malformed XML
-            or XML constructs refused for security (DTD entity/external
-            declarations), or the output directory is (or contains) a symlink
-            or is an existing non-directory.
+        InvalidDocumentError: If the input path is a directory, the file is not
+            a valid zip/docx, contains an unsafe entry path or a symlink entry,
+            is missing the required word/document.xml part (rejected before
+            extraction), a part contains malformed XML or XML constructs
+            refused for security (DTD entity/external declarations), or the
+            output directory is (or contains) a symlink or is an existing
+            non-directory.
     """
     input_path = Path(input_file)
     output_path = Path(output_dir)
 
     if not input_path.exists():
         raise DocumentNotFoundError(f"Document not found: {input_file}")
+
+    if input_path.is_dir():
+        raise InvalidDocumentError(f"Is a directory, not a .docx file: {input_file}")
 
     # Reject a symlinked destination so extractall cannot write through it.
     if output_path.is_symlink():
@@ -85,11 +90,18 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
         # rejection leaves the filesystem untouched.
         try:
             with zipfile.ZipFile(input_path) as zf:
+                names = set()
                 for info in zf.infolist():
                     if _is_unsafe_zip_path(info.filename):
                         raise InvalidDocumentError(f"Unsafe ZIP entry path: {info.filename!r} in {input_file}")
                     if _is_symlink_entry(info):
                         raise InvalidDocumentError(f"Symlink ZIP entry: {info.filename!r} in {input_file}")
+                    names.add(info.filename)
+                # The one part every consumer unconditionally dereferences;
+                # without it, opening would fail later with a raw
+                # FileNotFoundError naming the internal cache path.
+                if "word/document.xml" not in names:
+                    raise InvalidDocumentError(f"{input_file} is not a valid .docx: missing word/document.xml")
                 try:
                     output_path.mkdir(parents=True)
                     created_output_dir = True
