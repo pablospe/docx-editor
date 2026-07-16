@@ -543,7 +543,7 @@ List all tracked changes in the document.
 
 **Returns:** List of Revision objects
 
-**Raises:** The `paragraph` ref is validated exactly like in the edit methods — `ValueError` (malformed ref), `ParagraphIndexError` (index out of range), `HashMismatchError` (stale hash).
+**Raises:** The `paragraph` ref is validated exactly like in the edit methods — `ValueError` (malformed ref), [`ParagraphIndexError`](#exceptions) (index out of range), [`HashMismatchError`](#exceptions) (stale hash).
 
 **Example:**
 
@@ -1077,7 +1077,11 @@ Raised when the workspace is out of sync with the source document: the source ch
 from docx_editor.exceptions import WorkspaceSyncError
 from docx_editor.workspace import Workspace
 
-Workspace("contract.docx", create=False).save("rescued.docx")
+try:
+    doc = Document.open("contract.docx")
+except WorkspaceSyncError:
+    Workspace("contract.docx", create=False).save("rescued.docx")  # rescue unsaved edits
+    doc = Document.open("contract.docx", force_recreate=True)
 ```
 
 ### `DocumentOpenError`

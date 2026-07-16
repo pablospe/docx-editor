@@ -142,7 +142,9 @@ Use the **docx_editor** Python library for all editing operations. It handles tr
 ### Installation
 
 ```bash
-pip install "docx-editor[create]"   # or: uv pip install "docx-editor[create]"
+pip install docx-editor             # editing: track changes, comments, revisions
+pip install "docx-editor[create]"   # + python-docx, for creating new documents
+pip install "docx-editor[session]"  # + docx-session persistent CLI
 ```
 
 - **Editing** (track changes, comments, revisions) needs only the base `pip install docx-editor` ([PyPI](https://pypi.org/project/docx-editor/)) — python-docx is NOT bundled
@@ -306,7 +308,7 @@ doc.close()
 
 **Raises:** `TextNotFoundError` if the text is not found (or the requested `occurrence` is out of range — the error then reports `total_occurrences`). `AmbiguousTextError` if `occurrence` is omitted and the target matches more than once in the search scope.
 
-### Recipe: per-section change report
+### Per-section change report
 
 Group revisions by heading by joining `list_paragraph_locations()` with
 `list_revisions()` on `paragraph_ref`. The fixture (python-docx, i.e. the
@@ -334,7 +336,8 @@ for r in reversed(doc.find_all("thirty days")):
 locs = dict(doc.list_paragraph_locations())          # snapshot AFTER the edits
 report = {}
 for r in doc.list_revisions():
-    key = " > ".join(locs[r.paragraph_ref].heading_path) or "(front matter)"
+    loc = locs.get(r.paragraph_ref)                  # None ref: e.g. table-row revisions
+    key = (" > ".join(loc.heading_path) or "(front matter)") if loc else "(unlocated)"
     report.setdefault(key, []).append(r)
 for heading, revs in report.items():
     print(f"{heading}: {len(revs)} revision(s)")     # "Chapter one > Termination: 2 ..."
@@ -695,7 +698,7 @@ behavior that keeps one `list_paragraphs()` snapshot valid for the whole batch.
 
 ### Error Handling & Recovery
 
-All LLM-facing errors inherit from `DocxEditError` and carry structured fields so you can retry in-loop without re-reading the document. Catch the specific class or the base — both work.
+All LLM-facing errors inherit from `DocxEditError` and (except `RevisionError`, message-only) carry structured fields so you can retry in-loop without re-reading the document. Catch the specific class or the base — both work.
 
 | Error                  | Fields                                                                                  | Recovery                                                                                         |
 | ---------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -856,7 +859,7 @@ documents, exploratory editing — use a persistent session instead of one-off
 scripts. The document (and all your variables) stays open between commands:
 
 ```bash
-# Requires: pip install docx-editor[session]
+# Requires: pip install "docx-editor[session]"
 docx-session start
 
 # Use ABSOLUTE paths: the kernel keeps the cwd it was started in, which is not
