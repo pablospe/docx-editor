@@ -820,8 +820,20 @@ docx-session exec "ref = doc.replace('30 days', '45 days', paragraph='P2#f3c1');
 docx-session exec "doc.add_comment('45 days', 'Extended per negotiation.', paragraph=ref)"
 docx-session exec "doc.save(); doc.close()"
 
-# Check whether a session is running: prints "running"/"not running";
-# exit code 0 if running, 3 if not
+# Read data out as JSON: eval takes an *expression* and prints one JSON envelope
+# on stdout — {"status", "value", "serialized", "stdout", "stderr", "traceback"}.
+# Prefer it over exec + print(json.dumps(...)) for structured reads.
+docx-session eval "[str(p) for p in doc.list_paragraphs()[:5]]"
+
+# Multi-line or quote-heavy code: '-' reads the code from stdin (exec and eval)
+docx-session exec - <<'PY'
+for p in doc.list_paragraphs():
+    if "deadline" in str(p):
+        print(p)
+PY
+
+# Check whether a session is running: prints "running"/"not running" plus
+# pid/state/connection-file detail lines; exit code 0 if running, 3 if not
 docx-session status
 
 docx-session stop
@@ -831,7 +843,10 @@ Rules:
 
 - **Always `docx-session stop` when the editing task is done** — don't leave kernels running.
 - Exit code 1 means the code raised: the traceback is on stderr, the session survives — fix the call and continue (introspect with `docx-session exec "import inspect; print(inspect.signature(doc.replace))"` when unsure).
-- Exit code 2 means timeout, 3 means no session is running.
+- Exit code 2 means timeout — the kernel is alive and your code is still running. Exit code 3 means no session is running.
+- Exit code 4 means the kernel died mid-exec or is unreachable: its state (open documents, variables) is lost. Recover with `docx-session stop` then `start`, and re-open your documents.
+- `eval` output: `"serialized": false` means the value wasn't JSON-serializable and `value` holds its `repr` string. On exit 4 the envelope has `"status": "dead"`; on exit 3 (no session) there is no envelope at all.
+- `status` reports `state: busy` while an exec is in flight — a busy session is healthy, don't stop/restart it.
 - Variables persist between `exec` calls: keep refs returned by edits in Python variables instead of re-running `list_paragraphs()`.
 - Use absolute paths inside `exec` — the kernel's cwd is whatever `start` captured.
 - A `exec` sent while the kernel is still busy **queues** behind the running one; `--timeout` covers the whole wait. A timeout does not cancel the running code.

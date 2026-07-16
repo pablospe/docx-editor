@@ -6,22 +6,24 @@ of re-opening them in one-off scripts. Requires the optional extra:
     pip install docx-editor[session]
 
 CLI (see main()):
-    docx-session start | exec "code" | status | stop
+    docx-session start | exec "code" | eval "expr" | status | stop
 """
 
 import argparse
+import ast
+import json
 import os
 import re
 import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from queue import Empty
 from typing import TYPE_CHECKING, Literal
 
-from .exceptions import SessionError
+from .exceptions import SessionDeadError, SessionError
 from .workspace import _pid_alive
 
 if TYPE_CHECKING:
@@ -76,6 +78,45 @@ def _kernel_alive(kc: "BlockingKernelClient", timeout: float = 5.0) -> bool:
             continue
         if reply.get("parent_header", {}).get("msg_id") == msg_id:
             return True
+
+
+def _kernel_idle(kc: "BlockingKernelClient", timeout: float = 2.0) -> bool:
+    """True if the kernel answers a kernel_info request on the *shell* channel.
+
+    The shell channel is serialized behind any running execute_request, so a
+    busy kernel leaves this request queued past the window — which is exactly
+    the idle/busy signal. The queued reply eventually lands on this
+    disconnected client's socket and is dropped by ZMQ.
+    """
+    msg = kc.session.msg("kernel_info_request", {})
+    kc.shell_channel.send(msg)
+    msg_id = msg["header"]["msg_id"]
+
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            reply = kc.get_shell_msg(timeout=min(remaining, 0.5))
+        except Empty:
+            continue
+        if reply.get("parent_header", {}).get("msg_id") == msg_id:
+            return True
+
+
+def _kernel_dead(kc: "BlockingKernelClient", connection_file: Path) -> bool:
+    """True only when the kernel is provably gone or unreachable.
+
+    Fast path: the recorded PID no longer exists (reap=True detects our own
+    zombie child in library use). Fallback: the control-channel probe — which
+    ipykernel answers on a dedicated thread even mid-exec — gets no reply.
+    _pid_alive errs toward "alive", so a live kernel never trips the fast path.
+    """
+    pid = _read_pid(connection_file)
+    if pid is not None and not _pid_alive(pid, reap=True):
+        return True
+    return not _kernel_alive(kc, timeout=5.0)
 
 
 def _pid_file(connection_file: Path) -> Path:
@@ -233,14 +274,61 @@ def stop_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: float
     return True
 
 
+@dataclass
+class SessionStatus:
+    """Snapshot of a session's state (see session_status())."""
+
+    running: bool
+    pid: int | None
+    state: Literal["idle", "busy"] | None  # None when not running
+    connection_file: Path
+    stale: bool  # session files exist but the kernel is unreachable — 'stop' cleans up
+
+
+def session_status(connection_file: Path = DEFAULT_CONNECTION_FILE) -> SessionStatus:
+    """Inspect the session: liveness, PID, and whether the kernel is idle or busy.
+
+    stale=True means session files exist but the kernel is not answering (it
+    crashed, was killed, or the machine rebooted).
+
+    Args:
+        connection_file: Kernel connection file to inspect
+
+    Raises:
+        ImportError: If the [session] extra is not installed.
+    """
+    if not connection_file.exists():
+        return SessionStatus(running=False, pid=None, state=None, connection_file=connection_file, stale=False)
+
+    pid = _read_pid(connection_file)
+    try:
+        kc = _client(connection_file)
+    except (ValueError, OSError):
+        return SessionStatus(running=False, pid=pid, state=None, connection_file=connection_file, stale=True)
+    try:
+        if not _kernel_alive(kc):
+            return SessionStatus(running=False, pid=pid, state=None, connection_file=connection_file, stale=True)
+        state: Literal["idle", "busy"] = "idle" if _kernel_idle(kc) else "busy"
+    finally:
+        kc.stop_channels()
+    return SessionStatus(running=True, pid=pid, state=state, connection_file=connection_file, stale=False)
+
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+ExecStatus = Literal["ok", "error", "timeout", "dead"]
+
+# Seconds of iopub silence before probing whether a mid-exec kernel is dead.
+# A live-but-busy kernel answers the control probe and the silence clock resets.
+_SILENCE_PROBE_AFTER = 10.0
 
 
 @dataclass
 class ExecResult:
     """Outcome of one exec_code() call against the session kernel."""
 
-    status: Literal["ok", "error", "timeout"]
+    status: ExecStatus
     stdout: str = ""
     stderr: str = ""
     result: str | None = None  # repr of the last expression, if any
@@ -259,11 +347,13 @@ def exec_code(code: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
         timeout: Seconds to wait for the execution to finish
 
     Returns:
-        ExecResult with status "ok", "error", or "timeout".
+        ExecResult with status "ok", "error", "timeout", or "dead" (the kernel
+        died mid-execution — its state is lost).
 
     Raises:
         FileNotFoundError: If no session connection file exists.
-        SessionError: If the kernel is not answering.
+        SessionDeadError: If the kernel is gone or not answering.
+        SessionError: If the connection file is unreadable.
         ImportError: If the [session] extra is not installed.
     """
     if not connection_file.exists():
@@ -275,8 +365,8 @@ def exec_code(code: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
         raise SessionError(f"Session connection file is unreadable ({connection_file}): {e}") from e
 
     try:
-        if not _kernel_alive(kc, timeout=10.0):
-            raise SessionError(
+        if _kernel_dead(kc, connection_file):
+            raise SessionDeadError(
                 f"Session kernel is not responding ({connection_file}). Run 'docx-session stop' then 'start'."
             )
         # allow_stdin=False: with stdin allowed, an input() call parks the kernel on
@@ -288,17 +378,28 @@ def exec_code(code: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
         stderr_parts: list[str] = []
         result: str | None = None
         traceback: str | None = None
-        status: Literal["ok", "error", "timeout"] = "ok"
+        status: ExecStatus = "ok"
         deadline = time.monotonic() + timeout
+        last_activity = time.monotonic()
 
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return ExecResult(status="timeout", stdout="".join(stdout_parts), stderr="".join(stderr_parts))
+                final: ExecStatus = "dead" if _kernel_dead(kc, connection_file) else "timeout"
+                return ExecResult(status=final, stdout="".join(stdout_parts), stderr="".join(stderr_parts))
             try:
                 msg = kc.get_iopub_msg(timeout=min(remaining, 1.0))
             except Empty:
+                # A crashed kernel just goes silent; without this probe the loop
+                # would run out the full timeout and report it as still running.
+                if time.monotonic() - last_activity < _SILENCE_PROBE_AFTER:
+                    continue
+                if _kernel_dead(kc, connection_file):
+                    return ExecResult(status="dead", stdout="".join(stdout_parts), stderr="".join(stderr_parts))
+                last_activity = time.monotonic()
                 continue
+            # Any iopub traffic proves the kernel is alive, whoever it belongs to.
+            last_activity = time.monotonic()
             if msg.get("parent_header", {}).get("msg_id") != msg_id:
                 continue
 
@@ -326,10 +427,92 @@ def exec_code(code: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
         kc.stop_channels()
 
 
+# JSON serialization must happen kernel-side: the client only ever sees mime
+# bundles. The wrapper's return value is the code block's last expression, so
+# the JSON rides back as the execute_result repr — a channel that user print()
+# output can't corrupt. The %s slot takes repr(expr) — a valid Python string
+# literal whatever quotes/backslashes/unicode the expression contains (str.format
+# would collide with the template's own braces). Keep this template %-free.
+# One __docx_session_eval name is left in the user namespace (overwritten each
+# call) — same class of pollution as IPython's own In/Out.
+_EVAL_TEMPLATE = """\
+def __docx_session_eval():
+    import json
+    value = eval(compile(%s, "<docx-session eval>", "eval"), globals())
+    try:
+        return json.dumps({"value": value, "serialized": True})
+    except (TypeError, ValueError, OverflowError):
+        return json.dumps({"value": repr(value), "serialized": False})
+__docx_session_eval()
+"""
+
+
+@dataclass
+class EvalResult:
+    """Outcome of one eval_code() call: an expression's value, JSON-transported."""
+
+    status: ExecStatus
+    value: object = None
+    serialized: bool = False  # False: value was not JSON-serializable; it holds a repr string
+    stdout: str = ""
+    stderr: str = ""
+    traceback: str | None = None
+
+
+def eval_code(expr: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: float = 120.0) -> EvalResult:
+    """Evaluate an expression in the session kernel and return its value.
+
+    JSON-serializable values arrive intact (serialized=True); anything else
+    arrives as its repr string (serialized=False). Statements ('x = 5') are a
+    SyntaxError — use exec_code for those.
+
+    Args:
+        expr: Python expression to evaluate in the session
+        connection_file: Kernel connection file of the session
+        timeout: Seconds to wait for the evaluation to finish
+
+    Raises:
+        Same as exec_code, plus SessionError if the value transport breaks.
+    """
+    res = exec_code(_EVAL_TEMPLATE % (repr(expr),), connection_file=connection_file, timeout=timeout)
+    if res.status != "ok":
+        return EvalResult(status=res.status, stdout=res.stdout, stderr=res.stderr, traceback=res.traceback)
+    if res.result is None:
+        raise SessionError("eval transport failed: kernel returned no result for the eval wrapper")
+    try:
+        payload = json.loads(ast.literal_eval(res.result))
+    except (ValueError, SyntaxError) as e:
+        raise SessionError(f"eval transport failed: could not decode the kernel's reply: {e}") from e
+    return EvalResult(
+        status="ok",
+        value=payload["value"],
+        serialized=payload["serialized"],
+        stdout=res.stdout,
+        stderr=res.stderr,
+    )
+
+
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_TIMEOUT = 2
 EXIT_NO_SESSION = 3
+EXIT_KERNEL_DEAD = 4
+
+
+def _read_code(arg: str) -> str:
+    """The code argument itself, or stdin's content when the argument is '-'."""
+    return sys.stdin.read() if arg == "-" else arg
+
+
+# The example is deliberately unindented: a copy-pasted heredoc only terminates
+# when the closing PY sits at column 0.
+_STDIN_EPILOG = """\
+Pass '-' to read the code from stdin — no shell quoting to fight:
+
+docx-session exec - <<'PY'
+for p in doc.list_paragraphs():
+    print(p)
+PY"""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -339,7 +522,8 @@ def main(argv: list[str] | None = None) -> int:
         "--session-file",
         type=Path,
         default=DEFAULT_CONNECTION_FILE,
-        help=f"Kernel connection file (default: {DEFAULT_CONNECTION_FILE})",
+        help="Kernel connection file; distinct files give isolated parallel sessions "
+        f"(default: {DEFAULT_CONNECTION_FILE})",
     )
 
     parser = argparse.ArgumentParser(
@@ -348,9 +532,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("start", parents=[common], help="Start a background kernel")
-    p_exec = sub.add_parser("exec", parents=[common], help="Execute code in the running kernel")
-    p_exec.add_argument("code", help="Python code to execute")
+    p_exec = sub.add_parser(
+        "exec",
+        parents=[common],
+        help="Execute code in the running kernel",
+        epilog=_STDIN_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_exec.add_argument("code", help="Python code to execute ('-' reads it from stdin)")
     p_exec.add_argument("--timeout", type=float, default=120.0, help="Seconds to wait (default: 120)")
+    p_eval = sub.add_parser(
+        "eval",
+        parents=[common],
+        help="Evaluate an expression; prints one JSON envelope on stdout",
+        epilog=_STDIN_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_eval.add_argument("expr", help="Python expression to evaluate ('-' reads it from stdin)")
+    p_eval.add_argument("--timeout", type=float, default=120.0, help="Seconds to wait (default: 120)")
     sub.add_parser("status", parents=[common], help="Check whether the kernel is answering")
     sub.add_parser("stop", parents=[common], help="Shut the kernel down")
     args = parser.parse_args(argv)
@@ -360,6 +559,9 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as e:
         print(e, file=sys.stderr)
         return EXIT_NO_SESSION
+    except SessionDeadError as e:
+        print(e, file=sys.stderr)
+        return EXIT_KERNEL_DEAD
     except (SessionError, ImportError) as e:
         print(e, file=sys.stderr)
         return EXIT_ERROR
@@ -375,10 +577,17 @@ def _run(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     if args.command == "status":
-        if is_session_running(connection_file=args.session_file):
+        st = session_status(connection_file=args.session_file)
+        if st.running:
             print("running")
+            print(f"pid: {st.pid}")
+            print(f"state: {st.state}")
+            print(f"connection file: {st.connection_file}")
             return EXIT_OK
         print("not running")
+        if st.stale:
+            detail = f"pid {st.pid} dead" if st.pid is not None else "kernel unreachable"
+            print(f"stale session files present ({detail}) — run 'docx-session stop' to clean up")
         return EXIT_NO_SESSION
 
     if args.command == "stop":
@@ -388,8 +597,19 @@ def _run(args: argparse.Namespace) -> int:
         print("no session")
         return EXIT_NO_SESSION
 
+    if args.command == "eval":
+        try:
+            eres = eval_code(_read_code(args.expr), connection_file=args.session_file, timeout=args.timeout)
+        except SessionDeadError as e:
+            # Keep eval's stdout contract — one JSON envelope whenever session
+            # files exist — even when the kernel is already gone.
+            print(e, file=sys.stderr)
+            eres = EvalResult(status="dead")
+        print(json.dumps(asdict(eres)))
+        return {"ok": EXIT_OK, "error": EXIT_ERROR, "timeout": EXIT_TIMEOUT, "dead": EXIT_KERNEL_DEAD}[eres.status]
+
     # exec
-    res = exec_code(args.code, connection_file=args.session_file, timeout=args.timeout)
+    res = exec_code(_read_code(args.code), connection_file=args.session_file, timeout=args.timeout)
 
     if res.stdout:
         print(res.stdout, end="")
@@ -400,6 +620,12 @@ def _run(args: argparse.Namespace) -> int:
     if res.status == "error":
         print(res.traceback, file=sys.stderr)
         return EXIT_ERROR
+    if res.status == "dead":
+        print(
+            "Kernel died during execution — its state is lost. Run 'docx-session stop' then 'start'.",
+            file=sys.stderr,
+        )
+        return EXIT_KERNEL_DEAD
     if res.status == "timeout":
         print(
             f"Timed out after {args.timeout}s (kernel still running; the command may still finish).",

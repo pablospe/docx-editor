@@ -1,5 +1,7 @@
 """Tests for the persistent session module (docx_editor/session.py)."""
 
+import io
+import json
 import subprocess
 import sys
 import threading
@@ -10,11 +12,13 @@ import pytest
 pytest.importorskip("jupyter_client")
 pytest.importorskip("ipykernel")
 
-from docx_editor.exceptions import SessionError  # noqa: E402
+from docx_editor.exceptions import SessionDeadError, SessionError  # noqa: E402
 from docx_editor.session import (  # noqa: E402
+    eval_code,
     exec_code,
     is_session_running,
     main,
+    session_status,
     start_session,
     stop_session,
 )
@@ -116,6 +120,100 @@ def test_exec_docx_editing_workflow(session_conn, temp_docx):
     assert r3.status == "ok"
 
 
+class TestEval:
+    """eval_code(): expression values come back as JSON, not display reprs."""
+
+    def test_eval_simple_expression(self, session_conn):
+        res = eval_code("1 + 1", connection_file=session_conn)
+        assert res.status == "ok"
+        assert res.value == 2
+        assert res.serialized is True
+
+    def test_eval_round_trips_unicode_and_quotes(self, session_conn):
+        value = {"text": "double \" and single ' quotes — ünïcode", "nested": [1, {"k": [True, None]}]}
+        # repr(value) is a valid Python expression that stresses the repr-embedding transport.
+        res = eval_code(repr(value), connection_file=session_conn)
+        assert res.status == "ok", res.traceback
+        assert res.value == value
+        assert res.serialized is True
+
+    def test_eval_large_payload_round_trips(self, session_conn):
+        """Guards the repr transport against any pretty-printer truncation/wrapping."""
+        res = eval_code("list(range(10000))", connection_file=session_conn)
+        assert res.status == "ok"
+        assert res.value == list(range(10000))
+
+    def test_eval_non_serializable_falls_back_to_repr(self, session_conn):
+        res = eval_code("object()", connection_file=session_conn)
+        assert res.status == "ok"
+        assert res.serialized is False
+        assert isinstance(res.value, str)
+        assert "object" in res.value
+
+    def test_eval_statement_is_a_syntax_error(self, session_conn):
+        res = eval_code("some_var = 5", connection_file=session_conn)
+        assert res.status == "error"
+        assert res.traceback is not None
+        assert "SyntaxError" in res.traceback
+
+    def test_eval_captures_side_effect_stdout(self, session_conn):
+        res = eval_code("print('noise') or 7", connection_file=session_conn)
+        assert res.status == "ok"
+        assert res.value == 7
+        assert "noise" in res.stdout
+
+    def test_eval_sees_state_from_prior_exec(self, session_conn):
+        assert exec_code("eval_state = {'a': 1}", connection_file=session_conn).status == "ok"
+        res = eval_code("eval_state", connection_file=session_conn)
+        assert res.value == {"a": 1}
+
+    def test_main_eval_prints_json_envelope(self, session_conn, capsys):
+        assert main(["eval", "2 + 3", "--session-file", str(session_conn)]) == 0
+        envelope = json.loads(capsys.readouterr().out)
+        assert envelope["status"] == "ok"
+        assert envelope["value"] == 5
+        assert envelope["serialized"] is True
+
+    def test_main_eval_error_envelope(self, session_conn, capsys):
+        assert main(["eval", "1 / 0", "--session-file", str(session_conn)]) == 1
+        envelope = json.loads(capsys.readouterr().out)
+        assert envelope["status"] == "error"
+        assert "ZeroDivisionError" in envelope["traceback"]
+
+    def test_main_eval_without_session(self, tmp_path, capsys):
+        assert main(["eval", "1 + 1", "--session-file", str(tmp_path / "nope.json")]) == 3
+        captured = capsys.readouterr()
+        assert captured.out == ""  # no envelope without a session
+        assert "docx-session start" in captured.err
+
+
+class TestSessionStatus:
+    """session_status(): richer detail than the boolean is_session_running()."""
+
+    def test_status_idle_session(self, session_conn):
+        st = session_status(session_conn)
+        assert st.running is True
+        assert st.state == "idle"
+        assert st.pid == int(session_conn.with_suffix(".pid").read_text(encoding="utf-8"))
+        assert st.connection_file == session_conn
+        assert st.stale is False
+
+    def test_status_no_session(self, tmp_path):
+        st = session_status(tmp_path / "nope.json")
+        assert st.running is False
+        assert st.pid is None
+        assert st.state is None
+        assert st.stale is False
+
+    def test_main_status_prints_details(self, session_conn, capsys):
+        assert main(["status", "--session-file", str(session_conn)]) == 0
+        out = capsys.readouterr().out
+        assert out.splitlines()[0] == "running"
+        assert "pid: " in out
+        assert "state: idle" in out
+        assert f"connection file: {session_conn}" in out
+
+
 class TestBusyKernel:
     """A busy kernel must stay distinguishable from a dead one.
 
@@ -150,6 +248,92 @@ class TestBusyKernel:
         res = exec_code("1 + 1", connection_file=busy_conn, timeout=30.0)
         assert res.status == "ok"
         assert res.result == "2"
+
+    def test_busy_kernel_status_reports_busy(self, busy_conn, capsys):
+        st = session_status(busy_conn)
+        assert st.running is True
+        assert st.state == "busy"
+        assert st.stale is False
+        assert main(["status", "--session-file", str(busy_conn)]) == 0
+        assert "state: busy" in capsys.readouterr().out
+
+
+class TestKernelDeath:
+    """A kernel that dies mid-exec must be reported dead, not 'still running'."""
+
+    @pytest.fixture
+    def dead_conn(self, tmp_path):
+        """A session whose kernel SIGKILLed itself mid-exec."""
+        conn = tmp_path / "kernel.json"
+        start_session(conn)
+        started = time.monotonic()
+        res = exec_code("import os; os.kill(os.getpid(), 9)", connection_file=conn, timeout=30.0)
+        elapsed = time.monotonic() - started
+        assert res.status == "dead"
+        # The silence probe (or pid fast path) must beat the 30s timeout by far.
+        assert elapsed < 20.0, f"death detection took {elapsed:.1f}s"
+        yield conn
+        stop_session(conn)
+
+    def test_dead_kernel_library_surface(self, dead_conn):
+        with pytest.raises(SessionDeadError, match="docx-session stop"):
+            exec_code("1 + 1", connection_file=dead_conn)
+        st = session_status(dead_conn)
+        assert st.running is False
+        assert st.stale is True
+        # stop still cleans the stale files up:
+        assert stop_session(dead_conn) is True
+        assert dead_conn.exists() is False
+        assert dead_conn.with_suffix(".pid").exists() is False
+
+    def test_dead_kernel_cli_surface(self, dead_conn, capsys):
+        sf = ["--session-file", str(dead_conn)]
+
+        assert main(["exec", "1 + 1", *sf]) == 4
+        assert "docx-session stop" in capsys.readouterr().err
+
+        assert main(["eval", "1 + 1", *sf]) == 4
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["status"] == "dead"
+
+        assert main(["status", *sf]) == 3
+        out = capsys.readouterr().out
+        assert out.splitlines()[0] == "not running"
+        assert "stale session files present" in out
+
+        assert main(["stop", *sf]) == 0
+
+
+class TestStdinCode:
+    """exec/eval accept '-' to read the code from stdin — no shell quoting to fight."""
+
+    def test_main_exec_stdin_multiline_mixed_quotes(self, session_conn, capsys, monkeypatch):
+        code = "\n".join([
+            "a = 'single'",
+            'b = "double"',
+            'print(f"{a} {b}")',
+        ])
+        monkeypatch.setattr("sys.stdin", io.StringIO(code))
+        assert main(["exec", "-", "--session-file", str(session_conn)]) == 0
+        assert "single double" in capsys.readouterr().out
+
+    def test_main_eval_stdin(self, session_conn, capsys, monkeypatch):
+        monkeypatch.setattr("sys.stdin", io.StringIO("{'k': 'v'}\n"))
+        assert main(["eval", "-", "--session-file", str(session_conn)]) == 0
+        envelope = json.loads(capsys.readouterr().out)
+        assert envelope["value"] == {"k": "v"}
+
+    def test_subprocess_exec_stdin(self, session_conn):
+        """End-to-end through a real pipe, mirroring the documented heredoc pattern."""
+        code = "sp_a = 'via'\nsp_b = \"stdin\"\nprint(sp_a, sp_b)\n"
+        proc = subprocess.run(
+            [sys.executable, "-m", "docx_editor.session", "exec", "-", "--session-file", str(session_conn)],
+            input=code,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "via stdin" in proc.stdout
 
 
 def test_exec_stdin_does_not_wedge_session(tmp_path):
