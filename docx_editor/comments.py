@@ -158,6 +158,7 @@ class CommentManager:
             ParagraphIndexError: If a paragraph reference's index is out of range.
             CommentError: If ``anchor_text`` is not a non-empty string, or
                 ``comment_text`` is not a string.
+            ValueError: If ``occurrence`` is negative or not an integer.
         """
         if not isinstance(anchor_text, str) or not anchor_text:
             raise CommentError(f"anchor_text must be a non-empty string, got {anchor_text!r}")

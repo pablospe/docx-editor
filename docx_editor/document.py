@@ -1013,6 +1013,9 @@ class Document:
             AmbiguousTextError: If ``occurrence`` is omitted and
                 ``anchor_text`` matches more than once in the search scope.
             HashMismatchError: If ``paragraph``'s hash is stale.
+            CommentError: If ``anchor_text`` is not a non-empty string, or
+                ``comment`` is not a string.
+            ValueError: If ``occurrence`` is negative or not an integer.
 
         Example:
             doc.add_comment("Section 5", "Please review this section")
