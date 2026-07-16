@@ -21,7 +21,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from queue import Empty
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .exceptions import SessionDeadError, SessionError
 from .workspace import _pid_alive
@@ -454,7 +454,7 @@ class EvalResult:
     """Outcome of one eval_code() call: an expression's value, JSON-transported."""
 
     status: ExecStatus
-    value: object = None
+    value: Any = None
     serialized: bool = False  # False: value was not JSON-serializable; it holds a repr string
     stdout: str = ""
     stderr: str = ""
@@ -506,6 +506,10 @@ EXIT_TIMEOUT = 2
 EXIT_NO_SESSION = 3
 EXIT_KERNEL_DEAD = 4
 
+_KERNEL_DIED_MSG = (
+    "Kernel died or became unreachable during execution — its state is lost. Run 'docx-session stop' then 'start'."
+)
+
 
 def _read_code(arg: str) -> str:
     """The code argument itself, or stdin's content when the argument is '-'."""
@@ -525,7 +529,7 @@ PY"""
 
 _EVAL_EPILOG = """\
 Pass '-' to read the expression from stdin — no shell quoting to fight; also the
-easy route for expressions starting with '-' (argparse would read "-x" as a flag):
+easy route for expressions starting with '-' (argparse would read a bare "-x" as a flag):
 
 docx-session eval - <<'PY'
 [str(p) for p in doc.list_paragraphs() if 'deadline' in str(p)]
@@ -618,14 +622,17 @@ def _run(args: argparse.Namespace) -> int:
 
     if args.command == "eval":
         try:
-            eres = eval_code(_read_code(args.expr), connection_file=args.session_file, timeout=args.timeout)
+            res = eval_code(_read_code(args.expr), connection_file=args.session_file, timeout=args.timeout)
         except SessionDeadError as e:
             # Keep eval's stdout contract — one JSON envelope whenever session
             # files exist — even when the kernel is already gone.
             print(e, file=sys.stderr)
-            eres = EvalResult(status="dead")
-        print(json.dumps(asdict(eres)))
-        return {"ok": EXIT_OK, "error": EXIT_ERROR, "timeout": EXIT_TIMEOUT, "dead": EXIT_KERNEL_DEAD}[eres.status]
+            res = EvalResult(status="dead")
+        else:
+            if res.status == "dead":  # died mid-eval: same stderr recovery hint as exec
+                print(_KERNEL_DIED_MSG, file=sys.stderr)
+        print(json.dumps(asdict(res)))
+        return {"ok": EXIT_OK, "error": EXIT_ERROR, "timeout": EXIT_TIMEOUT, "dead": EXIT_KERNEL_DEAD}[res.status]
 
     # exec
     res = exec_code(_read_code(args.code), connection_file=args.session_file, timeout=args.timeout)
@@ -640,11 +647,7 @@ def _run(args: argparse.Namespace) -> int:
         print(res.traceback, file=sys.stderr)
         return EXIT_ERROR
     if res.status == "dead":
-        print(
-            "Kernel died or became unreachable during execution — its state is lost. "
-            "Run 'docx-session stop' then 'start'.",
-            file=sys.stderr,
-        )
+        print(_KERNEL_DIED_MSG, file=sys.stderr)
         return EXIT_KERNEL_DEAD
     if res.status == "timeout":
         print(

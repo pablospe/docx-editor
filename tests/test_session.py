@@ -310,6 +310,19 @@ class TestKernelDeath:
 
         assert main(["stop", *sf]) == 0
 
+    def test_eval_mid_exec_death_prints_recovery_hint(self, tmp_path, capsys):
+        """Dying mid-eval must give the same stderr hint as the pre-checked dead path."""
+        conn = tmp_path / "kernel.json"
+        start_session(conn)
+        try:
+            expr = "__import__('os').kill(__import__('os').getpid(), 9)"
+            assert main(["eval", expr, "--session-file", str(conn), "--timeout", "30"]) == 4
+            captured = capsys.readouterr()
+            assert json.loads(captured.out)["status"] == "dead"
+            assert "docx-session stop" in captured.err
+        finally:
+            stop_session(conn)
+
 
 class TestStdinCode:
     """exec/eval accept '-' to read the code from stdin — no shell quoting to fight."""
