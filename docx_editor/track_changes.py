@@ -172,6 +172,15 @@ class EditOperation:
         return cls._insert("insert_before", anchor, text, paragraph, occurrence)
 
 
+def _not_an_edit_operation(op: object) -> str:
+    """Shared batch_edit/validate_batch message for a non-EditOperation element,
+    so the raising and never-raises paths cannot drift apart."""
+    return (
+        f"expected EditOperation, got {type(op).__name__} — build operations with "
+        "EditOperation.replace()/.delete()/.insert_after()/.insert_before()"
+    )
+
+
 @dataclass
 class EditValidationResult:
     """Outcome of validating one EditOperation in a dry-run batch."""
@@ -608,7 +617,8 @@ class RevisionManager:
                 be unique within the paragraph.
 
         Raises:
-            ValueError: If ``occurrence`` is negative.
+            ValueError: If ``occurrence`` is negative, or ``text`` is empty
+                or None.
             TextNotFoundError: If the text is absent, or ``occurrence`` is out
                 of range (then with ``occurrence``/``total_occurrences`` set).
             AmbiguousTextError: If ``occurrence`` is None and the text matches
@@ -616,6 +626,8 @@ class RevisionManager:
         """
         if occurrence is not None and occurrence < 0:
             raise ValueError(f"occurrence must be >= 0, got {occurrence}")
+        if not text:
+            raise ValueError(f"search text must be a non-empty string, got {text!r}")
         text_map = build_text_map(paragraph)
         total = count_in_text_map(text_map, text)
 
@@ -658,11 +670,12 @@ class RevisionManager:
             List of change IDs, one per operation (in original input order)
 
         Raises:
-            BatchOperationError: If any operation fails — validation (malformed
-                ref, stale hash, bad index) or apply (missing text, ambiguous
-                target). Carries ``operation_index`` so the caller knows which
-                op failed, and ``original`` (also ``__cause__``) with the
-                underlying typed exception. No edits are applied on failure.
+            BatchOperationError: If any operation fails — validation (element
+                is not an EditOperation, malformed ref, stale hash, bad index)
+                or apply (missing text, ambiguous target). Carries
+                ``operation_index`` so the caller knows which op failed, and
+                ``original`` (also ``__cause__``) with the underlying typed
+                exception. No edits are applied on failure.
         """
         if not operations:
             return []
@@ -670,6 +683,8 @@ class RevisionManager:
         # Parse and validate all refs upfront
         parsed: list[tuple[int, ParagraphRef, EditOperation]] = []
         for i, op in enumerate(operations):
+            if not isinstance(op, EditOperation):
+                raise BatchOperationError(i, _not_an_edit_operation(op))
             if not op.paragraph:
                 raise BatchOperationError(i, "paragraph reference is required for batch mode")
             try:
@@ -780,10 +795,17 @@ class RevisionManager:
             operations: List of EditOperation objects (each should have paragraph set)
 
         Returns:
-            One EditValidationResult per operation, in input order.
+            One EditValidationResult per operation, in input order. An element
+            that is not an EditOperation at all comes back as an invalid
+            result (``paragraph=None``), never as an exception.
         """
         results = []
         for i, op in enumerate(operations):
+            if not isinstance(op, EditOperation):
+                results.append(
+                    EditValidationResult(index=i, paragraph=None, valid=False, error=_not_an_edit_operation(op))
+                )
+                continue
             error = self._validate_single(op)
             results.append(
                 EditValidationResult(
@@ -1122,7 +1144,8 @@ class RevisionManager:
         the exact total is part of the error contract.
 
         Raises:
-            ValueError: If ``occurrence`` is negative.
+            ValueError: If ``occurrence`` is negative, or ``text`` is empty
+                or None.
             TextNotFoundError: If the text is not found or occurrence doesn't
                 exist; ``total_occurrences`` matches :meth:`count_matches`.
             AmbiguousTextError: If ``occurrence`` is None and the text matches
@@ -1130,6 +1153,8 @@ class RevisionManager:
         """
         if occurrence is not None and occurrence < 0:
             raise ValueError(f"occurrence must be >= 0, got {occurrence}")
+        if not text:
+            raise ValueError(f"search text must be a non-empty string, got {text!r}")
         occ = occurrence if occurrence is not None else 0
         match = self._find_across_boundaries(text, occ)
         if match is None:
@@ -1269,6 +1294,8 @@ class RevisionManager:
             The change ID of the insertion
 
         Raises:
+            ValueError: If ``find`` is empty or None, or ``occurrence`` is
+                negative
             TextNotFoundError: If the text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
                 matches more than once in the search scope
@@ -1298,6 +1325,8 @@ class RevisionManager:
             The change ID of the deletion
 
         Raises:
+            ValueError: If ``text`` is empty or None, or ``occurrence`` is
+                negative
             TextNotFoundError: If the text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
                 matches more than once in the search scope
@@ -2133,6 +2162,8 @@ class RevisionManager:
             The change ID of the insertion
 
         Raises:
+            ValueError: If ``anchor`` is empty or None, or ``occurrence`` is
+                negative
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the search scope
@@ -2157,6 +2188,8 @@ class RevisionManager:
             The change ID of the insertion
 
         Raises:
+            ValueError: If ``anchor`` is empty or None, or ``occurrence`` is
+                negative
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the search scope

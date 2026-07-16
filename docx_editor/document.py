@@ -40,6 +40,14 @@ from .xml_editor import (
 )
 
 
+def _require_ref_string(paragraph: str) -> None:
+    """Reject non-string paragraph refs before they can silently select the
+    RevisionManager's document-wide search branch (its ``paragraph=None``
+    mode is intentional at that layer, not at this one)."""
+    if not isinstance(paragraph, str):
+        raise ValueError(f"'paragraph' must be a paragraph ref string like 'P3#a7b2', got {type(paragraph).__name__}")
+
+
 class Document:
     """Word document with track changes and comment support.
 
@@ -725,6 +733,8 @@ class Document:
             for accept_group()/reject_group().
 
         Raises:
+            ValueError: If ``find`` is empty or None, ``paragraph`` is not a
+                ref string, or ``occurrence`` is negative.
             TextNotFoundError: If ``find`` is absent or ``occurrence`` is out
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
@@ -736,6 +746,7 @@ class Document:
             doc.replace("other text", "new text", paragraph=new_ref)
         """
         self._ensure_open()
+        _require_ref_string(paragraph)
         change_id = self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
         return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
@@ -755,6 +766,8 @@ class Document:
             revisions this edit created.
 
         Raises:
+            ValueError: If ``text`` is empty or None, ``paragraph`` is not a
+                ref string, or ``occurrence`` is negative.
             TextNotFoundError: If ``text`` is absent or ``occurrence`` is out
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
@@ -765,6 +778,7 @@ class Document:
             new_ref = doc.delete("obsolete clause", paragraph="P2#f3c1")
         """
         self._ensure_open()
+        _require_ref_string(paragraph)
         change_id = self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
         return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
@@ -785,6 +799,8 @@ class Document:
             revisions this edit created.
 
         Raises:
+            ValueError: If ``anchor`` is empty or None, ``paragraph`` is not
+                a ref string, or ``occurrence`` is negative.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
@@ -795,6 +811,7 @@ class Document:
             new_ref = doc.insert_after("Section 5", " (as amended)", paragraph="P2#f3c1")
         """
         self._ensure_open()
+        _require_ref_string(paragraph)
         change_id = self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
         return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
@@ -815,6 +832,8 @@ class Document:
             revisions this edit created.
 
         Raises:
+            ValueError: If ``anchor`` is empty or None, ``paragraph`` is not
+                a ref string, or ``occurrence`` is negative.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
@@ -825,6 +844,7 @@ class Document:
             new_ref = doc.insert_before("Section 6", "New clause: ", paragraph="P2#f3c1")
         """
         self._ensure_open()
+        _require_ref_string(paragraph)
         change_id = self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
         return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
@@ -863,8 +883,9 @@ class Document:
 
         Raises:
             BatchOperationError: The only exception a non-dry-run batch raises
-                for a failing operation — validation (malformed ref, stale
-                hash, bad index) and apply (missing text, ambiguous target)
+                for a failing operation — validation (element is not an
+                EditOperation, malformed ref, stale hash, bad index) and apply
+                (missing text, ambiguous target)
                 failures alike. ``operation_index`` names the failing op and
                 ``original`` (also ``__cause__``) holds the underlying typed
                 exception (e.g. a HashMismatchError with ``actual_hash``).

@@ -1049,6 +1049,19 @@ class TestEditOperationConstructors:
         with pytest.raises(ValueError, match="Invalid paragraph reference"):
             EditOperation.delete("a", paragraph="")
 
+    def test_none_paragraph_ref_rejected(self):
+        """paragraph=None gets the field-specific ValueError, not a raw regex TypeError."""
+        with pytest.raises(ValueError, match="Invalid paragraph reference None"):
+            EditOperation.replace("a", "b", paragraph=None)  # type: ignore[arg-type]
+
+    def test_delete_none_paragraph_ref_rejected(self):
+        with pytest.raises(ValueError, match="Invalid paragraph reference None"):
+            EditOperation.delete("x", paragraph=None)  # type: ignore[arg-type]
+
+    def test_non_string_paragraph_ref_names_the_type(self):
+        with pytest.raises(ValueError, match="expected a string like 'P3#a7b2', got int"):
+            EditOperation.insert_after("a", "x", paragraph=3)  # type: ignore[arg-type]
+
     def test_negative_occurrence_rejected(self):
         with pytest.raises(ValueError, match=r"EditOperation\.replace\(\): occurrence must be >= 0, got -1"):
             EditOperation.replace("a", "b", paragraph="P2#f3c1", occurrence=-1)

@@ -303,7 +303,7 @@ doc.close()
 
 **Multi-author documents:** Editing inside *another* author's pending insertion preserves their proposal, matching Word: deletions nest a `<w:del>` under your authorship inside their `<w:ins>`, and replacements/insertions put your text in your own sibling `<w:ins>` (splitting theirs when needed) instead of silently rewriting it. `accept_all(author=...)` / `reject_all(author=...)` then resolve each author's changes independently. Only your own pending insertions are edited in place.
 
-**Raises:** `TextNotFoundError` if the text is not found (or the requested `occurrence` is out of range — the error then reports `total_occurrences`). `AmbiguousTextError` if `occurrence` is omitted and the target matches more than once in the search scope.
+**Raises:** `TextNotFoundError` if the text is not found (or the requested `occurrence` is out of range — the error then reports `total_occurrences`). `AmbiguousTextError` if `occurrence` is omitted and the target matches more than once in the search scope. `ValueError` for empty or missing search/anchor text, a non-string `paragraph` ref, or a negative `occurrence` — all rejected up front, before any change is made.
 
 ### Comments API
 
@@ -658,7 +658,7 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `TextNotFoundError`    | `search_text`, `paragraph_ref`, `paragraph_preview`, `occurrence`, `total_occurrences`  | Use `paragraph_preview` to pick a substring that actually appears; if `total_occurrences` is set, retry with an `occurrence` < `total_occurrences`. |
 | `AmbiguousTextError`   | `search_text`, `paragraph_ref`, `paragraph_preview`, `total_occurrences`                | The target matched more than once with no `occurrence` given. Enumerate with `find_all()` and pick, or pass an explicit `occurrence` (0-based).      |
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` or call `list_paragraphs()` to pick a valid ref.                 |
-| `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (missing paragraph ref, duplicate paragraph). Batch methods never raise the inner types directly. |
+| `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (missing paragraph ref, duplicate paragraph, element is not an EditOperation). Batch methods never raise the inner types directly. |
 | `DocumentOpenError`    | `path`, `owner_file`                                                                    | **Do not retry blindly.** The destination is open in Word. Stop and tell the user to close it. Only pass `force=True` if the user confirms the `~$` lock is stale (crashed session). |
 
 ```python

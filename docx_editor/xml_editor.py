@@ -122,8 +122,13 @@ class ParagraphRef:
         """Parse a paragraph reference string like 'P3#a7b2'.
 
         Raises:
-            ValueError: If the reference format is invalid
+            ValueError: If the reference is not a string or its format is
+                invalid
         """
+        if not isinstance(ref, str):
+            raise ValueError(
+                f"Invalid paragraph reference {ref!r}: expected a string like 'P3#a7b2', got {type(ref).__name__}"
+            )
         m = _PARAGRAPH_REF_RE.match(ref)
         if not m:
             raise ValueError(
