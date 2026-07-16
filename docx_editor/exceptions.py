@@ -78,6 +78,17 @@ class SessionError(DocxEditError):
     pass
 
 
+class SessionDeadError(SessionError):
+    """Raised when session files exist but the kernel process is gone or unreachable.
+
+    The kernel crashed or was killed: its in-memory state (open documents,
+    variables) is lost. Recover with 'docx-session stop' to clean up the stale
+    files, then 'docx-session start'.
+    """
+
+    pass
+
+
 class DocumentOpenError(DocxEditError):
     """Raised when saving to a destination that appears open in another program.
 

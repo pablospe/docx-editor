@@ -142,11 +142,14 @@ Use the **docx_editor** Python library for all editing operations. It handles tr
 ### Installation
 
 ```bash
-pip install docx-editor python-docx
+pip install docx-editor             # editing: track changes, comments, revisions
+pip install "docx-editor[create]"   # + python-docx, for creating new documents
+pip install "docx-editor[session]"  # + docx-session persistent CLI
 ```
 
-- **docx-editor**: Track changes, comments, and revisions ([PyPI](https://pypi.org/project/docx-editor/))
-- **python-docx**: Reading document structure and creating new documents
+- **Editing** (track changes, comments, revisions) needs only the base `pip install docx-editor` ([PyPI](https://pypi.org/project/docx-editor/)) — python-docx is NOT bundled
+- **Creating** new documents and reading structure uses python-docx, which the `[create]` extra pulls in
+- **Session mode** (`docx-session`) needs the `[session]` extra
 
 ### Author Name for Track Changes
 
@@ -299,11 +302,53 @@ doc.save("edited.docx")
 doc.close()
 ```
 
-**Return values:** All edit methods return an `EditResult` — a `str` subclass whose value is the new paragraph reference (e.g., `"P2#c3d4"`); use it for follow-up edits on the same paragraph without calling `list_paragraphs()` again. It also carries `group_id` (the revision group holding every revision the edit created — pass to `accept_group()`/`reject_group()`) and `revision_ids` (the members' change ids). `group_id` is `None` when the edit created no new revisions (e.g. text spliced into one of your own pending insertions).
+**Return values:** All edit methods return an `EditResult` — a `str` subclass whose value is the new paragraph reference (e.g., `"P2#c3d4"`); use it for follow-up edits on the same paragraph without calling `list_paragraphs()` again. It also carries `group_id` (the revision group holding every revision the edit created — pass to `accept_group()`/`reject_group()`) and `revision_ids` (the members' change ids). `group_id` is `None` when the edit created no new revisions (e.g. text spliced into one of your own pending insertions). A single edit routinely creates **more than two** revisions: a replace whose span crosses run boundaries (e.g. part of the text is bold) creates one deletion per run plus the insertion, and a rewrite creates one revision per diff hunk — resolve them via `group_id`, never by guessing id pairs.
 
 **Multi-author documents:** Editing inside *another* author's pending insertion preserves their proposal, matching Word: deletions nest a `<w:del>` under your authorship inside their `<w:ins>`, and replacements/insertions put your text in your own sibling `<w:ins>` (splitting theirs when needed) instead of silently rewriting it. `accept_all(author=...)` / `reject_all(author=...)` then resolve each author's changes independently. Only your own pending insertions are edited in place.
 
 **Raises:** `TextNotFoundError` if the text is not found (or the requested `occurrence` is out of range — the error then reports `total_occurrences`). `AmbiguousTextError` if `occurrence` is omitted and the target matches more than once in the search scope. `ValueError` for search/anchor text that is not a non-empty string, replacement/insertion text that is not a string, a non-string `paragraph` ref, or an `occurrence` that is not a non-negative integer — all rejected up front, before any change is made.
+
+### Per-section change report
+
+Group revisions by heading by joining `list_paragraph_locations()` with
+`list_revisions()` on `paragraph_ref`. The fixture (python-docx, i.e. the
+`[create]` extra) also demonstrates `outline_level`/`section`/`heading_path`:
+
+```python
+from docx import Document as DocxDocument            # fixture: [create] extra
+from docx.enum.section import WD_SECTION
+
+d = DocxDocument()
+d.add_heading("Chapter one", 1)
+d.add_heading("Termination", 2)
+d.add_paragraph("The term is thirty days.")
+d.add_section(WD_SECTION.NEW_PAGE)                   # section 1 -> 2
+d.add_heading("Chapter two", 1)
+d.add_paragraph("Payment is due in thirty days.")
+d.save("report.docx")
+
+from docx_editor import Document
+doc = Document.open("report.docx", author="Reviewer")
+for r in reversed(doc.find_all("thirty days")):
+    doc.replace(r.text, "sixty days", paragraph=r.paragraph_ref,
+                occurrence=r.paragraph_occurrence)
+
+locs = dict(doc.list_paragraph_locations())          # snapshot AFTER the edits
+report = {}
+for r in doc.list_revisions():
+    loc = locs.get(r.paragraph_ref)                  # None ref: e.g. table-row revisions
+    key = (" > ".join(loc.heading_path) or "(front matter)") if loc else "(unlocated)"
+    report.setdefault(key, []).append(r)
+for heading, revs in report.items():
+    print(f"{heading}: {len(revs)} revision(s)")     # "Chapter one > Termination: 2 ..."
+    for r in revs:
+        print(f"  [{r.type}] {r.author}: {r.text}")
+```
+
+The join works because both APIs report the same hash-anchored refs for the
+current state — so take the locations snapshot *after* editing. Keep the
+report read-only (`r.type`/`r.author`/`r.text`): deletion `occurrence` values
+must not feed the anchor APIs (see the revision API notes below).
 
 ### Comments API
 
@@ -373,7 +418,10 @@ for r in revisions:
 # Filter by author
 their_changes = doc.list_revisions(author="OtherUser")
 
-# Filter to one paragraph (ref from list_paragraphs())
+# Filter to one paragraph (ref from list_paragraphs()). The filter validates
+# the ref exactly like the edit methods — a stale ref raises HashMismatchError
+# (malformed: ValueError; out of range: ParagraphIndexError) — so re-list
+# paragraphs after edits before filtering:
 para_changes = doc.list_revisions(paragraph="P3#a7b2")
 
 # For INSERTIONS, r.paragraph_ref/r.occurrence plug straight into the anchor
@@ -650,7 +698,7 @@ behavior that keeps one `list_paragraphs()` snapshot valid for the whole batch.
 
 ### Error Handling & Recovery
 
-All LLM-facing errors inherit from `DocxEditError` and carry structured fields so you can retry in-loop without re-reading the document. Catch the specific class or the base — both work.
+All LLM-facing errors inherit from `DocxEditError` and (except `RevisionError`, message-only) carry structured fields so you can retry in-loop without re-reading the document. Catch the specific class or the base — both work.
 
 | Error                  | Fields                                                                                  | Recovery                                                                                         |
 | ---------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -658,7 +706,8 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `TextNotFoundError`    | `search_text`, `paragraph_ref`, `paragraph_preview`, `occurrence`, `total_occurrences`  | Use `paragraph_preview` to pick a substring that actually appears; if `total_occurrences` is set, retry with an `occurrence` < `total_occurrences`. |
 | `AmbiguousTextError`   | `search_text`, `paragraph_ref`, `paragraph_preview`, `total_occurrences`                | The target matched more than once with no `occurrence` given. Enumerate with `find_all()` and pick, or pass an explicit `occurrence` (0-based).      |
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` or call `list_paragraphs()` to pick a valid ref.                 |
-| `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (missing paragraph ref, duplicate paragraph, element is not an EditOperation). Batch methods never raise the inner types directly. |
+| `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (a missing paragraph ref, an element that is not an `EditOperation`, or a duplicate paragraph in `batch_rewrite` — `batch_edit` allows repeats, applied sequentially). Batch methods never raise the inner types directly. |
+| `RevisionError`        | (message only)                                                                          | Unknown `group_id` passed to `accept_group()`/`reject_group()`. Groups are in-memory and per-open-Document: use the `EditResult.group_id` you were handed in this session; after `close()`/reopen resolve by revision id or author instead. |
 | `DocumentOpenError`    | `path`, `owner_file`                                                                    | **Do not retry blindly.** The destination is open in Word. Stop and tell the user to close it. Only pass `force=True` if the user confirms the `~$` lock is stale (crashed session). |
 
 ```python
@@ -667,6 +716,7 @@ from docx_editor import (
     BatchOperationError,
     HashMismatchError,
     ParagraphIndexError,
+    RevisionError,
     TextNotFoundError,
 )
 
@@ -809,7 +859,7 @@ documents, exploratory editing — use a persistent session instead of one-off
 scripts. The document (and all your variables) stays open between commands:
 
 ```bash
-# Requires: pip install docx-editor[session]
+# Requires: pip install "docx-editor[session]"
 docx-session start
 
 # Use ABSOLUTE paths: the kernel keeps the cwd it was started in, which is not
@@ -820,25 +870,51 @@ docx-session exec "ref = doc.replace('30 days', '45 days', paragraph='P2#f3c1');
 docx-session exec "doc.add_comment('45 days', 'Extended per negotiation.', paragraph=ref)"
 docx-session exec "doc.save(); doc.close()"
 
-# Check whether a session is running: prints "running"/"not running";
-# exit code 0 if running, 3 if not
+# Read data out as JSON: eval takes an *expression* and prints one JSON envelope
+# on stdout — {"status", "value", "serialized", "stdout", "stderr", "traceback"}.
+# Prefer it over exec + print(json.dumps(...)) for structured reads.
+docx-session eval "[str(p) for p in doc.list_paragraphs()[:5]]"
+
+# Multi-line or quote-heavy code: '-' reads the code from stdin (exec and eval;
+# also use it for expressions starting with '-', which argparse reads as a flag)
+docx-session exec - <<'PY'
+for p in doc.list_paragraphs():
+    if "deadline" in str(p):
+        print(p)
+PY
+
+# Check whether a session is running: prints "running"/"not running" plus
+# pid/state/connection-file detail lines; exit code 0 if running, 3 if not
 docx-session status
 
 docx-session stop
+
+# Two documents at once: --session-file (goes AFTER the subcommand; default
+# ~/.cache/docx-editor/kernel.json) selects an independent kernel per file.
+# Every start/exec/status/stop must pass the same file for its session:
+docx-session start --session-file /tmp/kernel-a.json
+docx-session start --session-file /tmp/kernel-b.json
+docx-session exec --session-file /tmp/kernel-a.json "..."
+docx-session stop --session-file /tmp/kernel-a.json
+docx-session stop --session-file /tmp/kernel-b.json
 ```
 
 Rules:
 
 - **Always `docx-session stop` when the editing task is done** — don't leave kernels running.
 - Exit code 1 means the code raised: the traceback is on stderr, the session survives — fix the call and continue (introspect with `docx-session exec "import inspect; print(inspect.signature(doc.replace))"` when unsure).
-- Exit code 2 means timeout, 3 means no session is running.
+- Exit code 2 means timeout — the kernel is alive and your code is still running. Exit code 3 means no session is running.
+- Exit code 4 means the kernel died mid-exec or is unreachable: its state (open documents, variables) is lost. Recover with `docx-session stop` then `start`, and re-open your documents.
+- `eval` output: `"serialized": false` means the value wasn't JSON-serializable and `value` holds its `repr` string. On exit 4 the envelope has `"status": "dead"`; on exit 3 (no session) there is no envelope at all.
+- `status` reports `state: busy` while an exec is in flight — a busy session is healthy, don't stop/restart it.
 - Variables persist between `exec` calls: keep refs returned by edits in Python variables instead of re-running `list_paragraphs()`.
 - Use absolute paths inside `exec` — the kernel's cwd is whatever `start` captured.
 - A `exec` sent while the kernel is still busy **queues** behind the running one; `--timeout` covers the whole wait. A timeout does not cancel the running code.
 - The session is non-interactive: `input()` (and anything reading stdin) raises `StdinNotImplementedError` rather than hanging.
 - `doc.save()` raises `WorkspaceSyncError` if the file changed on disk while the session held it open (e.g. the user edited it in Word). Ask the user before retrying with `doc.save(force=True)` — force overwrites their changes.
-- A session that saved to a different path (or whose save failed) and never called `doc.close()` leaves the workspace flagged as holding unsaved changes; the next `Document.open()` of the same source raises `WorkspaceSyncError` instead of silently carrying those edits over. Recover with `Document.open(path, force_recreate=True)`.
+- A session that saved to a different path (or whose save failed) and never called `doc.close()` leaves the workspace flagged as holding unsaved changes; the next `Document.open()` of the same source raises `WorkspaceSyncError` instead of silently carrying those edits over. `Document.open(path, force_recreate=True)` recovers but **discards** those edits — to rescue them first, save the orphaned workspace to a new file: `from docx_editor.workspace import Workspace; Workspace("contract.docx", create=False).save("rescued.docx")` (deep import — `Workspace` is not exported at package root), then reopen the source with `force_recreate=True`.
 - `Document.open()` raises `WorkspaceLockedError` if a live session (another process, or an unclosed `Document` in this one) already holds the document's workspace. Close the other session, or use `Document.open(path, force_recreate=True)` to take the workspace over, discarding its unsaved edits. Stale locks from dead processes are reclaimed automatically.
+- Concurrent sessions via `--session-file` must edit *different* documents — the same document still shares one workspace (see "Editing in parallel" below).
 - For a single edit, a one-off script is still fine — session mode pays off with repeated operations.
 
 ### Complementary Tools
@@ -931,8 +1007,9 @@ When generating code for DOCX operations:
 
 Required dependencies (install if not available):
 
-- **docx_editor**: `pip install docx-editor` (for track changes, comments, revisions)
-- **python-docx**: `pip install python-docx` (for reading structure and creating documents)
+- **docx_editor**: `pip install docx-editor` (track changes, comments, revisions — editing needs nothing else)
+- **python-docx**: `pip install "docx-editor[create]"` (adds python-docx, for reading structure and creating documents)
+- **docx-session**: `pip install "docx-editor[session]"` (persistent session CLI)
 - **pandoc**: `sudo apt-get install pandoc` (for text extraction to markdown)
 - **docx** (npm): `npm install -g docx` (optional, for complex document formatting)
 - **LibreOffice**: `sudo apt-get install libreoffice` (for PDF conversion)
