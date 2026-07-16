@@ -733,8 +733,9 @@ class Document:
             for accept_group()/reject_group().
 
         Raises:
-            ValueError: If ``find`` is empty or None, ``paragraph`` is not a
-                ref string, or ``occurrence`` is negative.
+            ValueError: If ``find`` is not a non-empty string,
+                ``replace_with`` is not a string, ``paragraph`` is not a ref
+                string, or ``occurrence`` is negative.
             TextNotFoundError: If ``find`` is absent or ``occurrence`` is out
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
@@ -766,8 +767,8 @@ class Document:
             revisions this edit created.
 
         Raises:
-            ValueError: If ``text`` is empty or None, ``paragraph`` is not a
-                ref string, or ``occurrence`` is negative.
+            ValueError: If ``text`` is not a non-empty string, ``paragraph``
+                is not a ref string, or ``occurrence`` is negative.
             TextNotFoundError: If ``text`` is absent or ``occurrence`` is out
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
@@ -799,8 +800,9 @@ class Document:
             revisions this edit created.
 
         Raises:
-            ValueError: If ``anchor`` is empty or None, ``paragraph`` is not
-                a ref string, or ``occurrence`` is negative.
+            ValueError: If ``anchor`` is not a non-empty string, ``text`` is
+                not a string, ``paragraph`` is not a ref string, or
+                ``occurrence`` is negative.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
@@ -832,8 +834,9 @@ class Document:
             revisions this edit created.
 
         Raises:
-            ValueError: If ``anchor`` is empty or None, ``paragraph`` is not
-                a ref string, or ``occurrence`` is negative.
+            ValueError: If ``anchor`` is not a non-empty string, ``text`` is
+                not a string, ``paragraph`` is not a ref string, or
+                ``occurrence`` is negative.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``

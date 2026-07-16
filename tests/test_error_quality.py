@@ -562,6 +562,110 @@ class TestNonStringParagraphRefRejected:
             doc.close()
 
 
+class TestNonStringSearchAndPayloadRejected:
+    """
+    Before: a truthy non-string search target (``find=123``) slipped past
+    the falsiness checks into the text-map search and surfaced as a raw
+    ``TypeError`` from ``str.find`` — escaping both documented batch
+    contracts (``batch_edit`` raises only BatchOperationError;
+    ``validate_batch`` never raises). A non-string payload
+    (``replace_with=123``) was worse: dry-run reported the op as *valid*,
+    then apply crashed with a raw ``AttributeError``.
+
+    After: search/anchor text must be a non-empty ``str`` and payloads must
+    be ``str`` at every boundary — direct API, typed constructors, batch
+    apply (wrapped with the op index), and dry-run (invalid row, no raise).
+    """
+
+    def test_direct_api_rejects_non_string_search_text(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(ValueError, match="search text must be a non-empty string, got 123"):
+                doc.replace(123, "x", paragraph=ref)  # type: ignore[arg-type]
+            with pytest.raises(ValueError, match="search text must be a non-empty string, got b'needle'"):
+                doc.delete(b"needle", paragraph=ref)  # type: ignore[arg-type]
+            assert doc.list_revisions() == []
+        finally:
+            doc.close()
+
+    def test_direct_api_rejects_non_string_payload(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(ValueError, match="'replace_with' must be a string"):
+                doc.replace("needle", 123, paragraph=ref)  # type: ignore[arg-type]
+            with pytest.raises(ValueError, match="'text' must be a string"):
+                doc.insert_after("needle", 123, paragraph=ref)  # type: ignore[arg-type]
+            with pytest.raises(ValueError, match="'text' must be a string"):
+                doc.insert_before("needle", 123, paragraph=ref)  # type: ignore[arg-type]
+            assert doc.list_revisions() == []
+        finally:
+            doc.close()
+
+    def test_batch_wraps_non_string_target_not_raw_typeerror(self, doc_path):
+        """Hand-built op (bypassing the typed constructors) with an int find."""
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            before = doc.get_visible_text()
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            op = EditOperation(action="replace", paragraph=ref, find=123, replace_with="x")  # type: ignore[arg-type]
+            with pytest.raises(BatchOperationError) as exc:
+                doc.batch_edit([op])
+
+            assert exc.value.operation_index == 0
+            assert isinstance(exc.value.original, ValueError)
+            assert "search text must be a non-empty string" in exc.value.reason
+            assert doc.get_visible_text() == before
+        finally:
+            doc.close()
+
+    def test_batch_wraps_non_string_payload_not_raw_attributeerror(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            before = doc.get_visible_text()
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            op = EditOperation(action="replace", paragraph=ref, find="needle", replace_with=123)  # type: ignore[arg-type]
+            with pytest.raises(BatchOperationError) as exc:
+                doc.batch_edit([op])
+
+            assert exc.value.operation_index == 0
+            assert "a string 'replace_with'" in exc.value.reason
+            assert doc.get_visible_text() == before
+        finally:
+            doc.close()
+
+    def test_dry_run_reports_non_string_target_as_invalid(self, doc_path):
+        """validate_batch's never-raises contract holds for an int find."""
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            op = EditOperation(action="replace", paragraph=ref, find=123, replace_with="x")  # type: ignore[arg-type]
+            results = doc.batch_edit([op], dry_run=True)
+
+            assert len(results) == 1
+            assert not results[0].valid
+            assert results[0].error is not None
+            assert "search text must be a non-empty string" in results[0].error
+        finally:
+            doc.close()
+
+    def test_dry_run_reports_non_string_payload_as_invalid(self, doc_path):
+        """Before the fix this came back valid=True, then crashed at apply."""
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            op = EditOperation(action="replace", paragraph=ref, find="needle", replace_with=123)  # type: ignore[arg-type]
+            results = doc.batch_edit([op], dry_run=True)
+
+            assert len(results) == 1
+            assert not results[0].valid
+            assert results[0].error is not None
+            assert "a string 'replace_with'" in results[0].error
+        finally:
+            doc.close()
+
+
 class TestSharedBaseClass:
     """All structured errors inherit from `DocxEditError`.
 

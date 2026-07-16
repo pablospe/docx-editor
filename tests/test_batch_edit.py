@@ -1062,6 +1062,21 @@ class TestEditOperationConstructors:
         with pytest.raises(ValueError, match="expected a string like 'P3#a7b2', got int"):
             EditOperation.insert_after("a", "x", paragraph=3)  # type: ignore[arg-type]
 
+    def test_non_string_search_text_rejected(self):
+        """A truthy non-string target fails at construction, not deep in the search."""
+        with pytest.raises(ValueError, match=r"'find' must be a non-empty string"):
+            EditOperation.replace(123, "x", paragraph="P2#f3c1")  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match=r"'text' must be a non-empty string"):
+            EditOperation.delete(123, paragraph="P2#f3c1")  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match=r"'anchor' must be a non-empty string"):
+            EditOperation.insert_after(123, "x", paragraph="P2#f3c1")  # type: ignore[arg-type]
+
+    def test_non_string_payload_rejected(self):
+        with pytest.raises(ValueError, match=r"'replace_with' must be a string"):
+            EditOperation.replace("a", 123, paragraph="P2#f3c1")  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match=r"'text' must be a string"):
+            EditOperation.insert_before("a", 123, paragraph="P2#f3c1")  # type: ignore[arg-type]
+
     def test_negative_occurrence_rejected(self):
         with pytest.raises(ValueError, match=r"EditOperation\.replace\(\): occurrence must be >= 0, got -1"):
             EditOperation.replace("a", "b", paragraph="P2#f3c1", occurrence=-1)
