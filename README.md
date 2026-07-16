@@ -24,7 +24,7 @@ Pure Python library for Word document track changes and comments, without requir
 - **Mixed-State Editing**: Atomic decomposition for text spanning `<w:ins>`/`<w:del>` boundaries
 - **Comments**: Add, reply, resolve, and delete comments
 - **Revision Management**: List, accept, and reject tracked changes
-- **Session Mode**: Optional persistent kernel (`docx-session start/exec/stop`) keeps documents open across many small commands — ideal for AI agents (`pip install "docx-editor[session]"`)
+- **Session Mode**: Optional persistent kernel (`docx-session start/exec/eval/stop`) keeps documents open across many small commands — ideal for AI agents (`pip install "docx-editor[session]"`)
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **No Dependencies**: Only requires `defusedxml` for secure XML parsing
 
