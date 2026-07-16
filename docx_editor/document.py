@@ -138,6 +138,10 @@ class Document:
             Document instance ready for editing
 
         Raises:
+            DocumentNotFoundError: If the path does not exist.
+            InvalidDocumentError: If the path is not a valid .docx document:
+                wrong suffix, a directory, not a zip archive, malformed XML in
+                a part, or the required word/document.xml part is missing.
             WorkspaceError: If the workspace cannot be created (unwritable base,
                 undeterminable home directory) or an existing workspace was
                 unpacked from a different document.

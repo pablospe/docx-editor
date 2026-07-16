@@ -24,14 +24,16 @@ Pure Python library for Word document track changes and comments, without requir
 - **Mixed-State Editing**: Atomic decomposition for text spanning `<w:ins>`/`<w:del>` boundaries
 - **Comments**: Add, reply, resolve, and delete comments
 - **Revision Management**: List, accept, and reject tracked changes
-- **Session Mode**: Optional persistent kernel (`docx-session start/exec/eval/stop`) keeps documents open across many small commands — ideal for AI agents (`pip install docx-editor[session]`)
+- **Session Mode**: Optional persistent kernel (`docx-session start/exec/eval/stop`) keeps documents open across many small commands — ideal for AI agents (`pip install "docx-editor[session]"`)
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **No Dependencies**: Only requires `defusedxml` for secure XML parsing
 
 ## Installation
 
 ```bash
-pip install docx-editor
+pip install docx-editor             # editing: track changes, comments, revisions
+pip install "docx-editor[create]"   # + python-docx, for creating new documents
+pip install "docx-editor[session]"  # + docx-session persistent CLI
 ```
 
 ## Claude Code Plugin
@@ -50,14 +52,14 @@ This plugin extends the [original Anthropic docx skill](https://github.com/anthr
 /plugin install docx-editor@docx-editor-marketplace
 
 # Install dependencies
-pip install docx-editor python-docx
+pip install "docx-editor[create]"
 ```
 
 ### Manual install (alternative)
 
 ```bash
 # Install dependencies
-pip install docx-editor python-docx
+pip install "docx-editor[create]"
 
 # Copy skill to Claude Code skills directory
 git clone https://github.com/pablospe/docx-editor /tmp/docx-editor

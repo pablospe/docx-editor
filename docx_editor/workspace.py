@@ -242,7 +242,10 @@ class Workspace:
 
         Raises:
             DocumentNotFoundError: If the source document doesn't exist
-            InvalidDocumentError: If the file is not a .docx file
+            InvalidDocumentError: If the path is not a valid .docx document:
+                wrong suffix, a directory, not a zip archive, a part contains
+                malformed XML, or the required word/document.xml part is
+                missing
             WorkspaceLockedError: If a live session already holds this
                 document's workspace (see _acquire_lock). Checked first: a
                 live holder masks the sync/exists errors below until it
@@ -331,7 +334,20 @@ class Workspace:
                                 f"Document has changed since workspace was created. "
                                 f"Delete {self.workspace_path} or use force_recreate=True"
                             )
-                        # Workspace is valid, just load it
+                        if self.document_xml_path.exists():
+                            # Workspace is valid, just load it
+                            return
+                        # Clean and in-sync but missing the core part: an
+                        # orphan left by a pre-0.6.1 failed open (ISSUES.md
+                        # #41) or a manually mangled workspace. The checks
+                        # above proved the source still matches the recorded
+                        # fingerprint and no edits were flagged, so this cache
+                        # can be discarded and rebuilt without losing anything
+                        # the system tracks. A valid source heals; an invalid one
+                        # raises InvalidDocumentError from unpack_document
+                        # (single message site).
+                        shutil.rmtree(self.workspace_path)
+                        self._create_workspace()
                         return
                     else:
                         raise WorkspaceExistsError(f"Workspace already exists: {self.workspace_path}")

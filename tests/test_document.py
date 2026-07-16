@@ -5,12 +5,13 @@ import re
 import zipfile
 
 import pytest
-from conftest import ENTITY_DTD_XML, NS, find_ref, replace_document_xml
+from conftest import ENTITY_DTD_XML, NS, find_ref, replace_document_xml, replace_docx_parts
 from defusedxml.common import EntitiesForbidden
 
 import docx_editor
 from docx_editor import Document, SearchResult
 from docx_editor.exceptions import (
+    DocumentNotFoundError,
     DocumentOpenError,
     DocxEditError,
     InvalidDocumentError,
@@ -107,6 +108,56 @@ class TestDocumentOpen:
             Document.open(bad_docx)
 
         assert isinstance(excinfo.value, InvalidDocumentError)
+
+    def test_open_zip_missing_document_xml_raises_invalid_document_error(
+        self, simple_docx, temp_dir, isolated_workspace_base
+    ):
+        """A valid zip missing word/document.xml surfaces as InvalidDocumentError (ISSUES.md #41).
+
+        Previously this escaped as a raw FileNotFoundError naming the internal
+        cache path and left an orphaned workspace behind.
+        """
+        junk = temp_dir / "junk.docx"
+        replace_docx_parts(simple_docx, junk, {"word/document.xml": None})
+
+        with pytest.raises(InvalidDocumentError, match=r"missing word/document\.xml") as excinfo:
+            Document.open(junk)
+
+        # The message names the document the user opened, never the cache path.
+        assert str(junk) in str(excinfo.value)
+        assert str(isolated_workspace_base) not in str(excinfo.value)
+        # No orphaned workspace dir and no .lock sidecar.
+        assert list(isolated_workspace_base.iterdir()) == []
+
+    def test_open_directory_raises_invalid_document_error(self, temp_dir):
+        """A directory named *.docx raises the typed error, not raw IsADirectoryError."""
+        dir_path = temp_dir / "iamadir.docx"
+        dir_path.mkdir()
+
+        with pytest.raises(InvalidDocumentError, match="Is a directory"):
+            Document.open(dir_path)
+
+    def test_open_nonexistent_path_raises_document_not_found(self, temp_dir):
+        """A nonexistent path raises DocumentNotFoundError at the Document.open level."""
+        with pytest.raises(DocumentNotFoundError, match="Document not found"):
+            Document.open(temp_dir / "nonexistent.docx")
+
+    def test_open_repeat_junk_file_deterministic(self, simple_docx, temp_dir, isolated_workspace_base):
+        """Repeat opens of the same junk file fail identically — no orphan adoption.
+
+        On ≤0.6.0 the first failed open orphaned a workspace that every later
+        open adopted, so the failure mode silently changed between attempts.
+        """
+        junk = temp_dir / "junk.docx"
+        replace_docx_parts(simple_docx, junk, {"word/document.xml": None})
+
+        with pytest.raises(InvalidDocumentError) as first:
+            Document.open(junk)
+        with pytest.raises(InvalidDocumentError) as second:
+            Document.open(junk)
+
+        assert str(first.value) == str(second.value)
+        assert list(isolated_workspace_base.iterdir()) == []
 
 
 class TestDocumentSave:

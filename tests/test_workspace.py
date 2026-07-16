@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import ENTITY_DTD_XML, find_ref, replace_document_xml
+from conftest import ENTITY_DTD_XML, find_ref, replace_document_xml, replace_docx_parts
 
 from docx_editor.document import Document
 from docx_editor.exceptions import (
@@ -21,7 +21,7 @@ from docx_editor.exceptions import (
     WorkspaceLockedError,
     WorkspaceSyncError,
 )
-from docx_editor.workspace import Workspace, _default_cache_dir, _pid_alive
+from docx_editor.workspace import Workspace, _default_cache_dir, _file_sha256, _pid_alive
 
 
 class TestWorkspaceCreation:
@@ -115,6 +115,61 @@ class TestWorkspaceParseFailureCleanup:
         workspace = Workspace(doc_path)
         assert workspace.document_xml_path.exists()
         workspace.close()
+
+
+class TestWorkspaceMissingDocumentXml:
+    """A zip without word/document.xml raises a typed error and leaves no orphan (ISSUES.md #41)."""
+
+    def test_workspace_missing_document_xml_leaves_no_workspace(self, simple_docx, temp_dir, isolated_workspace_base):
+        """The failed open leaves neither a workspace dir nor a .lock sibling."""
+        junk = temp_dir / "junk.docx"
+        replace_docx_parts(simple_docx, junk, {"word/document.xml": None})
+
+        with pytest.raises(InvalidDocumentError, match=r"missing word/document\.xml"):
+            Workspace(junk)
+
+        assert list(isolated_workspace_base.iterdir()) == []
+
+    def test_adopted_workspace_missing_document_xml_self_heals(self, clean_workspace):
+        """A clean, in-sync workspace missing the core part is rebuilt from the source."""
+        workspace = Workspace(clean_workspace)
+        workspace_path = workspace.workspace_path
+        workspace.close(cleanup=False)
+        (workspace_path / "word" / "document.xml").unlink()
+
+        reopened = Workspace(clean_workspace)
+        assert reopened.document_xml_path.exists()
+        reopened.close()
+
+    def test_adopted_orphan_of_junk_source_raises_typed_error_and_cleans_up(
+        self, simple_docx, temp_dir, isolated_workspace_base
+    ):
+        """A pre-0.6.1 orphan of an invalid source raises the typed error and is removed.
+
+        On ≤0.6.0 a failed open of a document.xml-less zip left a fully
+        populated workspace behind, and every later open adopted it and raised
+        the same raw FileNotFoundError forever. Simulate that orphan and check
+        the recreate branch surfaces InvalidDocumentError instead — and
+        removes the orphan.
+        """
+        junk = temp_dir / "junk.docx"
+        replace_docx_parts(simple_docx, junk, {"word/document.xml": None})
+
+        orphan = Workspace._resolve_workspace_path(junk.resolve(), None)
+        orphan.mkdir(parents=True)
+        meta = {
+            "source_path": str(junk.resolve()),
+            "source_mtime": junk.stat().st_mtime,
+            "source_size": junk.stat().st_size,
+            "source_sha256": _file_sha256(junk),
+            "dirty": False,
+        }
+        (orphan / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+        with pytest.raises(InvalidDocumentError, match=r"missing word/document\.xml"):
+            Workspace(junk)
+
+        assert list(isolated_workspace_base.iterdir()) == []
 
 
 class TestWorkspacePersistence:
