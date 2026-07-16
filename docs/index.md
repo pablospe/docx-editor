@@ -19,7 +19,9 @@ Pure Python library for Word document track changes and comments, without requir
 ## Installation
 
 ```bash
-pip install docx-editor
+pip install docx-editor             # editing: track changes, comments, revisions
+pip install "docx-editor[create]"   # + python-docx, for creating new documents
+pip install "docx-editor[session]"  # + docx-session persistent CLI
 ```
 
 ## Quick Start

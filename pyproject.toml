@@ -25,6 +25,7 @@ Repository = "https://github.com/pablospe/docx-editor"
 Documentation = "https://pablospe.github.io/docx-editor/"
 
 [project.optional-dependencies]
+create = ["python-docx>=1.1"]
 session = ["jupyter-client>=8.6", "ipykernel>=6.29"]
 
 [project.scripts]

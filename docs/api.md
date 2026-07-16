@@ -532,15 +532,18 @@ doc.delete_comment(0)
 
 ### Revision Management Methods
 
-#### `list_revisions(author=None)`
+#### `list_revisions(author=None, paragraph=None)`
 
 List all tracked changes in the document.
 
 **Parameters:**
 
 - `author` (str, optional): If provided, filter by author name
+- `paragraph` (str, optional): If provided, only return revisions in this paragraph (hash-anchored ref from `list_paragraphs()`, e.g. `"P3#a7b2"`)
 
 **Returns:** List of Revision objects
+
+**Raises:** The `paragraph` ref is validated exactly like in the edit methods — `ValueError` (malformed ref), [`ParagraphIndexError`](#exceptions) (index out of range), [`HashMismatchError`](#exceptions) (stale hash).
 
 **Example:**
 
@@ -1050,7 +1053,7 @@ except CommentError as e:
 
 ### `RevisionError`
 
-Raised when a revision operation fails.
+Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`. Revision groups are in-memory and per-open-`Document`, so ids from a previous session are unknown; resolve those revisions by id or author instead. No structured fields (message only).
 
 ```python
 from docx_editor.exceptions import RevisionError
@@ -1068,8 +1071,17 @@ from docx_editor.exceptions import WorkspaceExistsError
 
 Raised when the workspace is out of sync with the source document: the source changed on disk since the workspace was created, or the workspace holds unsaved changes from a previous session that the source never received.
 
+`Document.open(path, force_recreate=True)` recovers but discards the workspace's unsaved edits. To rescue them first, save the orphaned workspace to a new file (`Workspace` is not exported at the package root — use the deep import):
+
 ```python
 from docx_editor.exceptions import WorkspaceSyncError
+from docx_editor.workspace import Workspace
+
+try:
+    doc = Document.open("contract.docx")
+except WorkspaceSyncError:
+    Workspace("contract.docx", create=False).save("rescued.docx")  # rescue unsaved edits
+    doc = Document.open("contract.docx", force_recreate=True)
 ```
 
 ### `DocumentOpenError`
