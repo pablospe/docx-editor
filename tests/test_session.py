@@ -150,6 +150,13 @@ class TestEval:
         assert isinstance(res.value, str)
         assert "object" in res.value
 
+    def test_eval_non_finite_floats_fall_back_to_repr(self, session_conn):
+        """NaN/Infinity have no RFC-8259 form — they must not leak into the envelope."""
+        res = eval_code("[float('nan'), float('inf')]", connection_file=session_conn)
+        assert res.status == "ok"
+        assert res.serialized is False
+        assert res.value == "[nan, inf]"
+
     def test_eval_statement_is_a_syntax_error(self, session_conn):
         res = eval_code("some_var = 5", connection_file=session_conn)
         assert res.status == "error"

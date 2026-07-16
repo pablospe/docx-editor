@@ -440,7 +440,9 @@ def __docx_session_eval():
     import json
     value = eval(compile(%s, "<docx-session eval>", "eval"), globals())
     try:
-        return json.dumps({"value": value, "serialized": True})
+        # allow_nan=False: NaN/Infinity would otherwise ride out as bare tokens
+        # that are not valid RFC-8259 JSON; the ValueError routes them to repr.
+        return json.dumps({"value": value, "serialized": True}, allow_nan=False)
     except (TypeError, ValueError, OverflowError):
         return json.dumps({"value": repr(value), "serialized": False})
 __docx_session_eval()
@@ -462,9 +464,11 @@ class EvalResult:
 def eval_code(expr: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: float = 120.0) -> EvalResult:
     """Evaluate an expression in the session kernel and return its value.
 
-    JSON-serializable values arrive intact (serialized=True); anything else
-    arrives as its repr string (serialized=False). Statements ('x = 5') are a
-    SyntaxError — use exec_code for those.
+    JSON-serializable values arrive as their JSON equivalents (serialized=True;
+    a tuple arrives as a list); anything else — including non-finite floats,
+    which have no valid JSON form — arrives as its repr string
+    (serialized=False). Statements ('x = 5') are a SyntaxError — use exec_code
+    for those.
 
     Args:
         expr: Python expression to evaluate in the session
@@ -472,7 +476,11 @@ def eval_code(expr: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
         timeout: Seconds to wait for the evaluation to finish
 
     Raises:
-        Same as exec_code, plus SessionError if the value transport breaks.
+        FileNotFoundError: If no session connection file exists.
+        SessionDeadError: If the kernel is gone or not answering.
+        SessionError: If the connection file is unreadable or the value
+            transport breaks.
+        ImportError: If the [session] extra is not installed.
     """
     res = exec_code(_EVAL_TEMPLATE % (repr(expr),), connection_file=connection_file, timeout=timeout)
     if res.status != "ok":
@@ -504,14 +512,23 @@ def _read_code(arg: str) -> str:
     return sys.stdin.read() if arg == "-" else arg
 
 
-# The example is deliberately unindented: a copy-pasted heredoc only terminates
-# when the closing PY sits at column 0.
-_STDIN_EPILOG = """\
-Pass '-' to read the code from stdin — no shell quoting to fight:
+# The examples are deliberately unindented: a copy-pasted heredoc only
+# terminates when the closing PY sits at column 0.
+_EXEC_EPILOG = """\
+Pass '-' to read the code from stdin — no shell quoting to fight; also the easy
+route for code starting with '-' (argparse would read a bare "-x" as a flag):
 
 docx-session exec - <<'PY'
 for p in doc.list_paragraphs():
     print(p)
+PY"""
+
+_EVAL_EPILOG = """\
+Pass '-' to read the expression from stdin — no shell quoting to fight; also the
+easy route for expressions starting with '-' (argparse would read "-x" as a flag):
+
+docx-session eval - <<'PY'
+[str(p) for p in doc.list_paragraphs() if 'deadline' in str(p)]
 PY"""
 
 
@@ -536,7 +553,7 @@ def main(argv: list[str] | None = None) -> int:
         "exec",
         parents=[common],
         help="Execute code in the running kernel",
-        epilog=_STDIN_EPILOG,
+        epilog=_EXEC_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_exec.add_argument("code", help="Python code to execute ('-' reads it from stdin)")
@@ -545,7 +562,7 @@ def main(argv: list[str] | None = None) -> int:
         "eval",
         parents=[common],
         help="Evaluate an expression; prints one JSON envelope on stdout",
-        epilog=_STDIN_EPILOG,
+        epilog=_EVAL_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_eval.add_argument("expr", help="Python expression to evaluate ('-' reads it from stdin)")
@@ -586,7 +603,9 @@ def _run(args: argparse.Namespace) -> int:
             return EXIT_OK
         print("not running")
         if st.stale:
-            detail = f"pid {st.pid} dead" if st.pid is not None else "kernel unreachable"
+            # "unreachable", not "dead": stale also covers a live-but-wedged pid
+            # or a corrupt connection file.
+            detail = f"kernel unreachable (pid {st.pid})" if st.pid is not None else "kernel unreachable"
             print(f"stale session files present ({detail}) — run 'docx-session stop' to clean up")
         return EXIT_NO_SESSION
 
@@ -622,7 +641,8 @@ def _run(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     if res.status == "dead":
         print(
-            "Kernel died during execution — its state is lost. Run 'docx-session stop' then 'start'.",
+            "Kernel died or became unreachable during execution — its state is lost. "
+            "Run 'docx-session stop' then 'start'.",
             file=sys.stderr,
         )
         return EXIT_KERNEL_DEAD

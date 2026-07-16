@@ -825,7 +825,8 @@ docx-session exec "doc.save(); doc.close()"
 # Prefer it over exec + print(json.dumps(...)) for structured reads.
 docx-session eval "[str(p) for p in doc.list_paragraphs()[:5]]"
 
-# Multi-line or quote-heavy code: '-' reads the code from stdin (exec and eval)
+# Multi-line or quote-heavy code: '-' reads the code from stdin (exec and eval;
+# also use it for expressions starting with '-', which argparse reads as a flag)
 docx-session exec - <<'PY'
 for p in doc.list_paragraphs():
     if "deadline" in str(p):
