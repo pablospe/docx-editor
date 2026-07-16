@@ -340,9 +340,10 @@ class Workspace:
                         # Clean and in-sync but missing the core part: an
                         # orphan left by a pre-0.6.1 failed open (ISSUES.md
                         # #41) or a manually mangled workspace. The checks
-                        # above proved the content is exactly what the current
-                        # source unpacks to, so discarding and re-unpacking
-                        # loses nothing. A valid source heals; an invalid one
+                        # above proved the source still matches the recorded
+                        # fingerprint and no edits were flagged, so this cache
+                        # can be discarded and rebuilt without losing anything
+                        # the system tracks. A valid source heals; an invalid one
                         # raises InvalidDocumentError from unpack_document
                         # (single message site).
                         shutil.rmtree(self.workspace_path)

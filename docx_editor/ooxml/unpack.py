@@ -90,7 +90,7 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
         # rejection leaves the filesystem untouched.
         try:
             with zipfile.ZipFile(input_path) as zf:
-                names = set()
+                names: set[str] = set()
                 for info in zf.infolist():
                     if _is_unsafe_zip_path(info.filename):
                         raise InvalidDocumentError(f"Unsafe ZIP entry path: {info.filename!r} in {input_file}")
@@ -101,7 +101,7 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
                 # without it, opening would fail later with a raw
                 # FileNotFoundError naming the internal cache path.
                 if "word/document.xml" not in names:
-                    raise InvalidDocumentError(f"{input_file} is not a valid .docx: missing word/document.xml")
+                    raise InvalidDocumentError(f"Not a valid .docx: missing word/document.xml in {input_file}")
                 try:
                     output_path.mkdir(parents=True)
                     created_output_dir = True

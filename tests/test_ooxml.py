@@ -255,7 +255,7 @@ class TestUnpackMissingParts:
         _build_zip(junk_zip, [("[Content_Types].xml", b"<Types/>")])
         output = temp_dir / "output"
 
-        with pytest.raises(InvalidDocumentError, match=r"is not a valid \.docx: missing word/document\.xml") as excinfo:
+        with pytest.raises(InvalidDocumentError, match=r"Not a valid \.docx: missing word/document\.xml") as excinfo:
             unpack_document(junk_zip, output)
 
         # Message names the document the caller opened, not a cache path.
