@@ -60,6 +60,18 @@ class TextMapMatch:
     spans_boundary: bool  # True if match spans different revision contexts
 
 
+def _require_valid_occurrence(occurrence: int | None, label: str = "") -> None:
+    """Reject a non-int or negative ``occurrence`` before it can hit an int
+    comparison (raw TypeError from ``"0" < 0``), TypeError deeper in the
+    search (float), or be silently misread as 0/1 (bool)."""
+    if occurrence is None:
+        return
+    if isinstance(occurrence, bool) or not isinstance(occurrence, int):
+        raise ValueError(f"{label}occurrence must be a non-negative integer, got {occurrence!r}")
+    if occurrence < 0:
+        raise ValueError(f"{label}occurrence must be >= 0, got {occurrence}")
+
+
 def find_in_text_map(text_map: TextMap, search: str, occurrence: int = 0) -> TextMapMatch | None:
     """Find the nth occurrence of text in a text map.
 
@@ -122,8 +134,13 @@ class ParagraphRef:
         """Parse a paragraph reference string like 'P3#a7b2'.
 
         Raises:
-            ValueError: If the reference format is invalid
+            ValueError: If the reference is not a string or its format is
+                invalid
         """
+        if not isinstance(ref, str):
+            raise ValueError(
+                f"Invalid paragraph reference {ref!r}: expected a string like 'P3#a7b2', got {type(ref).__name__}"
+            )
         m = _PARAGRAPH_REF_RE.match(ref)
         if not m:
             raise ValueError(

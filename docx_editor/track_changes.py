@@ -29,6 +29,7 @@ from .xml_editor import (
     TextMapMatch,
     TextPosition,
     _escape_xml,
+    _require_valid_occurrence,
     build_text_map,
     compute_paragraph_hash,
     compute_text_hash,
@@ -64,8 +65,7 @@ class EditOperation:
     def _validate_common(constructor: str, paragraph: str, occurrence: int | None) -> None:
         """Construction-time checks shared by all typed constructors."""
         ParagraphRef.parse(paragraph)
-        if occurrence is not None and occurrence < 0:
-            raise ValueError(f"EditOperation.{constructor}(): occurrence must be >= 0, got {occurrence}")
+        _require_valid_occurrence(occurrence, f"EditOperation.{constructor}(): ")
 
     @classmethod
     def replace(cls, find: str, replace_with: str, *, paragraph: str, occurrence: int | None = None) -> "EditOperation":
@@ -82,13 +82,19 @@ class EditOperation:
 
         Raises:
             ValueError: If the paragraph ref is malformed, ``occurrence`` is
-                negative, ``find`` is empty, or ``replace_with`` is None.
+                not a non-negative integer, ``find`` is not a non-empty
+                string, or ``replace_with`` is not a string.
         """
         cls._validate_common("replace", paragraph, occurrence)
-        if not find:
-            raise ValueError("EditOperation.replace(): 'find' must be a non-empty string — the text to search for")
-        if replace_with is None:
-            raise ValueError("EditOperation.replace(): 'replace_with' must be a string (empty string is allowed)")
+        if not isinstance(find, str) or not find:
+            raise ValueError(
+                f"EditOperation.replace(): 'find' must be a non-empty string — the text to search for, got {find!r}"
+            )
+        if not isinstance(replace_with, str):
+            raise ValueError(
+                f"EditOperation.replace(): 'replace_with' must be a string (empty string is allowed), "
+                f"got {replace_with!r}"
+            )
         return cls(
             action="replace",
             paragraph=paragraph,
@@ -110,11 +116,14 @@ class EditOperation:
 
         Raises:
             ValueError: If the paragraph ref is malformed, ``occurrence`` is
-                negative, or ``text`` is empty.
+                not a non-negative integer, or ``text`` is not a non-empty
+                string.
         """
         cls._validate_common("delete", paragraph, occurrence)
-        if not text:
-            raise ValueError("EditOperation.delete(): 'text' must be a non-empty string — the text to mark as deleted")
+        if not isinstance(text, str) or not text:
+            raise ValueError(
+                f"EditOperation.delete(): 'text' must be a non-empty string — the text to mark as deleted, got {text!r}"
+            )
         return cls(action="delete", paragraph=paragraph, text=text, occurrence=occurrence)
 
     @classmethod
@@ -127,10 +136,15 @@ class EditOperation:
         occurrence: int | None,
     ) -> "EditOperation":
         cls._validate_common(action, paragraph, occurrence)
-        if not anchor:
-            raise ValueError(f"EditOperation.{action}(): 'anchor' must be a non-empty string — the text to insert near")
-        if text is None:
-            raise ValueError(f"EditOperation.{action}(): 'text' must be a string (empty string is allowed)")
+        if not isinstance(anchor, str) or not anchor:
+            raise ValueError(
+                f"EditOperation.{action}(): 'anchor' must be a non-empty string — the text to insert near, "
+                f"got {anchor!r}"
+            )
+        if not isinstance(text, str):
+            raise ValueError(
+                f"EditOperation.{action}(): 'text' must be a string (empty string is allowed), got {text!r}"
+            )
         return cls(action=action, paragraph=paragraph, anchor=anchor, text=text, occurrence=occurrence)
 
     @classmethod
@@ -148,7 +162,8 @@ class EditOperation:
 
         Raises:
             ValueError: If the paragraph ref is malformed, ``occurrence`` is
-                negative, ``anchor`` is empty, or ``text`` is None.
+                not a non-negative integer, ``anchor`` is not a non-empty
+                string, or ``text`` is not a string.
         """
         return cls._insert("insert_after", anchor, text, paragraph, occurrence)
 
@@ -167,9 +182,19 @@ class EditOperation:
 
         Raises:
             ValueError: If the paragraph ref is malformed, ``occurrence`` is
-                negative, ``anchor`` is empty, or ``text`` is None.
+                not a non-negative integer, ``anchor`` is not a non-empty
+                string, or ``text`` is not a string.
         """
         return cls._insert("insert_before", anchor, text, paragraph, occurrence)
+
+
+def _not_an_edit_operation_message(op: object) -> str:
+    """Shared batch_edit/validate_batch message for a non-EditOperation element,
+    so the raising and never-raises paths cannot drift apart."""
+    return (
+        f"expected EditOperation, got {type(op).__name__} — build operations with "
+        "EditOperation.replace()/.delete()/.insert_after()/.insert_before()"
+    )
 
 
 @dataclass
@@ -608,14 +633,16 @@ class RevisionManager:
                 be unique within the paragraph.
 
         Raises:
-            ValueError: If ``occurrence`` is negative.
+            ValueError: If ``occurrence`` is negative or not an integer, or ``text`` is not a
+                non-empty string.
             TextNotFoundError: If the text is absent, or ``occurrence`` is out
                 of range (then with ``occurrence``/``total_occurrences`` set).
             AmbiguousTextError: If ``occurrence`` is None and the text matches
                 more than once in the paragraph.
         """
-        if occurrence is not None and occurrence < 0:
-            raise ValueError(f"occurrence must be >= 0, got {occurrence}")
+        _require_valid_occurrence(occurrence)
+        if not isinstance(text, str) or not text:
+            raise ValueError(f"search text must be a non-empty string, got {text!r}")
         text_map = build_text_map(paragraph)
         total = count_in_text_map(text_map, text)
 
@@ -658,11 +685,12 @@ class RevisionManager:
             List of change IDs, one per operation (in original input order)
 
         Raises:
-            BatchOperationError: If any operation fails — validation (malformed
-                ref, stale hash, bad index) or apply (missing text, ambiguous
-                target). Carries ``operation_index`` so the caller knows which
-                op failed, and ``original`` (also ``__cause__``) with the
-                underlying typed exception. No edits are applied on failure.
+            BatchOperationError: If any operation fails — validation (element
+                is not an EditOperation, malformed ref, stale hash, bad index)
+                or apply (missing text, ambiguous target). Carries
+                ``operation_index`` so the caller knows which op failed, and
+                ``original`` (also ``__cause__``) with the underlying typed
+                exception. No edits are applied on failure.
         """
         if not operations:
             return []
@@ -670,6 +698,8 @@ class RevisionManager:
         # Parse and validate all refs upfront
         parsed: list[tuple[int, ParagraphRef, EditOperation]] = []
         for i, op in enumerate(operations):
+            if not isinstance(op, EditOperation):
+                raise BatchOperationError(i, _not_an_edit_operation_message(op))
             if not op.paragraph:
                 raise BatchOperationError(i, "paragraph reference is required for batch mode")
             try:
@@ -721,23 +751,23 @@ class RevisionManager:
         so both paths fail cleanly before the search.
 
         Raises:
-            ValueError: If ``occurrence`` is negative, required arguments for
-                op.action are missing, or the action is unrecognized.
+            ValueError: If ``occurrence`` is negative or not an integer, required arguments for
+                op.action are missing or not strings, or the action is
+                unrecognized.
         """
-        if op.occurrence is not None and op.occurrence < 0:
-            raise ValueError(f"occurrence must be >= 0, got {op.occurrence}")
+        _require_valid_occurrence(op.occurrence)
 
         if op.action == "replace":
-            if not op.find or op.replace_with is None:
-                raise ValueError("replace requires 'find' and 'replace_with'")
+            if not op.find or not isinstance(op.replace_with, str):
+                raise ValueError("replace requires 'find' and a string 'replace_with'")
             return op.find
         elif op.action == "delete":
             if not op.text:
                 raise ValueError("delete requires 'text'")
             return op.text
         elif op.action in ("insert_after", "insert_before"):
-            if not op.anchor or op.text is None:
-                raise ValueError(f"{op.action} requires 'anchor' and 'text'")
+            if not op.anchor or not isinstance(op.text, str):
+                raise ValueError(f"{op.action} requires 'anchor' and a string 'text'")
             return op.anchor
         else:
             raise ValueError(f"Unknown action: {op.action}")
@@ -780,10 +810,17 @@ class RevisionManager:
             operations: List of EditOperation objects (each should have paragraph set)
 
         Returns:
-            One EditValidationResult per operation, in input order.
+            One EditValidationResult per operation, in input order. An element
+            that is not an EditOperation at all comes back as an invalid
+            result (``paragraph=None``), never as an exception.
         """
         results = []
         for i, op in enumerate(operations):
+            if not isinstance(op, EditOperation):
+                results.append(
+                    EditValidationResult(index=i, paragraph=None, valid=False, error=_not_an_edit_operation_message(op))
+                )
+                continue
             error = self._validate_single(op)
             results.append(
                 EditValidationResult(
@@ -828,7 +865,7 @@ class RevisionManager:
 
         try:
             self._locate_in_paragraph(p, op.paragraph, target, op.occurrence)
-        except DocxEditError as e:
+        except (ValueError, DocxEditError) as e:
             return str(e)
 
         return None
@@ -1122,14 +1159,16 @@ class RevisionManager:
         the exact total is part of the error contract.
 
         Raises:
-            ValueError: If ``occurrence`` is negative.
+            ValueError: If ``occurrence`` is negative or not an integer, or ``text`` is not a
+                non-empty string.
             TextNotFoundError: If the text is not found or occurrence doesn't
                 exist; ``total_occurrences`` matches :meth:`count_matches`.
             AmbiguousTextError: If ``occurrence`` is None and the text matches
                 more than once in the document.
         """
-        if occurrence is not None and occurrence < 0:
-            raise ValueError(f"occurrence must be >= 0, got {occurrence}")
+        _require_valid_occurrence(occurrence)
+        if not isinstance(text, str) or not text:
+            raise ValueError(f"search text must be a non-empty string, got {text!r}")
         occ = occurrence if occurrence is not None else 0
         match = self._find_across_boundaries(text, occ)
         if match is None:
@@ -1269,11 +1308,15 @@ class RevisionManager:
             The change ID of the insertion
 
         Raises:
+            ValueError: If ``find`` is not a non-empty string, ``replace_with``
+                is not a string, or ``occurrence`` is negative or not an integer
             TextNotFoundError: If the text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
                 matches more than once in the search scope
             HashMismatchError: If the paragraph hash doesn't match
         """
+        if not isinstance(replace_with, str):
+            raise ValueError(f"'replace_with' must be a string (empty string is allowed), got {replace_with!r}")
         with self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
@@ -1298,6 +1341,8 @@ class RevisionManager:
             The change ID of the deletion
 
         Raises:
+            ValueError: If ``text`` is not a non-empty string, or
+                ``occurrence`` is negative or not an integer
             TextNotFoundError: If the text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
                 matches more than once in the search scope
@@ -2133,6 +2178,8 @@ class RevisionManager:
             The change ID of the insertion
 
         Raises:
+            ValueError: If ``anchor`` is not a non-empty string, ``text`` is
+                not a string, or ``occurrence`` is negative or not an integer
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the search scope
@@ -2157,6 +2204,8 @@ class RevisionManager:
             The change ID of the insertion
 
         Raises:
+            ValueError: If ``anchor`` is not a non-empty string, ``text`` is
+                not a string, or ``occurrence`` is negative or not an integer
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the search scope
@@ -2173,6 +2222,8 @@ class RevisionManager:
         paragraph: str | None = None,
     ) -> int:
         """Insert text before or after anchor with tracked changes."""
+        if not isinstance(text, str):
+            raise ValueError(f"'text' must be a string (empty string is allowed), got {text!r}")
         with self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)

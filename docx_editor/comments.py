@@ -24,6 +24,7 @@ from .xml_editor import (
     TextMapMatch,
     _escape_xml,
     _generate_hex_id,
+    _require_valid_occurrence,
     build_text_map,
     compute_paragraph_hash,
     count_in_text_map,
@@ -155,10 +156,16 @@ class CommentManager:
                 ``anchor_text`` matches more than once in the search scope.
             HashMismatchError: If a paragraph reference's hash is stale.
             ParagraphIndexError: If a paragraph reference's index is out of range.
-            CommentError: If ``anchor_text`` is empty.
+            CommentError: If ``anchor_text`` is not a non-empty string, or
+                ``comment_text`` is not a string.
+            ValueError: If ``occurrence`` is negative or not an integer.
         """
-        if not anchor_text:
-            raise CommentError("anchor_text must not be empty")
+        if not isinstance(anchor_text, str) or not anchor_text:
+            raise CommentError(f"anchor_text must be a non-empty string, got {anchor_text!r}")
+        if not isinstance(comment_text, str):
+            # Must fail here, before _place_markers mutates document.xml —
+            # a crash later (html.escape) would leave orphaned range markers.
+            raise CommentError(f"comment_text must be a string, got {comment_text!r}")
         _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id
@@ -190,11 +197,10 @@ class CommentManager:
         ``_locate_document_wide`` so comment anchors and edit anchors find the
         same text and fail the same way: ``occurrence=None`` requires a unique
         anchor (else AmbiguousTextError), an explicit out-of-range occurrence
-        reports the actual total, and a negative occurrence is rejected with
-        ValueError.
+        reports the actual total, and a negative or non-int occurrence is
+        rejected with ValueError.
         """
-        if occurrence is not None and occurrence < 0:
-            raise ValueError(f"occurrence must be >= 0, got {occurrence}")
+        _require_valid_occurrence(occurrence)
         occ = occurrence if occurrence is not None else 0
 
         if paragraph is not None:
