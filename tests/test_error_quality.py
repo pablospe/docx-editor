@@ -538,6 +538,22 @@ class TestEmptySearchTextRejected:
         finally:
             doc.close()
 
+    def test_add_comment_rejects_non_string_comment_before_mutating(self, doc_path):
+        """Before: comment_text=123 crashed in html.escape AFTER the range
+        markers were placed — orphaned commentRangeStart/End corruption.
+        After: rejected up front with CommentError, document untouched."""
+        from docx_editor import CommentError
+
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(CommentError, match="comment_text must be a string, got 123"):
+                doc.add_comment("needle", 123, paragraph=ref)  # type: ignore[arg-type]
+            assert doc.list_comments() == []
+            assert "commentRangeStart" not in doc._document_editor.dom.toxml()
+        finally:
+            doc.close()
+
 
 class TestNonStringParagraphRefRejected:
     """
