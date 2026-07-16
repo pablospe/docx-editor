@@ -735,7 +735,7 @@ class Document:
         Raises:
             ValueError: If ``find`` is not a non-empty string,
                 ``replace_with`` is not a string, ``paragraph`` is not a ref
-                string, or ``occurrence`` is negative.
+                string, or ``occurrence`` is negative or not an integer.
             TextNotFoundError: If ``find`` is absent or ``occurrence`` is out
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
@@ -768,7 +768,7 @@ class Document:
 
         Raises:
             ValueError: If ``text`` is not a non-empty string, ``paragraph``
-                is not a ref string, or ``occurrence`` is negative.
+                is not a ref string, or ``occurrence`` is negative or not an integer.
             TextNotFoundError: If ``text`` is absent or ``occurrence`` is out
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
@@ -802,7 +802,7 @@ class Document:
         Raises:
             ValueError: If ``anchor`` is not a non-empty string, ``text`` is
                 not a string, ``paragraph`` is not a ref string, or
-                ``occurrence`` is negative.
+                ``occurrence`` is negative or not an integer.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
@@ -836,7 +836,7 @@ class Document:
         Raises:
             ValueError: If ``anchor`` is not a non-empty string, ``text`` is
                 not a string, ``paragraph`` is not a ref string, or
-                ``occurrence`` is negative.
+                ``occurrence`` is negative or not an integer.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``

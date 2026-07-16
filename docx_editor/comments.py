@@ -24,6 +24,7 @@ from .xml_editor import (
     TextMapMatch,
     _escape_xml,
     _generate_hex_id,
+    _require_valid_occurrence,
     build_text_map,
     compute_paragraph_hash,
     count_in_text_map,
@@ -190,11 +191,10 @@ class CommentManager:
         ``_locate_document_wide`` so comment anchors and edit anchors find the
         same text and fail the same way: ``occurrence=None`` requires a unique
         anchor (else AmbiguousTextError), an explicit out-of-range occurrence
-        reports the actual total, and a negative occurrence is rejected with
-        ValueError.
+        reports the actual total, and a negative or non-int occurrence is
+        rejected with ValueError.
         """
-        if occurrence is not None and occurrence < 0:
-            raise ValueError(f"occurrence must be >= 0, got {occurrence}")
+        _require_valid_occurrence(occurrence)
         occ = occurrence if occurrence is not None else 0
 
         if paragraph is not None:

@@ -562,6 +562,77 @@ class TestNonStringParagraphRefRejected:
             doc.close()
 
 
+class TestNonIntOccurrenceRejected:
+    """
+    Before: ``occurrence`` was the one input the type-hardening pass skipped.
+    ``occurrence="0"`` hit ``"0" < 0`` → raw TypeError on every path
+    (constructors, direct API, batch apply, dry-run, add_comment);
+    ``occurrence=1.5`` passed the ``< 0`` check and TypeErrored deeper in
+    the search; ``occurrence=True`` was silently misread as occurrence 1.
+
+    After: a shared guard rejects non-int (including bool) occurrences with
+    the same ValueError at every boundary, before any comparison or search.
+    """
+
+    def test_direct_api_rejects_str_occurrence(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(ValueError, match="occurrence must be a non-negative integer, got '0'"):
+                doc.replace("needle", "x", paragraph=ref, occurrence="0")  # type: ignore[arg-type]
+            assert doc.list_revisions() == []
+        finally:
+            doc.close()
+
+    def test_constructor_rejects_float_and_bool(self):
+        with pytest.raises(
+            ValueError, match=r"EditOperation\.replace\(\): occurrence must be a non-negative integer, got 1\.5"
+        ):
+            EditOperation.replace("a", "b", paragraph="P2#f3c1", occurrence=1.5)  # type: ignore[arg-type]
+        with pytest.raises(
+            ValueError, match=r"EditOperation\.delete\(\): occurrence must be a non-negative integer, got True"
+        ):
+            EditOperation.delete("a", paragraph="P2#f3c1", occurrence=True)  # type: ignore[arg-type]
+
+    def test_batch_wraps_str_occurrence_not_raw_typeerror(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            before = doc.get_visible_text()
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            op = EditOperation(action="replace", paragraph=ref, find="needle", replace_with="x", occurrence="0")  # type: ignore[arg-type]
+            with pytest.raises(BatchOperationError) as exc:
+                doc.batch_edit([op])
+
+            assert exc.value.operation_index == 0
+            assert "occurrence must be a non-negative integer" in exc.value.reason
+            assert doc.get_visible_text() == before
+        finally:
+            doc.close()
+
+    def test_dry_run_reports_str_occurrence_as_invalid(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            op = EditOperation(action="replace", paragraph=ref, find="needle", replace_with="x", occurrence="0")  # type: ignore[arg-type]
+            results = doc.batch_edit([op], dry_run=True)
+
+            assert len(results) == 1
+            assert not results[0].valid
+            assert results[0].error is not None
+            assert "occurrence must be a non-negative integer" in results[0].error
+        finally:
+            doc.close()
+
+    def test_add_comment_rejects_str_occurrence(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(ValueError, match="occurrence must be a non-negative integer, got '0'"):
+                doc.add_comment("needle", "note", paragraph=ref, occurrence="0")  # type: ignore[arg-type]
+        finally:
+            doc.close()
+
+
 class TestNonStringSearchAndPayloadRejected:
     """
     Before: a truthy non-string search target (``find=123``) slipped past

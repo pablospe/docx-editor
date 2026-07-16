@@ -303,7 +303,7 @@ doc.close()
 
 **Multi-author documents:** Editing inside *another* author's pending insertion preserves their proposal, matching Word: deletions nest a `<w:del>` under your authorship inside their `<w:ins>`, and replacements/insertions put your text in your own sibling `<w:ins>` (splitting theirs when needed) instead of silently rewriting it. `accept_all(author=...)` / `reject_all(author=...)` then resolve each author's changes independently. Only your own pending insertions are edited in place.
 
-**Raises:** `TextNotFoundError` if the text is not found (or the requested `occurrence` is out of range — the error then reports `total_occurrences`). `AmbiguousTextError` if `occurrence` is omitted and the target matches more than once in the search scope. `ValueError` for search/anchor text that is not a non-empty string, replacement/insertion text that is not a string, a non-string `paragraph` ref, or a negative `occurrence` — all rejected up front, before any change is made.
+**Raises:** `TextNotFoundError` if the text is not found (or the requested `occurrence` is out of range — the error then reports `total_occurrences`). `AmbiguousTextError` if `occurrence` is omitted and the target matches more than once in the search scope. `ValueError` for search/anchor text that is not a non-empty string, replacement/insertion text that is not a string, a non-string `paragraph` ref, or an `occurrence` that is not a non-negative integer — all rejected up front, before any change is made.
 
 ### Comments API
 
