@@ -265,7 +265,7 @@ class Workspace:
         self.source_path = Path(source_path).resolve()
 
         if not self.source_path.exists():
-            raise DocumentNotFoundError(f"Document not found: {source_path}")
+            raise DocumentNotFoundError(f"Document not found: {source_path}", path=self.source_path)
 
         if self.source_path.suffix.lower() != ".docx":
             raise InvalidDocumentError(f"Not a .docx file: {source_path}")
@@ -325,14 +325,18 @@ class Workspace:
                                 f"{self.source_path}. Use force_recreate=True (or delete the "
                                 f"workspace) to discard them, or "
                                 f"Workspace(source, create=False).save(destination=...) to "
-                                f"rescue them first."
+                                f"rescue them first.",
+                                workspace_path=self.workspace_path,
+                                source_path=self.source_path,
                             )
                         # Same staleness predicate as save(), so a workspace can never
                         # open clean here and then fail sync_check() later at save time.
                         if not self.sync_check():
                             raise WorkspaceSyncError(
                                 f"Document has changed since workspace was created. "
-                                f"Delete {self.workspace_path} or use force_recreate=True"
+                                f"Delete {self.workspace_path} or use force_recreate=True",
+                                workspace_path=self.workspace_path,
+                                source_path=self.source_path,
                             )
                         if self.document_xml_path.exists():
                             # Workspace is valid, just load it
@@ -771,7 +775,9 @@ class Workspace:
             raise WorkspaceSyncError(
                 f"Source document changed on disk since the workspace was created: {self.source_path}. "
                 f"Saving would overwrite those changes. Use save(force=True) to overwrite anyway, "
-                f"or save(destination=...) to write elsewhere."
+                f"or save(destination=...) to write elsewhere.",
+                workspace_path=self.workspace_path,
+                source_path=self.source_path,
             )
 
         # Refuse to overwrite a document Word currently has open. Saving into

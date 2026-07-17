@@ -228,6 +228,8 @@ for p in doc.list_paragraphs():
 # Chain into an edit with paragraph=match.paragraph_ref plus
 # occurrence=match.paragraph_occurrence (edits count occurrences per paragraph).
 match = doc.find_text("30 days")
+# Optionally scope to one paragraph — occurrence then counts within it:
+match = doc.find_text("30 days", paragraph="P2#f3c1")
 
 # Enumerate EVERY match in one call (returns list[SearchResult], [] if none).
 # Each result plugs straight into a follow-up edit — no occurrence math needed.
@@ -276,10 +278,10 @@ new_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
 doc.replace("net", "gross", paragraph=new_ref)  # chain without list_paragraphs()
 
 # occurrence is 0-based everywhere (0 = first). Edit methods count occurrences
-# within the target paragraph; find_text counts document-wide. add_comment
-# counts within the paragraph when paragraph= is given, and document-wide
-# (like find_text) when paragraph=None. find_all bridges the two conventions:
-# each result's paragraph_occurrence is already in edit-method coordinates.
+# within the target paragraph. find_text and add_comment count within the
+# paragraph when paragraph= is given, and document-wide when paragraph=None.
+# find_all bridges the two conventions: each result's paragraph_occurrence is
+# already in edit-method coordinates.
 #
 # OMITTING occurrence means "the target is unique in the search scope".
 # If it matches more than once, the edit raises AmbiguousTextError instead of
@@ -698,7 +700,7 @@ behavior that keeps one `list_paragraphs()` snapshot valid for the whole batch.
 
 ### Error Handling & Recovery
 
-All LLM-facing errors inherit from `DocxEditError` and (except `RevisionError`, message-only) carry structured fields so you can retry in-loop without re-reading the document. Catch the specific class or the base — both work.
+All LLM-facing errors inherit from `DocxEditError` and carry structured fields so you can retry in-loop without re-reading the document. Catch the specific class or the base — both work.
 
 | Error                  | Fields                                                                                  | Recovery                                                                                         |
 | ---------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -707,7 +709,11 @@ All LLM-facing errors inherit from `DocxEditError` and (except `RevisionError`, 
 | `AmbiguousTextError`   | `search_text`, `paragraph_ref`, `paragraph_preview`, `total_occurrences`                | The target matched more than once with no `occurrence` given. Enumerate with `find_all()` and pick, or pass an explicit `occurrence` (0-based).      |
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` or call `list_paragraphs()` to pick a valid ref.                 |
 | `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (a missing paragraph ref, an element that is not an `EditOperation`, or a duplicate paragraph in `batch_rewrite` — `batch_edit` allows repeats, applied sequentially). Batch methods never raise the inner types directly. |
-| `RevisionError`        | (message only)                                                                          | Unknown `group_id` passed to `accept_group()`/`reject_group()`. Groups are in-memory and per-open-Document: use the `EditResult.group_id` you were handed in this session; after `close()`/reopen resolve by revision id or author instead. |
+| `RevisionError`        | `revision_id`, `group_id` (set when the error is about that id, else None)              | Unknown `group_id` passed to `accept_group()`/`reject_group()`. Groups are in-memory and per-open-Document: use the `EditResult.group_id` you were handed in this session; after `close()`/reopen resolve by revision id or author instead. |
+| `CommentError`         | `comment_id` (set when a comment id was targeted, else None)                            | Replying to a nonexistent comment id — call `list_comments()` and retry with a real id. With `comment_id=None` the arguments themselves were invalid; fix them per the message. |
+| `DocumentClosedError`  | `path`                                                                                  | The `Document` was used after `close()`. Reopen with `Document.open(e.path)`; edits not saved before the `close()` were discarded with the workspace. |
+| `DocumentNotFoundError`| `path`                                                                                  | The file doesn't exist at `path` — fix the path (typo, wrong cwd) before retrying. |
+| `WorkspaceSyncError`   | `workspace_path`, `source_path`                                                         | Workspace and source disagree (unsaved edits from a previous session, or the source changed on disk). **Do not retry blindly** — `force_recreate=True` (open) / `force=True` (save) DISCARDS one side; to rescue the workspace's edits first, save them elsewhere: `Workspace(source, create=False).save("rescued.docx")`. |
 | `DocumentOpenError`    | `path`, `owner_file`                                                                    | **Do not retry blindly.** The destination is open in Word. Stop and tell the user to close it. Only pass `force=True` if the user confirms the `~$` lock is stale (crashed session). |
 
 ```python

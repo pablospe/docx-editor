@@ -65,7 +65,7 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
     output_path = Path(output_dir)
 
     if not input_path.exists():
-        raise DocumentNotFoundError(f"Document not found: {input_file}")
+        raise DocumentNotFoundError(f"Document not found: {input_file}", path=input_path)
 
     if input_path.is_dir():
         raise InvalidDocumentError(f"Is a directory, not a .docx file: {input_file}")

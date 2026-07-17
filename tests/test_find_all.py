@@ -170,3 +170,63 @@ class TestFindAllScoped:
         doc, _ = multi_para_doc
         with pytest.raises(ParagraphIndexError):
             doc.find_all("committee", paragraph="P999#0000")
+
+
+class TestFindTextScoped:
+    """find_text(paragraph=) — same scoping contract as find_all (ISSUES.md #42)."""
+
+    def test_scoped_occurrence_counts_within_paragraph(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[2].split("|")[0]
+        match = doc.find_text("committee", occurrence=1, paragraph=ref)
+        assert match is not None
+        assert match.paragraph_ref == ref
+        assert match.paragraph_occurrence == 1
+        # Unscoped occurrence=1 is still the second document-wide match (in
+        # P1) — proving the scoped branch switched coordinate systems.
+        unscoped = doc.find_text("committee", occurrence=1)
+        assert unscoped is not None
+        assert unscoped.paragraph_ref != ref
+
+    def test_scoped_misses_text_present_elsewhere(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        assert doc.find_text("item 5", paragraph=ref) is None
+        assert doc.find_text("item 5") is not None  # exists document-wide
+
+    def test_occurrence_beyond_paragraph_matches_returns_none(self, multi_para_doc):
+        """Out-of-range stays None (find_text's lookup contract), never IndexError."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        assert doc.find_text("committee", occurrence=2, paragraph=ref) is None
+
+    def test_negative_occurrence_returns_none_not_wraparound(self, multi_para_doc):
+        """occurrence=-1 must not silently return the paragraph's last match."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        assert doc.find_text("committee", occurrence=-1, paragraph=ref) is None
+
+    def test_stale_hash_raises(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        doc.replace("item 1", "MUTATED", paragraph=ref)
+        with pytest.raises(HashMismatchError):
+            doc.find_text("committee", paragraph=ref)
+
+    def test_malformed_ref_raises_value_error(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        with pytest.raises(ValueError, match="Invalid paragraph reference"):
+            doc.find_text("committee", paragraph="not-a-ref")
+
+    def test_out_of_range_index_raises(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        with pytest.raises(ParagraphIndexError):
+            doc.find_text("committee", paragraph="P999#0000")
+
+    def test_empty_text_raises_value_error_scoped_and_unscoped(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        with pytest.raises(ValueError, match="non-empty"):
+            doc.find_text("")
+        with pytest.raises(ValueError, match="non-empty"):
+            doc.find_text("", paragraph=ref)

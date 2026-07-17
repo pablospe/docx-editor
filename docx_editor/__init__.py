@@ -40,6 +40,7 @@ from .exceptions import (
     AmbiguousTextError,
     BatchOperationError,
     CommentError,
+    DocumentClosedError,
     DocumentNotFoundError,
     DocumentOpenError,
     DocxEditError,
@@ -77,6 +78,7 @@ __all__ = [
     "Comment",
     # Exceptions
     "DocxEditError",
+    "DocumentClosedError",
     "DocumentNotFoundError",
     "DocumentOpenError",
     "InvalidDocumentError",

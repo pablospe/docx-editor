@@ -404,7 +404,10 @@ class CommentManager:
             CommentError: If the parent comment is not found
         """
         if parent_comment_id not in self.existing_comments:
-            raise CommentError(f"Parent comment with id={parent_comment_id} not found")
+            raise CommentError(
+                f"Parent comment with id={parent_comment_id} not found",
+                comment_id=parent_comment_id,
+            )
 
         parent_info = self.existing_comments[parent_comment_id]
         comment_id = self.next_comment_id

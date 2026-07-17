@@ -11,6 +11,7 @@ from defusedxml.common import EntitiesForbidden
 import docx_editor
 from docx_editor import Document, SearchResult
 from docx_editor.exceptions import (
+    DocumentClosedError,
     DocumentNotFoundError,
     DocumentOpenError,
     DocxEditError,
@@ -328,7 +329,7 @@ class TestDocumentClose:
         doc = Document.open(clean_workspace)
         doc.close()
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.list_revisions()
 
 
@@ -432,49 +433,49 @@ class TestDocumentEdgeCases:
         doc = Document.open(clean_workspace)
         doc.close()
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.count_matches("test")
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.replace("old", "new", paragraph="P1#0000")
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.delete("text", paragraph="P1#0000")
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.insert_after("anchor", "text", paragraph="P1#0000")
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.insert_before("anchor", "text", paragraph="P1#0000")
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.add_comment("anchor", "comment")
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.reply_to_comment(0, "reply")
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.list_comments()
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.resolve_comment(0)
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.delete_comment(0)
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.accept_revision(0)
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.reject_revision(0)
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.accept_all()
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.reject_all()
 
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.save()
 
 
@@ -717,10 +718,10 @@ class TestDocumentGetVisibleText:
         doc.close()
 
     def test_get_visible_text_after_close_raises(self, clean_workspace):
-        """Should raise ValueError after document is closed."""
+        """Should raise DocumentClosedError after document is closed."""
         doc = Document.open(clean_workspace)
         doc.close()
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.get_visible_text()
 
 
@@ -765,10 +766,10 @@ class TestDocumentGetOriginalText:
         doc.close()
 
     def test_get_original_text_after_close_raises(self, clean_workspace):
-        """Should raise ValueError after document is closed."""
+        """Should raise DocumentClosedError after document is closed."""
         doc = Document.open(clean_workspace)
         doc.close()
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.get_original_text()
 
 
@@ -838,7 +839,7 @@ class TestDocumentFindText:
     def test_find_text_after_close_raises(self, clean_workspace):
         doc = Document.open(clean_workspace)
         doc.close()
-        with pytest.raises(ValueError, match="closed"):
+        with pytest.raises(DocumentClosedError, match="closed"):
             doc.find_text("test")
 
 

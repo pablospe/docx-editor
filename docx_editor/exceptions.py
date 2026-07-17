@@ -10,9 +10,15 @@ class DocxEditError(Exception):
 
 
 class DocumentNotFoundError(DocxEditError):
-    """Raised when the document file cannot be found."""
+    """Raised when the document file cannot be found.
 
-    pass
+    Attributes:
+        path: The path that did not exist, or None if unknown.
+    """
+
+    def __init__(self, message: str, *, path: Path | None = None):
+        self.path = path
+        super().__init__(message)
 
 
 class InvalidDocumentError(DocxEditError):
@@ -39,9 +45,22 @@ class WorkspaceSyncError(WorkspaceError):
     Two triggers: the source changed on disk since the workspace was created,
     or the workspace holds unsaved changes from a previous session that the
     source never received.
+
+    Attributes:
+        workspace_path: The workspace that is out of sync, or None if unknown.
+        source_path: The source document it belongs to, or None if unknown.
     """
 
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        workspace_path: Path | None = None,
+        source_path: Path | None = None,
+    ):
+        self.workspace_path = workspace_path
+        self.source_path = source_path
+        super().__init__(message)
 
 
 class WorkspaceLockedError(WorkspaceError):
@@ -116,6 +135,22 @@ class DocumentOpenError(DocxEditError):
         super().__init__(message)
 
 
+class DocumentClosedError(DocxEditError):
+    """Raised when an operation is attempted on a closed Document.
+
+    ``close()`` discards the workspace (unless ``cleanup=False``), so the
+    object cannot keep serving reads or edits. Reopen the source with
+    ``Document.open(e.path)`` to continue.
+
+    Attributes:
+        path: Source path of the closed document, or None if unknown.
+    """
+
+    def __init__(self, message: str, *, path: Path | None = None):
+        self.path = path
+        super().__init__(message)
+
+
 class XMLError(DocxEditError):
     """Raised when there's an error parsing or manipulating XML."""
 
@@ -135,15 +170,39 @@ class MultipleNodesFoundError(XMLError):
 
 
 class RevisionError(DocxEditError):
-    """Raised when there's an error with revision operations."""
+    """Raised when there's an error with revision operations.
 
-    pass
+    Attributes:
+        revision_id: The revision id the operation targeted, or None if the
+            error is not about a specific revision.
+        group_id: The revision group id the operation targeted (e.g. an
+            unknown group passed to ``accept_group``/``reject_group``), or
+            None if the error is not about a group.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        revision_id: int | None = None,
+        group_id: int | None = None,
+    ):
+        self.revision_id = revision_id
+        self.group_id = group_id
+        super().__init__(message)
 
 
 class CommentError(DocxEditError):
-    """Raised when there's an error with comment operations."""
+    """Raised when there's an error with comment operations.
 
-    pass
+    Attributes:
+        comment_id: The comment id the operation targeted (e.g. the parent id
+            of a failed reply), or None if no comment id applies.
+    """
+
+    def __init__(self, message: str, *, comment_id: int | None = None):
+        self.comment_id = comment_id
+        super().__init__(message)
 
 
 def _truncate_preview(text: str, limit: int = 80) -> str:
