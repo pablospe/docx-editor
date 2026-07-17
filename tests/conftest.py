@@ -11,7 +11,7 @@ import pytest
 
 def find_ref(doc, text):
     """Find the paragraph ref containing the given text."""
-    for entry in doc.list_paragraphs():
+    for entry in doc.list_paragraphs(limit=None):
         if text in entry:
             return entry.split("|")[0]
     raise ValueError(f"Paragraph containing '{text}' not found")

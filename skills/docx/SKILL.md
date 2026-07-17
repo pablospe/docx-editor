@@ -247,6 +247,15 @@ doc.batch_edit(ops)
 # order as above (an edit never shifts the matches before it; ascending
 # mis-targets, and descending is not valid for self-overlapping search strings
 # like "aa" in "aaaa").
+# SearchResults print compactly — SearchResult(P3#a7b2 occ=1 '30 days') — so
+# printing a whole find_all() list is cheap. Each result also carries
+# paragraph_index (the int inside paragraph_ref); never string-parse refs.
+
+# Show the paragraphs AROUND a match ("what's the surrounding section?").
+# window=2 (default) returns up to 5 ParagraphInfo records, clamped at the
+# document edges; each prints as "P{i}#{hash}| full text":
+for info in doc.context(match.paragraph_ref, window=2):
+    print(info)
 
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()
@@ -624,14 +633,17 @@ with Document.open("file.docx", author=author) as doc:
     doc.save()
 ```
 
-Refs are **1-based** global indexes (`P1`, not `P0`). For large documents, page through paragraphs to save tokens — `paragraph_count()` gives the total for bounds, and `start`/`limit` return a slice whose refs keep their global index. You pick the page size (there's no built-in limit); with `limit=N` the next page starts at `start + N`. Pass `max_chars=0` to get bare refs (`P1#a7b2`) with no preview text or `| ` separator:
+Refs are **1-based** global indexes (`P1`, not `P0`). A bare `list_paragraphs()` call returns at most **200 paragraphs** (the default `limit`). Whenever paragraphs remain beyond the returned window — default or explicit `limit` — the last list entry is a truncation notice instead of a paragraph, e.g. `"... 50 more paragraphs; use start=201 or limit=None"`, telling you the next `start`. Notice lines always begin with `...` and never match the `P{i}#{hash}` ref shape, so filter them with `entry.startswith("...")` when consuming entries as refs. `paragraph_count()` gives the total for bounds; `start`/`limit` return a slice whose refs keep their global index; `limit=None` removes the cap. Pass `max_chars=0` to get bare refs (`P1#a7b2`) with no preview text or `| ` separator:
 
 ```python
-total = doc.paragraph_count()                        # cheap bounds check
-page_size = 50                                        # caller's choice
-page2 = doc.list_paragraphs(start=1 + page_size, limit=page_size)  # refs P51..P100
+page1 = doc.list_paragraphs()                        # up to P200, then "... N more" notice
+page2 = doc.list_paragraphs(start=201)               # next page, per the notice
+refs = [e for e in page1 if not e.startswith("...")]  # drop the notice line
+everything = doc.list_paragraphs(limit=None)         # uncapped, never a notice
 refs_only = doc.list_paragraphs(max_chars=0)         # "P1#a7b2", no preview
 ```
+
+(`list_paragraphs_structured()` has the same 200-record default cap but appends **no notice** — every entry stays a typed `ParagraphInfo`. Detect truncation by comparing `len(result)` with `paragraph_count()`, or pass `limit=None`.)
 
 The `paragraph` argument is **required** for all edit methods. If the paragraph content has changed since you called `list_paragraphs()`, a `HashMismatchError` is raised — preventing edits to the wrong location.
 

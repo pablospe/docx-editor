@@ -115,7 +115,7 @@ def benchmark_speed(iterations: int = 50):
     hash_times = []
     for _ in range(iterations):
         d, t = open_saved()
-        refs = d.list_paragraphs()
+        refs = d.list_paragraphs(limit=None)
         # Find P15's ref
         ref = None
         for entry in refs:
@@ -167,7 +167,7 @@ def benchmark_accuracy():
     print("=" * 60)
 
     doc, tmp = build_multi_paragraph_doc(30)
-    paragraphs = doc.list_paragraphs()
+    paragraphs = doc.list_paragraphs(limit=None)
     n_paras = len(paragraphs)
     print(f"  Paragraphs: {n_paras}")
 
@@ -338,7 +338,7 @@ def benchmark_accuracy():
 
 def _get_fresh_hash(doc, para_index):
     """Get the current hash for a paragraph by index (1-based)."""
-    entries = doc.list_paragraphs()
+    entries = doc.list_paragraphs(limit=None)
     entry = entries[para_index - 1]
     ref = entry.split("|")[0]
     return ref.split("#")[1]
@@ -376,7 +376,7 @@ def benchmark_batch_vs_individual():
         d, t = open_saved()
         t0 = time.perf_counter()
         for i in range(1, n_edits + 1):
-            refs = d.list_paragraphs()
+            refs = d.list_paragraphs(limit=None)
             ref = refs[i - 1].split("|")[0]
             d.replace(f"item {i}", f"EDIT_{i}", paragraph=ref)
         t1 = time.perf_counter()
@@ -388,7 +388,7 @@ def benchmark_batch_vs_individual():
     for _ in range(iterations):
         d, t = open_saved()
         t0 = time.perf_counter()
-        refs = d.list_paragraphs()
+        refs = d.list_paragraphs(limit=None)
         ops = [
             EditOperation(
                 action="replace",

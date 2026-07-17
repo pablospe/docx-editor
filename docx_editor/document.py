@@ -39,6 +39,10 @@ from .xml_editor import (
     compute_paragraph_hash,
 )
 
+# Default page size for list_paragraphs / list_paragraphs_structured. Bounds
+# the output of a bare call on large documents; pass limit=None for everything.
+_DEFAULT_LIST_LIMIT = 200
+
 
 def _require_ref_string(paragraph: str) -> None:
     """Reject non-string paragraph refs before they can silently select the
@@ -231,6 +235,9 @@ class Document:
               document-wide).
             - ``spans_revision``: True if the match crosses a tracked-revision
               boundary (e.g. part of it is inside a tracked insertion).
+            - ``paragraph_index``: 1-based index of the containing paragraph —
+              the same integer embedded in ``paragraph_ref``, provided so you
+              never need to string-parse the ref.
 
         Example:
             match = doc.find_text("30 days")
@@ -345,13 +352,24 @@ class Document:
         self._ensure_open()
         return len(self._document_editor.dom.getElementsByTagName("w:p"))
 
-    def list_paragraphs(self, max_chars: int = 80, *, start: int = 1, limit: int | None = None) -> list[str]:
+    def list_paragraphs(
+        self, max_chars: int = 80, *, start: int = 1, limit: int | None = _DEFAULT_LIST_LIMIT
+    ) -> list[str]:
         """List paragraphs with hash-anchored references.
 
         Returns a list of strings like "P1#a7b2| Introduction to the..."
         for use as stable paragraph references in editing operations. Refs
         are **1-based global** indexes (P1, P2, …) and stay correct across
         pages — a slice starting at paragraph 51 emits "P51#…", not "P1#…".
+
+        .. versionchanged:: 0.6.1
+            A bare call now returns at most 200 paragraphs (it used to return
+            all of them). Whenever paragraphs remain beyond the returned
+            window, the last list entry is a truncation notice instead of a
+            paragraph, e.g. ``"... 50 more paragraphs; use start=201 or
+            limit=None"``. Notice lines always start with ``"..."`` and never
+            match the ``P{i}#{hash}`` ref shape, so ref-consuming code can
+            filter them out. Pass ``limit=None`` to restore the full listing.
 
         Args:
             max_chars: Maximum characters for the preview text (default 80).
@@ -360,29 +378,32 @@ class Document:
             start: 1-based index of the first paragraph to return (default 1).
                 Must be >= 1. A ``start`` beyond the last paragraph yields an
                 empty list.
-            limit: Maximum number of paragraphs to return, or ``None`` for all
-                paragraphs from ``start`` onward (default ``None``). Must be
-                >= 0 when given; ``0`` yields an empty list.
+            limit: Maximum number of paragraphs to return (default 200), or
+                ``None`` for all paragraphs from ``start`` onward. Must be
+                >= 0 when given.
 
         Returns:
-            List of hash-tagged paragraph preview strings.
+            List of hash-tagged paragraph preview strings, plus one trailing
+            ``"... N more paragraphs; use start=… or limit=None"`` notice
+            when the window did not reach the end of the document.
 
         Raises:
             ValueError: If ``max_chars`` < 0, ``start`` < 1, or ``limit`` < 0.
 
         Example:
-            # Caller chooses the page size; ``start`` walks forward by it.
-            count = doc.paragraph_count()
-            page_size = 50
-            for start in range(1, count + 1, page_size):
-                for ref in doc.list_paragraphs(start=start, limit=page_size):
-                    print(ref)
+            # Walk a large document page by page; the trailing notice on each
+            # page tells you the next start.
+            page = doc.list_paragraphs()                # P1..P200 + notice
+            page = doc.list_paragraphs(start=201)       # P201.. and so on
+            everything = doc.list_paragraphs(limit=None)  # no cap, no notice
         """
         self._ensure_open()
         if max_chars < 0:
             raise ValueError(f"max_chars must be >= 0, got {max_chars}")
         result = []
+        last_index = start - 1  # highest index emitted; start-1 when the slice is empty
         for i, p in self._iter_paragraph_slice(start, limit):
+            last_index = i
             h = compute_paragraph_hash(p)
             if max_chars == 0:
                 result.append(f"P{i}#{h}")
@@ -392,6 +413,9 @@ class Document:
             if len(tm.text) > max_chars:
                 preview += "..."
             result.append(f"P{i}#{h}| {preview}")
+        remaining = self.paragraph_count() - last_index
+        if remaining > 0:
+            result.append(f"... {remaining} more paragraphs; use start={last_index + 1} or limit=None")
         return result
 
     def _iter_paragraph_slice(self, start: int, limit: int | None) -> Iterator[tuple[int, Element]]:
@@ -415,7 +439,9 @@ class Document:
         end = begin + limit if limit is not None else None
         return enumerate(paragraphs[begin:end], start=begin + 1)
 
-    def list_paragraphs_structured(self, *, start: int = 1, limit: int | None = None) -> list[ParagraphInfo]:
+    def list_paragraphs_structured(
+        self, *, start: int = 1, limit: int | None = _DEFAULT_LIST_LIMIT
+    ) -> list[ParagraphInfo]:
         """List paragraphs as structured :class:`ParagraphInfo` records.
 
         Like :meth:`list_paragraphs`, but returns named records (index, ref,
@@ -431,26 +457,33 @@ class Document:
         across slices, with the same ``start``/``limit`` semantics as
         :meth:`list_paragraphs`.
 
+        .. versionchanged:: 0.6.1
+            A bare call now returns at most 200 records (it used to return
+            all of them). Unlike :meth:`list_paragraphs`, **no truncation
+            notice is appended** — every entry is a :class:`ParagraphInfo`,
+            never a string — so a capped result is silent. To detect
+            truncation, compare ``len(result)`` (or the last record's
+            ``index``) against :meth:`paragraph_count`. Pass ``limit=None``
+            for the full listing.
+
         Args:
             start: 1-based index of the first paragraph to return (default 1).
                 Must be >= 1. A ``start`` beyond the last paragraph yields an
                 empty list.
-            limit: Maximum number of paragraphs to return, or ``None`` for all
-                paragraphs from ``start`` onward (default ``None``). Must be
+            limit: Maximum number of paragraphs to return (default 200), or
+                ``None`` for all paragraphs from ``start`` onward. Must be
                 >= 0 when given; ``0`` yields an empty list.
 
         Returns:
-            List of :class:`ParagraphInfo` records.
+            List of :class:`ParagraphInfo` records (no notice entries).
 
         Raises:
             ValueError: If ``start`` < 1, or ``limit`` < 0.
 
         Example:
-            # Caller chooses the page size; ``start`` walks forward by it.
-            page_size = 50
-            for start in range(1, doc.paragraph_count() + 1, page_size):
-                for info in doc.list_paragraphs_structured(start=start, limit=page_size):
-                    print(info.ref, info.text)
+            infos = doc.list_paragraphs_structured(limit=None)  # everything
+            if len(infos) < doc.paragraph_count():
+                ...  # a bounded call was truncated
         """
         self._ensure_open()
         result = []
@@ -489,6 +522,80 @@ class Document:
         p = paragraphs[index - 1]
         h = compute_paragraph_hash(p)
         return ParagraphInfo(index=index, ref=f"P{index}#{h}", text=build_text_map(p).text)
+
+    def context(self, ref: str, window: int = 2) -> list[ParagraphInfo]:
+        """Return the paragraphs surrounding ``ref``, in document order.
+
+        Fetches the referenced paragraph plus up to ``window`` paragraphs on
+        each side (fewer at the document edges) — the "show me what's around
+        this match" helper for search results: pass a
+        :class:`~docx_editor.track_changes.SearchResult`'s ``paragraph_ref``
+        straight in. The records are identical to what
+        :meth:`list_paragraphs_structured` would emit for the same indexes.
+
+        Args:
+            ref: Paragraph reference (e.g., "P3#a7b2") from
+                :meth:`list_paragraphs`, :meth:`find_text`/:meth:`find_all`,
+                or an edit result.
+            window: Number of paragraphs to include on *each side* of the
+                referenced one (default 2, so up to 5 records). Must be >= 0;
+                ``0`` returns just the referenced paragraph. Clamped at the
+                document edges — no padding, no wrap-around.
+
+        Returns:
+            List of :class:`ParagraphInfo` records covering
+            ``max(1, i - window) .. min(paragraph_count(), i + window)``,
+            where ``i`` is the referenced paragraph's index.
+
+        Raises:
+            ValueError: If ``ref`` has an invalid format, or ``window`` < 0.
+            ParagraphIndexError: If the paragraph index is out of range.
+            HashMismatchError: If the hash no longer matches current
+                paragraph content (paragraph was modified after the ref
+                was captured).
+
+        Example:
+            match = doc.find_text("Termination")
+            for info in doc.context(match.paragraph_ref, window=2):
+                print(info)
+        """
+        self._ensure_open()
+        if window < 0:
+            raise ValueError(f"window must be >= 0, got {window}")
+        index, _ = self._resolve_validated_ref(ref)
+        first = max(1, index - window)
+        last = min(self.paragraph_count(), index + window)
+        return self.list_paragraphs_structured(start=first, limit=last - first + 1)
+
+    def _resolve_validated_ref(self, ref: str) -> tuple[int, Element]:
+        """Parse ``ref``, bounds-check its index, and verify its hash.
+
+        Shared validation for the ref-taking read methods
+        (:meth:`get_paragraph_location`, :meth:`context`).
+
+        Returns:
+            ``(index, paragraph_element)`` — the ref's 1-based index and the
+            ``w:p`` element it resolves to.
+
+        Raises:
+            ValueError: If ``ref`` has an invalid format.
+            ParagraphIndexError: If the paragraph index is out of range.
+            HashMismatchError: If the hash no longer matches current
+                paragraph content.
+        """
+        parsed = ParagraphRef.parse(ref)
+        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        if parsed.index < 1 or parsed.index > len(paragraphs):
+            raise ParagraphIndexError(parsed.index, len(paragraphs))
+        p = paragraphs[parsed.index - 1]
+        actual_hash = compute_paragraph_hash(p)
+        if actual_hash != parsed.hash:
+            tm = build_text_map(p)
+            preview = tm.text[:80]
+            if len(tm.text) > 80:
+                preview += "..."
+            raise HashMismatchError(parsed.index, parsed.hash, actual_hash, preview)
+        return parsed.index, p
 
     def _style_maps(self) -> tuple[dict[str, int], dict[str, ListItem]]:
         """Outline-level and numbering maps defined by paragraph styles.
@@ -580,21 +687,11 @@ class Document:
             print(f"section {loc.section}")
         """
         self._ensure_open()
-        parsed = ParagraphRef.parse(ref)
+        index, p = self._resolve_validated_ref(ref)
         paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
-        if parsed.index < 1 or parsed.index > len(paragraphs):
-            raise ParagraphIndexError(parsed.index, len(paragraphs))
-        p = paragraphs[parsed.index - 1]
-        actual_hash = compute_paragraph_hash(p)
-        if actual_hash != parsed.hash:
-            tm = build_text_map(p)
-            preview = tm.text[:80]
-            if len(tm.text) > 80:
-                preview += "..."
-            raise HashMismatchError(parsed.index, parsed.hash, actual_hash, preview)
         style_outlines, style_numbering = self._style_maps()
-        heading_path = _compute_heading_paths(paragraphs[: parsed.index], style_outlines)[-1]
-        section = _compute_section_indexes(paragraphs[: parsed.index])[-1]
+        heading_path = _compute_heading_paths(paragraphs[:index], style_outlines)[-1]
+        section = _compute_section_indexes(paragraphs[:index])[-1]
         return _compute_paragraph_location(
             p,
             style_outlines=style_outlines,
@@ -1134,7 +1231,9 @@ class Document:
 
         Example:
             # Reviewer workflow: inspect one paragraph's revisions, then act.
-            for ref in doc.list_paragraphs(max_chars=0):
+            # limit=None: every entry must be a real ref, never a truncation
+            # notice, because each one is passed as paragraph= below.
+            for ref in doc.list_paragraphs(max_chars=0, limit=None):
                 for r in doc.list_revisions(paragraph=ref):
                     print(f"{r.id}: {r.type} '{r.text}' by {r.author}")
             doc.accept_revision(3)

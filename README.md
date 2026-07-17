@@ -120,13 +120,12 @@ with Document.open("reviewed.docx", author="Editor") as doc:
     # List paragraphs to find hash-anchored references
     refs = doc.list_paragraphs()
 
-    # Page through large documents — you choose the page size; refs stay
-    # globally indexed (page 2 with size 50 starts at P51, not P1)
-    total = doc.paragraph_count()
-    page_size = 50
-    for start in range(1, total + 1, page_size):
-        for ref in doc.list_paragraphs(start=start, limit=page_size):
-            print(ref)  # process this page of refs
+    # Large documents: a bare call returns at most 200 paragraphs, ending
+    # with a "... N more paragraphs; use start=201 or limit=None" notice.
+    # Refs stay globally indexed across pages (page 2 starts at P201, not P1).
+    page1 = doc.list_paragraphs()                 # up to P200, then the notice
+    page2 = doc.list_paragraphs(start=201)        # next page, per the notice
+    everything = doc.list_paragraphs(limit=None)  # uncapped, never a notice
 
     # Find text across element boundaries
     match = doc.find_text("Aim: To")
