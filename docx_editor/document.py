@@ -12,7 +12,7 @@ from typing import Literal, overload
 from xml.dom.minidom import Element
 
 from .comments import Comment, CommentManager
-from .exceptions import HashMismatchError, ParagraphIndexError
+from .exceptions import DocumentClosedError, HashMismatchError, ParagraphIndexError
 from .track_changes import (
     EditOperation,
     EditResult,
@@ -203,12 +203,17 @@ class Document:
 
     # ==================== Track Changes API ====================
 
-    def find_text(self, text: str, occurrence: int = 0) -> SearchResult | None:
+    def find_text(self, text: str, occurrence: int = 0, paragraph: str | None = None) -> SearchResult | None:
         """Find text in the document, including across element boundaries.
 
         Args:
-            text: Text to search for
-            occurrence: Which occurrence document-wide (0 = first, 1 = second, etc.)
+            text: Text to search for (must be non-empty)
+            occurrence: Which occurrence (0 = first, 1 = second, etc.).
+                Counts document-wide when ``paragraph`` is None, and within
+                the paragraph when scoped — the same convention as the edit
+                methods and ``add_comment``.
+            paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope
+                the search to one paragraph. None searches the whole document.
 
         Returns:
             A SearchResult, or None if the text (or that occurrence) is not
@@ -238,9 +243,14 @@ class Document:
                 )
 
         To enumerate every hit in one call, use :meth:`find_all`.
+
+        Raises:
+            ValueError: If ``text`` is empty, or ``paragraph`` is malformed.
+            ParagraphIndexError: If ``paragraph``'s index is out of range.
+            HashMismatchError: If ``paragraph``'s hash is stale.
         """
         self._ensure_open()
-        return self._revision_manager.find_text(text, occurrence)
+        return self._revision_manager.find_text(text, occurrence, paragraph=paragraph)
 
     def find_all(self, text: str, paragraph: str | None = None) -> list[SearchResult]:
         """Find every match of ``text``, in document order.
@@ -1346,9 +1356,12 @@ class Document:
     # ==================== Private Methods ====================
 
     def _ensure_open(self) -> None:
-        """Raise error if document is closed."""
+        """Raise DocumentClosedError if the document is closed."""
         if self._closed:
-            raise ValueError("Document is closed")
+            raise DocumentClosedError(
+                f"Document is closed. Reopen it with Document.open({str(self.source_path)!r}) to continue.",
+                path=self.source_path,
+            )
 
     def _setup_tracking(self) -> None:
         """Set up tracked changes infrastructure in the document.

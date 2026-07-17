@@ -197,16 +197,19 @@ Get flattened original (pre-revision) document text. Deleted text is included an
 text = doc.get_original_text()
 ```
 
-#### `find_text(text, occurrence=0)`
+#### `find_text(text, occurrence=0, paragraph=None)`
 
 Find text in the document, including text spanning XML element boundaries.
 
 **Parameters:**
 
-- `text` (str): Text to search for
-- `occurrence` (int): Which occurrence to return, counted document-wide, 0-based (0 = first). Defaults to 0.
+- `text` (str): Text to search for (must be non-empty)
+- `occurrence` (int): Which occurrence to return, 0-based (0 = first). Counted document-wide when `paragraph` is None, and within the paragraph when scoped. Defaults to 0.
+- `paragraph` (str, optional): Paragraph reference (e.g. `P2#f3c1`) to scope the search — the same scoping `find_all` offers. `None` searches the whole document. Defaults to None.
 
 **Returns:** [`SearchResult`](#searchresult), or None if not found
+
+**Raises:** `ValueError` if `text` is empty or `paragraph` is malformed; [`ParagraphIndexError`](#exceptions) / [`HashMismatchError`](#exceptions) for an out-of-range or stale `paragraph`.
 
 **Example:**
 
@@ -714,6 +717,8 @@ Close the document and clean up workspace. Releases the advisory workspace lock 
 
 > **Warning:** closing without saving discards unsaved edits. There is no dirty check: `close()` (the default `cleanup=True`, including normal context-manager exit) deletes the workspace and everything not yet written by `save()` is silently lost. `close(cleanup=False)` keeps the workspace on disk, but a later `Document.open()` of the same source raises `WorkspaceSyncError` if it holds unsaved changes, rather than silently carrying them over.
 
+Any operation on the document after `close()` raises [`DocumentClosedError`](#documentclosederror).
+
 **Parameters:**
 
 - `cleanup` (bool): If True, delete the workspace folder. Defaults to True.
@@ -943,9 +948,10 @@ from docx_editor import SearchResult
 
 `start`/`end` are offsets within the matched paragraph's visible text, **not**
 document-wide offsets. Coordinate systems differ between search and edit:
-`find_text`'s `occurrence` counts matches document-wide, while edit methods
-count within one paragraph — `paragraph_occurrence` bridges the two, so always
-pass it alongside `paragraph_ref` when chaining into an edit. `paragraph_ref`
+`find_text`'s `occurrence` counts matches document-wide (unless scoped with
+`paragraph=`), while edit methods count within one paragraph —
+`paragraph_occurrence` bridges the two, so always pass it alongside
+`paragraph_ref` when chaining into an edit. `paragraph_ref`
 is computed at search time and — like refs from `list_paragraphs()` — goes
 stale once that paragraph is edited.
 
@@ -1040,7 +1046,7 @@ while ops:
 
 ### `CommentError`
 
-Raised when a comment operation fails.
+Raised when a comment operation fails. Structured field: `comment_id` (the comment id the operation targeted, e.g. the parent id of a failed reply; `None` when no comment id applies).
 
 ```python
 from docx_editor.exceptions import CommentError
@@ -1048,15 +1054,37 @@ from docx_editor.exceptions import CommentError
 try:
     doc.reply_to_comment(999, "reply")
 except CommentError as e:
-    print(f"Comment error: {e}")
+    print(f"Comment {e.comment_id} not found")
 ```
 
 ### `RevisionError`
 
-Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`. Revision groups are in-memory and per-open-`Document`, so ids from a previous session are unknown; resolve those revisions by id or author instead. No structured fields (message only).
+Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`. Revision groups are in-memory and per-open-`Document`, so ids from a previous session are unknown; resolve those revisions by id or author instead. Structured fields: `revision_id` and `group_id` — set when the error is about that specific id (`group_id` for unknown-group errors), `None` otherwise.
 
 ```python
 from docx_editor.exceptions import RevisionError
+```
+
+### `DocumentNotFoundError`
+
+Raised by `Document.open()` when the source file does not exist. Structured field: `path` (the path that did not exist).
+
+```python
+from docx_editor.exceptions import DocumentNotFoundError
+```
+
+### `DocumentClosedError`
+
+Raised when any operation is attempted on a `Document` after `close()`. Closing discards the workspace (unless `cleanup=False`), so the object cannot keep serving reads or edits — reopen the source to continue. Structured field: `path` (the source path of the closed document).
+
+```python
+from docx_editor import Document
+from docx_editor.exceptions import DocumentClosedError
+
+try:
+    doc.get_visible_text()
+except DocumentClosedError as e:
+    doc = Document.open(e.path)
 ```
 
 ### `WorkspaceExistsError`
@@ -1069,7 +1097,7 @@ from docx_editor.exceptions import WorkspaceExistsError
 
 ### `WorkspaceSyncError`
 
-Raised when the workspace is out of sync with the source document: the source changed on disk since the workspace was created, or the workspace holds unsaved changes from a previous session that the source never received.
+Raised when the workspace is out of sync with the source document: the source changed on disk since the workspace was created, or the workspace holds unsaved changes from a previous session that the source never received. Structured fields: `workspace_path` and `source_path`.
 
 `Document.open(path, force_recreate=True)` recovers but discards the workspace's unsaved edits. To rescue them first, save the orphaned workspace to a new file (`Workspace` is not exported at the package root — use the deep import):
 

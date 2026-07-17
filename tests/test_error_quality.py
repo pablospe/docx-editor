@@ -27,10 +27,16 @@ import pytest
 from docx_editor import (
     AmbiguousTextError,
     BatchOperationError,
+    CommentError,
     Document,
+    DocumentClosedError,
+    DocumentNotFoundError,
+    DocxEditError,
     EditOperation,
     ParagraphIndexError,
+    RevisionError,
     TextNotFoundError,
+    WorkspaceSyncError,
 )
 
 
@@ -766,13 +772,14 @@ class TestSharedBaseClass:
     """
 
     def test_all_structured_errors_share_docx_edit_error_base(self):
-        from docx_editor import DocxEditError, HashMismatchError
+        from docx_editor import HashMismatchError
 
         assert issubclass(TextNotFoundError, DocxEditError)
         assert issubclass(AmbiguousTextError, DocxEditError)
         assert issubclass(HashMismatchError, DocxEditError)
         assert issubclass(ParagraphIndexError, DocxEditError)
         assert issubclass(BatchOperationError, DocxEditError)
+        assert issubclass(DocumentClosedError, DocxEditError)
 
     def test_ambiguous_is_not_a_textnotfound_subclass(self):
         """The text WAS found — code catching TextNotFoundError to mean
@@ -784,7 +791,121 @@ class TestSharedBaseClass:
         from docx_editor import (  # noqa: F401
             AmbiguousTextError,
             BatchOperationError,
+            CommentError,
+            DocumentClosedError,
+            DocumentNotFoundError,
             HashMismatchError,
             ParagraphIndexError,
+            RevisionError,
             TextNotFoundError,
+            WorkspaceSyncError,
         )
+
+
+class TestDocumentClosedError:
+    """
+    Before: any operation on a closed Document raised a bare
+    ``ValueError("Document is closed")`` — outside the DocxEditError
+    hierarchy, indistinguishable from argument-validation ValueErrors, with
+    no path to reopen and no hint that reopening is the recovery.
+
+    After: DocumentClosedError(DocxEditError) carries ``path`` (the source
+    document) and the message says how to recover (Document.open).
+    """
+
+    def test_every_operation_kind_raises_typed_error(self, doc_path):
+        doc = Document.open(doc_path)
+        source = doc.source_path
+        doc.close()
+        calls = [
+            lambda: doc.replace("a", "b", paragraph="P1#0000"),  # edit
+            lambda: doc.get_visible_text(),  # read
+            lambda: doc.list_paragraphs(),  # read
+            lambda: doc.find_text("a"),  # search
+            lambda: doc.add_comment("a", "note"),  # comment
+            lambda: doc.accept_group(0),  # revision op
+            lambda: doc.save(),  # save
+        ]
+        for call in calls:
+            with pytest.raises(DocumentClosedError) as exc_info:
+                call()
+            e = exc_info.value
+            assert isinstance(e, DocxEditError)
+            assert e.path == source
+            assert "Document.open" in str(e)
+
+
+class TestLifecycleErrorFields:
+    """
+    Before: DocumentNotFoundError, WorkspaceSyncError, CommentError and
+    RevisionError were message-only — the recovery data (which path? which
+    id?) had to be parsed back out of the string.
+
+    After: each carries keyword-only typed fields, populated at every raise
+    site that has the value in scope; sites with no meaningful value leave
+    the field None rather than inventing one. Messages are unchanged.
+    """
+
+    def test_document_not_found_carries_path(self, doc_path):
+        missing = doc_path.parent / "no_such_file.docx"
+        with pytest.raises(DocumentNotFoundError) as exc_info:
+            Document.open(missing)
+        assert exc_info.value.path == missing.resolve()
+
+    def test_workspace_sync_error_at_open_carries_both_paths(self, doc_path):
+        """Dirty-workspace adoption refusal names workspace AND source."""
+        doc = Document.open(doc_path)
+        workspace_path = doc.workspace_path
+        doc.save(doc_path.parent / "elsewhere.docx")  # workspace now ahead of source
+        doc.close(cleanup=False)
+        try:
+            with pytest.raises(WorkspaceSyncError) as exc_info:
+                Document.open(doc_path)
+            e = exc_info.value
+            assert e.workspace_path == workspace_path
+            assert e.source_path == doc_path.resolve()
+        finally:
+            Document.open(doc_path, force_recreate=True).close()
+
+    def test_workspace_sync_error_at_save_carries_both_paths(self, doc_path):
+        doc = Document.open(doc_path)
+        try:
+            # Simulate an external edit: change the source file's content.
+            doc_path.write_bytes(doc_path.read_bytes() + b"\x00")
+            with pytest.raises(WorkspaceSyncError) as exc_info:
+                doc.save()
+            e = exc_info.value
+            assert e.workspace_path == doc.workspace_path
+            assert e.source_path == doc_path.resolve()
+        finally:
+            doc.close()
+
+    def test_comment_error_carries_parent_comment_id(self, doc_path):
+        doc = Document.open(doc_path)
+        try:
+            with pytest.raises(CommentError) as exc_info:
+                doc.reply_to_comment(999, "reply")
+            assert exc_info.value.comment_id == 999
+        finally:
+            doc.close()
+
+    def test_comment_error_validation_sites_leave_id_none(self, doc_path):
+        """No comment id exists yet at argument-validation time — field stays None."""
+        doc = Document.open(doc_path)
+        try:
+            with pytest.raises(CommentError) as exc_info:
+                doc.add_comment("", "note")
+            assert exc_info.value.comment_id is None
+        finally:
+            doc.close()
+
+    def test_revision_error_carries_group_id(self, doc_path):
+        doc = Document.open(doc_path)
+        try:
+            with pytest.raises(RevisionError) as exc_info:
+                doc.accept_group(424242)
+            e = exc_info.value
+            assert e.group_id == 424242
+            assert e.revision_id is None  # the error is about a group, not a revision
+        finally:
+            doc.close()

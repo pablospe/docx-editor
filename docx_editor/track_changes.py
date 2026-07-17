@@ -592,7 +592,8 @@ class RevisionManager:
         if members is None:
             raise RevisionError(
                 f"Unknown revision group: {group_id}. Groups exist only for edits made "
-                f"through the current open Document; they are not persisted in the file."
+                f"through the current open Document; they are not persisted in the file.",
+                group_id=group_id,
             )
         return members
 
@@ -1219,12 +1220,28 @@ class RevisionManager:
         located = self._find_across_boundaries_located(text, occurrence)
         return located.match if located is not None else None
 
-    def find_text(self, text: str, occurrence: int = 0) -> SearchResult | None:
+    def find_text(self, text: str, occurrence: int = 0, paragraph: str | None = None) -> SearchResult | None:
         """Find the nth occurrence of text, as a public SearchResult.
 
-        Searches across element boundaries; ``occurrence`` counts matches
-        document-wide (0 = first). Returns None if not found.
+        Searches across element boundaries. With ``paragraph=None``,
+        ``occurrence`` counts matches document-wide (0 = first); with a
+        paragraph reference, the search is scoped to that paragraph and
+        ``occurrence`` counts within it. Returns None if not found.
+
+        Raises:
+            ValueError: If ``text`` is empty, or ``paragraph`` is malformed.
+            ParagraphIndexError: If ``paragraph``'s index is out of range.
+            HashMismatchError: If ``paragraph``'s hash is stale.
         """
+        if not text:
+            raise ValueError("find_text() requires a non-empty search string")
+
+        if paragraph is not None:
+            results = self.find_all(text, paragraph=paragraph)
+            # 0 <= guard: a bare results[occurrence] would let a negative
+            # index silently return a match from the end.
+            return results[occurrence] if 0 <= occurrence < len(results) else None
+
         located = self._find_across_boundaries_located(text, occurrence)
         if located is None:
             return None
