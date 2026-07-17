@@ -192,6 +192,21 @@ class TestSearchResultErgonomics:
         assert plain.spans_revision is False
         assert "spans_rev" not in repr(plain)
 
+    def test_repr_elides_long_matched_text(self):
+        # Sentence-length search anchors are a documented pattern; the repr
+        # elides the display at 60 chars while the attribute keeps full text.
+        r = SearchResult(
+            start=0,
+            end=70,
+            text="x" * 70,
+            paragraph_ref="P1#abcd",
+            paragraph_occurrence=0,
+            spans_revision=False,
+            paragraph_index=1,
+        )
+        assert repr(r) == f"SearchResult(P1#abcd occ=0 '{'x' * 57}...')"
+        assert r.text == "x" * 70
+
 
 class TestFindAllScoped:
     def test_scoped_returns_only_that_paragraphs_hits(self, multi_para_doc):

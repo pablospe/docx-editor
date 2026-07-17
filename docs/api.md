@@ -977,7 +977,9 @@ stale once that paragraph is edited.
 `repr()`/`str()` are compact one-liners —
 `SearchResult(P3#a7b2 occ=0 '30 days')`, with a trailing `spans_rev` marker
 when `spans_revision` is true — so printing a whole `find_all()` list stays
-cheap. Every field remains accessible as an attribute.
+cheap. Matched text longer than 60 characters is elided with `...` in the
+display only; every field, including the full `text`, remains accessible as
+an attribute.
 
 ### Example
 

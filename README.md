@@ -117,11 +117,9 @@ with Document.open("reviewed.docx", author="Editor") as doc:
     # Get visible text (inserted text included, deleted excluded)
     text = doc.get_visible_text()
 
-    # List paragraphs to find hash-anchored references
-    refs = doc.list_paragraphs()
-
-    # Large documents: a bare call returns at most 200 paragraphs, ending
-    # with a "... N more paragraphs; use start=201 or limit=None" notice.
+    # List paragraphs to find hash-anchored references. Large documents:
+    # a bare call returns at most 200 paragraphs, ending with a
+    # "... N more paragraphs; use start=201 or limit=None" notice.
     # Refs stay globally indexed across pages (page 2 starts at P201, not P1).
     page1 = doc.list_paragraphs()                 # up to P200, then the notice
     page2 = doc.list_paragraphs(start=201)        # next page, per the notice

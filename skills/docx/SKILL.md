@@ -640,7 +640,7 @@ page1 = doc.list_paragraphs()                        # up to P200, then "... N m
 page2 = doc.list_paragraphs(start=201)               # next page, per the notice
 refs = [e for e in page1 if not e.startswith("...")]  # drop the notice line
 everything = doc.list_paragraphs(limit=None)         # uncapped, never a notice
-refs_only = doc.list_paragraphs(max_chars=0)         # "P1#a7b2", no preview
+refs_only = doc.list_paragraphs(max_chars=0, limit=None)  # every "P1#a7b2", no preview, no notice
 ```
 
 (`list_paragraphs_structured()` has the same 200-record default cap but appends **no notice** — every entry stays a typed `ParagraphInfo`. Detect truncation by checking whether the last record's `index` is still below `paragraph_count()` (robust for any `start`), or pass `limit=None`.)

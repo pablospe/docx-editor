@@ -523,7 +523,7 @@ Pass '-' to read the code from stdin — no shell quoting to fight; also the eas
 route for code starting with '-' (argparse would read a bare "-x" as a flag):
 
 docx-session exec - <<'PY'
-for p in doc.list_paragraphs():
+for p in doc.list_paragraphs(limit=None):
     print(p)
 PY"""
 

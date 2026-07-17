@@ -264,7 +264,9 @@ class SearchResult:
 
     ``repr()``/``str()`` are compact one-liners
     (``SearchResult(P3#a7b2 occ=0 '30 days')``) so printing a list of results
-    stays cheap; every field remains accessible as an attribute.
+    stays cheap; matched text longer than 60 characters is elided with
+    ``"..."`` in the display only. Every field — including the full ``text``
+    — remains accessible as an attribute.
     """
 
     start: int  # Start offset in the paragraph's visible text
@@ -276,8 +278,9 @@ class SearchResult:
     paragraph_index: int  # 1-based index of the containing paragraph (same as in paragraph_ref)
 
     def __repr__(self) -> str:
+        text = self.text if len(self.text) <= 60 else self.text[:57] + "..."
         spans = " spans_rev" if self.spans_revision else ""
-        return f"SearchResult({self.paragraph_ref} occ={self.paragraph_occurrence} {self.text!r}{spans})"
+        return f"SearchResult({self.paragraph_ref} occ={self.paragraph_occurrence} {text!r}{spans})"
 
 
 @dataclass(frozen=True)
