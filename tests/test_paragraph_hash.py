@@ -200,7 +200,8 @@ class TestListParagraphs:
             assert page[0].startswith("P2#")
             assert page[1].startswith("P3#")
             assert page[:2] == full[1:3]
-            assert page[2] == "... 1 more paragraphs; use start=4 or limit=None"
+            # Singular case: the notice noun pluralizes with the count.
+            assert page[2] == "... 1 more paragraph; use start=4 or limit=None"
         finally:
             doc.close()
 

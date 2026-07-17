@@ -103,7 +103,7 @@ count = doc.paragraph_count()
 
 List paragraphs with hash-anchored references. Refs are **1-based global** indexes (`P1`, `P2`, …) and stay correct across pages — a slice starting at paragraph 51 emits `P51#…`, not `P1#…`.
 
-*Changed in 0.6.1:* a bare call now returns at most 200 paragraphs (previously all of them). Whenever paragraphs remain beyond the returned window — default or explicit `limit` — the last list entry is a **truncation notice** instead of a paragraph, e.g. `"... 50 more paragraphs; use start=201 or limit=None"`. Notice lines always start with `...` and never match the `P{index}#{hash}` ref shape; filter them with `entry.startswith("...")` when consuming entries as refs. Pass `limit=None` for the full, notice-free listing.
+**Changed in 0.6.1:** a bare call now returns at most 200 paragraphs (previously all of them). Whenever paragraphs remain beyond the returned window — default or explicit `limit` — the last list entry is a **truncation notice** instead of a paragraph, e.g. `"... 50 more paragraphs; use start=201 or limit=None"`. Notice lines always start with `...` and never match the `P{index}#{hash}` ref shape; filter them with `entry.startswith("...")` when consuming entries as refs. Pass `limit=None` for the full, notice-free listing.
 
 **Parameters:**
 
@@ -122,7 +122,7 @@ refs = [e for e in page1 if not e.startswith("...")]  # drop the notice line
 everything = doc.list_paragraphs(limit=None)  # uncapped, never a notice
 ```
 
-`list_paragraphs_structured()` (same `start`/`limit` semantics, returns typed `ParagraphInfo` records with full untruncated text) shares the 200-record default cap but appends **no notice** — every entry stays a `ParagraphInfo`. Detect truncation by comparing `len(result)` with `paragraph_count()`, or pass `limit=None`.
+`list_paragraphs_structured()` (same `start`/`limit` semantics, returns typed `ParagraphInfo` records with full untruncated text) shares the 200-record default cap but appends **no notice** — every entry stays a `ParagraphInfo`. Detect truncation by checking whether the last record's `index` is still below `paragraph_count()` (robust for any `start`), or pass `limit=None`.
 
 #### `context(ref, window=2)`
 
@@ -975,7 +975,7 @@ is computed at search time and — like refs from `list_paragraphs()` — goes
 stale once that paragraph is edited.
 
 `repr()`/`str()` are compact one-liners —
-`SearchResult(P3#a7b2 occ=1 '30 days')`, with a trailing `spans_rev` marker
+`SearchResult(P3#a7b2 occ=0 '30 days')`, with a trailing `spans_rev` marker
 when `spans_revision` is true — so printing a whole `find_all()` list stays
 cheap. Every field remains accessible as an attribute.
 

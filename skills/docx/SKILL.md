@@ -247,7 +247,7 @@ doc.batch_edit(ops)
 # order as above (an edit never shifts the matches before it; ascending
 # mis-targets, and descending is not valid for self-overlapping search strings
 # like "aa" in "aaaa").
-# SearchResults print compactly — SearchResult(P3#a7b2 occ=1 '30 days') — so
+# SearchResults print compactly — SearchResult(P3#a7b2 occ=0 '30 days') — so
 # printing a whole find_all() list is cheap. Each result also carries
 # paragraph_index (the int inside paragraph_ref); never string-parse refs.
 
@@ -643,7 +643,7 @@ everything = doc.list_paragraphs(limit=None)         # uncapped, never a notice
 refs_only = doc.list_paragraphs(max_chars=0)         # "P1#a7b2", no preview
 ```
 
-(`list_paragraphs_structured()` has the same 200-record default cap but appends **no notice** — every entry stays a typed `ParagraphInfo`. Detect truncation by comparing `len(result)` with `paragraph_count()`, or pass `limit=None`.)
+(`list_paragraphs_structured()` has the same 200-record default cap but appends **no notice** — every entry stays a typed `ParagraphInfo`. Detect truncation by checking whether the last record's `index` is still below `paragraph_count()` (robust for any `start`), or pass `limit=None`.)
 
 The `paragraph` argument is **required** for all edit methods. If the paragraph content has changed since you called `list_paragraphs()`, a `HashMismatchError` is raised — preventing edits to the wrong location.
 

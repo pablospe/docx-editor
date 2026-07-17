@@ -362,14 +362,15 @@ class Document:
         are **1-based global** indexes (P1, P2, …) and stay correct across
         pages — a slice starting at paragraph 51 emits "P51#…", not "P1#…".
 
-        .. versionchanged:: 0.6.1
-            A bare call now returns at most 200 paragraphs (it used to return
-            all of them). Whenever paragraphs remain beyond the returned
-            window, the last list entry is a truncation notice instead of a
-            paragraph, e.g. ``"... 50 more paragraphs; use start=201 or
-            limit=None"``. Notice lines always start with ``"..."`` and never
-            match the ``P{i}#{hash}`` ref shape, so ref-consuming code can
-            filter them out. Pass ``limit=None`` to restore the full listing.
+        Note:
+            Changed in 0.6.1: a bare call now returns at most 200 paragraphs
+            (it used to return all of them). Whenever paragraphs remain beyond
+            the returned window, the last list entry is a truncation notice
+            instead of a paragraph, e.g. ``"... 50 more paragraphs; use
+            start=201 or limit=None"``. Notice lines always start with
+            ``"..."`` and never match the ``P{i}#{hash}`` ref shape, so
+            ref-consuming code can filter them out. Pass ``limit=None`` to
+            restore the full listing.
 
         Args:
             max_chars: Maximum characters for the preview text (default 80).
@@ -415,7 +416,8 @@ class Document:
             result.append(f"P{i}#{h}| {preview}")
         remaining = self.paragraph_count() - last_index
         if remaining > 0:
-            result.append(f"... {remaining} more paragraphs; use start={last_index + 1} or limit=None")
+            noun = "paragraph" if remaining == 1 else "paragraphs"
+            result.append(f"... {remaining} more {noun}; use start={last_index + 1} or limit=None")
         return result
 
     def _iter_paragraph_slice(self, start: int, limit: int | None) -> Iterator[tuple[int, Element]]:
@@ -457,14 +459,15 @@ class Document:
         across slices, with the same ``start``/``limit`` semantics as
         :meth:`list_paragraphs`.
 
-        .. versionchanged:: 0.6.1
-            A bare call now returns at most 200 records (it used to return
-            all of them). Unlike :meth:`list_paragraphs`, **no truncation
-            notice is appended** — every entry is a :class:`ParagraphInfo`,
-            never a string — so a capped result is silent. To detect
-            truncation, compare ``len(result)`` (or the last record's
-            ``index``) against :meth:`paragraph_count`. Pass ``limit=None``
-            for the full listing.
+        Note:
+            Changed in 0.6.1: a bare call now returns at most 200 records (it
+            used to return all of them). Unlike :meth:`list_paragraphs`, **no
+            truncation notice is appended** — every entry is a
+            :class:`ParagraphInfo`, never a string — so a capped result is
+            silent. To detect truncation, check whether the last record's
+            ``index`` is still below :meth:`paragraph_count` (robust for any
+            ``start``; with ``start=1``, comparing ``len(result)`` works too).
+            Pass ``limit=None`` for the full listing.
 
         Args:
             start: 1-based index of the first paragraph to return (default 1).
@@ -481,9 +484,10 @@ class Document:
             ValueError: If ``start`` < 1, or ``limit`` < 0.
 
         Example:
-            infos = doc.list_paragraphs_structured(limit=None)  # everything
-            if len(infos) < doc.paragraph_count():
-                ...  # a bounded call was truncated
+            infos = doc.list_paragraphs_structured()  # bounded: at most 200
+            if infos and infos[-1].index < doc.paragraph_count():
+                ...  # truncated — continue from start=infos[-1].index + 1
+            everything = doc.list_paragraphs_structured(limit=None)
         """
         self._ensure_open()
         result = []
@@ -567,15 +571,16 @@ class Document:
         last = min(self.paragraph_count(), index + window)
         return self.list_paragraphs_structured(start=first, limit=last - first + 1)
 
-    def _resolve_validated_ref(self, ref: str) -> tuple[int, Element]:
+    def _resolve_validated_ref(self, ref: str) -> tuple[int, list[Element]]:
         """Parse ``ref``, bounds-check its index, and verify its hash.
 
         Shared validation for the ref-taking read methods
         (:meth:`get_paragraph_location`, :meth:`context`).
 
         Returns:
-            ``(index, paragraph_element)`` — the ref's 1-based index and the
-            ``w:p`` element it resolves to.
+            ``(index, paragraphs)`` — the ref's 1-based index and the full
+            document paragraph list it was validated against, so callers that
+            need the elements don't re-query the DOM.
 
         Raises:
             ValueError: If ``ref`` has an invalid format.
@@ -595,7 +600,7 @@ class Document:
             if len(tm.text) > 80:
                 preview += "..."
             raise HashMismatchError(parsed.index, parsed.hash, actual_hash, preview)
-        return parsed.index, p
+        return parsed.index, paragraphs
 
     def _style_maps(self) -> tuple[dict[str, int], dict[str, ListItem]]:
         """Outline-level and numbering maps defined by paragraph styles.
@@ -687,8 +692,8 @@ class Document:
             print(f"section {loc.section}")
         """
         self._ensure_open()
-        index, p = self._resolve_validated_ref(ref)
-        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        index, paragraphs = self._resolve_validated_ref(ref)
+        p = paragraphs[index - 1]
         style_outlines, style_numbering = self._style_maps()
         heading_path = _compute_heading_paths(paragraphs[:index], style_outlines)[-1]
         section = _compute_section_indexes(paragraphs[:index])[-1]
