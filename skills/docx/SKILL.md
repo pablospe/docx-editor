@@ -504,8 +504,6 @@ doc.reject_group(result.group_id)   # undo the whole rewrite, or:
 # group_id from THIS session's list_revisions()/EditResult; a stale id
 # from a previous session may resolve to a different group. Own edits
 # stamp collision-bumped whole-second dates (two changesets by one author
-# from a previous session may resolve to a different group. Own edits
-# stamp collision-bumped whole-second dates (two changesets by one author
 # never share a second within one open session); all ops of one
 # batch_edit/batch_rewrite call share one date (one changeset). Revisions
 # from other sources — foreign authors, or own edits from a previous
