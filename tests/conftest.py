@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path
+from xml.dom import minidom
 
 import defusedxml.minidom
 import pytest
@@ -53,6 +54,24 @@ def parse_paragraph(xml: str):
     """Parse XML string and return the first w:p element."""
     doc = defusedxml.minidom.parseString(f"<root {NS}>{xml}</root>")
     return doc.getElementsByTagName("w:p")[0]
+
+
+def count_dom_walks(monkeypatch) -> list[str]:
+    """Record the tag of every full-document getElementsByTagName call.
+
+    Returns a list that grows as walks happen, so a test can pin that the
+    number of full-DOM walks stays constant in the operation count. Only
+    Document-level walks are counted; paragraph-local ones run on Elements.
+    """
+    walks: list[str] = []
+    original = minidom.Document.getElementsByTagName
+
+    def counting(self, name):
+        walks.append(name)
+        return original(self, name)
+
+    monkeypatch.setattr(minidom.Document, "getElementsByTagName", counting)
+    return walks
 
 
 @pytest.fixture

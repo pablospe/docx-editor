@@ -1260,25 +1260,66 @@ class DocxXMLEditor(XMLEditor):
         # operation must not let its id be reissued (id-keyed bookkeeping
         # such as revision groups would silently point at the wrong element).
         self._max_change_id = -1
+        self._change_id_seeded = False
         self._tracked_change_collector: list[Element] | None = None
         self._frozen_timestamp: str | None = None
         # Last stamped (author, second) — the one collision counter behind
         # _get_next_changeset_timestamp.
         self._last_changeset_stamp: tuple[str, datetime] | None = None
 
+    def _fold_change_id(self, raw_id: str) -> None:
+        """Raise the high-water mark to cover an id already present in the XML.
+
+        Non-numeric and empty ids are ignored: they can never be produced by
+        allocation, so they cannot collide with it.
+        """
+        try:
+            self._max_change_id = max(self._max_change_id, int(raw_id))
+        except ValueError:
+            pass
+
+    def _parse_fragment(self, xml_content: str):
+        """Parse a fragment, folding any pre-set w:ids into the high-water mark.
+
+        Every path that brings new XML into the document parses it here, so
+        folding at this choke point keeps allocation collision-free however
+        the caller attaches the parsed nodes — including direct appendChild,
+        which does not run attribute injection. Cost is O(fragment).
+        """
+        nodes = super()._parse_fragment(xml_content)
+        for node in nodes:
+            if node.nodeType != node.ELEMENT_NODE:
+                continue
+            if node.tagName in ("w:ins", "w:del"):
+                self._fold_change_id(node.getAttribute("w:id"))
+            for tag in ("w:ins", "w:del"):
+                for elem in node.getElementsByTagName(tag):
+                    self._fold_change_id(elem.getAttribute("w:id"))
+        return nodes
+
     def _get_next_change_id(self) -> int:
-        """Get the next available change ID by checking all tracked change elements."""
-        max_id = self._max_change_id
-        for tag in ("w:ins", "w:del"):
-            elements = self.dom.getElementsByTagName(tag)
-            for elem in elements:
-                change_id = elem.getAttribute("w:id")
-                if change_id:
-                    try:
-                        max_id = max(max_id, int(change_id))
-                    except ValueError:
-                        pass
-        self._max_change_id = max_id + 1
+        """Get the next available change ID.
+
+        The first allocation scans every <w:ins>/<w:del> in the document to
+        seed the high-water mark; every later allocation is a plain
+        increment (no full-DOM walk). Ids that arrive with the XML are folded
+        into the mark by _parse_fragment (and again by attribute injection),
+        so allocation can never collide with an id added after seeding.
+        """
+        if not self._change_id_seeded:
+            max_id = self._max_change_id
+            for tag in ("w:ins", "w:del"):
+                elements = self.dom.getElementsByTagName(tag)
+                for elem in elements:
+                    change_id = elem.getAttribute("w:id")
+                    if change_id:
+                        try:
+                            max_id = max(max_id, int(change_id))
+                        except ValueError:
+                            pass
+            self._max_change_id = max_id
+            self._change_id_seeded = True
+        self._max_change_id += 1
         return self._max_change_id
 
     @contextmanager
@@ -1435,6 +1476,11 @@ class DocxXMLEditor(XMLEditor):
             is_new = not elem.hasAttribute("w:id")
             if is_new:
                 elem.setAttribute("w:id", str(self._get_next_change_id()))
+            else:
+                # A pre-set id (raw-XML insertion) may exceed the seeded
+                # high-water mark; fold it in so later allocations can never
+                # collide with an id already present in the document.
+                self._fold_change_id(elem.getAttribute("w:id"))
             if not elem.hasAttribute("w:author"):
                 elem.setAttribute("w:author", self.author)
             if not elem.hasAttribute("w:date"):

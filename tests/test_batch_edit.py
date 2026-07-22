@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from conftest import count_dom_walks
 
 from docx_editor import (
     AmbiguousTextError,
@@ -1157,3 +1158,87 @@ class TestBatchEditTrimming:
         assert results[0].group_id is None
         assert results[0].revision_ids == ()
         assert doc.list_revisions() == []
+
+
+class TestBatchEditFullDomWalks:
+    """Structural performance pin for ISSUES.md #51: the number of full-DOM
+    getElementsByTagName walks per batch is a small constant — it must not
+    grow with the operation count. Counts Document-level walks only (the
+    per-op work is paragraph-local, on Elements), so the test is exact and
+    timing-free."""
+
+    @staticmethod
+    def _replace_ops(refs, indices):
+        return [
+            EditOperation.replace(f"item {i + 1}", f"ITEM_{i + 1}", paragraph=refs[i].split("|")[0]) for i in indices
+        ]
+
+    def test_apply_walk_count_is_constant_in_op_count(self, multi_para_doc, monkeypatch):
+        doc, _ = multi_para_doc
+        # Warm-up batch: absorbs the one-time change-id seed scan so the two
+        # counted batches are structurally identical.
+        refs = doc.list_paragraphs()
+        doc.batch_edit(self._replace_ops(refs, [9]))
+
+        walks = count_dom_walks(monkeypatch)
+
+        refs = doc.list_paragraphs()
+        doc.batch_edit(self._replace_ops(refs, [0, 1, 2]))
+        small_batch = len(walks)
+
+        walks.clear()
+        refs = doc.list_paragraphs()
+        # 8 ops: revert the three edits above, edit five fresh paragraphs.
+        large_ops = [
+            EditOperation.replace(f"ITEM_{i + 1}", f"item {i + 1}", paragraph=refs[i].split("|")[0]) for i in (0, 1, 2)
+        ] + self._replace_ops(refs, [3, 4, 5, 6, 7])
+        doc.batch_edit(large_ops)
+        large_batch = len(walks)
+
+        assert small_batch == large_batch
+        assert small_batch <= 4
+
+    def test_dry_run_walk_count_is_constant_in_op_count(self, multi_para_doc, monkeypatch):
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+
+        walks = count_dom_walks(monkeypatch)
+
+        results = doc.batch_edit(self._replace_ops(refs, [0, 1, 2]), dry_run=True)
+        assert all(r.valid for r in results)
+        small_batch = len(walks)
+
+        walks.clear()
+        results = doc.batch_edit(self._replace_ops(refs, [0, 1, 2, 3, 4, 5, 6, 7]), dry_run=True)
+        assert all(r.valid for r in results)
+        large_batch = len(walks)
+
+        assert small_batch == large_batch
+        assert small_batch <= 2
+
+    def test_change_ids_not_reused_after_rollback(self, multi_para_doc):
+        """Ids consumed by a rolled-back batch are never reissued (id-keyed
+        bookkeeping such as revision groups must not alias old ids)."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+
+        first = doc.batch_edit(self._replace_ops(refs, [4]))
+        ids_before = set(first[0].revision_ids)
+        assert ids_before
+
+        # Reverse-order application: the op on P8 applies first and consumes
+        # ids, then the op on P2 fails and the whole batch rolls back.
+        refs = doc.list_paragraphs()
+        failing = [
+            EditOperation.replace("item 8", "ITEM_EIGHT", paragraph=refs[7].split("|")[0]),
+            EditOperation.replace("no such text", "x", paragraph=refs[1].split("|")[0]),
+        ]
+        with pytest.raises(BatchOperationError):
+            doc.batch_edit(failing)
+
+        after = doc.batch_edit(self._replace_ops(refs, [2]))
+        ids_after = set(after[0].revision_ids)
+        assert ids_after
+        # Strictly beyond the burned ids: with reuse, the new batch would
+        # restart at max(ids_before) + 1.
+        assert min(ids_after) > max(ids_before) + 1

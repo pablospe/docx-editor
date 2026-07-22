@@ -786,11 +786,14 @@ class RevisionManager:
             )
         return members
 
-    def _resolve_paragraph(self, ref: ParagraphRef):
+    def _resolve_paragraph(self, ref: ParagraphRef, paragraphs: list[Element] | None = None):
         """Resolve a ParagraphRef to its <w:p> element, validating the hash.
 
         Args:
             ref: Parsed paragraph reference
+            paragraphs: Optional pre-fetched list of every <w:p> element, so
+                batch callers pay for one full-DOM walk per batch instead of
+                one per operation. Default None fetches fresh.
 
         Returns:
             The <w:p> DOM element
@@ -799,7 +802,8 @@ class RevisionManager:
             ParagraphIndexError: If paragraph index is out of range
             HashMismatchError: If the hash doesn't match current content
         """
-        paragraphs = self.editor.dom.getElementsByTagName("w:p")
+        if paragraphs is None:
+            paragraphs = self.editor.dom.getElementsByTagName("w:p")
         if ref.index < 1 or ref.index > len(paragraphs):
             raise ParagraphIndexError(ref.index, len(paragraphs))
         p = paragraphs[ref.index - 1]
@@ -887,6 +891,13 @@ class RevisionManager:
         if not operations:
             return []
 
+        # One full-DOM <w:p> walk shared by the whole batch. Safe because
+        # batch ops never add, remove, or replace <w:p> elements (they only
+        # rewrite runs inside a paragraph) and minidom returns a plain
+        # non-live list. After a rollback the DOM is replaced, but the
+        # exception propagates immediately and this list is never used again.
+        paragraphs = self.editor.dom.getElementsByTagName("w:p")
+
         # Parse and validate all refs upfront
         parsed: list[tuple[int, ParagraphRef, EditOperation]] = []
         for i, op in enumerate(operations):
@@ -896,7 +907,7 @@ class RevisionManager:
                 raise BatchOperationError(i, "paragraph reference is required for batch mode")
             try:
                 ref = ParagraphRef.parse(op.paragraph)
-                self._resolve_paragraph(ref)  # Raises HashMismatchError if stale
+                self._resolve_paragraph(ref, paragraphs)  # Raises HashMismatchError if stale
             except (ValueError, DocxEditError) as e:
                 raise BatchOperationError(i, str(e), original=e) from e
             parsed.append((i, ref, op))
@@ -921,7 +932,7 @@ class RevisionManager:
                         # Each op is its own logical edit: one group per op, so
                         # callers can accept one op and reject another.
                         with self._grouped():
-                            change_id = self._apply_single_edit(op)
+                            change_id = self._apply_single_edit(op, paragraphs)
                     except (ValueError, DocxEditError) as e:
                         raise BatchOperationError(original_idx, str(e), original=e) from e
                     results[original_idx] = change_id
@@ -967,10 +978,16 @@ class RevisionManager:
         else:
             raise ValueError(f"Unknown action: {op.action}")
 
-    def _apply_single_edit(self, op: EditOperation) -> int:
-        """Apply a single edit operation. Paragraph hash was already validated."""
+    def _apply_single_edit(self, op: EditOperation, paragraphs: list[Element] | None = None) -> int:
+        """Apply a single edit operation. Paragraph hash was already validated.
+
+        ``paragraphs`` is the batch's shared <w:p> snapshot (see batch_edit);
+        None fetches fresh.
+        """
         ref = ParagraphRef.parse(op.paragraph)
-        p = self.editor.dom.getElementsByTagName("w:p")[ref.index - 1]
+        if paragraphs is None:
+            paragraphs = self.editor.dom.getElementsByTagName("w:p")
+        p = paragraphs[ref.index - 1]
 
         target = self._resolve_action_target(op)
         match = self._locate_in_paragraph(p, op.paragraph, target, op.occurrence)
@@ -1009,6 +1026,11 @@ class RevisionManager:
             that is not an EditOperation at all comes back as an invalid
             result (``paragraph=None``), never as an exception.
         """
+        if not operations:
+            return []
+        # One <w:p> walk for the whole dry run — validation is read-only, so
+        # the snapshot is trivially stable (same sharing as batch_edit).
+        paragraphs = self.editor.dom.getElementsByTagName("w:p")
         results = []
         for i, op in enumerate(operations):
             if not isinstance(op, EditOperation):
@@ -1016,7 +1038,7 @@ class RevisionManager:
                     EditValidationResult(index=i, paragraph=None, valid=False, error=_not_an_edit_operation_message(op))
                 )
                 continue
-            error = self._validate_single(op)
+            error = self._validate_single(op, paragraphs)
             results.append(
                 EditValidationResult(
                     index=i,
@@ -1027,14 +1049,15 @@ class RevisionManager:
             )
         return results
 
-    def _validate_single(self, op: EditOperation) -> str | None:
+    def _validate_single(self, op: EditOperation, paragraphs: list[Element] | None = None) -> str | None:
         """Return an error message if ``op`` would fail, or None if it is valid.
 
         Reuses ``_resolve_paragraph``, ``_resolve_action_target``, and
         ``_locate_in_paragraph`` — the same helpers ``_apply_single_edit`` uses —
         so dry-run validation cannot drift from real application semantics
         (out-of-range and ambiguous targets produce the same error text).
-        Reads only.
+        Reads only. ``paragraphs`` is the dry run's shared <w:p> snapshot
+        (see validate_batch); None fetches fresh.
         """
         if not op.paragraph:
             return "paragraph reference is required for batch mode"
@@ -1045,7 +1068,7 @@ class RevisionManager:
             return str(e)
 
         try:
-            p = self._resolve_paragraph(ref)
+            p = self._resolve_paragraph(ref, paragraphs)
         except (ParagraphIndexError, HashMismatchError) as e:
             return str(e)
 
