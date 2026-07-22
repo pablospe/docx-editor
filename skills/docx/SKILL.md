@@ -75,7 +75,7 @@ Use **python-docx** to explore document structure before editing. This is useful
 >
 > **Never carry paragraph indexes between libraries.** python-docx
 > `doc.paragraphs` lists body-level paragraphs only (table cells excluded);
-> docx-editor `P{i}` refs number every paragraph including table cells — the
+> docx_editor `P{i}` refs number every paragraph including table cells — the
 > numberings diverge at the first table (a 3000-paragraph doc can have 3027
 > `P` refs), so `P{i}` ≠ `paragraphs[i-1]`.
 
@@ -213,15 +213,18 @@ with Document.open("contract.docx", author=author) as doc:
 # There is no dirty check: unsaved edits are silently discarded, so always
 # call save() before the block ends.
 # On exception, the workspace dir (doc.workspace_path) is kept — but it holds
-# only state already flushed by save(); unsaved edits live in memory and are
-# LOST, and the next open() succeeds with no trace of them. To keep work when
-# a step fails, catch the exception INSIDE the with block and
-# doc.save("rescue.docx") — once the block exits, the document is closed.
-# (Swallow the exception and the block exits normally: the workspace is
-# cleaned up and the next open() is clean. Re-raise after the rescue save,
+# only state already flushed by save(); unsaved tracked-change edits live in
+# memory and are LOST, and the next open() succeeds with no trace of them.
+# (add_comment is the exception: the first comment writes comment parts into
+# the workspace and flags it, so an unsaved comment can instead leave the
+# next open() raising WorkspaceSyncError — recover with force_recreate=True.)
+# To keep work when a step fails, catch the exception INSIDE the with block
+# and doc.save("rescued.docx") — once the block exits, the document is
+# closed. (Swallow the exception and the block exits normally: the workspace
+# is cleaned up and the next open() is clean. Re-raise after the rescue save,
 # though, and the kept workspace stays flagged as diverged — the next open()
 # of the source then raises WorkspaceSyncError; force_recreate=True discards
-# it, and rescue.docx already holds your edits.)
+# it, and rescued.docx already holds your edits.)
 ```
 
 Without context manager:

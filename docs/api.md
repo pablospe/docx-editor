@@ -79,7 +79,7 @@ print(doc.source_path)  # Path("/path/to/contract.docx")
 
 #### `workspace_path`
 
-Get the path to this document's workspace folder. Since the workspace lives in the user cache by default, this is how you locate the unpacked XML — for example after `close(cleanup=False)`, or when a workspace was preserved because an exception was raised. Either way the workspace holds the last state flushed by `save()`: edits made but not saved live only in memory and are **not** in it.
+Get the path to this document's workspace folder. Since the workspace lives in the user cache by default, this is how you locate the unpacked XML — for example after `close(cleanup=False)`, or when a workspace was preserved because an exception was raised. Either way the workspace holds the last state flushed by `save()`: tracked-change edits made but not saved live only in memory and are **not** in it. (A first `add_comment()` is the exception — it writes comment-part scaffolding into the workspace and flags it as diverged before any save; the unsaved comment text itself is still memory-only.)
 
 ```python
 print(doc.workspace_path)  # Path("/home/you/.cache/docx-editor/0bebafb463a87cfa")
