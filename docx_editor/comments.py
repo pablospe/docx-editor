@@ -401,8 +401,21 @@ class CommentManager:
             The new comment ID for the reply
 
         Raises:
-            CommentError: If the parent comment is not found
+            ValueError: If ``parent_comment_id`` is not an integer (bool
+                included), or ``reply_text`` is not a non-empty string.
+            CommentError: If the parent comment is not found; carries
+                ``comment_id``.
         """
+        # Reject junk ids before the membership test: None/"1" would surface
+        # as a misleading "not found" CommentError, and True aliases comment
+        # id 1 (bool == int). The message names the public field 'comment_id',
+        # not this internal parameter.
+        if isinstance(parent_comment_id, bool) or not isinstance(parent_comment_id, int):
+            raise ValueError(f"reply_to_comment(): 'comment_id' must be an integer, got {parent_comment_id!r}")
+        # Must fail before any marker is inserted into document.xml — a None
+        # reply would otherwise be serialized into comments.xml as "None".
+        if not isinstance(reply_text, str) or not reply_text:
+            raise ValueError(f"reply_to_comment(): 'reply' must be a non-empty string, got {reply_text!r}")
         if parent_comment_id not in self.existing_comments:
             raise CommentError(
                 f"Parent comment with id={parent_comment_id} not found",
@@ -510,7 +523,14 @@ class CommentManager:
 
         Returns:
             True if resolved, False if not found
+
+        Raises:
+            ValueError: If ``comment_id`` is not an integer (bool included).
         """
+        # A junk id must not silently return False ("not found"), and True
+        # would alias comment id 1 (bool == int).
+        if isinstance(comment_id, bool) or not isinstance(comment_id, int):
+            raise ValueError(f"resolve_comment(): 'comment_id' must be an integer, got {comment_id!r}")
         if comment_id not in self.existing_comments:
             return False
 
@@ -535,7 +555,14 @@ class CommentManager:
 
         Returns:
             True if deleted, False if not found
+
+        Raises:
+            ValueError: If ``comment_id`` is not an integer (bool included).
         """
+        # Same guard as resolve_comment: no silent False for junk, no bool
+        # aliasing comment id 1.
+        if isinstance(comment_id, bool) or not isinstance(comment_id, int):
+            raise ValueError(f"delete_comment(): 'comment_id' must be an integer, got {comment_id!r}")
         if comment_id not in self.existing_comments:
             return False
 
