@@ -1231,6 +1231,7 @@ class DocxXMLEditor(XMLEditor):
         # such as revision groups would silently point at the wrong element).
         self._max_change_id = -1
         self._tracked_change_collector: list[Element] | None = None
+        self._frozen_timestamp: str | None = None
 
     def _get_next_change_id(self) -> int:
         """Get the next available change ID by checking all tracked change elements."""
@@ -1267,6 +1268,26 @@ class DocxXMLEditor(XMLEditor):
             yield collected
         finally:
             self._tracked_change_collector = None
+
+    @contextmanager
+    def frozen_timestamp(self) -> Iterator[None]:
+        """Stamp every element injected in this context with ONE ``w:date``.
+
+        ``_inject_attributes_to_nodes`` reads the clock per call, and one
+        logical operation (a multi-hunk rewrite, a cross-run replace) injects
+        several times — crossing a second boundary mid-operation would spread
+        the operation's revisions across two ``w:date`` values, and parse-time
+        group reconstruction (which keys on identical dates) would then reopen
+        one edit as several groups. Does not nest — same single-slot design as
+        ``collect_tracked_changes``.
+        """
+        if self._frozen_timestamp is not None:
+            raise RuntimeError("frozen_timestamp() does not nest")
+        self._frozen_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            yield
+        finally:
+            self._frozen_timestamp = None
 
     def _ensure_w16du_namespace(self) -> None:
         """Ensure w16du namespace is declared on the root element."""
@@ -1306,7 +1327,7 @@ class DocxXMLEditor(XMLEditor):
         - w:comment: gets w:author, w:date, w:initials
         - w16cex:commentExtensible: gets w16cex:dateUtc
         """
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        timestamp = self._frozen_timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         def is_inside_deletion(elem) -> bool:
             """Check if element is inside a w:del element."""

@@ -45,8 +45,15 @@ from .xml_editor import (
 # Document ("recorded") vs reconstructed at parse time ("inferred").
 _GroupSource = Literal["recorded", "inferred"]
 
-# (counter, groups, revision->group, group->source) — see _registry_snapshot.
-_RegistrySnapshot = tuple[int, dict[int, tuple[int, ...]], dict[int, int | None], dict[int, _GroupSource]]
+
+@dataclass
+class _RegistrySnapshot:
+    """Copy of the group registry, for rollback alongside a DOM snapshot."""
+
+    counter: int
+    groups: dict[int, tuple[int, ...]]
+    revision_groups: dict[int, int | None]
+    group_sources: dict[int, _GroupSource]
 
 
 @dataclass
@@ -330,8 +337,11 @@ class Revision:
       record their group directly; revisions already in the file get an
       *inferred* group reconstructed at parse time (see ``group_source``).
       None only when the revision is ungroupable: it sits outside any
-      paragraph, lacks an author or date, carries a non-numeric or
-      duplicate id, or is a mid-session split half of a foreign insertion.
+      paragraph, lacks an author or date, shares a duplicated id with
+      another revision (id-keyed lookup cannot tell the occurrences
+      apart), or is a mid-session split half of a foreign insertion.
+      Revisions with non-numeric ids are omitted from ``list_revisions()``
+      entirely — no id-keyed operation could target them.
     - ``group_source``: provenance of ``group_id`` — ``"recorded"`` for
       groups created by edits through this open Document, ``"inferred"``
       for groups reconstructed at parse time by the heuristic (contiguous
@@ -352,7 +362,7 @@ class Revision:
     nested_under: int | None = None
     contains_ids: tuple[int, ...] = ()
     group_id: int | None = None
-    group_source: Literal["recorded", "inferred"] | None = None
+    group_source: _GroupSource | None = None
 
     def __repr__(self) -> str:
         kind = "ins" if self.type == "insertion" else "del"
@@ -588,8 +598,12 @@ class RevisionManager:
 
         A revision stays unregistered (group_id None, breaking the current
         run) when it has no ancestor <w:p> (e.g. w:trPr row markers), an
-        empty author or date, a non-numeric id, or a duplicate id
-        (nonconforming producers; first occurrence wins).
+        empty author or date, or a non-numeric id (nonconforming producers;
+        list_revisions() omits non-numeric ids entirely — no id-keyed
+        operation could target them). A duplicated id is wholly ungrouped —
+        every occurrence, including the first — because id-keyed lookup
+        cannot tell the occurrences apart, so no group may contain an
+        ambiguous member.
         """
         run_key: tuple[int, str, str] | None = None
         run_members: list[int] = []
@@ -613,14 +627,26 @@ class RevisionManager:
                 rev_id = int(elem.getAttribute("w:id"))
             except ValueError:
                 rev_id = None
-            if (
-                paragraph is None
-                or not author
-                or not date
-                or rev_id is None
-                or rev_id in self._revision_groups
-                or rev_id in run_members
-            ):
+            if paragraph is None or not author or not date or rev_id is None:
+                close_run()
+                run_key = None
+                continue
+            if rev_id in self._revision_groups or rev_id in run_members:
+                # Duplicate w:id: demote the id to explicitly ungrouped —
+                # the earlier occurrence must not "win" a group its
+                # duplicate would silently inherit in list_revisions()
+                # (group lookup is id-keyed and cannot tell them apart).
+                if rev_id in run_members:
+                    run_members.remove(rev_id)
+                group_id = self._revision_groups.get(rev_id)
+                if group_id is not None:
+                    remaining = tuple(m for m in self._groups[group_id] if m != rev_id)
+                    if remaining:
+                        self._groups[group_id] = remaining
+                    else:
+                        del self._groups[group_id]
+                        del self._group_sources[group_id]
+                self._revision_groups[rev_id] = None
                 close_run()
                 run_key = None
                 continue
@@ -653,7 +679,7 @@ class RevisionManager:
         If the operation raises, nothing is registered.
         """
         capture = _GroupCapture()
-        with self.editor.collect_tracked_changes() as collected:
+        with self.editor.collect_tracked_changes() as collected, self.editor.frozen_timestamp():
             yield capture
         members: list[int] = []
         seen: set[int] = set()
@@ -713,11 +739,19 @@ class RevisionManager:
 
     def _registry_snapshot(self) -> _RegistrySnapshot:
         """Snapshot the group registry for rollback alongside a DOM snapshot."""
-        return (self._group_counter, dict(self._groups), dict(self._revision_groups), dict(self._group_sources))
+        return _RegistrySnapshot(
+            counter=self._group_counter,
+            groups=dict(self._groups),
+            revision_groups=dict(self._revision_groups),
+            group_sources=dict(self._group_sources),
+        )
 
     def _restore_registry(self, snapshot: _RegistrySnapshot) -> None:
         """Restore the group registry captured by ``_registry_snapshot``."""
-        self._group_counter, self._groups, self._revision_groups, self._group_sources = snapshot
+        self._group_counter = snapshot.counter
+        self._groups = snapshot.groups
+        self._revision_groups = snapshot.revision_groups
+        self._group_sources = snapshot.group_sources
 
     def group_id_of(self, revision_id: int) -> int | None:
         """Group id of a revision (recorded or inferred), or None if ungrouped."""
@@ -2574,6 +2608,13 @@ class RevisionManager:
         rev_id = elem.getAttribute("w:id")
         if not rev_id:
             return None
+        try:
+            rev_id_int = int(rev_id)
+        except ValueError:
+            # Nonconforming producer: Revision.id is an int and every
+            # id-keyed operation targets ints, so a non-numeric w:id is
+            # unrepresentable — omit it rather than crash the listing.
+            return None
 
         author = elem.getAttribute("w:author") or "Unknown"
         date_str = elem.getAttribute("w:date")
@@ -2608,7 +2649,6 @@ class RevisionManager:
                     view: Literal["accepted", "original"] = "accepted" if rev_type == "insertion" else "original"
                     occurrence = _occurrence_in_text_map(ctx.text_map(paragraph, view), elem, text)
 
-        rev_id_int = int(rev_id)
         group_id = self._revision_groups.get(rev_id_int)
         return Revision(
             id=rev_id_int,

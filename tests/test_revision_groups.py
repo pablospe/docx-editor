@@ -66,6 +66,26 @@ def frozen_clock(monkeypatch):
 
 
 @pytest.fixture
+def ticking_clock(monkeypatch):
+    """Every datetime.now() call lands in a NEW second.
+
+    Adversarial clock for the per-operation frozen timestamp: without
+    freezing, each attribute-injection call inside one edit would stamp
+    its own second, and reconstruction would split the edit after reopen.
+    """
+
+    class _TickingDatetime(datetime):
+        _tick = 0
+
+        @classmethod
+        def now(cls, tz=None):
+            _TickingDatetime._tick += 1
+            return cls(2025, 6, 1, 12, _TickingDatetime._tick // 60, _TickingDatetime._tick % 60, tzinfo=tz)
+
+    monkeypatch.setattr("docx_editor.xml_editor.datetime", _TickingDatetime)
+
+
+@pytest.fixture
 def doc(temp_docx):
     """An open Document over the simple.docx copy, closed after the test."""
     document = Document.open(temp_docx)
@@ -628,8 +648,10 @@ class TestGroupReconstruction:
         assert "group=" not in repr(by_id[2])
 
     def test_nonconforming_ids_stay_ungrouped(self, temp_xml):
-        # Non-numeric and duplicate ids (nonconforming producers) break
-        # their runs and stay unregistered; first occurrence wins.
+        # Non-numeric ids (nonconforming producers) break their runs, stay
+        # unregistered, and are omitted from list_revisions(). A duplicated
+        # id is wholly ungrouped — every occurrence, including the first —
+        # because id-keyed lookup cannot tell the occurrences apart.
         body = (
             f"<w:p>{_ins_xml(1, 'one ')}"
             f'<w:ins w:id="oops" w:author="{AUTHOR_A}" w:date="{DATE_A}"><w:r><w:t>bad </w:t></w:r></w:ins>'
@@ -638,7 +660,15 @@ class TestGroupReconstruction:
         )
         manager = _make_manager(temp_xml(body))
 
-        assert manager._groups == {1: (1,), 2: (2,), 3: (3,), 4: (4,)}
+        assert manager._groups == {2: (3,), 3: (4,)}
+
+        revisions = manager.list_revisions()
+        assert sorted(rev.id for rev in revisions) == [1, 1, 2, 2, 3, 4]  # "oops" omitted
+        for rev in revisions:
+            if rev.id in (1, 2):  # both occurrences of each duplicated id
+                assert rev.group_id is None and rev.group_source is None
+        by_id = {rev.id: rev for rev in revisions}
+        assert by_id[3].group_id == 2 and by_id[4].group_id == 3
 
     def test_revision_outside_paragraph_stays_ungrouped(self, temp_xml):
         # A <w:trPr> row-mark insertion has no ancestor <w:p>.
@@ -741,6 +771,27 @@ class TestGroupReconstructionAcrossReopen:
             assert len(by_gid) == 3
             assert all(len(paras) == 1 for paras in by_gid.values())
             assert len(set().union(*by_gid.values())) == 3  # one paragraph each
+
+    def test_multi_hunk_edit_straddling_seconds_stays_one_group(self, temp_docx, ticking_clock):
+        # One logical edit stamps ONE w:date even when the wall clock ticks
+        # between its internal injection calls (frozen_timestamp): without
+        # the freeze, a multi-hunk rewrite crossing a second boundary would
+        # reconstruct as several inferred groups after reopen.
+        new_text = "A slow red cat crawls beneath the energetic dog."
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            result = doc.rewrite_paragraph(ref, new_text)
+            assert len(result.revision_ids) > 2
+            doc.save()
+
+        with Document.open(temp_docx) as doc:
+            revisions = doc.list_revisions()
+            assert len({rev.date for rev in revisions}) == 1  # one frozen stamp
+            gid = revisions[0].group_id
+            assert gid is not None
+            assert all(rev.group_id == gid for rev in revisions)
+            doc.accept_group(gid)
+            assert _paragraph_text(doc, 1) == new_text
 
     def test_same_paragraph_same_second_over_merges(self, temp_docx, frozen_clock):
         # Accepted relaxation, pinned: w:date has second precision, so two
