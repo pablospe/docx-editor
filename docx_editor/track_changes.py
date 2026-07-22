@@ -56,7 +56,7 @@ class _RegistrySnapshot:
     group_sources: dict[int, GroupSource]
     changeset_counter: int
     changesets: dict[int, tuple[int, ...]]
-    group_changesets: dict[int, int | None]
+    group_changesets: dict[int, int]
     changeset_sources: dict[int, GroupSource]
 
 
@@ -518,13 +518,6 @@ class _GroupCapture:
     group_id: int | None = None
 
 
-@dataclass
-class _ChangesetCapture:
-    """Filled in by ``RevisionManager._changeset`` when its with-block exits."""
-
-    changeset_id: int | None = None
-
-
 def _occurrence_in_text_map(tm: TextMap, elem, text: str) -> int | None:
     """0-based occurrence index of ``text`` at ``elem``'s own span in ``tm``.
 
@@ -617,7 +610,7 @@ class RevisionManager:
         # mirror the group ones exactly, one level up. Recorded changesets
         # continue this counter past the inferred ones, just as groups do.
         self._changesets: dict[int, tuple[int, ...]] = {}
-        self._group_changesets: dict[int, int | None] = {}
+        self._group_changesets: dict[int, int] = {}
         self._changeset_sources: dict[int, GroupSource] = {}
         self._changeset_counter = 1
         # Reentrancy flag for _changeset(): only the outermost boundary
@@ -793,20 +786,24 @@ class RevisionManager:
             capture.group_id = group_id
 
     @contextmanager
-    def _changeset(self) -> Iterator[_ChangesetCapture]:
+    def _changeset(self) -> Iterator[None]:
         """Bundle every group one public call creates as one changeset.
 
         The changeset is the intent tier: one whole ``batch_edit``/
         ``batch_rewrite`` call, or one single edit, contains ≥1 group.
 
         Reentrant by reuse (mirrors ``editor.frozen_timestamp``): a nested
-        entry yields a bare capture and defers to the enclosing boundary, so
-        ``batch_rewrite`` -> ``rewrite_paragraph`` merges into ONE changeset
-        while a standalone ``rewrite_paragraph`` gets its own. Only the
-        outermost entry bundles, and only on clean exit — an exception
-        propagates out of the generator at the ``yield`` before the bundling
-        code runs, so a failed batch never bundles a ghost changeset (its
-        registry is restored by ``_restore_registry`` anyway).
+        entry defers to the enclosing boundary, so ``batch_rewrite`` ->
+        ``rewrite_paragraph`` merges into ONE changeset while a standalone
+        ``rewrite_paragraph`` gets its own. Only the outermost entry bundles,
+        and only on clean exit — an exception propagates out of the generator
+        at the ``yield`` before the bundling code runs, so a failed batch never
+        bundles a ghost changeset (its registry is restored by
+        ``_restore_registry`` anyway).
+
+        Yields nothing: the bundled id is read back through
+        ``changeset_id_of(group_id)`` (via ``_edit_result``/``list_revisions``),
+        never off the context manager itself.
 
         Members are the *recorded* groups whose ids fall in
         ``[start, group_counter)`` and are not yet assigned to a changeset. A
@@ -814,14 +811,13 @@ class RevisionManager:
         allocates no new id in range) stays with that group's changeset and is
         never re-bundled.
         """
-        capture = _ChangesetCapture()
         if self._in_changeset:
-            yield capture
+            yield
             return
         self._in_changeset = True
         start = self._group_counter
         try:
-            yield capture
+            yield
         finally:
             self._in_changeset = False
         members = [
@@ -836,7 +832,6 @@ class RevisionManager:
             for gid in members:
                 self._group_changesets[gid] = changeset_id
             self._changeset_sources[changeset_id] = "recorded"
-            capture.changeset_id = changeset_id
 
     def _adopt_split_tail(self, original_ins, new_nodes) -> None:
         """Keep a split-off tail of one of our own insertions in its origin group.
@@ -917,7 +912,8 @@ class RevisionManager:
         return self._group_changesets.get(group_id)
 
     def changeset_groups(self, changeset_id: int) -> tuple[int, ...]:
-        """Member group ids of ``changeset_id``.
+        """Member group ids of ``changeset_id``, in group-creation order
+        (recorded changesets) or document order (inferred changesets).
 
         Raises:
             RevisionError: If the changeset id is unknown to this manager

@@ -330,7 +330,7 @@ Words shared by `find` and `replace_with` at either end are trimmed first, so on
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
-**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`)
 
 **Example:**
 
@@ -349,7 +349,7 @@ Mark text as deleted with tracked changes. Deleting text inside another author's
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
-**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`)
 
 **Example:**
 
@@ -368,7 +368,7 @@ Insert text after anchor with tracked changes. An anchor inside another author's
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
-**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`)
 
 **Example:**
 
@@ -387,7 +387,7 @@ Insert text before anchor with tracked changes. Foreign pending insertions are t
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
-**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`)
 
 **Example:**
 
@@ -410,7 +410,7 @@ resolve them as a unit with [`accept_group()`](#accept_groupgroup_id) /
 - `ref` (str): Paragraph reference from `list_paragraphs()`
 - `new_text` (str): Desired paragraph text
 
-**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`revision_ids`; `group_id` is `None` when `new_text` equals the current text, or when every change landed inside your own pending insertions and was merged in place)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`; `group_id` is `None` when `new_text` equals the current text, or when every change landed inside your own pending insertions and was merged in place)
 
 **Example:**
 
@@ -716,10 +716,10 @@ result = doc.rewrite_paragraph(ref, "New text.")
 doc.reject_group(result.group_id)  # undo the whole rewrite
 ```
 
-#### `accept_changeset(changeset_id)` / `reject_changeset(changeset_id)`
+#### `accept_changeset(changeset_id)`
 
-Accept (or reject) every revision created by **one whole call** — the *intent*
-tier, one level above a group:
+Accept every revision created by **one whole call** — the *intent* tier, one
+level above a group:
 
 ```
 one call (a single edit, or an entire batch_edit / batch_rewrite)
@@ -730,8 +730,7 @@ A single edit is a one-group changeset; a whole `batch_edit`/`batch_rewrite` is
 one changeset over all the groups it created. Each returned
 [`EditResult`](#editresult) carries the `changeset_id`, and `list_revisions()`
 stamps `changeset_id`/`changeset_source` on each member revision. Accepting the
-changeset applies the entire call; rejecting it undoes the entire call,
-restoring the exact pre-call text. **There is no tier above this** — the model
+changeset applies the entire call. **There is no tier above this** — the model
 stops at three: revision < group < changeset.
 
 A changeset is the `(author, date)` **equivalence class over groups** — a
@@ -750,7 +749,7 @@ resolves fine.
 
 - `changeset_id` (int): Changeset id from an `EditResult` (or a `Revision.changeset_id`)
 
-**Returns:** Number of revisions accepted/rejected across the changeset's groups (int). Members already resolved individually are skipped (and not counted).
+**Returns:** Number of revisions accepted across the changeset's groups (int). Members already resolved individually are skipped (and not counted).
 
 **Raises:** [`RevisionError`](#revisionerror) if the changeset id is unknown to this open Document.
 
@@ -759,6 +758,29 @@ resolves fine.
 ```python
 results = doc.batch_edit([...])           # one changeset over several groups
 doc.accept_changeset(results[0].changeset_id)  # accept the whole batch at once
+```
+
+#### `reject_changeset(changeset_id)`
+
+Reject every revision created by one whole call — the counterpart of
+[`accept_changeset()`](#accept_changesetchangeset_id). Rejecting the changeset
+undoes the entire call (every group), restoring the exact pre-call text. Same
+changeset semantics and lifetime as `accept_changeset()` — including recorded
+vs inferred changesets and per-open renumbering.
+
+**Parameters:**
+
+- `changeset_id` (int): Changeset id from an `EditResult` (or a `Revision.changeset_id`)
+
+**Returns:** Number of revisions rejected across the changeset's groups (int). Members already resolved individually are skipped (and not counted).
+
+**Raises:** [`RevisionError`](#revisionerror) if the changeset id is unknown to this open Document.
+
+**Example:**
+
+```python
+results = doc.batch_edit([...])
+doc.reject_changeset(results[0].changeset_id)  # undo the whole batch
 ```
 
 #### `accept_all(author=None)`
@@ -896,7 +918,7 @@ from docx_editor import Revision
 | `text` | str | The inserted or deleted text |
 | `group_id` | int or None | Revision group this revision belongs to (see [`accept_group()`](#accept_groupgroup_id)): recorded for this session's edits, inferred by reconstruction for revisions already in the file; None only for ungroupable revisions (missing author/date, outside any paragraph, duplicated id, or a mid-session split half of a foreign insertion) |
 | `group_source` | str or None | Provenance of `group_id`: `"recorded"` (created through this open Document) or `"inferred"` (reconstructed at parse time from same-paragraph contiguity + identical author and date); None iff `group_id` is None |
-| `changeset_id` | int or None | Changeset (one whole call) this revision's group belongs to (see [`accept_changeset()`](#accept_changesetchangeset_id-reject_changesetchangeset_id)) — the `(author, date)` class over groups; None iff `group_id` is None |
+| `changeset_id` | int or None | Changeset (one whole call) this revision's group belongs to (see [`accept_changeset()`](#accept_changesetchangeset_id) / [`reject_changeset()`](#reject_changesetchangeset_id)) — the `(author, date)` class over groups; None iff `group_id` is None |
 | `changeset_source` | str or None | Provenance of `changeset_id`: `"recorded"` or `"inferred"`; None iff `changeset_id` is None |
 
 ### Example
@@ -982,7 +1004,7 @@ from docx_editor import EditResult
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `group_id` | int or None | Revision group holding every revision this edit created, for [`accept_group()`](#accept_groupgroup_id) / [`reject_group()`](#reject_groupgroup_id). None when the edit created no new revisions (e.g. text spliced into one of your own pending insertions, a no-change rewrite, or a rewrite whose changes all merged into your own pending insertions). Valid only while this Document stays open — after reopen the same revisions belong to a freshly inferred group with a new id. |
-| `changeset_id` | int or None | Changeset (one whole call) this edit's group belongs to, for [`accept_changeset()`](#accept_changesetchangeset_id-reject_changesetchangeset_id) / `reject_changeset()`. Every `EditResult` from one `batch_edit`/`batch_rewrite` shares it; None iff `group_id` is None. Per-open-`Document`, like `group_id`. |
+| `changeset_id` | int or None | Changeset (one whole call) this edit's group belongs to, for [`accept_changeset()`](#accept_changesetchangeset_id) / [`reject_changeset()`](#reject_changesetchangeset_id). Every `EditResult` from one `batch_edit`/`batch_rewrite` shares it; None iff `group_id` is None. Per-open-`Document`, like `group_id`. |
 | `revision_ids` | tuple[int, ...] | The `w:id`s of the group's member revisions, in creation order; `()` when `group_id` is None |
 
 ### Example
