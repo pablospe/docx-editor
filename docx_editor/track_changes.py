@@ -6,7 +6,7 @@ Provides RevisionManager for creating and managing tracked changes (insertions/d
 import difflib
 import re
 from collections import OrderedDict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -48,12 +48,16 @@ GroupSource = Literal["recorded", "inferred"]
 
 @dataclass
 class _RegistrySnapshot:
-    """Copy of the group registry, for rollback alongside a DOM snapshot."""
+    """Copy of the group + changeset registry, for rollback with a DOM snapshot."""
 
     counter: int
     groups: dict[int, tuple[int, ...]]
     revision_groups: dict[int, int | None]
     group_sources: dict[int, GroupSource]
+    changeset_counter: int
+    changesets: dict[int, tuple[int, ...]]
+    group_changesets: dict[int, int | None]
+    changeset_sources: dict[int, GroupSource]
 
 
 @dataclass
@@ -241,6 +245,13 @@ class EditResult(str):
       and renumbered on each open — after close()/reopen the same revisions
       belong to a freshly inferred group with a new id, so never carry a
       group_id across sessions (see ``Document.accept_group``).
+    - ``changeset_id``: id of the changeset (one whole call: this single
+      edit, or the entire ``batch_edit``/``batch_rewrite``) that this
+      operation's group belongs to, usable with
+      ``accept_changeset``/``reject_changeset``. One changeset contains ≥1
+      group; a single edit is a one-group changeset. None whenever
+      ``group_id`` is None. Per-open-Document and renumbered on each open,
+      exactly like ``group_id``.
     - ``revision_ids``: the w:ids of the group's member revisions, in
       creation order, as of this edit's return; ``()`` when ``group_id`` is
       None. A later edit that splits one of these insertions adds the
@@ -249,11 +260,19 @@ class EditResult(str):
     """
 
     group_id: int | None
+    changeset_id: int | None
     revision_ids: tuple[int, ...]
 
-    def __new__(cls, ref: str, group_id: int | None = None, revision_ids: tuple[int, ...] = ()) -> "EditResult":
+    def __new__(
+        cls,
+        ref: str,
+        group_id: int | None = None,
+        revision_ids: tuple[int, ...] = (),
+        changeset_id: int | None = None,
+    ) -> "EditResult":
         result = super().__new__(cls, ref)
         result.group_id = group_id
+        result.changeset_id = changeset_id
         result.revision_ids = revision_ids
         return result
 
@@ -354,6 +373,18 @@ class Revision:
       so own writes from a previous session merge like foreign revisions:
       identical author + date can still over-merge (``w:date`` has second
       precision). None iff ``group_id`` is None.
+    - ``changeset_id``: id of the changeset (one whole call — see
+      ``EditResult.changeset_id``) this revision's group belongs to,
+      resolvable with ``Document.accept_changeset``/``reject_changeset``.
+      A changeset is the ``(author, date)`` equivalence class over groups:
+      every group sharing this revision's ``w:author`` + ``w:date`` is in
+      the same changeset (recorded edits bundle one call; inferred
+      changesets partition reconstructed groups by that key). None iff
+      ``group_id`` is None.
+    - ``changeset_source``: provenance of ``changeset_id`` — ``"recorded"``
+      for changesets bundled by a call through this open Document,
+      ``"inferred"`` for changesets partitioned at parse time. None iff
+      ``changeset_id`` is None.
     """
 
     id: int
@@ -367,6 +398,8 @@ class Revision:
     contains_ids: tuple[int, ...] = ()
     group_id: int | None = None
     group_source: GroupSource | None = None
+    changeset_id: int | None = None
+    changeset_source: GroupSource | None = None
 
     def __repr__(self) -> str:
         kind = "ins" if self.type == "insertion" else "del"
@@ -376,7 +409,8 @@ class Revision:
         contains = f", contains={list(self.contains_ids)}" if self.contains_ids else ""
         inferred = "(inferred)" if self.group_source == "inferred" else ""
         group = f", group={self.group_id}{inferred}" if self.group_id is not None else ""
-        return f"Revision({kind} {self.id}{location}: '{preview}' by {self.author}{nested}{contains}{group})"
+        changeset = f", cs={self.changeset_id}" if self.changeset_id is not None else ""
+        return f"Revision({kind} {self.id}{location}: '{preview}' by {self.author}{nested}{contains}{group}{changeset})"
 
 
 def _ancestor_paragraph(elem) -> Element | None:
@@ -484,6 +518,13 @@ class _GroupCapture:
     group_id: int | None = None
 
 
+@dataclass
+class _ChangesetCapture:
+    """Filled in by ``RevisionManager._changeset`` when its with-block exits."""
+
+    changeset_id: int | None = None
+
+
 def _occurrence_in_text_map(tm: TextMap, elem, text: str) -> int | None:
     """0-based occurrence index of ``text`` at ``elem``'s own span in ``tm``.
 
@@ -571,6 +612,18 @@ class RevisionManager:
         # Maps group id -> provenance ("recorded" | "inferred").
         self._group_sources: dict[int, GroupSource] = {}
         self._group_counter = 1
+        # Changeset tier (one whole call ⊇ ≥1 group). A changeset is the
+        # (author, date) equivalence class over groups; these registries
+        # mirror the group ones exactly, one level up. Recorded changesets
+        # continue this counter past the inferred ones, just as groups do.
+        self._changesets: dict[int, tuple[int, ...]] = {}
+        self._group_changesets: dict[int, int | None] = {}
+        self._changeset_sources: dict[int, GroupSource] = {}
+        self._changeset_counter = 1
+        # Reentrancy flag for _changeset(): only the outermost boundary
+        # bundles, so batch_rewrite -> rewrite_paragraph merges into one
+        # changeset (mirrors editor.frozen_timestamp's reuse guard).
+        self._in_changeset = False
         self._reconstruct_groups()
 
     def _reconstruct_groups(self) -> None:
@@ -617,6 +670,10 @@ class RevisionManager:
         """
         run_key: tuple[int, str, str] | None = None
         run_members: list[int] = []
+        # (author, date) -> changeset id, for the inferred changeset tier.
+        # Groups anywhere in the document sharing an (author, date) join one
+        # changeset — a global equivalence class, not a contiguous run.
+        changeset_by_key: dict[tuple[str, str], int] = {}
 
         def close_run() -> None:
             nonlocal run_members
@@ -627,6 +684,21 @@ class RevisionManager:
                 for rev_id in run_members:
                     self._revision_groups[rev_id] = group_id
                 self._group_sources[group_id] = "inferred"
+                # run_members non-empty guarantees run_key is set (members are
+                # only appended after run_key becomes non-None). Its author+date
+                # are the group's; drop the paragraph identity so groups in
+                # different paragraphs still share one changeset.
+                assert run_key is not None
+                _, author, date = run_key
+                cs_key = (author, date)
+                cs_id = changeset_by_key.get(cs_key)
+                if cs_id is None:
+                    cs_id = self._changeset_counter
+                    self._changeset_counter += 1
+                    changeset_by_key[cs_key] = cs_id
+                    self._changeset_sources[cs_id] = "inferred"
+                self._changesets[cs_id] = (*self._changesets.get(cs_id, ()), group_id)
+                self._group_changesets[group_id] = cs_id
                 run_members = []
 
         elements = _revision_elements(self.editor.dom.documentElement)
@@ -720,6 +792,52 @@ class RevisionManager:
             self._group_sources[group_id] = "recorded"
             capture.group_id = group_id
 
+    @contextmanager
+    def _changeset(self) -> Iterator[_ChangesetCapture]:
+        """Bundle every group one public call creates as one changeset.
+
+        The changeset is the intent tier: one whole ``batch_edit``/
+        ``batch_rewrite`` call, or one single edit, contains ≥1 group.
+
+        Reentrant by reuse (mirrors ``editor.frozen_timestamp``): a nested
+        entry yields a bare capture and defers to the enclosing boundary, so
+        ``batch_rewrite`` -> ``rewrite_paragraph`` merges into ONE changeset
+        while a standalone ``rewrite_paragraph`` gets its own. Only the
+        outermost entry bundles, and only on clean exit — an exception
+        propagates out of the generator at the ``yield`` before the bundling
+        code runs, so a failed batch never bundles a ghost changeset (its
+        registry is restored by ``_restore_registry`` anyway).
+
+        Members are the *recorded* groups whose ids fall in
+        ``[start, group_counter)`` and are not yet assigned to a changeset. A
+        split tail adopted into an existing group's id (``_adopt_split_tail``
+        allocates no new id in range) stays with that group's changeset and is
+        never re-bundled.
+        """
+        capture = _ChangesetCapture()
+        if self._in_changeset:
+            yield capture
+            return
+        self._in_changeset = True
+        start = self._group_counter
+        try:
+            yield capture
+        finally:
+            self._in_changeset = False
+        members = [
+            gid
+            for gid in range(start, self._group_counter)
+            if gid in self._groups and self._group_sources.get(gid) == "recorded" and gid not in self._group_changesets
+        ]
+        if members:
+            changeset_id = self._changeset_counter
+            self._changeset_counter += 1
+            self._changesets[changeset_id] = tuple(members)
+            for gid in members:
+                self._group_changesets[gid] = changeset_id
+            self._changeset_sources[changeset_id] = "recorded"
+            capture.changeset_id = changeset_id
+
     def _adopt_split_tail(self, original_ins, new_nodes) -> None:
         """Keep a split-off tail of one of our own insertions in its origin group.
 
@@ -748,20 +866,28 @@ class RevisionManager:
                     self._groups[origin_group] = (*self._groups[origin_group], tail_id)
 
     def _registry_snapshot(self) -> _RegistrySnapshot:
-        """Snapshot the group registry for rollback alongside a DOM snapshot."""
+        """Snapshot the group + changeset registry for rollback with a DOM snapshot."""
         return _RegistrySnapshot(
             counter=self._group_counter,
             groups=dict(self._groups),
             revision_groups=dict(self._revision_groups),
             group_sources=dict(self._group_sources),
+            changeset_counter=self._changeset_counter,
+            changesets=dict(self._changesets),
+            group_changesets=dict(self._group_changesets),
+            changeset_sources=dict(self._changeset_sources),
         )
 
     def _restore_registry(self, snapshot: _RegistrySnapshot) -> None:
-        """Restore the group registry captured by ``_registry_snapshot``."""
+        """Restore the group + changeset registry captured by ``_registry_snapshot``."""
         self._group_counter = snapshot.counter
         self._groups = snapshot.groups
         self._revision_groups = snapshot.revision_groups
         self._group_sources = snapshot.group_sources
+        self._changeset_counter = snapshot.changeset_counter
+        self._changesets = snapshot.changesets
+        self._group_changesets = snapshot.group_changesets
+        self._changeset_sources = snapshot.changeset_sources
 
     def group_id_of(self, revision_id: int) -> int | None:
         """Group id of a revision (recorded or inferred), or None if ungrouped."""
@@ -783,6 +909,29 @@ class RevisionManager:
                 f"reconstruction for revisions already in the file); use a group_id from "
                 f"this session's EditResult or list_revisions().",
                 group_id=group_id,
+            )
+        return members
+
+    def changeset_id_of(self, group_id: int) -> int | None:
+        """Changeset id of a group (recorded or inferred), or None if unassigned."""
+        return self._group_changesets.get(group_id)
+
+    def changeset_groups(self, changeset_id: int) -> tuple[int, ...]:
+        """Member group ids of ``changeset_id``.
+
+        Raises:
+            RevisionError: If the changeset id is unknown to this manager
+                (changeset ids are per-open-Document and renumbered on each
+                open, exactly like group ids).
+        """
+        members = self._changesets.get(changeset_id)
+        if members is None:
+            raise RevisionError(
+                f"Unknown changeset: {changeset_id}. Changeset ids are per-open-Document and "
+                f"renumbered on each open (recorded for this session's calls, inferred by "
+                f"reconstruction for revisions already in the file); use a changeset_id from "
+                f"this session's EditResult or list_revisions().",
+                changeset_id=changeset_id,
             )
         return members
 
@@ -925,8 +1074,11 @@ class RevisionManager:
         try:
             results = [0] * len(operations)
             # One batch call = one changeset: every op's revisions share one
-            # w:date (the per-op _grouped() freezes join this outer scope).
-            with self.editor.frozen_timestamp():
+            # w:date (the per-op _grouped() freezes join this outer scope) and
+            # every op's group bundles into that one changeset. Inside the try
+            # so a failed op never bundles a changeset (the generator raises at
+            # its yield before bundling) and rollback restores the registry.
+            with self._changeset(), self.editor.frozen_timestamp():
                 for original_idx, _ref, op in parsed:
                     try:
                         # Each op is its own logical edit: one group per op, so
@@ -1146,9 +1298,12 @@ class RevisionManager:
             # reconstruction keeps one group per paragraph despite the
             # shared date).
             group_ids: list[int | None] = [None] * len(rewrites)
-            with self.editor.frozen_timestamp():
+            with self._changeset(), self.editor.frozen_timestamp():
                 for original_idx, ref, new_text in parsed:
                     try:
+                        # The inner rewrite_paragraph's own _changeset() becomes
+                        # a no-op (reentrancy guard), so the whole call is one
+                        # changeset with one group per rewrite.
                         group_ids[original_idx] = self.rewrite_paragraph(f"P{ref.index}#{ref.hash}", new_text)
                     except (ValueError, DocxEditError) as e:
                         raise BatchOperationError(original_idx, str(e), original=e) from e
@@ -1192,7 +1347,7 @@ class RevisionManager:
                 f"rewrite_paragraph(): 'new_text' must be a string "
                 f"(empty string is allowed — it deletes all text), got {new_text!r}"
             )
-        with self._grouped() as capture:
+        with self._changeset(), self._grouped() as capture:
             self._rewrite_paragraph_inner(ref_str, new_text)
         return capture.group_id
 
@@ -1588,7 +1743,7 @@ class RevisionManager:
         """
         if not isinstance(replace_with, str):
             raise ValueError(f"'replace_with' must be a string (empty string is allowed), got {replace_with!r}")
-        with self._grouped():
+        with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
                 p = self._resolve_paragraph(ref)
@@ -1619,7 +1774,7 @@ class RevisionManager:
                 matches more than once in the search scope
             HashMismatchError: If the paragraph hash doesn't match
         """
-        with self._grouped():
+        with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
                 p = self._resolve_paragraph(ref)
@@ -2542,7 +2697,7 @@ class RevisionManager:
         """Insert text before or after anchor with tracked changes."""
         if not isinstance(text, str):
             raise ValueError(f"'text' must be a string (empty string is allowed), got {text!r}")
-        with self._grouped():
+        with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
                 p = self._resolve_paragraph(ref)
@@ -2764,6 +2919,7 @@ class RevisionManager:
                     occurrence = _occurrence_in_text_map(ctx.text_map(paragraph, view), elem, text)
 
         group_id = self._revision_groups.get(rev_id_int)
+        changeset_id = self.changeset_id_of(group_id) if group_id is not None else None
         return Revision(
             id=rev_id_int,
             type=rev_type,
@@ -2776,6 +2932,8 @@ class RevisionManager:
             contains_ids=_descendant_revision_ids(elem),
             group_id=group_id,
             group_source=self._group_sources.get(group_id) if group_id is not None else None,
+            changeset_id=changeset_id,
+            changeset_source=self._changeset_sources.get(changeset_id) if changeset_id is not None else None,
         )
 
     def accept_revision(self, revision_id: int) -> bool:
@@ -2836,15 +2994,16 @@ class RevisionManager:
 
         return False
 
-    def _resolve_group(self, group_id: int, resolve: Callable[[int], bool]) -> int:
-        """Apply ``resolve`` (accept/reject_revision) to every member of a group.
+    def _resolve_ids(self, members: Iterable[int], resolve: Callable[[int], bool]) -> int:
+        """Apply ``resolve`` (accept/reject_revision) to every id in ``members``.
 
         Same reverse-id, loop-until-no-progress pattern as accept_all/
-        reject_all, restricted to the group's members: nested members become
+        reject_all, restricted to ``members``: nested members become
         resolvable once their host is processed, and members already resolved
-        individually are simply skipped.
+        individually are simply skipped. Shared by group and changeset
+        resolution (a changeset passes the union of its groups' revisions).
         """
-        members = self.group_revisions(group_id)
+        members = list(members)
         count = 0
         while True:
             progressed = False
@@ -2854,6 +3013,20 @@ class RevisionManager:
                     progressed = True
             if not progressed:
                 return count
+
+    def _resolve_group(self, group_id: int, resolve: Callable[[int], bool]) -> int:
+        """Apply ``resolve`` to every member revision of a group."""
+        return self._resolve_ids(self.group_revisions(group_id), resolve)
+
+    def _resolve_changeset(self, changeset_id: int, resolve: Callable[[int], bool]) -> int:
+        """Apply ``resolve`` to every revision across all groups of a changeset.
+
+        A revision belongs to exactly one group, so the changeset's groups
+        never share a member — the flattened list has no duplicates, and
+        ``_resolve_ids`` would tolerate any anyway (a re-resolve returns False).
+        """
+        revision_ids = [rev_id for group_id in self.changeset_groups(changeset_id) for rev_id in self._groups[group_id]]
+        return self._resolve_ids(revision_ids, resolve)
 
     def accept_group(self, group_id: int) -> int:
         """Accept every revision in a revision group.
@@ -2886,6 +3059,38 @@ class RevisionManager:
             RevisionError: If the group id is unknown to this manager.
         """
         return self._resolve_group(group_id, self.reject_revision)
+
+    def accept_changeset(self, changeset_id: int) -> int:
+        """Accept every revision in a changeset (one whole call's groups).
+
+        Args:
+            changeset_id: Changeset id from an edit's :class:`EditResult` (or
+                a Revision's ``changeset_id``).
+
+        Returns:
+            Number of revisions accepted across the changeset's groups.
+            Members already resolved individually are skipped (rump-tolerant).
+
+        Raises:
+            RevisionError: If the changeset id is unknown to this manager.
+        """
+        return self._resolve_changeset(changeset_id, self.accept_revision)
+
+    def reject_changeset(self, changeset_id: int) -> int:
+        """Reject every revision in a changeset (one whole call's groups).
+
+        Args:
+            changeset_id: Changeset id from an edit's :class:`EditResult` (or
+                a Revision's ``changeset_id``).
+
+        Returns:
+            Number of revisions rejected across the changeset's groups.
+            Members already resolved individually are skipped (rump-tolerant).
+
+        Raises:
+            RevisionError: If the changeset id is unknown to this manager.
+        """
+        return self._resolve_changeset(changeset_id, self.reject_revision)
 
     def accept_all(self, author: str | None = None) -> int:
         """Accept all revisions, optionally filtered by author.

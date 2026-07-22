@@ -716,6 +716,51 @@ result = doc.rewrite_paragraph(ref, "New text.")
 doc.reject_group(result.group_id)  # undo the whole rewrite
 ```
 
+#### `accept_changeset(changeset_id)` / `reject_changeset(changeset_id)`
+
+Accept (or reject) every revision created by **one whole call** — the *intent*
+tier, one level above a group:
+
+```
+one call (a single edit, or an entire batch_edit / batch_rewrite)
+  = one changeset  ⊇  one-or-more groups  ⊇  revisions
+```
+
+A single edit is a one-group changeset; a whole `batch_edit`/`batch_rewrite` is
+one changeset over all the groups it created. Each returned
+[`EditResult`](#editresult) carries the `changeset_id`, and `list_revisions()`
+stamps `changeset_id`/`changeset_source` on each member revision. Accepting the
+changeset applies the entire call; rejecting it undoes the entire call,
+restoring the exact pre-call text. **There is no tier above this** — the model
+stops at three: revision < group < changeset.
+
+A changeset is the `(author, date)` **equivalence class over groups** — a
+*global* class, not a contiguous run: a `batch_edit` whose ops land in different
+paragraphs is one changeset even though its groups are non-contiguous. Edits
+made here **record** their changeset (`changeset_source == "recorded"`);
+revisions already in the file get **inferred** changesets, partitioning the
+reconstructed groups by identical `w:author` + `w:date`
+(`changeset_source == "inferred"`). Same lifetime and caveats as groups:
+changeset ids are in-memory and per-open-`Document`, renumbered on each open, so
+always take one from the current session's `EditResult` or `list_revisions()`.
+Rump-tolerant — after Word has resolved part of the changeset, the remainder
+resolves fine.
+
+**Parameters:**
+
+- `changeset_id` (int): Changeset id from an `EditResult` (or a `Revision.changeset_id`)
+
+**Returns:** Number of revisions accepted/rejected across the changeset's groups (int). Members already resolved individually are skipped (and not counted).
+
+**Raises:** [`RevisionError`](#revisionerror) if the changeset id is unknown to this open Document.
+
+**Example:**
+
+```python
+results = doc.batch_edit([...])           # one changeset over several groups
+doc.accept_changeset(results[0].changeset_id)  # accept the whole batch at once
+```
+
 #### `accept_all(author=None)`
 
 Accept all revisions.
@@ -851,6 +896,8 @@ from docx_editor import Revision
 | `text` | str | The inserted or deleted text |
 | `group_id` | int or None | Revision group this revision belongs to (see [`accept_group()`](#accept_groupgroup_id)): recorded for this session's edits, inferred by reconstruction for revisions already in the file; None only for ungroupable revisions (missing author/date, outside any paragraph, duplicated id, or a mid-session split half of a foreign insertion) |
 | `group_source` | str or None | Provenance of `group_id`: `"recorded"` (created through this open Document) or `"inferred"` (reconstructed at parse time from same-paragraph contiguity + identical author and date); None iff `group_id` is None |
+| `changeset_id` | int or None | Changeset (one whole call) this revision's group belongs to (see [`accept_changeset()`](#accept_changesetchangeset_id-reject_changesetchangeset_id)) — the `(author, date)` class over groups; None iff `group_id` is None |
+| `changeset_source` | str or None | Provenance of `changeset_id`: `"recorded"` or `"inferred"`; None iff `changeset_id` is None |
 
 ### Example
 
@@ -935,15 +982,17 @@ from docx_editor import EditResult
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `group_id` | int or None | Revision group holding every revision this edit created, for [`accept_group()`](#accept_groupgroup_id) / [`reject_group()`](#reject_groupgroup_id). None when the edit created no new revisions (e.g. text spliced into one of your own pending insertions, a no-change rewrite, or a rewrite whose changes all merged into your own pending insertions). Valid only while this Document stays open — after reopen the same revisions belong to a freshly inferred group with a new id. |
+| `changeset_id` | int or None | Changeset (one whole call) this edit's group belongs to, for [`accept_changeset()`](#accept_changesetchangeset_id-reject_changesetchangeset_id) / `reject_changeset()`. Every `EditResult` from one `batch_edit`/`batch_rewrite` shares it; None iff `group_id` is None. Per-open-`Document`, like `group_id`. |
 | `revision_ids` | tuple[int, ...] | The `w:id`s of the group's member revisions, in creation order; `()` when `group_id` is None |
 
 ### Example
 
 ```python
 result = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
-print(str(result))         # "P2#c3d4" — the new paragraph ref
-print(result.group_id)     # 1
-print(result.revision_ids) # (0, 1) — the del and the ins
+print(str(result))          # "P2#c3d4" — the new paragraph ref
+print(result.group_id)      # 1
+print(result.changeset_id)  # 1 — a single edit is a one-group changeset
+print(result.revision_ids)  # (0, 1) — the del and the ins
 
 doc.replace("net", "gross", paragraph=result)  # usable as a plain ref
 doc.reject_group(result.group_id)              # undo the first edit entirely
@@ -1129,7 +1178,7 @@ except CommentError as e:
 
 ### `RevisionError`
 
-Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`. Group ids are per-open-`Document` and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use a group id from the current session's `EditResult` or `list_revisions()` — a stale id from a previous session may raise this, or worse, silently resolve to a different group. Structured fields: `revision_id` and `group_id` — set when the error is about that specific id (`group_id` for unknown-group errors), `None` otherwise.
+Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`, or an unknown changeset id passed to `accept_changeset()` / `reject_changeset()`. Group and changeset ids are per-open-`Document` and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use an id from the current session's `EditResult` or `list_revisions()` — a stale id from a previous session may raise this, or worse, silently resolve to a different group/changeset. Structured fields: `revision_id`, `group_id`, and `changeset_id` — set when the error is about that specific id (`group_id` for unknown-group errors, `changeset_id` for unknown-changeset errors), `None` otherwise.
 
 ```python
 from docx_editor.exceptions import RevisionError

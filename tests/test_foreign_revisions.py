@@ -39,7 +39,10 @@ from docx_editor import Document, Revision
 # identical text in the same paragraph — type + occurrence (in each type's own
 # view) is what tells them apart. Every revision differs from its document-
 # order neighbor by paragraph, author, or date, so group reconstruction
-# infers eight singleton groups, numbered 1-8 in document order.
+# infers eight singleton groups, numbered 1-8 in document order. Every
+# revision also has a distinct (author, date) pair, so the changeset tier
+# partitions them into eight singleton inferred changesets — changeset_id
+# equals group_id here (1-8), each changeset_source "inferred".
 EXPECTED_REVISIONS = [
     Revision(
         id=1001,
@@ -51,6 +54,8 @@ EXPECTED_REVISIONS = [
         occurrence=0,
         group_id=1,
         group_source="inferred",
+        changeset_id=1,
+        changeset_source="inferred",
     ),
     Revision(
         id=1002,
@@ -62,6 +67,8 @@ EXPECTED_REVISIONS = [
         occurrence=0,
         group_id=2,
         group_source="inferred",
+        changeset_id=2,
+        changeset_source="inferred",
     ),
     Revision(
         id=1003,
@@ -73,6 +80,8 @@ EXPECTED_REVISIONS = [
         occurrence=0,
         group_id=3,
         group_source="inferred",
+        changeset_id=3,
+        changeset_source="inferred",
     ),
     Revision(
         id=1004,
@@ -84,6 +93,8 @@ EXPECTED_REVISIONS = [
         occurrence=0,
         group_id=4,
         group_source="inferred",
+        changeset_id=4,
+        changeset_source="inferred",
     ),
     Revision(
         id=1005,
@@ -95,6 +106,8 @@ EXPECTED_REVISIONS = [
         occurrence=0,
         group_id=5,
         group_source="inferred",
+        changeset_id=5,
+        changeset_source="inferred",
     ),
     Revision(
         id=1006,
@@ -106,6 +119,8 @@ EXPECTED_REVISIONS = [
         occurrence=0,
         group_id=6,
         group_source="inferred",
+        changeset_id=6,
+        changeset_source="inferred",
     ),
     Revision(
         id=1007,
@@ -117,6 +132,8 @@ EXPECTED_REVISIONS = [
         occurrence=0,
         group_id=7,
         group_source="inferred",
+        changeset_id=7,
+        changeset_source="inferred",
     ),
     Revision(
         id=1008,
@@ -128,6 +145,8 @@ EXPECTED_REVISIONS = [
         occurrence=0,
         group_id=8,
         group_source="inferred",
+        changeset_id=8,
+        changeset_source="inferred",
     ),
 ]
 

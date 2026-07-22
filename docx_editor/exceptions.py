@@ -184,6 +184,10 @@ class RevisionError(DocxEditError):
         group_id: The revision group id the operation targeted (e.g. an
             unknown group passed to ``accept_group``/``reject_group``), or
             None if the error is not about a group.
+        changeset_id: The changeset id the operation targeted (e.g. an
+            unknown changeset passed to
+            ``accept_changeset``/``reject_changeset``), or None if the error
+            is not about a changeset.
     """
 
     def __init__(
@@ -192,9 +196,11 @@ class RevisionError(DocxEditError):
         *,
         revision_id: int | None = None,
         group_id: int | None = None,
+        changeset_id: int | None = None,
     ):
         self.revision_id = revision_id
         self.group_id = group_id
+        self.changeset_id = changeset_id
         super().__init__(message)
 
 
