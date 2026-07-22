@@ -660,7 +660,7 @@ class TestGroupReconstruction:
         )
         manager = _make_manager(temp_xml(body))
 
-        assert manager._groups == {2: (3,), 3: (4,)}
+        assert manager._groups == {1: (3,), 2: (4,)}
 
         revisions = manager.list_revisions()
         assert sorted(rev.id for rev in revisions) == [1, 1, 2, 2, 3, 4]  # "oops" omitted
@@ -668,7 +668,22 @@ class TestGroupReconstruction:
             if rev.id in (1, 2):  # both occurrences of each duplicated id
                 assert rev.group_id is None and rev.group_source is None
         by_id = {rev.id: rev for rev in revisions}
-        assert by_id[3].group_id == 2 and by_id[4].group_id == 3
+        assert by_id[3].group_id == 1 and by_id[4].group_id == 2
+
+    def test_duplicate_id_with_ungroupable_occurrence_stays_ungrouped(self, temp_xml):
+        # An ungroupable occurrence (here: no w:date) of a duplicated id
+        # must still bar its groupable twin from winning a group — id-keyed
+        # lookup would report that group for both elements.
+        body = (
+            f'<w:p><w:ins w:id="5" w:author="{AUTHOR_A}"><w:r><w:t>no date </w:t></w:r></w:ins>'
+            f"{_ins_xml(5, 'groupable twin ')}{_ins_xml(6, 'six')}</w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+
+        assert manager._groups == {1: (6,)}
+        revisions = manager.list_revisions()
+        assert sorted(rev.id for rev in revisions) == [5, 5, 6]
+        assert all(rev.group_id is None for rev in revisions if rev.id == 5)
 
     def test_revision_outside_paragraph_stays_ungrouped(self, temp_xml):
         # A <w:trPr> row-mark insertion has no ancestor <w:p>.

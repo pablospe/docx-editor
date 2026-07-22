@@ -427,7 +427,8 @@ for r in revisions:
     # says how it was established: "recorded" (edit made in this session)
     # or "inferred" (reconstructed at parse time for revisions already in
     # the file). None only for ungroupable revisions (missing author/date,
-    # outside any paragraph, duplicated id).
+    # outside any paragraph, duplicated id, or a mid-session split half
+    # of a foreign insertion).
     print(f"  group_id={r.group_id} group_source={r.group_source}")
 
 # Filter by author

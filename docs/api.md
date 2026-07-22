@@ -640,9 +640,10 @@ same second merge into one inferred group. When Word already resolved part of
 a former edit, the remainder reconstructs as a smaller (rump) group, and
 `accept_group()`/`reject_group()` handle it fine. Revisions missing an author
 or date, sitting outside any paragraph (e.g. table-row markers), or sharing a
-duplicated id stay ungrouped (`group_id=None`); revisions with non-numeric ids
-are omitted from `list_revisions()` entirely (no id-keyed operation could
-target them).
+duplicated id stay ungrouped (`group_id=None`), as does the trailing half
+created when an edit splits a *foreign* author's pending insertion mid-session
+(foreign grouping is best-effort); revisions with non-numeric ids are omitted
+from `list_revisions()` entirely (no id-keyed operation could target them).
 
 Never carry a `group_id` across sessions: reopening renumbers groups from 1,
 so a stale id from a previous session may silently resolve to a *different*
@@ -821,7 +822,7 @@ from docx_editor import Revision
 | `author` | str | The revision author |
 | `date` | datetime or None | When the revision was made |
 | `text` | str | The inserted or deleted text |
-| `group_id` | int or None | Revision group this revision belongs to (see [`accept_group()`](#accept_groupgroup_id)): recorded for this session's edits, inferred by reconstruction for revisions already in the file; None only for ungroupable revisions (missing author/date, outside any paragraph, duplicated id) |
+| `group_id` | int or None | Revision group this revision belongs to (see [`accept_group()`](#accept_groupgroup_id)): recorded for this session's edits, inferred by reconstruction for revisions already in the file; None only for ungroupable revisions (missing author/date, outside any paragraph, duplicated id, or a mid-session split half of a foreign insertion) |
 | `group_source` | str or None | Provenance of `group_id`: `"recorded"` (created through this open Document) or `"inferred"` (reconstructed at parse time from same-paragraph contiguity + identical author and date); None iff `group_id` is None |
 
 ### Example

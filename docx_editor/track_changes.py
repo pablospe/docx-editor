@@ -43,7 +43,7 @@ from .xml_editor import (
 
 # Provenance of a revision group: created by an edit through this open
 # Document ("recorded") vs reconstructed at parse time ("inferred").
-_GroupSource = Literal["recorded", "inferred"]
+GroupSource = Literal["recorded", "inferred"]
 
 
 @dataclass
@@ -53,7 +53,7 @@ class _RegistrySnapshot:
     counter: int
     groups: dict[int, tuple[int, ...]]
     revision_groups: dict[int, int | None]
-    group_sources: dict[int, _GroupSource]
+    group_sources: dict[int, GroupSource]
 
 
 @dataclass
@@ -362,7 +362,7 @@ class Revision:
     nested_under: int | None = None
     contains_ids: tuple[int, ...] = ()
     group_id: int | None = None
-    group_source: _GroupSource | None = None
+    group_source: GroupSource | None = None
 
     def __repr__(self) -> str:
         kind = "ins" if self.type == "insertion" else "del"
@@ -565,7 +565,7 @@ class RevisionManager:
         # report None.
         self._revision_groups: dict[int, int | None] = {}
         # Maps group id -> provenance ("recorded" | "inferred").
-        self._group_sources: dict[int, _GroupSource] = {}
+        self._group_sources: dict[int, GroupSource] = {}
         self._group_counter = 1
         self._reconstruct_groups()
 
@@ -601,9 +601,9 @@ class RevisionManager:
         empty author or date, or a non-numeric id (nonconforming producers;
         list_revisions() omits non-numeric ids entirely — no id-keyed
         operation could target them). A duplicated id is wholly ungrouped —
-        every occurrence, including the first — because id-keyed lookup
-        cannot tell the occurrences apart, so no group may contain an
-        ambiguous member.
+        every occurrence, whether or not individually groupable — because
+        id-keyed lookup cannot tell the occurrences apart, so no group may
+        contain an ambiguous member.
         """
         run_key: tuple[int, str, str] | None = None
         run_members: list[int] = []
@@ -619,7 +619,24 @@ class RevisionManager:
                 self._group_sources[group_id] = "inferred"
                 run_members = []
 
-        for elem in _revision_elements(self.editor.dom.documentElement):
+        elements = _revision_elements(self.editor.dom.documentElement)
+
+        # Pre-scan for duplicated ids, independent of groupability: an
+        # ungroupable occurrence (e.g. missing its date) must still bar its
+        # groupable twin from winning a group that id-keyed lookup would
+        # then report for both elements.
+        seen_ids: set[int] = set()
+        duplicate_ids: set[int] = set()
+        for elem in elements:
+            try:
+                elem_id = int(elem.getAttribute("w:id"))
+            except ValueError:
+                continue
+            if elem_id in seen_ids:
+                duplicate_ids.add(elem_id)
+            seen_ids.add(elem_id)
+
+        for elem in elements:
             paragraph = _ancestor_paragraph(elem)
             author = elem.getAttribute("w:author")
             date = elem.getAttribute("w:date")
@@ -627,26 +644,9 @@ class RevisionManager:
                 rev_id = int(elem.getAttribute("w:id"))
             except ValueError:
                 rev_id = None
-            if paragraph is None or not author or not date or rev_id is None:
-                close_run()
-                run_key = None
-                continue
-            if rev_id in self._revision_groups or rev_id in run_members:
-                # Duplicate w:id: demote the id to explicitly ungrouped —
-                # the earlier occurrence must not "win" a group its
-                # duplicate would silently inherit in list_revisions()
-                # (group lookup is id-keyed and cannot tell them apart).
-                if rev_id in run_members:
-                    run_members.remove(rev_id)
-                group_id = self._revision_groups.get(rev_id)
-                if group_id is not None:
-                    remaining = tuple(m for m in self._groups[group_id] if m != rev_id)
-                    if remaining:
-                        self._groups[group_id] = remaining
-                    else:
-                        del self._groups[group_id]
-                        del self._group_sources[group_id]
-                self._revision_groups[rev_id] = None
+            if paragraph is None or not author or not date or rev_id is None or rev_id in duplicate_ids:
+                if rev_id is not None and rev_id in duplicate_ids:
+                    self._revision_groups[rev_id] = None  # explicitly ungrouped
                 close_run()
                 run_key = None
                 continue
