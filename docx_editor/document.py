@@ -337,17 +337,23 @@ class Document:
         self._ensure_open()
         return self._revision_manager.count_matches(text)
 
-    def _compute_new_ref(self, old_ref: str) -> str:
-        """Compute a fresh paragraph reference after mutation."""
+    def _compute_new_ref(self, old_ref: str, paragraphs: list | None = None) -> str:
+        """Compute a fresh paragraph reference after mutation.
+
+        ``paragraphs`` is an optional pre-fetched <w:p> list so batch callers
+        pay for one full-DOM walk per batch; None fetches fresh.
+        """
         ref = ParagraphRef.parse(old_ref)
-        p = self._document_editor.dom.getElementsByTagName("w:p")[ref.index - 1]
+        if paragraphs is None:
+            paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        p = paragraphs[ref.index - 1]
         new_hash = compute_paragraph_hash(p)
         return f"P{ref.index}#{new_hash}"
 
-    def _edit_result(self, old_ref: str, group_id: int | None) -> EditResult:
+    def _edit_result(self, old_ref: str, group_id: int | None, paragraphs: list | None = None) -> EditResult:
         """Build an EditResult from a mutated paragraph's old ref and its group."""
         revision_ids = self._revision_manager.group_revisions(group_id) if group_id is not None else ()
-        return EditResult(self._compute_new_ref(old_ref), group_id=group_id, revision_ids=revision_ids)
+        return EditResult(self._compute_new_ref(old_ref, paragraphs), group_id=group_id, revision_ids=revision_ids)
 
     def paragraph_count(self) -> int:
         """Return the total number of paragraphs in the document.
@@ -1069,8 +1075,11 @@ class Document:
         if dry_run:
             return self._revision_manager.validate_batch(operations)
         change_ids = self._revision_manager.batch_edit(operations)
+        # One <w:p> walk for all result refs — batch ops never change the
+        # paragraph set, so the snapshot is valid for every op.
+        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
         return [
-            self._edit_result(op.paragraph, self._revision_manager.group_id_of(change_id))
+            self._edit_result(op.paragraph, self._revision_manager.group_id_of(change_id), paragraphs)
             for op, change_id in zip(operations, change_ids, strict=True)
         ]
 

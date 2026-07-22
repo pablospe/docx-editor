@@ -427,6 +427,56 @@ class TestDocxXMLEditorGetNextChangeId:
         next_id = editor._get_next_change_id()
         assert next_id == 6
 
+    def test_allocation_increments_after_seeding(self, tracked_changes_xml):
+        """Repeated allocations continue past the seeded high-water mark."""
+        editor = DocxXMLEditor(tracked_changes_xml, rsid="00AABBCC", author="Test")
+        assert editor._get_next_change_id() == 2
+        assert editor._get_next_change_id() == 3
+        assert editor._get_next_change_id() == 4
+
+    def test_second_allocation_does_no_full_dom_scan(self, tracked_changes_xml, monkeypatch):
+        """Only the first allocation scans the document; later ones increment."""
+        from xml.dom import minidom
+
+        editor = DocxXMLEditor(tracked_changes_xml, rsid="00AABBCC", author="Test")
+        assert editor._get_next_change_id() == 2  # seeds via full scan
+
+        walks = []
+        original = minidom.Document.getElementsByTagName
+
+        def counting(self, name):
+            walks.append(name)
+            return original(self, name)
+
+        monkeypatch.setattr(minidom.Document, "getElementsByTagName", counting)
+        assert editor._get_next_change_id() == 3
+        assert editor._get_next_change_id() == 4
+        assert walks == []
+
+    def test_preset_id_after_seeding_bumps_high_water_mark(self, tracked_changes_xml):
+        """Raw XML inserted with a pre-set w:id never collides with later allocations."""
+        editor = DocxXMLEditor(tracked_changes_xml, rsid="00AABBCC", author="Test")
+        assert editor._get_next_change_id() == 2  # seeds via full scan
+        body = editor.dom.getElementsByTagName("w:body")[0]
+        editor.append_to(
+            body,
+            '<w:p><w:ins w:id="100" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>preset</w:t></w:r></w:ins></w:p>",
+        )
+        assert editor._get_next_change_id() == 101
+
+    def test_preset_non_numeric_id_ignored_by_high_water_mark(self, tracked_changes_xml):
+        """A non-numeric pre-set w:id passes through injection without affecting allocation."""
+        editor = DocxXMLEditor(tracked_changes_xml, rsid="00AABBCC", author="Test")
+        assert editor._get_next_change_id() == 2  # seeds via full scan
+        body = editor.dom.getElementsByTagName("w:body")[0]
+        editor.append_to(
+            body,
+            '<w:p><w:ins w:id="invalid" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>x</w:t></w:r></w:ins></w:p>",
+        )
+        assert editor._get_next_change_id() == 3
+
 
 class TestDocxXMLEditorNamespaces:
     """Tests for namespace handling in DocxXMLEditor."""

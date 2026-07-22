@@ -1260,6 +1260,7 @@ class DocxXMLEditor(XMLEditor):
         # operation must not let its id be reissued (id-keyed bookkeeping
         # such as revision groups would silently point at the wrong element).
         self._max_change_id = -1
+        self._change_id_seeded = False
         self._tracked_change_collector: list[Element] | None = None
         self._frozen_timestamp: str | None = None
         # Last stamped (author, second) — the one collision counter behind
@@ -1267,18 +1268,28 @@ class DocxXMLEditor(XMLEditor):
         self._last_changeset_stamp: tuple[str, datetime] | None = None
 
     def _get_next_change_id(self) -> int:
-        """Get the next available change ID by checking all tracked change elements."""
-        max_id = self._max_change_id
-        for tag in ("w:ins", "w:del"):
-            elements = self.dom.getElementsByTagName(tag)
-            for elem in elements:
-                change_id = elem.getAttribute("w:id")
-                if change_id:
-                    try:
-                        max_id = max(max_id, int(change_id))
-                    except ValueError:
-                        pass
-        self._max_change_id = max_id + 1
+        """Get the next available change ID.
+
+        The first allocation scans every <w:ins>/<w:del> in the document to
+        seed the high-water mark; every later allocation is a plain
+        increment (no full-DOM walk). Elements that arrive with a pre-set
+        w:id are folded into the mark by _inject_attributes_to_nodes, so
+        allocation can never collide with an id inserted after seeding.
+        """
+        if not self._change_id_seeded:
+            max_id = self._max_change_id
+            for tag in ("w:ins", "w:del"):
+                elements = self.dom.getElementsByTagName(tag)
+                for elem in elements:
+                    change_id = elem.getAttribute("w:id")
+                    if change_id:
+                        try:
+                            max_id = max(max_id, int(change_id))
+                        except ValueError:
+                            pass
+            self._max_change_id = max_id
+            self._change_id_seeded = True
+        self._max_change_id += 1
         return self._max_change_id
 
     @contextmanager
@@ -1435,6 +1446,14 @@ class DocxXMLEditor(XMLEditor):
             is_new = not elem.hasAttribute("w:id")
             if is_new:
                 elem.setAttribute("w:id", str(self._get_next_change_id()))
+            else:
+                # A pre-set id (raw-XML insertion) may exceed the seeded
+                # high-water mark; fold it in so later allocations can never
+                # collide with an id already present in the document.
+                try:
+                    self._max_change_id = max(self._max_change_id, int(elem.getAttribute("w:id")))
+                except ValueError:
+                    pass
             if not elem.hasAttribute("w:author"):
                 elem.setAttribute("w:author", self.author)
             if not elem.hasAttribute("w:date"):
