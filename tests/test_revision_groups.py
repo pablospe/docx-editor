@@ -1068,3 +1068,275 @@ class TestMonotonicChangeIds:
             with manager._grouped():
                 with manager._grouped():
                     pass  # pragma: no cover
+
+
+class TestChangesetTier:
+    """Changeset tier (ISSUES.md #54): one whole call ⊇ ≥1 group ⊇ revisions.
+
+    A changeset is the ``(author, date)`` equivalence class over groups — a
+    global (non-contiguous) class, not a contiguous run. A single edit is a
+    one-group changeset; a whole ``batch_edit``/``batch_rewrite`` is one
+    changeset over all its groups. Recorded live and reconstructed on reopen,
+    exactly like the group tier one level down. There is no fourth tier.
+    """
+
+    def test_single_edit_is_one_group_one_changeset(self, doc):
+        ref = find_ref(doc, "quick brown fox")
+        result = doc.replace("quick", "speedy", paragraph=ref)
+
+        assert result.group_id is not None
+        assert result.changeset_id is not None
+        for rev in doc.list_revisions():
+            assert rev.group_id == result.group_id
+            assert rev.changeset_id == result.changeset_id
+            assert rev.changeset_source == "recorded"
+            assert f", cs={result.changeset_id}" in repr(rev)
+        # accept_changeset applies the whole edit as a unit.
+        assert doc.accept_changeset(result.changeset_id) == 2
+        assert "speedy brown fox" in _paragraph_text(doc, 1)
+        assert doc.list_revisions() == []
+
+    def test_batch_edit_is_one_changeset_over_many_groups(self, doc):
+        ref1 = find_ref(doc, "quick brown fox")
+        ref2 = find_ref(doc, "sample document for testing")
+        results = doc.batch_edit([
+            EditOperation.replace("quick", "speedy", paragraph=ref1),
+            EditOperation.delete("sample ", paragraph=ref2),
+        ])
+
+        # Two groups (one per op), non-contiguous (different paragraphs), one
+        # changeset — the headline: a changeset is not a contiguous run.
+        assert results[0].group_id != results[1].group_id
+        assert results[0].changeset_id is not None
+        assert results[0].changeset_id == results[1].changeset_id
+        assert {rev.changeset_id for rev in doc.list_revisions()} == {results[0].changeset_id}
+
+        # reject_changeset undoes the entire batch (both groups' 3 revisions).
+        assert doc.reject_changeset(results[0].changeset_id) == 3
+        assert "quick brown fox" in _paragraph_text(doc, 1)
+        assert "sample document for testing" in doc.get_visible_text()
+        assert doc.list_revisions() == []
+
+    def test_batch_rewrite_is_one_changeset_one_group_per_rewrite(self, doc):
+        ref1 = find_ref(doc, "quick brown fox")
+        ref2 = find_ref(doc, "sample document for testing")
+        results = doc.batch_rewrite([
+            (ref1, "A slow red cat sits."),
+            (ref2, "This paragraph was fully rewritten for the test."),
+        ])
+
+        # The inner rewrite_paragraph _changeset() calls no-op via reentrancy:
+        # one changeset for the whole call, one group per rewrite.
+        assert results[0].group_id != results[1].group_id
+        assert results[0].changeset_id is not None
+        assert results[0].changeset_id == results[1].changeset_id
+        assert {rev.changeset_id for rev in doc.list_revisions()} == {results[0].changeset_id}
+
+    def test_standalone_rewrite_is_its_own_changeset(self, doc):
+        # The reentrancy flip side: two standalone rewrite_paragraph calls are
+        # two changesets (each is its own outermost boundary).
+        ref1 = find_ref(doc, "quick brown fox")
+        ref2 = find_ref(doc, "sample document for testing")
+        r1 = doc.rewrite_paragraph(ref1, "A slow red cat sits.")
+        r2 = doc.rewrite_paragraph(ref2, "Entirely different sample text.")
+
+        assert r1.changeset_id is not None and r2.changeset_id is not None
+        assert r1.changeset_id != r2.changeset_id
+        assert r1.group_id != r2.group_id
+
+    def test_unknown_changeset_raises(self, doc):
+        with pytest.raises(RevisionError, match="Unknown changeset: 999"):
+            doc.accept_changeset(999)
+        with pytest.raises(RevisionError, match="Unknown changeset: 999"):
+            doc.reject_changeset(999)
+
+    def test_changeset_flag_resets_after_edit(self, doc):
+        ref = find_ref(doc, "quick brown fox")
+        doc.replace("quick", "speedy", paragraph=ref)
+        assert doc._revision_manager._in_changeset is False
+
+    def test_batch_edit_rollback_restores_changeset_registry(self, doc):
+        ref1 = find_ref(doc, "quick brown fox")
+        manager = doc._revision_manager
+        cs_counter_before = manager._changeset_counter
+
+        with pytest.raises(BatchOperationError):
+            doc.batch_edit([
+                EditOperation.replace("quick", "speedy", paragraph=ref1),
+                EditOperation.delete("no such text anywhere", paragraph=ref1),
+            ])
+
+        # No ghost changeset from the failed batch; the flag is released.
+        assert manager._changeset_counter == cs_counter_before
+        assert manager._changesets == {}
+        assert manager._group_changesets == {}
+        assert manager._changeset_sources == {}
+        assert manager._in_changeset is False
+        assert doc.list_revisions() == []
+
+    def test_roundtrip_two_paragraph_batch_plus_single_edit(self, temp_docx, frozen_clock):
+        # Headline round-trip: a batch over two paragraphs (one changeset,
+        # two groups) plus a separate single edit (a second changeset). After
+        # save + reopen: exactly 2 inferred changesets / 3 groups, and each
+        # changeset resolves as a unit.
+        with Document.open(temp_docx) as doc:
+            ref1 = find_ref(doc, "quick brown fox")
+            ref2 = find_ref(doc, "sample document for testing")
+            results = doc.batch_edit([
+                EditOperation.replace("quick", "speedy", paragraph=ref1),
+                EditOperation.delete("sample ", paragraph=ref2),
+            ])
+            third = doc.replace("well-structured", "tidy", paragraph=find_ref(doc, "well-structured document"))
+            # Recorded: 3 groups, 2 changesets (the batch's two groups share
+            # one changeset; the single edit gets a collision-bumped date and
+            # its own changeset).
+            assert len({r.group_id for r in [*results, third]}) == 3
+            assert results[0].changeset_id == results[1].changeset_id
+            assert third.changeset_id not in {results[0].changeset_id}
+            manager = doc._revision_manager
+            assert len(manager._changesets) == 2
+            assert len(manager._groups) == 3
+            doc.save()
+
+        with Document.open(temp_docx) as doc:
+            revisions = doc.list_revisions()
+            by_cs: dict[int, set[int]] = {}
+            for rev in revisions:
+                assert rev.changeset_id is not None
+                assert rev.group_id is not None
+                assert rev.changeset_source == "inferred"
+                by_cs.setdefault(rev.changeset_id, set()).add(rev.group_id)
+            # Exactly two changesets; three groups total.
+            assert len(by_cs) == 2
+            assert len({gid for gids in by_cs.values() for gid in gids}) == 3
+            # One changeset spans two groups (the batch), the other spans one.
+            assert sorted(len(gids) for gids in by_cs.values()) == [1, 2]
+
+            batch_cs = next(cs for cs, gids in by_cs.items() if len(gids) == 2)
+            single_cs = next(cs for cs, gids in by_cs.items() if len(gids) == 1)
+            # Each changeset resolves as a unit, independently.
+            assert doc.accept_changeset(batch_cs) == 3  # replace (del+ins) + delete
+            assert doc.reject_changeset(single_cs) == 2  # replace (del+ins) undone
+            assert doc.list_revisions() == []
+            text = doc.get_visible_text()
+            assert "speedy brown fox" in text
+            assert "sample " not in text
+            assert "well-structured" in text  # the single edit was rejected
+
+    def test_same_paragraph_batch_over_merges_after_reopen(self, temp_docx, frozen_clock):
+        # Accepted imprecision (carried up from #46): two batch ops in the
+        # SAME paragraph share (author, date) and paragraph, so #46 merges
+        # them into ONE group on reopen — hence one changeset. Pinned so the
+        # collapse is a known contract, not a silent regression.
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            results = doc.batch_edit([
+                EditOperation.replace("quick", "speedy", paragraph=ref),
+                EditOperation.replace("lazy", "sleepy", paragraph=ref),
+            ])
+            # Recorded: two groups, one changeset.
+            assert results[0].group_id != results[1].group_id
+            assert results[0].changeset_id == results[1].changeset_id
+            doc.save()
+
+        with Document.open(temp_docx) as doc:
+            revisions = doc.list_revisions()
+            assert len(revisions) == 4
+            gids = {rev.group_id for rev in revisions}
+            cs_ids = {rev.changeset_id for rev in revisions}
+            assert len(gids) == 1  # #46 merges same-paragraph same-date ops
+            assert len(cs_ids) == 1 and None not in cs_ids
+
+    def test_rump_changeset_after_partial_word_accept(self, temp_xml):
+        # A changeset spanned two paragraphs (revs 1-4, one author+date).
+        # Word accepted rev 1 (unwrapped it to plain text), leaving revs
+        # 2,3,4. The survivors reconstruct as a rump changeset — its first
+        # group lost a member — that reject_changeset resolves as a unit.
+        survivors = (
+            f"<w:p><w:r><w:t>one </w:t></w:r>{_del_xml(2, 'two ')}</w:p>"
+            f"<w:p>{_ins_xml(3, 'three ')}{_del_xml(4, 'four')}</w:p>"
+        )
+        manager = _make_manager(temp_xml(survivors))
+
+        # Two groups (one per paragraph), one changeset (shared author+date).
+        assert len(manager._groups) == 2
+        (cs_id,) = manager._changesets
+        assert manager._changeset_sources[cs_id] == "inferred"
+        assert set(manager.changeset_groups(cs_id)) == set(manager._groups)
+        # The rump resolves without error (3 survivors across two groups).
+        assert manager.reject_changeset(cs_id) == 3
+        assert manager.list_revisions() == []
+
+    def test_partially_resolved_changeset_is_rump_tolerant(self, temp_xml):
+        # Resolve one group of a two-group changeset individually, then the
+        # changeset still resolves the survivors (skips the resolved pair).
+        body = (
+            f"<w:p>{_ins_xml(1, 'one ')}{_del_xml(2, 'two ')}</w:p>"
+            f"<w:p>{_ins_xml(3, 'three ')}{_del_xml(4, 'four')}</w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+        (cs_id,) = manager._changesets
+
+        first_group = manager.group_id_of(1)
+        assert first_group is not None
+        assert manager.accept_group(first_group) == 2  # revs 1,2 resolved
+
+        assert manager.accept_changeset(cs_id) == 2  # only revs 3,4 remain
+        assert manager.list_revisions() == []
+
+    def test_reconstruction_partitions_by_author_date(self, temp_xml):
+        # Same (author, date) in two paragraphs → two groups, ONE changeset
+        # (global equivalence class). A different date → a distinct changeset.
+        body = (
+            f"<w:p>{_ins_xml(1, 'a')}</w:p>"
+            f"<w:p>{_ins_xml(2, 'b')}</w:p>"  # same author+date as rev 1
+            f"<w:p>{_ins_xml(3, 'c', date=DATE_B)}</w:p>"  # different date
+        )
+        manager = _make_manager(temp_xml(body))
+
+        assert manager._groups == {1: (1,), 2: (2,), 3: (3,)}
+        # Groups 1 and 2 share a changeset; group 3 is its own.
+        cs1 = manager.changeset_id_of(1)
+        cs2 = manager.changeset_id_of(2)
+        cs3 = manager.changeset_id_of(3)
+        assert cs1 is not None and cs3 is not None
+        assert cs1 == cs2 and cs1 != cs3
+        assert set(manager.changeset_groups(cs1)) == {1, 2}
+        assert manager.changeset_groups(cs3) == (3,)
+        assert all(src == "inferred" for src in manager._changeset_sources.values())
+
+    def test_ungrouped_revision_has_no_changeset(self, temp_xml):
+        # A revision with no date is ungroupable → no group, no changeset.
+        body = (
+            f"<w:p>{_ins_xml(1, 'one ')}"
+            f'<w:ins w:id="2" w:author="{AUTHOR_A}"><w:r><w:t>no date</w:t></w:r></w:ins></w:p>'
+        )
+        manager = _make_manager(temp_xml(body))
+        by_id = {rev.id: rev for rev in manager.list_revisions()}
+
+        assert by_id[1].changeset_id is not None
+        assert by_id[1].changeset_source == "inferred"
+        assert by_id[2].group_id is None
+        assert by_id[2].changeset_id is None
+        assert by_id[2].changeset_source is None
+        assert "cs=" not in repr(by_id[2])
+
+    def test_foreign_revisions_carry_inferred_changesets(self, test_data_dir, temp_dir):
+        # Every foreign revision now carries an inferred changeset, and
+        # changeset membership never crosses an (author, date) boundary
+        # (same changeset ⇒ same author+date — the equivalence-class contract).
+        fixture = test_data_dir / "OXML_TrackChanges_Test.docx"
+        dest = temp_dir / "foreign.docx"
+        shutil.copy(fixture, dest)
+        with Document.open(dest) as doc:
+            revisions = doc.list_revisions()
+            assert revisions
+            assert all(rev.changeset_id is not None for rev in revisions)
+            assert all(rev.changeset_source == "inferred" for rev in revisions)
+            assert all(f", cs={rev.changeset_id}" in repr(rev) for rev in revisions)
+
+            by_cs: dict[int, set[tuple[str, object]]] = {}
+            for rev in revisions:
+                assert rev.changeset_id is not None
+                by_cs.setdefault(rev.changeset_id, set()).add((rev.author, rev.date))
+            assert all(len(keys) == 1 for keys in by_cs.values())

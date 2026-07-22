@@ -351,9 +351,15 @@ class Document:
         return f"P{ref.index}#{new_hash}"
 
     def _edit_result(self, old_ref: str, group_id: int | None, paragraphs: list[Element] | None = None) -> EditResult:
-        """Build an EditResult from a mutated paragraph's old ref and its group."""
+        """Build an EditResult from a mutated paragraph's old ref, group, and changeset."""
         revision_ids = self._revision_manager.group_revisions(group_id) if group_id is not None else ()
-        return EditResult(self._compute_new_ref(old_ref, paragraphs), group_id=group_id, revision_ids=revision_ids)
+        changeset_id = self._revision_manager.changeset_id_of(group_id) if group_id is not None else None
+        return EditResult(
+            self._compute_new_ref(old_ref, paragraphs),
+            group_id=group_id,
+            revision_ids=revision_ids,
+            changeset_id=changeset_id,
+        )
 
     def paragraph_count(self) -> int:
         """Return the total number of paragraphs in the document.
@@ -1423,6 +1429,77 @@ class Document:
         """
         self._ensure_open()
         return self._revision_manager.reject_group(group_id)
+
+    def accept_changeset(self, changeset_id: int) -> int:
+        """Accept every revision created by one whole call (a changeset).
+
+        A changeset is the intent tier — one level above a group:
+
+            one call (a single edit, or an entire batch_edit/batch_rewrite)
+            = one changeset ⊇ one-or-more groups ⊇ revisions
+
+        Accepting the changeset applies every group the call created. Its
+        ``changeset_id`` is carried by each EditResult the call returned (and
+        by every Revision's ``changeset_id``). There is no tier above this —
+        the model stops at three (revision < group < changeset).
+
+        A changeset is the ``(author, date)`` equivalence class over groups:
+        for edits made here it bundles the whole call; for revisions already
+        in the file it partitions the reconstructed groups by identical
+        author + date (``changeset_source == "inferred"``). A ``batch_edit``
+        whose ops land in different paragraphs is therefore one changeset even
+        though its groups are non-contiguous.
+
+        Changeset ids are in-memory and per-open-Document, renumbered on each
+        open, exactly like group ids — always use one from this session's
+        EditResult or list_revisions(). Rump-tolerant: after Word has already
+        resolved part of the changeset, accepting resolves whatever survives.
+
+        Args:
+            changeset_id: Changeset id from an EditResult (or a Revision's
+                ``changeset_id``)
+
+        Returns:
+            Number of revisions accepted across the changeset's groups.
+            Members already resolved individually are skipped (and not
+            counted).
+
+        Raises:
+            RevisionError: If the changeset id is unknown to this open Document.
+
+        Example:
+            results = doc.batch_edit([...])
+            doc.accept_changeset(results[0].changeset_id)  # accept the whole batch
+        """
+        self._ensure_open()
+        return self._revision_manager.accept_changeset(changeset_id)
+
+    def reject_changeset(self, changeset_id: int) -> int:
+        """Reject every revision created by one whole call (a changeset).
+
+        The counterpart of :meth:`accept_changeset` — rejecting the changeset
+        undoes the entire call (every group), restoring the exact pre-call
+        text. Same changeset semantics and lifetime as accept_changeset(),
+        including inferred changesets after reopen. No tier exists above this.
+
+        Args:
+            changeset_id: Changeset id from an EditResult (or a Revision's
+                ``changeset_id``)
+
+        Returns:
+            Number of revisions rejected across the changeset's groups.
+            Members already resolved individually are skipped (and not
+            counted).
+
+        Raises:
+            RevisionError: If the changeset id is unknown to this open Document.
+
+        Example:
+            results = doc.batch_edit([...])
+            doc.reject_changeset(results[0].changeset_id)  # undo the whole batch
+        """
+        self._ensure_open()
+        return self._revision_manager.reject_changeset(changeset_id)
 
     def accept_all(self, author: str | None = None) -> int:
         """Accept all revisions.
