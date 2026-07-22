@@ -423,8 +423,13 @@ for r in revisions:
     print(f"  at {r.paragraph_ref} occurrence={r.occurrence}")
     # Nesting: e.g. a foreign deletion inside another author's insertion
     print(f"  nested_under={r.nested_under} contains_ids={r.contains_ids}")
-    # Group: revisions created by the same edit in this session share it
-    print(f"  group_id={r.group_id}")
+    # Group: revisions from the same logical edit share it. group_source
+    # says how it was established: "recorded" (edit made in this session)
+    # or "inferred" (reconstructed at parse time for revisions already in
+    # the file). None only for ungroupable revisions (missing author/date,
+    # outside any paragraph, duplicated id, or a mid-session split half
+    # of a foreign insertion).
+    print(f"  group_id={r.group_id} group_source={r.group_source}")
 
 # Filter by author
 their_changes = doc.list_revisions(author="OtherUser")
@@ -456,10 +461,17 @@ result = doc.rewrite_paragraph("P3#a7b2", "Entirely new paragraph text.")
 doc.reject_group(result.group_id)   # undo the whole rewrite, or:
 # doc.accept_group(result.group_id) # apply it in full
 
-# Groups are in-memory and per-open-Document: after close()/reopen,
-# revisions report group_id=None and old group ids raise RevisionError.
-# save() keeps groups alive (the Document stays open). Foreign/pre-session
-# revisions never have a group — resolve those by id or author.
+# Group ids are in-memory and per-open-Document, renumbered on each open.
+# Pre-existing revisions (previous sessions, foreign reviewers, Word
+# round-trips) get INFERRED groups reconstructed at parse time: contiguous
+# same-paragraph revisions sharing identical w:author + w:date are one
+# group (r.group_source == "inferred"; session edits are "recorded"). So
+# accept_group/reject_group work after reopen too — but always take the
+# group_id from THIS session's list_revisions()/EditResult; a stale id
+# from a previous session may resolve to a different group. Caveat:
+# w:date has second precision, so two edits to the same paragraph in the
+# same second merge into one inferred group. save() keeps groups alive
+# (the Document stays open).
 
 # Accept or reject all revisions (returns count of revisions processed)
 doc.accept_all()
@@ -541,11 +553,15 @@ doc.save("resolved.docx")
 doc.close()
 ```
 
-To act on a subset, target revisions by ID: `list_revisions()` (optionally
-`author=`- or `paragraph=`-filtered), pick by `.text`/`.type`/`.paragraph_ref`,
-then `accept_revision(id)` / `reject_revision(id)`. For edits made in the
-current session, prefer `accept_group()`/`reject_group()` with the
-`EditResult.group_id` — it resolves everything one edit created, in one call.
+To act on a subset, prefer whole groups: `accept_group()`/`reject_group()`
+resolves everything one edit created in one call. For this session's edits
+take the `EditResult.group_id`; for pre-existing revisions (a reviewer
+session over someone else's redlines, or your own after reopen) take the
+`group_id` from `list_revisions()` — those groups are inferred at parse time
+(`group_source == "inferred"`), so one logical edit still resolves as a
+unit. Fall back to per-id `accept_revision(id)` / `reject_revision(id)`
+(pick by `.text`/`.type`/`.paragraph_ref`) only for revisions inside a group
+you don't want to resolve whole.
 
 ## Redlining Workflow (Document Review)
 
@@ -721,7 +737,7 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `AmbiguousTextError`   | `search_text`, `paragraph_ref`, `paragraph_preview`, `total_occurrences`                | The target matched more than once with no `occurrence` given. Enumerate with `find_all()` and pick, or pass an explicit `occurrence` (0-based).      |
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` or call `list_paragraphs()` to pick a valid ref.                 |
 | `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (a missing paragraph ref, an element that is not an `EditOperation`, or a duplicate paragraph in `batch_rewrite` — `batch_edit` allows repeats, applied sequentially). Batch methods never raise the inner types directly. |
-| `RevisionError`        | `revision_id`, `group_id` (set when the error is about that id, else None)              | Unknown `group_id` passed to `accept_group()`/`reject_group()`. Groups are in-memory and per-open-Document: use the `EditResult.group_id` you were handed in this session; after `close()`/reopen resolve by revision id or author instead. |
+| `RevisionError`        | `revision_id`, `group_id` (set when the error is about that id, else None)              | Unknown `group_id` passed to `accept_group()`/`reject_group()`. Group ids are per-open-Document and renumbered on each open (recorded for this session's edits, inferred for pre-existing revisions): use a `group_id` from this session's `EditResult` or `list_revisions()`, never one saved from a previous session. |
 | `CommentError`         | `comment_id` (set when a comment id was targeted, else None)                            | Replying to a nonexistent comment id — call `list_comments()` and retry with a real id. With `comment_id=None` the arguments themselves were invalid; fix them per the message. |
 | `DocumentClosedError`  | `path`                                                                                  | The `Document` was used after `close()`. Reopen with `Document.open(e.path)`; edits not saved before the `close()` were discarded with the workspace. |
 | `DocumentNotFoundError`| `path`                                                                                  | The file doesn't exist at `path` — fix the path (typo, wrong cwd) before retrying. |
