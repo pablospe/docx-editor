@@ -318,8 +318,9 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 # Machine-specific prefix before a docx_editor/ path component. The lookahead
 # requires a separator immediately before docx_editor/, so a user path like
-# /x/my_docx_editor/foo.py — or a document path inside an exception message,
-# which has no docx_editor/ component — is untouched.
+# /x/my_docx_editor/foo.py stays untouched. Any literal docx_editor/ component
+# matches, though — even a user document under a directory so named — but
+# stripping only ever rewrites traceback text, never structured error fields.
 _INTERNAL_PATH_RE = re.compile(r"(?:[A-Za-z]:)?[\\/~]\S*?[\\/](?=docx_editor[\\/])")
 # ipykernel writes each executed cell to /tmp/ipykernel_<pid>/<n>.py.
 _CELL_PATH_RE = re.compile(r"(?:[A-Za-z]:)?[\\/~]\S*?[\\/]ipykernel_\d+[\\/]\d+\.py")
@@ -328,8 +329,8 @@ _CELL_PATH_RE = re.compile(r"(?:[A-Za-z]:)?[\\/~]\S*?[\\/]ipykernel_\d+[\\/]\d+\
 def _strip_internal_paths(text: str) -> str:
     """Rewrite machine-specific paths in a traceback to stable relative forms.
 
-    Library frames become ``docx_editor/...``; ipykernel cell files become
-    ``<session-cell>``. Keeps tracebacks compact and free of absolute repo
+    Library frames become `docx_editor/...`; ipykernel cell files become
+    `<session-cell>`. Keeps tracebacks compact and free of absolute repo
     paths that mean nothing to a CLI consumer.
     """
     return _CELL_PATH_RE.sub("<session-cell>", _INTERNAL_PATH_RE.sub("", text))
