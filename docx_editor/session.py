@@ -316,6 +316,25 @@ def session_status(connection_file: Path = DEFAULT_CONNECTION_FILE) -> SessionSt
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
+# Machine-specific prefix before a docx_editor/ path component. The lookahead
+# requires a separator immediately before docx_editor/, so a user path like
+# /x/my_docx_editor/foo.py stays untouched. Any literal docx_editor/ component
+# matches, though — even a user document under a directory so named — but
+# stripping only ever rewrites traceback text, never structured error fields.
+_INTERNAL_PATH_RE = re.compile(r"(?:[A-Za-z]:)?[\\/~]\S*?[\\/](?=docx_editor[\\/])")
+# ipykernel writes each executed cell to /tmp/ipykernel_<pid>/<n>.py.
+_CELL_PATH_RE = re.compile(r"(?:[A-Za-z]:)?[\\/~]\S*?[\\/]ipykernel_\d+[\\/]\d+\.py")
+
+
+def _strip_internal_paths(text: str) -> str:
+    """Rewrite machine-specific paths in a traceback to stable relative forms.
+
+    Library frames become `docx_editor/...`; ipykernel cell files become
+    `<session-cell>`. Keeps tracebacks compact and free of absolute repo
+    paths that mean nothing to a CLI consumer.
+    """
+    return _CELL_PATH_RE.sub("<session-cell>", _INTERNAL_PATH_RE.sub("", text))
+
 
 ExecStatus = Literal["ok", "error", "timeout", "dead"]
 
@@ -412,7 +431,7 @@ def exec_code(code: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
                 result = content.get("data", {}).get("text/plain", result)
             elif msg_type == "error":
                 status = "error"
-                traceback = _ANSI_RE.sub("", "\n".join(content["traceback"]))
+                traceback = _strip_internal_paths(_ANSI_RE.sub("", "\n".join(content["traceback"])))
             elif msg_type == "status" and content["execution_state"] == "idle":
                 break
 
@@ -437,13 +456,63 @@ def exec_code(code: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
 # call) — same class of pollution as IPython's own In/Out.
 _EVAL_TEMPLATE = """\
 def __docx_session_eval():
+    import dataclasses
+    import datetime
     import json
-    value = eval(compile(%s, "<docx-session eval>", "eval"), globals())
+    import pathlib
+    import traceback
+
+    def _default(o):
+        # Library dataclasses (SearchResult, Revision, Comment, ...) ride out
+        # as real JSON objects instead of opaque reprs. The type guard keeps a
+        # bare dataclass *class* on the repr path.
+        if dataclasses.is_dataclass(o) and not isinstance(o, type):
+            return dataclasses.asdict(o)
+        if isinstance(o, (datetime.datetime, datetime.date)):
+            return o.isoformat()
+        if isinstance(o, pathlib.PurePath):
+            return str(o)
+        raise TypeError(f"{type(o).__name__} is not JSON serializable")
+
+    def _err_payload(exc, depth=0):
+        # type/message plus every structured recovery field the exception
+        # carries (actual_hash, total_occurrences, ...). A nested exception
+        # (BatchOperationError.original) recurses, depth-capped so a
+        # pathological self-referential chain cannot hang the wrapper.
+        payload = {"type": type(exc).__name__, "message": str(exc)}
+        for key, val in vars(exc).items():
+            if key in payload:
+                continue
+            if isinstance(val, BaseException):
+                payload[key] = _err_payload(val, depth + 1) if depth < 3 else repr(val)
+                continue
+            try:
+                json.dumps(val, allow_nan=False, default=_default)
+            except Exception:
+                payload[key] = repr(val)
+            else:
+                payload[key] = val
+        return payload
+
+    try:
+        value = eval(compile(%s, "<docx-session eval>", "eval"), globals())
+    except Exception as e:
+        # tb_next skips this wrapper's own frame, so the trace starts at
+        # <docx-session eval> (for a compile() SyntaxError it is None and the
+        # caret-formatted exception alone comes back). This is a plain, few-
+        # hundred-char traceback, not IPython's multi-kilobyte verbose one.
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__.tb_next))
+        try:
+            return json.dumps({"error": _err_payload(e), "traceback": tb}, allow_nan=False, default=_default)
+        except Exception:
+            return json.dumps({"error": {"type": type(e).__name__, "message": str(e)}, "traceback": tb})
     try:
         # allow_nan=False: NaN/Infinity would otherwise ride out as bare tokens
-        # that are not valid RFC-8259 JSON; the ValueError routes them to repr.
-        return json.dumps({"value": value, "serialized": True}, allow_nan=False)
-    except (TypeError, ValueError, OverflowError):
+        # that are not valid RFC-8259 JSON. except Exception, not just
+        # (TypeError, ValueError): an exotic dataclass field may fail deepcopy
+        # inside asdict — degrade to repr, never crash the transport.
+        return json.dumps({"value": value, "serialized": True}, allow_nan=False, default=_default)
+    except Exception:
         return json.dumps({"value": repr(value), "serialized": False})
 __docx_session_eval()
 """
@@ -459,16 +528,27 @@ class EvalResult:
     stdout: str = ""
     stderr: str = ""
     traceback: str | None = None
+    error: dict[str, Any] | None = None  # {"type", "message", <structured fields>} when the expression raised
 
 
 def eval_code(expr: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: float = 120.0) -> EvalResult:
     """Evaluate an expression in the session kernel and return its value.
 
     JSON-serializable values arrive as their JSON equivalents (serialized=True;
-    a tuple arrives as a list); anything else — including non-finite floats,
-    which have no valid JSON form — arrives as its repr string
-    (serialized=False). Statements ('x = 5') are a SyntaxError — use exec_code
-    for those.
+    a tuple arrives as a list); library dataclasses (SearchResult,
+    ParagraphInfo, ParagraphLocation, Revision, Comment, ...) arrive as JSON
+    objects with datetimes as ISO strings. Anything else — including
+    non-finite floats, which have no valid JSON form — arrives as its repr
+    string (serialized=False). Statements ('x = 5') are a SyntaxError — use
+    exec_code for those.
+
+    When the expression raises, status is "error" and `error` holds
+    {"type", "message", <structured recovery fields>} captured from the
+    exception object kernel-side (e.g. actual_hash for a HashMismatchError),
+    with a compact path-stripped traceback. Exceptions that bypass the
+    kernel-side capture (KeyboardInterrupt/SystemExit, transport failures)
+    still ride the exec path: `error` stays None and `traceback` holds the
+    IPython-formatted trace.
 
     Args:
         expr: Python expression to evaluate in the session
@@ -491,6 +571,14 @@ def eval_code(expr: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
         payload = json.loads(ast.literal_eval(res.result))
     except (ValueError, SyntaxError) as e:
         raise SessionError(f"eval transport failed: could not decode the kernel's reply: {e}") from e
+    if "error" in payload:
+        return EvalResult(
+            status="error",
+            stdout=res.stdout,
+            stderr=res.stderr,
+            traceback=_strip_internal_paths(payload["traceback"]),
+            error=payload["error"],
+        )
     return EvalResult(
         status="ok",
         value=payload["value"],

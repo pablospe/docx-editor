@@ -2,10 +2,13 @@
 
 import io
 import json
+import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -208,6 +211,207 @@ class TestEval:
         monkeypatch.setattr(session_mod, "exec_code", lambda *a, **k: ExecResult(status="ok", result="{not a literal"))
         with pytest.raises(SessionError, match="could not decode"):
             eval_code("1 + 1", connection_file=tmp_path / "unused.json")
+
+
+@pytest.fixture(scope="class")
+def eval_doc(session_conn, tmp_path_factory):
+    """A document opened as `doc` inside the shared kernel, closed at class teardown."""
+    src = Path(__file__).parent / "test_data" / "simple.docx"
+    path = tmp_path_factory.mktemp("evaldoc") / "doc.docx"
+    shutil.copy(src, path)
+    r = exec_code(
+        f"from docx_editor import Document, EditOperation; doc = Document.open({str(path)!r}, author='Eval')",
+        connection_file=session_conn,
+    )
+    assert r.status == "ok", r.traceback
+    yield session_conn
+    exec_code("doc.close()", connection_file=session_conn)
+
+
+class TestEvalLibraryTypes:
+    """Library dataclasses must arrive as real JSON objects, not opaque reprs.
+
+    simple.docx: P1 "Sample Test Document" / P2 "The quick brown fox jumps
+    over the lazy dog." / P3 "This is a sample document for testing the
+    editing features." / P4 "A well-structured document helps ensure
+    comprehensive test coverage."
+    """
+
+    def test_search_result_arrives_as_json(self, eval_doc):
+        res = eval_code("doc.find_text('quick')", connection_file=eval_doc)
+        assert res.status == "ok", res.traceback
+        assert res.serialized is True
+        sr = res.value
+        assert sr["text"] == "quick"
+        assert isinstance(sr["start"], int)
+        assert isinstance(sr["end"], int)
+        assert sr["paragraph_ref"].startswith("P2#")
+        assert sr["paragraph_occurrence"] == 0
+        assert sr["spans_revision"] is False
+        assert sr["paragraph_index"] == 2
+
+    def test_find_all_arrives_as_json_list(self, eval_doc):
+        res = eval_code("doc.find_all('document')", connection_file=eval_doc)
+        assert res.status == "ok", res.traceback
+        assert res.serialized is True
+        assert [m["paragraph_index"] for m in res.value] == [3, 4]
+        assert all(m["text"] == "document" for m in res.value)
+
+    def test_paragraph_info_arrives_as_json(self, eval_doc):
+        res = eval_code("doc.get_paragraph(1)", connection_file=eval_doc)
+        assert res.status == "ok", res.traceback
+        assert res.serialized is True
+        assert res.value["index"] == 1
+        assert res.value["ref"].startswith("P1#")
+        assert res.value["text"] == "Sample Test Document"
+
+    def test_paragraph_location_arrives_as_json(self, eval_doc):
+        res = eval_code("doc.get_paragraph_location(doc.get_paragraph(2).ref)", connection_file=eval_doc)
+        assert res.status == "ok", res.traceback
+        assert res.serialized is True
+        loc = res.value
+        assert loc["table"] is None
+        assert loc["list"] is None
+        assert loc["heading_path"] == []  # tuple arrives as a list
+        assert loc["section"] == 1
+
+    def test_revision_arrives_as_json_with_iso_date(self, eval_doc):
+        r = exec_code("doc.replace('quick', 'swift', paragraph=doc.get_paragraph(2).ref)", connection_file=eval_doc)
+        assert r.status == "ok", r.traceback
+        res = eval_code("doc.list_revisions()", connection_file=eval_doc)
+        assert res.status == "ok", res.traceback
+        assert res.serialized is True
+        assert len(res.value) > 0
+        for rev in res.value:
+            assert rev["type"] in ("insertion", "deletion")
+            assert rev["author"] == "Eval"
+            assert rev["date"] is None or "T" in rev["date"]  # ISO string, not a repr
+            assert isinstance(rev["contains_ids"], list)
+
+    def test_comment_arrives_as_json_with_nested_replies(self, eval_doc):
+        r = exec_code(
+            "cid = doc.add_comment('lazy dog', 'Check this.'); doc.reply_to_comment(cid, 'Agreed.')",
+            connection_file=eval_doc,
+        )
+        assert r.status == "ok", r.traceback
+        res = eval_code("doc.list_comments()", connection_file=eval_doc)
+        assert res.status == "ok", res.traceback
+        assert res.serialized is True
+        comment = res.value[0]
+        assert comment["text"] == "Check this."
+        assert comment["resolved"] is False
+        assert comment["date"] is None or "T" in comment["date"]
+        assert comment["replies"][0]["text"] == "Agreed."  # nested dataclass, deep-converted
+
+
+class TestEvalErrorEnvelope:
+    """Expression errors carry {type, message, <recovery fields>} in `error`."""
+
+    def test_hash_mismatch_structured_fields(self, eval_doc):
+        res = eval_code("doc.replace('Sample', 'X', paragraph='P1#0000')", connection_file=eval_doc)
+        assert res.status == "error"
+        assert res.error is not None
+        assert res.error["type"] == "HashMismatchError"
+        assert res.error["paragraph_index"] == 1
+        assert res.error["expected_hash"] == "0000"
+        assert re.fullmatch(r"[0-9a-f]{4}", res.error["actual_hash"])
+        assert "Sample Test Document" in res.error["paragraph_preview"]
+
+    def test_text_not_found_fields(self, eval_doc):
+        res = eval_code(
+            "doc.replace('no-such-text', 'x', paragraph=doc.get_paragraph(3).ref)",
+            connection_file=eval_doc,
+        )
+        assert res.status == "error"
+        assert res.error is not None
+        assert res.error["type"] == "TextNotFoundError"
+        assert res.error["search_text"] == "no-such-text"
+        assert res.error["paragraph_ref"].startswith("P3#")
+        assert "sample document" in res.error["paragraph_preview"]
+
+    def test_occurrence_overflow_fields(self, eval_doc):
+        res = eval_code(
+            "doc.replace('document', 'doc', paragraph=doc.get_paragraph(3).ref, occurrence=9)",
+            connection_file=eval_doc,
+        )
+        assert res.status == "error"
+        assert res.error is not None
+        assert res.error["type"] == "TextNotFoundError"
+        assert res.error["occurrence"] == 9
+        assert res.error["total_occurrences"] == 1
+
+    def test_path_field_coerced_to_string(self, eval_doc):
+        res = eval_code("Document.open('/nope/missing.docx')", connection_file=eval_doc)
+        assert res.status == "error"
+        assert res.error is not None
+        assert res.error["type"] == "DocumentNotFoundError"
+        assert res.error["path"] == "/nope/missing.docx"
+
+    def test_batch_error_nests_original_exception(self, eval_doc):
+        res = eval_code(
+            "doc.batch_edit([EditOperation.replace('quick', 'fast', paragraph='P2#0000')])",
+            connection_file=eval_doc,
+        )
+        assert res.status == "error"
+        assert res.error is not None
+        assert res.error["type"] == "BatchOperationError"
+        assert res.error["operation_index"] == 0
+        original = res.error["original"]
+        assert original["type"] == "HashMismatchError"
+        assert original["expected_hash"] == "0000"
+        assert re.fullmatch(r"[0-9a-f]{4}", original["actual_hash"])
+
+    def test_non_library_error_has_no_stray_fields(self, eval_doc):
+        res = eval_code("1 / 0", connection_file=eval_doc)
+        assert res.status == "error"
+        assert res.error == {"type": "ZeroDivisionError", "message": "division by zero"}
+
+    def test_session_survives_enveloped_error(self, eval_doc):
+        assert eval_code("doc.replace('x', 'y', paragraph='P1#0000')", connection_file=eval_doc).status == "error"
+        res = eval_code("len(doc.list_paragraphs())", connection_file=eval_doc)
+        assert res.status == "ok"
+        assert res.value == 4
+
+    def test_main_eval_error_envelope_has_structured_fields(self, eval_doc, capsys):
+        expr = "doc.replace('Sample', 'X', paragraph='P1#0000')"
+        assert main(["eval", expr, "--session-file", str(eval_doc)]) == 1
+        envelope = json.loads(capsys.readouterr().out)
+        assert envelope["status"] == "error"
+        assert envelope["value"] is None
+        assert envelope["serialized"] is False
+        assert envelope["error"]["type"] == "HashMismatchError"
+        assert envelope["error"]["expected_hash"] == "0000"
+        assert "HashMismatchError" in envelope["traceback"]
+
+    def test_eval_error_traceback_is_compact_and_path_free(self, eval_doc):
+        res = eval_code("doc.replace('Sample', 'X', paragraph='P1#0000')", connection_file=eval_doc)
+        assert res.status == "error"
+        assert res.traceback is not None
+        assert "<docx-session eval>" in res.traceback
+        assert "docx_editor/" in res.traceback  # library frames keep their relative path
+        assert not re.search(r"[/~]\S+[/\\]docx_editor[/\\]", res.traceback)  # ...but no absolute prefix
+        assert "site-packages" not in res.traceback
+        assert len(res.traceback) < 1500  # plain traceback, not IPython's multi-kilobyte one
+
+    def test_exec_error_traceback_is_path_free(self, eval_doc):
+        res = exec_code("doc.replace('Sample', 'X', paragraph='P1#0000')", connection_file=eval_doc)
+        assert res.status == "error"
+        assert res.traceback is not None
+        assert "HashMismatchError" in res.traceback
+        assert not re.search(r"[/~]\S+[/\\]docx_editor[/\\]", res.traceback)
+        assert "site-packages" not in res.traceback
+
+    def test_eval_error_rewrites_prior_cell_frames(self, eval_doc):
+        """A frame from a function defined in an earlier exec cell carries the
+        ipykernel cell-file path (/tmp/ipykernel_<pid>/<n>.py) — rewritten."""
+        assert exec_code("def _boom():\n    return 1 / 0", connection_file=eval_doc).status == "ok"
+        res = eval_code("_boom()", connection_file=eval_doc)
+        assert res.status == "error"
+        assert res.error is not None
+        assert res.traceback is not None
+        assert res.error["type"] == "ZeroDivisionError"
+        assert "<session-cell>" in res.traceback
+        assert "ipykernel_" not in res.traceback
 
 
 class TestSessionStatus:
