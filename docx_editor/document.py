@@ -857,7 +857,19 @@ class Document:
     def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int | None = None) -> EditResult:
         """Replace text with tracked changes.
 
-        Creates a tracked deletion of the old text and insertion of the new text.
+        Creates a tracked deletion of the old text and insertion of the new
+        text. Words shared by ``find`` and ``replace_with`` at either end are
+        trimmed first, so only the changed words become revisions — a replace
+        that only adds or only removes words is written as a pure insertion
+        or deletion. The insertion carries the formatting (rPr) that covers
+        the most characters of the replaced span — runs sharing identical
+        formatting tally together, with ties breaking to the earliest-seen
+        formatting.
+
+        When ``replace_with`` equals the found text, the call is a no-op: no
+        revisions are created and the returned EditResult equals the input
+        ``paragraph`` ref with ``group_id=None`` and ``revision_ids=()`` —
+        that triple is how callers detect the no-op.
 
         Args:
             find: Text to find and replace

@@ -381,3 +381,63 @@ class TestFindInTextMap:
         assert match is not None
         assert not match.spans_boundary  # entirely within ins
         assert all(p.is_inside_ins for p in match.positions)
+
+
+class TestTextMapMatchNarrowed:
+    """Tests for TextMapMatch.narrowed() span trimming."""
+
+    def test_narrow_prefix(self):
+        p = _parse_paragraph("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")
+        tm = build_text_map(p)
+        match = find_in_text_map(tm, "Hello world")
+        assert match is not None
+        narrowed = match.narrowed(6, 0)
+        assert narrowed.text == "world"
+        assert (narrowed.start, narrowed.end) == (6, 11)
+        assert narrowed.positions == match.positions[6:]
+        assert narrowed.spans_boundary is False
+
+    def test_narrow_suffix(self):
+        p = _parse_paragraph("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")
+        tm = build_text_map(p)
+        match = find_in_text_map(tm, "Hello world")
+        assert match is not None
+        narrowed = match.narrowed(0, 6)
+        assert narrowed.text == "Hello"
+        assert (narrowed.start, narrowed.end) == (0, 5)
+        assert narrowed.positions == match.positions[:5]
+
+    def test_narrow_both_ends(self):
+        p = _parse_paragraph("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")
+        tm = build_text_map(p)
+        match = find_in_text_map(tm, "Hello world")
+        assert match is not None
+        narrowed = match.narrowed(6, 3)
+        assert narrowed.text == "wo"
+        assert (narrowed.start, narrowed.end) == (6, 8)
+
+    def test_narrow_zero_is_identity(self):
+        p = _parse_paragraph("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")
+        tm = build_text_map(p)
+        match = find_in_text_map(tm, "world")
+        assert match is not None
+        narrowed = match.narrowed(0, 0)
+        assert narrowed == match
+
+    def test_narrow_recomputes_spans_boundary(self):
+        p = _parse_paragraph(
+            "<w:p>"
+            "<w:r><w:t>AB</w:t></w:r>"
+            '<w:ins w:id="1" w:author="Test" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>CD</w:t></w:r>"
+            "</w:ins>"
+            "</w:p>"
+        )
+        tm = build_text_map(p)
+        match = find_in_text_map(tm, "BCD")
+        assert match is not None
+        assert match.spans_boundary is True
+        narrowed = match.narrowed(1, 0)
+        assert narrowed.text == "CD"
+        assert narrowed.spans_boundary is False
+        assert all(pos.is_inside_ins for pos in narrowed.positions)

@@ -5,7 +5,8 @@ from conftest import find_ref
 from conftest import parse_paragraph as _parse_paragraph
 
 from docx_editor import Document
-from docx_editor.xml_editor import build_text_map, find_in_text_map
+from docx_editor.track_changes import RevisionManager
+from docx_editor.xml_editor import DocxXMLEditor, build_text_map, find_in_text_map
 
 
 class TestMixedStateDetection:
@@ -187,3 +188,39 @@ class TestMixedStateReplace:
         text = doc2.get_visible_text()
         assert "wonderful" in text
         doc2.close()
+
+
+NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+
+def _make_manager(tmp_path, body_xml, author="Test Author"):
+    """Create a RevisionManager over a crafted document body."""
+    xml = f'<?xml version="1.0" encoding="utf-8"?><w:document {NS}><w:body>{body_xml}</w:body></w:document>'
+    xml_path = tmp_path / "document.xml"
+    xml_path.write_text(xml, encoding="utf-8")
+    return RevisionManager(DocxXMLEditor(xml_path, rsid="00AA1234", author=author))
+
+
+class TestMixedStateMajorityRPr:
+    """Mixed-state replace carries the majority-by-characters rPr."""
+
+    def test_replacement_carries_majority_rpr(self, tmp_path):
+        mgr = _make_manager(
+            tmp_path,
+            "<w:p>"
+            '<w:r><w:t xml:space="preserve">a </w:t></w:r>'
+            '<w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:rPr><w:b/></w:rPr><w:t>bolded text</w:t></w:r>"
+            "</w:ins>"
+            "</w:p>",
+        )
+        match = mgr._find_across_boundaries("a bolded")
+        assert match is not None and match.spans_boundary  # precondition: mixed-state path
+
+        mgr.replace_text("a bolded", "z")
+
+        own_ins = [
+            e for e in mgr.editor.dom.getElementsByTagName("w:ins") if e.getAttribute("w:author") == "Test Author"
+        ]
+        assert len(own_ins) == 1
+        assert len(own_ins[0].getElementsByTagName("w:b")) == 1
