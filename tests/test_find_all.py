@@ -268,11 +268,12 @@ class TestFindTextScoped:
         ref = doc.list_paragraphs()[0].split("|")[0]
         assert doc.find_text("committee", occurrence=2, paragraph=ref) is None
 
-    def test_negative_occurrence_returns_none_not_wraparound(self, multi_para_doc):
+    def test_negative_occurrence_rejected_not_wraparound(self, multi_para_doc):
         """occurrence=-1 must not silently return the paragraph's last match."""
         doc, _ = multi_para_doc
         ref = doc.list_paragraphs()[0].split("|")[0]
-        assert doc.find_text("committee", occurrence=-1, paragraph=ref) is None
+        with pytest.raises(ValueError, match="occurrence must be >= 0"):
+            doc.find_text("committee", occurrence=-1, paragraph=ref)
 
     def test_stale_hash_raises(self, multi_para_doc):
         doc, _ = multi_para_doc

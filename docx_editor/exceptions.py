@@ -22,9 +22,15 @@ class DocumentNotFoundError(DocxEditError):
 
 
 class InvalidDocumentError(DocxEditError):
-    """Raised when the document is not a valid .docx file."""
+    """Raised when the document is not a valid .docx file.
 
-    pass
+    Attributes:
+        path: The path that failed validation, or None if unknown.
+    """
+
+    def __init__(self, message: str, *, path: Path | None = None):
+        self.path = path
+        super().__init__(message)
 
 
 class WorkspaceError(DocxEditError):

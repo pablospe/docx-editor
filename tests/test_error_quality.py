@@ -17,8 +17,11 @@ This file is the artefact that proves the change's claim: diagnostics
 move from string-parsing into structured fields.
 """
 
+import getpass
+import os
 import shutil
 import tempfile
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -33,9 +36,11 @@ from docx_editor import (
     DocumentNotFoundError,
     DocxEditError,
     EditOperation,
+    InvalidDocumentError,
     ParagraphIndexError,
     RevisionError,
     TextNotFoundError,
+    WorkspaceLockedError,
     WorkspaceSyncError,
 )
 
@@ -909,3 +914,393 @@ class TestLifecycleErrorFields:
             assert e.revision_id is None  # the error is about a group, not a revision
         finally:
             doc.close()
+
+
+class TestFindTextOccurrenceParity:
+    """
+    Before: find_text validated only text emptiness. occurrence=-1 returned
+    None (silently masking the argument bug), occurrence=1.0 raised a raw
+    TypeError on the scoped path (list index) while silently matching on the
+    doc-wide path (1.0 == 1), occurrence=True was misread as 1 and returned
+    the SECOND match, and a non-str text hit str.find as a raw TypeError.
+
+    After: find_text shares the edit methods' occurrence validator (with
+    None rejected too — find_text's default is 0, not None), and both
+    find_text and find_all require a non-empty str text, on the doc-wide
+    AND paragraph-scoped paths alike.
+    """
+
+    TEXTS = ["alpha beta alpha.", "gamma alpha."]
+
+    def _build_doc(self, doc_path: Path) -> Document:
+        return _build_doc_with_paragraphs(doc_path, self.TEXTS)
+
+    def test_bad_occurrence_rejected_on_both_paths(self, doc_path):
+        doc = self._build_doc(doc_path)
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            for bad in (-1, 1.0, True, None, "1"):
+                with pytest.raises(ValueError, match="find_text\\(\\): occurrence must be"):
+                    doc.find_text("alpha", occurrence=bad)  # type: ignore[arg-type]
+                with pytest.raises(ValueError, match="find_text\\(\\): occurrence must be"):
+                    doc.find_text("alpha", occurrence=bad, paragraph=ref)  # type: ignore[arg-type]
+        finally:
+            doc.close()
+
+    def test_valid_occurrences_keep_lookup_contract(self, doc_path):
+        """0/1 return matches; a huge in-range-typed occurrence stays None."""
+        doc = self._build_doc(doc_path)
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            assert doc.find_text("alpha", occurrence=0) is not None
+            first = doc.find_text("alpha", occurrence=0, paragraph=ref)
+            second = doc.find_text("alpha", occurrence=1, paragraph=ref)
+            assert first is not None and second is not None
+            assert (first.start, first.end) != (second.start, second.end)
+            assert doc.find_text("alpha", occurrence=10**9) is None
+            assert doc.find_text("alpha", occurrence=10**9, paragraph=ref) is None
+        finally:
+            doc.close()
+
+    def test_non_string_text_rejected_naming_the_value(self, doc_path):
+        doc = self._build_doc(doc_path)
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(ValueError, match="find_text\\(\\): search text must be a non-empty string, got None"):
+                doc.find_text(None)  # type: ignore[arg-type]
+            with pytest.raises(ValueError, match="find_text\\(\\): search text must be a non-empty string, got 123"):
+                doc.find_text(123, paragraph=ref)  # type: ignore[arg-type]
+            with pytest.raises(ValueError, match="find_all\\(\\): search text must be a non-empty string, got None"):
+                doc.find_all(None)  # type: ignore[arg-type]
+            with pytest.raises(ValueError, match="find_all\\(\\): search text must be a non-empty string, got 123"):
+                doc.find_all(123, paragraph=ref)  # type: ignore[arg-type]
+        finally:
+            doc.close()
+
+
+class TestRewriteNewTextValidation:
+    """
+    Before: ``rewrite_paragraph(ref, None)`` leaked a raw ``TypeError:
+    expected string or bytes-like object`` from the re module's word
+    tokenizer, and ``batch_rewrite(None)`` silently returned ``[]`` (the
+    falsy-input guard swallowed it) — indistinguishable from an empty batch.
+
+    After: new_text must be a str (empty allowed — it deletes all text) at
+    both the single and batch boundaries; the batch check runs in the
+    upfront validation loop so atomicity holds; and batch inputs must be a
+    real list.
+    """
+
+    def test_single_rewrite_rejects_non_string(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(ValueError, match="'new_text' must be a string"):
+                doc.rewrite_paragraph(ref, None)  # type: ignore[arg-type]
+            with pytest.raises(ValueError, match="'new_text' must be a string"):
+                doc.rewrite_paragraph(ref, 42)  # type: ignore[arg-type]
+            assert doc.list_revisions() == []
+        finally:
+            doc.close()
+
+    def test_empty_string_still_deletes_all_text(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            result = doc.rewrite_paragraph(ref, "")
+            assert result.group_id is not None
+            doc.accept_all()
+            assert "needle" not in doc.get_visible_text()
+        finally:
+            doc.close()
+
+    def test_batch_rejects_non_string_at_index_atomically(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["first paragraph.", "second paragraph."])
+        try:
+            before = doc.get_visible_text()
+            refs = [line.split("|")[0] for line in doc.list_paragraphs()]
+            with pytest.raises(BatchOperationError) as exc:
+                doc.batch_rewrite([(refs[0], "changed."), (refs[1], None)])  # type: ignore[list-item]
+            err = exc.value
+            assert err.operation_index == 1
+            assert "'new_text' must be a string" in err.reason
+            assert doc.get_visible_text() == before  # op 0 was not applied
+            assert doc.list_revisions() == []
+        finally:
+            doc.close()
+
+    def test_batch_rewrite_none_raises_not_empty_list(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            with pytest.raises(ValueError, match="batch_rewrite\\(\\): 'rewrites' must be a list"):
+                doc.batch_rewrite(None)  # type: ignore[arg-type]
+        finally:
+            doc.close()
+
+
+class TestWorkspaceSyncSaveMessage:
+    """
+    Before: the save-time WorkspaceSyncError remedy said ``save(destination=...)``
+    — but ``Document.save`` has no ``destination`` kwarg (that's Workspace.save's
+    signature). Following the message verbatim from the Document layer raised
+    a TypeError on top of the sync error.
+
+    After: the remedy is layer-neutral — ``save('rescued.docx')`` works
+    verbatim as the first positional arg of both Document.save and
+    Workspace.save. (The open-time message keeps ``destination=`` on purpose:
+    there it names Workspace.save explicitly, which has that kwarg.)
+    """
+
+    def test_save_time_message_is_layer_neutral(self, doc_path):
+        doc = Document.open(doc_path)
+        try:
+            doc_path.write_bytes(doc_path.read_bytes() + b"\x00")
+            with pytest.raises(WorkspaceSyncError) as exc:
+                doc.save()
+            e = exc.value
+            msg = str(e)
+            assert "force=True" in msg
+            assert "destination=" not in msg
+            assert e.workspace_path == doc.workspace_path
+            assert e.source_path == doc_path.resolve()
+        finally:
+            doc.close()
+
+
+class TestInvalidDocumentErrorPath:
+    """
+    Before: InvalidDocumentError was message-only (``vars(e)`` empty) and a
+    bad ZIP produced a bare "Not a valid .docx file: {path}" for an empty
+    file, a renamed .doc, and a truncated download alike.
+
+    After: every raise site carries ``path``, and the BadZipFile handler
+    diagnoses the three cases from the size and first bytes.
+    """
+
+    def test_directory_named_docx(self, doc_path):
+        bad = doc_path.parent / "adir.docx"
+        bad.mkdir()
+        with pytest.raises(InvalidDocumentError) as exc:
+            Document.open(bad)
+        assert "directory" in str(exc.value)
+        assert exc.value.path == bad.resolve()
+
+    def test_wrong_suffix(self, doc_path):
+        bad = doc_path.parent / "renamed.txt"
+        shutil.copy(doc_path, bad)
+        with pytest.raises(InvalidDocumentError) as exc:
+            Document.open(bad)
+        assert "Not a .docx file" in str(exc.value)
+        assert exc.value.path == bad.resolve()
+
+    def test_empty_file_names_zero_bytes(self, doc_path):
+        bad = doc_path.parent / "empty.docx"
+        bad.write_bytes(b"")
+        with pytest.raises(InvalidDocumentError) as exc:
+            Document.open(bad)
+        assert "empty (0 bytes)" in str(exc.value)
+        assert exc.value.path == bad.resolve()
+
+    def test_text_file_renamed_docx_names_not_a_zip(self, doc_path):
+        bad = doc_path.parent / "fake.docx"
+        bad.write_text("hello, I am plain text pretending to be a document")
+        with pytest.raises(InvalidDocumentError) as exc:
+            Document.open(bad)
+        msg = str(exc.value)
+        assert "not a ZIP" in msg
+        assert exc.value.path == bad.resolve()
+
+    def test_truncated_docx_names_damage(self, doc_path):
+        data = doc_path.read_bytes()
+        bad = doc_path.parent / "truncated.docx"
+        bad.write_bytes(data[: len(data) // 2])
+        with pytest.raises(InvalidDocumentError) as exc:
+            Document.open(bad)
+        msg = str(exc.value)
+        assert "damaged" in msg
+        assert "truncated" in msg
+        assert exc.value.path == bad.resolve()
+
+    def test_zip_missing_document_xml(self, doc_path):
+        bad = doc_path.parent / "hollow.docx"
+        with zipfile.ZipFile(bad, "w") as zf:
+            zf.writestr("hello.txt", "hi")
+        with pytest.raises(InvalidDocumentError) as exc:
+            Document.open(bad)
+        assert "missing word/document.xml" in str(exc.value)
+        assert exc.value.path == bad.resolve()
+
+
+class TestStructuralArgTypes:
+    """
+    Before: a str ``limit``/``start``/``window`` leaked a raw ``'<' not
+    supported between instances of 'str' and 'int'``; ``max_chars=True``
+    silently sliced previews to one character (bool == 1); ``batch_edit(None)``
+    leaked a raw not-iterable TypeError; a bare EditOperation (not a list)
+    crashed on iteration.
+
+    After: structural arguments are type-checked (bool excluded from int)
+    at the method boundary with field-naming ValueErrors, and batch inputs
+    must be real lists in both dry-run and apply modes.
+    """
+
+    def test_pagination_and_window_args_type_checked(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            cases = [
+                (lambda: doc.list_paragraphs(limit="10"), "'limit' must be an integer"),  # type: ignore[arg-type]
+                (lambda: doc.list_paragraphs(start="5"), "'start' must be an integer"),  # type: ignore[arg-type]
+                (lambda: doc.list_paragraphs(max_chars="80"), "'max_chars' must be an integer"),  # type: ignore[arg-type]
+                (lambda: doc.list_paragraphs(max_chars=True), "'max_chars' must be an integer"),
+                (lambda: doc.list_paragraphs_structured(limit="10"), "'limit' must be an integer"),  # type: ignore[arg-type]
+                (lambda: doc.context(ref, window="2"), "'window' must be an integer"),  # type: ignore[arg-type]
+                (lambda: doc.context(ref, window=True), "'window' must be an integer"),
+            ]
+            for call, expected in cases:
+                with pytest.raises(ValueError) as exc:
+                    call()
+                assert expected in str(exc.value)
+        finally:
+            doc.close()
+
+    def test_batch_inputs_must_be_lists(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        try:
+            bare_op = EditOperation.replace("a", "b", paragraph="P1#0000")
+            cases = [
+                (lambda: doc.batch_edit(None), "'operations' must be a list"),  # type: ignore[arg-type]
+                (lambda: doc.batch_edit(bare_op), "'operations' must be a list"),  # type: ignore[arg-type]
+                (lambda: doc.batch_edit(None, dry_run=True), "'operations' must be a list"),  # type: ignore[arg-type]
+                (lambda: doc.batch_rewrite(None), "'rewrites' must be a list"),  # type: ignore[arg-type]
+            ]
+            for call, expected in cases:
+                with pytest.raises(ValueError) as exc:
+                    call()
+                assert expected in str(exc.value)
+        finally:
+            doc.close()
+
+    def test_valid_calls_unaffected(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only.", "second paragraph."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            assert doc.list_paragraphs(max_chars=0, limit=1)[0] == ref
+            assert len(doc.list_paragraphs_structured(start=2, limit=1)) == 1
+            assert len(doc.context(ref, window=0)) == 1
+            assert doc.batch_edit([]) == []
+            assert doc.batch_rewrite([]) == []
+        finally:
+            doc.close()
+
+
+class TestCommentIdValidation:
+    """
+    Before: ``reply_to_comment(None)`` raised ``CommentError("Parent comment
+    with id=None not found", comment_id=None)`` — contradicting the documented
+    contract that ``comment_id=None`` means "the arguments were invalid".
+    ``resolve_comment(True)``/``delete_comment(True)`` silently targeted
+    comment id 1 (bool == int), and junk ids returned False ("not found").
+    A None reply text would have been serialized into comments.xml as "None".
+
+    After: comment ids must be real ints (bool excluded) and reply text a
+    non-empty string — argument errors are ValueError; CommentError with a
+    set ``comment_id`` is reserved for a real id that doesn't exist.
+    """
+
+    def _build_commented_doc(self, doc_path: Path) -> tuple[Document, int]:
+        doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
+        cid = doc.add_comment("needle", "note")
+        return doc, cid
+
+    def test_junk_ids_rejected_across_all_three_methods(self, doc_path):
+        doc, _ = self._build_commented_doc(doc_path)
+        try:
+            for bad in (None, "1", True):
+                with pytest.raises(ValueError, match="'comment_id' must be an integer"):
+                    doc.reply_to_comment(bad, "reply")  # type: ignore[arg-type]
+                with pytest.raises(ValueError, match="'comment_id' must be an integer"):
+                    doc.resolve_comment(bad)  # type: ignore[arg-type]
+                with pytest.raises(ValueError, match="'comment_id' must be an integer"):
+                    doc.delete_comment(bad)  # type: ignore[arg-type]
+        finally:
+            doc.close()
+
+    def test_nonexistent_int_id_keeps_typed_behavior(self, doc_path):
+        """reply → CommentError carrying the id; resolve/delete → False."""
+        doc, _ = self._build_commented_doc(doc_path)
+        try:
+            with pytest.raises(CommentError) as exc:
+                doc.reply_to_comment(999, "reply")
+            assert exc.value.comment_id == 999
+            assert doc.resolve_comment(999) is False
+            assert doc.delete_comment(999) is False
+        finally:
+            doc.close()
+
+    def test_reply_text_must_be_non_empty_string(self, doc_path):
+        doc, cid = self._build_commented_doc(doc_path)
+        try:
+            with pytest.raises(ValueError, match="'reply_text' must be a non-empty string, got None"):
+                doc.reply_to_comment(cid, None)  # type: ignore[arg-type]
+            with pytest.raises(ValueError, match="'reply_text' must be a non-empty string, got ''"):
+                doc.reply_to_comment(cid, "")
+            reply_id = doc.reply_to_comment(cid, "a real reply")
+            assert isinstance(reply_id, int)
+        finally:
+            doc.close()
+
+
+class TestAuthorValidation:
+    """
+    Before: ``Document.open(p, author="")`` silently attributed every tracked
+    change to ``getpass.getuser()`` (the ``author or ...`` fallback treats
+    empty as unset), and a non-str author was stored as-is, breaking
+    initials/serialization later.
+
+    After: author must be None (documented system-username fallback) or a
+    non-empty string; validation fires before any filesystem access, so no
+    workspace or lock is left behind.
+    """
+
+    def test_empty_and_non_string_author_rejected(self, doc_path):
+        for bad in ("", 123):
+            with pytest.raises(ValueError, match="'author' must be None"):
+                Document.open(doc_path, author=bad)  # type: ignore[arg-type]
+        # Nothing was created by the failed opens — a normal open works.
+        doc = Document.open(doc_path)
+        doc.close()
+
+    def test_none_author_falls_back_to_system_user(self, doc_path):
+        doc = Document.open(doc_path)
+        try:
+            assert doc.author == getpass.getuser()
+        finally:
+            doc.close()
+
+    def test_explicit_author_preserved(self, doc_path):
+        doc = Document.open(doc_path, author="Reviewer")
+        try:
+            assert doc.author == "Reviewer"
+        finally:
+            doc.close()
+
+
+class TestOwnPidLockMessage:
+    """
+    Regression pin for the own-pid double-open message (dogfood3 B19): the
+    friction-log claim that it tells you to "close the session in process
+    <own pid>" was a misattribution — the special case exists and must stay.
+    """
+
+    def test_second_open_in_same_process_names_itself(self, doc_path):
+        doc1 = Document.open(doc_path)
+        try:
+            with pytest.raises(WorkspaceLockedError) as exc:
+                Document.open(doc_path)
+            e = exc.value
+            assert "this process already has the document open" in str(e)
+            assert "close the session in process" not in str(e)
+            assert e.pid == os.getpid()
+        finally:
+            doc1.close()

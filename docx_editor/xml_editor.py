@@ -60,12 +60,19 @@ class TextMapMatch:
     spans_boundary: bool  # True if match spans different revision contexts
 
 
-def _require_valid_occurrence(occurrence: int | None, label: str = "") -> None:
+def _require_valid_occurrence(occurrence: int | None, label: str = "", allow_none: bool = True) -> None:
     """Reject a non-int or negative ``occurrence`` before it can hit an int
     comparison (raw TypeError from ``"0" < 0``), TypeError deeper in the
-    search (float), or be silently misread as 0/1 (bool)."""
+    search (float), or be silently misread as 0/1 (bool).
+
+    ``allow_none=True`` (the edit methods' contract) lets None through — it
+    means "the target must be unique". Callers whose occurrence defaults to 0
+    instead of None (``find_text``) pass ``allow_none=False`` so None is
+    rejected like any other non-int."""
     if occurrence is None:
-        return
+        if allow_none:
+            return
+        raise ValueError(f"{label}occurrence must be a non-negative integer, got None")
     if isinstance(occurrence, bool) or not isinstance(occurrence, int):
         raise ValueError(f"{label}occurrence must be a non-negative integer, got {occurrence!r}")
     if occurrence < 0:

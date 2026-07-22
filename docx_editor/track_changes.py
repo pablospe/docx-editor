@@ -897,7 +897,8 @@ class RevisionManager:
 
         Raises:
             BatchOperationError: If any rewrite fails — validation (malformed
-                ref, duplicate paragraph, stale hash, bad index) or apply.
+                ref, duplicate paragraph, non-string new_text, stale hash,
+                bad index) or apply.
                 Carries ``operation_index`` and ``original`` (also
                 ``__cause__``) with the underlying typed exception.
         """
@@ -917,6 +918,11 @@ class RevisionManager:
                 raise BatchOperationError(
                     i,
                     f"duplicate paragraph P{ref.index}. Each paragraph can appear at most once in a batch rewrite.",
+                )
+            if not isinstance(new_text, str):
+                raise BatchOperationError(
+                    i,
+                    f"'new_text' must be a string (empty string is allowed — it deletes all text), got {new_text!r}",
                 )
             seen_indices.add(ref.index)
             parsed.append((i, ref, new_text))
@@ -968,9 +974,15 @@ class RevisionManager:
             was absorbed into this author's own pending insertions).
 
         Raises:
+            ValueError: If ``new_text`` is not a string
             HashMismatchError: If the paragraph hash doesn't match
             IndexError: If paragraph index is out of range
         """
+        if not isinstance(new_text, str):
+            raise ValueError(
+                f"rewrite_paragraph(): 'new_text' must be a string "
+                f"(empty string is allowed — it deletes all text), got {new_text!r}"
+            )
         with self._grouped() as capture:
             self._rewrite_paragraph_inner(ref_str, new_text)
         return capture.group_id
@@ -1245,12 +1257,15 @@ class RevisionManager:
         ``occurrence`` counts within it. Returns None if not found.
 
         Raises:
-            ValueError: If ``text`` is empty, or ``paragraph`` is malformed.
+            ValueError: If ``text`` is not a non-empty string, ``occurrence``
+                is not a non-negative integer (None included — the default is
+                0, not None), or ``paragraph`` is malformed.
             ParagraphIndexError: If ``paragraph``'s index is out of range.
             HashMismatchError: If ``paragraph``'s hash is stale.
         """
-        if not text:
-            raise ValueError("find_text() requires a non-empty search string")
+        if not isinstance(text, str) or not text:
+            raise ValueError(f"find_text(): search text must be a non-empty string, got {text!r}")
+        _require_valid_occurrence(occurrence, "find_text(): ", allow_none=False)
 
         if paragraph is not None:
             results = self.find_all(text, paragraph=paragraph)
@@ -1288,12 +1303,13 @@ class RevisionManager:
             is an enumeration API, not a lookup — no-match is not an error).
 
         Raises:
-            ValueError: If ``text`` is empty, or ``paragraph`` is malformed.
+            ValueError: If ``text`` is not a non-empty string, or
+                ``paragraph`` is malformed.
             ParagraphIndexError: If ``paragraph``'s index is out of range.
             HashMismatchError: If ``paragraph``'s hash is stale.
         """
-        if not text:
-            raise ValueError("find_all() requires a non-empty search string")
+        if not isinstance(text, str) or not text:
+            raise ValueError(f"find_all(): search text must be a non-empty string, got {text!r}")
 
         if paragraph is not None:
             ref = ParagraphRef.parse(paragraph)

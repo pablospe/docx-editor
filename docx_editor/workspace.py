@@ -254,7 +254,15 @@ class Workspace:
             WorkspaceSyncError: If create=True and an existing workspace holds
                 unsaved changes from a previous session, or the source document
                 changed on disk since the workspace was created
+            ValueError: If ``author`` is neither None nor a non-empty string
         """
+        # Fail fast on a junk author before any filesystem access: an empty
+        # string would silently fall back to the system username (silent
+        # misattribution of every tracked change), and a non-str would be
+        # stored as-is and break initials/serialization later.
+        if author is not None and (not isinstance(author, str) or not author):
+            raise ValueError(f"'author' must be None (system username) or a non-empty string, got {author!r}")
+
         # Keep the name the caller actually opened. If they opened a symlink, that is
         # the name Word was told to open — and therefore the name its ~$ owner file
         # sits beside. save() needs it to find that stub. Made absolute but NOT
@@ -268,7 +276,7 @@ class Workspace:
             raise DocumentNotFoundError(f"Document not found: {source_path}", path=self.source_path)
 
         if self.source_path.suffix.lower() != ".docx":
-            raise InvalidDocumentError(f"Not a .docx file: {source_path}")
+            raise InvalidDocumentError(f"Not a .docx file: {source_path}", path=self.source_path)
 
         # Determine workspace path
         self.workspace_path = self._resolve_workspace_path(self.source_path, workspace_dir)
@@ -775,7 +783,7 @@ class Workspace:
             raise WorkspaceSyncError(
                 f"Source document changed on disk since the workspace was created: {self.source_path}. "
                 f"Saving would overwrite those changes. Use save(force=True) to overwrite anyway, "
-                f"or save(destination=...) to write elsewhere.",
+                f"or save to a different path (e.g. save('rescued.docx')) to write elsewhere.",
                 workspace_path=self.workspace_path,
                 source_path=self.source_path,
             )

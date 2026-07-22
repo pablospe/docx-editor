@@ -134,7 +134,8 @@ class Document:
 
         Args:
             path: Path to the .docx file
-            author: Author name for tracked changes (defaults to system username)
+            author: Author name for tracked changes. None (the default) uses
+                the system username; otherwise it must be a non-empty string.
             force_recreate: If True, delete any existing workspace (stale or
                 in-sync) before opening, discarding whatever XML it holds, and
                 re-unpack from the current source. Use this to recover from
@@ -150,10 +151,13 @@ class Document:
             Document instance ready for editing
 
         Raises:
+            ValueError: If ``author`` is neither None nor a non-empty string.
             DocumentNotFoundError: If the path does not exist.
             InvalidDocumentError: If the path is not a valid .docx document:
-                wrong suffix, a directory, not a zip archive, malformed XML in
-                a part, or the required word/document.xml part is missing.
+                wrong suffix, a directory, an empty/truncated file or not a
+                zip archive, malformed XML in a part, or the required
+                word/document.xml part is missing. Carries ``path`` (the
+                input that failed validation).
             WorkspaceError: If the workspace cannot be created (unwritable base,
                 undeterminable home directory) or an existing workspace was
                 unpacked from a different document.
@@ -252,7 +256,9 @@ class Document:
         To enumerate every hit in one call, use :meth:`find_all`.
 
         Raises:
-            ValueError: If ``text`` is empty, or ``paragraph`` is malformed.
+            ValueError: If ``text`` is not a non-empty string, ``occurrence``
+                is not a non-negative integer (None included — the default is
+                0, not None), or ``paragraph`` is malformed.
             ParagraphIndexError: If ``paragraph``'s index is out of range.
             HashMismatchError: If ``paragraph``'s hash is stale.
         """
@@ -277,7 +283,8 @@ class Document:
             empty when nothing matches — no-match is not an error here.
 
         Raises:
-            ValueError: If ``text`` is empty or ``paragraph`` is malformed.
+            ValueError: If ``text`` is not a non-empty string, or
+                ``paragraph`` is malformed.
             ParagraphIndexError: If ``paragraph``'s index is out of range.
             HashMismatchError: If ``paragraph``'s hash is stale.
 
@@ -389,7 +396,9 @@ class Document:
             when the window did not reach the end of the document.
 
         Raises:
-            ValueError: If ``max_chars`` < 0, ``start`` < 1, or ``limit`` < 0.
+            ValueError: If ``max_chars``, ``start``, or ``limit`` is not an
+                integer (bool included), ``max_chars`` < 0, ``start`` < 1, or
+                ``limit`` < 0.
 
         Example:
             # Walk a large document page by page; the trailing notice on each
@@ -399,11 +408,16 @@ class Document:
             everything = doc.list_paragraphs(limit=None)  # no cap, no notice
         """
         self._ensure_open()
+        if isinstance(max_chars, bool) or not isinstance(max_chars, int):
+            raise ValueError(f"'max_chars' must be an integer, got {max_chars!r}")
         if max_chars < 0:
             raise ValueError(f"max_chars must be >= 0, got {max_chars}")
         result = []
+        # _iter_paragraph_slice validates start/limit eagerly — call it before
+        # the arithmetic below can hit a non-int start.
+        slice_pairs = self._iter_paragraph_slice(start, limit)
         last_index = start - 1  # highest index emitted; start-1 when the slice is empty
-        for i, p in self._iter_paragraph_slice(start, limit):
+        for i, p in slice_pairs:
             last_index = i
             h = compute_paragraph_hash(p)
             if max_chars == 0:
@@ -430,12 +444,18 @@ class Document:
         get a ``ValueError`` immediately, not on first iteration.
 
         Raises:
-            ValueError: If ``start`` < 1, or ``limit`` < 0 when given.
+            ValueError: If ``start`` or ``limit`` is not an integer (bool
+                included), ``start`` < 1, or ``limit`` < 0 when given.
         """
+        if isinstance(start, bool) or not isinstance(start, int):
+            raise ValueError(f"'start' must be an integer, got {start!r}")
         if start < 1:
             raise ValueError(f"start must be >= 1, got {start}")
-        if limit is not None and limit < 0:
-            raise ValueError(f"limit must be >= 0, got {limit}")
+        if limit is not None:
+            if isinstance(limit, bool) or not isinstance(limit, int):
+                raise ValueError(f"'limit' must be an integer or None, got {limit!r}")
+            if limit < 0:
+                raise ValueError(f"limit must be >= 0, got {limit}")
         paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
         begin = start - 1
         end = begin + limit if limit is not None else None
@@ -481,7 +501,8 @@ class Document:
             List of :class:`ParagraphInfo` records (no notice entries).
 
         Raises:
-            ValueError: If ``start`` < 1, or ``limit`` < 0.
+            ValueError: If ``start`` or ``limit`` is not an integer (bool
+                included), ``start`` < 1, or ``limit`` < 0.
 
         Example:
             infos = doc.list_paragraphs_structured()  # bounded: at most 200
@@ -552,7 +573,8 @@ class Document:
             where ``i`` is the referenced paragraph's index.
 
         Raises:
-            ValueError: If ``ref`` has an invalid format, or ``window`` < 0.
+            ValueError: If ``ref`` has an invalid format, or ``window`` is
+                not an integer (bool included) or is < 0.
             ParagraphIndexError: If the paragraph index is out of range.
             HashMismatchError: If the hash no longer matches current
                 paragraph content (paragraph was modified after the ref
@@ -564,6 +586,8 @@ class Document:
                 print(info)
         """
         self._ensure_open()
+        if isinstance(window, bool) or not isinstance(window, int):
+            raise ValueError(f"'window' must be an integer, got {window!r}")
         if window < 0:
             raise ValueError(f"window must be >= 0, got {window}")
         index, _ = self._resolve_validated_ref(ref)
@@ -1001,6 +1025,9 @@ class Document:
             When dry_run is True: list of EditValidationResult, one per operation.
 
         Raises:
+            ValueError: If ``operations`` is not a list at all (e.g. None or
+                a bare EditOperation) — raised before any validation, in both
+                dry-run and apply modes.
             BatchOperationError: The only exception a non-dry-run batch raises
                 for a failing operation — validation (element is not an
                 EditOperation, malformed ref, stale hash, bad index) and apply
@@ -1023,6 +1050,8 @@ class Document:
                 doc.batch_edit(ops)
         """
         self._ensure_open()
+        if not isinstance(operations, list):
+            raise ValueError(f"batch_edit(): 'operations' must be a list of EditOperation, got {operations!r}")
         if dry_run:
             return self._revision_manager.validate_batch(operations)
         change_ids = self._revision_manager.batch_edit(operations)
@@ -1052,6 +1081,12 @@ class Document:
             new_text equals the current text, or when every change landed
             inside your own pending insertions and was merged in place).
 
+        Raises:
+            ValueError: If ``new_text`` is not a string (empty string is
+                allowed — it deletes all text), or ``ref`` is malformed.
+            ParagraphIndexError: If ``ref``'s index is out of range.
+            HashMismatchError: If ``ref``'s hash is stale.
+
         Example:
             result = doc.rewrite_paragraph("P2#f3c1", "The board shall approve the proposal.")
             doc.reject_group(result.group_id)  # undo the whole rewrite
@@ -1080,6 +1115,8 @@ class Document:
             pending insertions).
 
         Raises:
+            ValueError: If ``rewrites`` is not a list at all (e.g. None) —
+                raised before any validation.
             BatchOperationError: The only exception raised for a failing
                 rewrite; carries ``operation_index`` and ``original``.
 
@@ -1091,6 +1128,8 @@ class Document:
             ])
         """
         self._ensure_open()
+        if not isinstance(rewrites, list):
+            raise ValueError(f"batch_rewrite(): 'rewrites' must be a list of (ref, new_text) tuples, got {rewrites!r}")
         group_ids = self._revision_manager.batch_rewrite(rewrites)
         return [self._edit_result(ref, group_id) for (ref, _), group_id in zip(rewrites, group_ids, strict=True)]
 
@@ -1150,6 +1189,12 @@ class Document:
         Returns:
             The new comment ID for the reply
 
+        Raises:
+            ValueError: If ``comment_id`` is not an integer (bool included),
+                or ``reply`` is not a non-empty string.
+            CommentError: If no comment with ``comment_id`` exists; carries
+                ``comment_id``.
+
         Example:
             doc.reply_to_comment(0, "I agree with this change")
         """
@@ -1182,6 +1227,9 @@ class Document:
         Returns:
             True if resolved, False if not found
 
+        Raises:
+            ValueError: If ``comment_id`` is not an integer (bool included).
+
         Example:
             doc.resolve_comment(0)
         """
@@ -1196,6 +1244,9 @@ class Document:
 
         Returns:
             True if deleted, False if not found
+
+        Raises:
+            ValueError: If ``comment_id`` is not an integer (bool included).
 
         Example:
             doc.delete_comment(0)

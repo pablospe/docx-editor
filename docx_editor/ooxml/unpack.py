@@ -38,6 +38,32 @@ def _is_symlink_entry(info: zipfile.ZipInfo) -> bool:
     return stat.S_ISLNK(mode)
 
 
+def _bad_zip_message(input_path: Path) -> str:
+    """Diagnose why the ZIP layer rejected the file: empty, wrong format, or damaged.
+
+    Reads only the size and first 4 bytes — never the whole file. A file that
+    starts with the ZIP magic but still fails is *probably* truncated; the
+    wording stays hedged because that is a heuristic, not a guarantee.
+    """
+    try:
+        size = input_path.stat().st_size
+        with open(input_path, "rb") as f:
+            head = f.read(4)
+    except OSError:
+        return f"Not a valid .docx file: {input_path}"
+    if size == 0:
+        return f"Not a valid .docx file: {input_path} — the file is empty (0 bytes)."
+    if not head.startswith(b"PK"):
+        return (
+            f"Not a valid .docx file: {input_path} — not a ZIP archive ({size} bytes). "
+            f".docx files are ZIP containers; is this a legacy .doc or another format renamed to .docx?"
+        )
+    return (
+        f"Not a valid .docx file: {input_path} — the ZIP structure is damaged ({size} bytes). "
+        f"The file may be truncated (interrupted download or copy)."
+    )
+
+
 def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
     """Unpack a .docx file to a directory with pretty-printed XML.
 
@@ -68,17 +94,17 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
         raise DocumentNotFoundError(f"Document not found: {input_file}", path=input_path)
 
     if input_path.is_dir():
-        raise InvalidDocumentError(f"Is a directory, not a .docx file: {input_file}")
+        raise InvalidDocumentError(f"Is a directory, not a .docx file: {input_file}", path=input_path)
 
     # Reject a symlinked destination so extractall cannot write through it.
     if output_path.is_symlink():
-        raise InvalidDocumentError(f"Output directory is a symlink: {output_dir}")
+        raise InvalidDocumentError(f"Output directory is a symlink: {output_dir}", path=output_path)
     if output_path.exists():
         if not output_path.is_dir():
-            raise InvalidDocumentError(f"Output path is not a directory: {output_dir}")
+            raise InvalidDocumentError(f"Output path is not a directory: {output_dir}", path=output_path)
         for entry in output_path.rglob("*"):
             if entry.is_symlink():
-                raise InvalidDocumentError(f"Symlink inside output directory: {entry}")
+                raise InvalidDocumentError(f"Symlink inside output directory: {entry}", path=entry)
 
     # Ownership of the output dir is claimed by the mkdir itself, not by a
     # separate exists() check, so a directory created concurrently by someone
@@ -93,15 +119,21 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
                 names: set[str] = set()
                 for info in zf.infolist():
                     if _is_unsafe_zip_path(info.filename):
-                        raise InvalidDocumentError(f"Unsafe ZIP entry path: {info.filename!r} in {input_file}")
+                        raise InvalidDocumentError(
+                            f"Unsafe ZIP entry path: {info.filename!r} in {input_file}", path=input_path
+                        )
                     if _is_symlink_entry(info):
-                        raise InvalidDocumentError(f"Symlink ZIP entry: {info.filename!r} in {input_file}")
+                        raise InvalidDocumentError(
+                            f"Symlink ZIP entry: {info.filename!r} in {input_file}", path=input_path
+                        )
                     names.add(info.filename)
                 # The one part every consumer unconditionally dereferences;
                 # without it, opening would fail later with a raw
                 # FileNotFoundError naming the internal cache path.
                 if "word/document.xml" not in names:
-                    raise InvalidDocumentError(f"Not a valid .docx: missing word/document.xml in {input_file}")
+                    raise InvalidDocumentError(
+                        f"Not a valid .docx: missing word/document.xml in {input_file}", path=input_path
+                    )
                 try:
                     output_path.mkdir(parents=True)
                     created_output_dir = True
@@ -109,7 +141,7 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
                     pass
                 zf.extractall(output_path)
         except zipfile.BadZipFile as e:
-            raise InvalidDocumentError(f"Not a valid .docx file: {input_file}") from e
+            raise InvalidDocumentError(_bad_zip_message(input_path), path=input_path) from e
 
         # Pretty print all XML files
         xml_files = list(output_path.rglob("*.xml")) + list(output_path.rglob("*.rels"))
@@ -127,7 +159,8 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
                 # to keep unrelated ValueErrors loud. `from e` preserves the
                 # security exception for audit.
                 raise InvalidDocumentError(
-                    f"Invalid XML in {xml_file.relative_to(output_path).as_posix()} of {input_file}: {e}"
+                    f"Invalid XML in {xml_file.relative_to(output_path).as_posix()} of {input_file}: {e}",
+                    path=input_path,
                 ) from e
             xml_file.write_bytes(dom.toprettyxml(indent="  ", encoding="utf-8"))
     except BaseException:
