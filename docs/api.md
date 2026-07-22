@@ -79,7 +79,7 @@ print(doc.source_path)  # Path("/path/to/contract.docx")
 
 #### `workspace_path`
 
-Get the path to this document's workspace folder. Since the workspace lives in the user cache by default, this is how you locate the unpacked XML — for example after `close(cleanup=False)`, or when a workspace was preserved because an exception was raised.
+Get the path to this document's workspace folder. Since the workspace lives in the user cache by default, this is how you locate the unpacked XML — for example after `close(cleanup=False)`, or when a workspace was preserved because an exception was raised. Either way the workspace holds the last state flushed by `save()`: edits made but not saved live only in memory and are **not** in it.
 
 ```python
 print(doc.workspace_path)  # Path("/home/you/.cache/docx-editor/0bebafb463a87cfa")
@@ -123,6 +123,25 @@ everything = doc.list_paragraphs(limit=None)  # uncapped, never a notice
 ```
 
 `list_paragraphs_structured()` (same `start`/`limit` semantics, returns typed `ParagraphInfo` records with full untruncated text) shares the 200-record default cap but appends **no notice** — every entry stays a `ParagraphInfo`. Detect truncation by checking whether the last record's `index` is still below `paragraph_count()` (robust for any `start`), or pass `limit=None`.
+
+#### `get_paragraph(index)`
+
+Return one paragraph as a structured `ParagraphInfo` record — the single-item counterpart to `list_paragraphs_structured()`. The returned record is identical to the one that method would emit for the same paragraph, without building a list.
+
+**Parameters:**
+
+- `index` (int): 1-based paragraph index (`P1` is `index=1`). Must be in `1 .. paragraph_count()`.
+
+**Returns:** `ParagraphInfo` (index, hash-anchored ref, full untruncated text) for the paragraph at `index`.
+
+**Raises:** [`ParagraphIndexError`](#exceptions) if `index` is out of range (`< 1` or greater than `paragraph_count()`).
+
+**Example:**
+
+```python
+info = doc.get_paragraph(1)
+print(info.ref, info.text)  # "P1#a7b2" "Full paragraph text..."
+```
 
 #### `context(ref, window=2)`
 

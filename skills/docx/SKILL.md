@@ -19,6 +19,7 @@ What do you need to do?
 |
 +-- Navigate Document Structure (for large docs or precise targeting)
 |   Use python-docx to explore before editing (see "Navigating document structure")
+|   CAUTION: clean documents only — python-docx is blind to tracked changes
 |
 +-- Create New Document
 |   Use python-docx (recommended, simpler)
@@ -66,6 +67,18 @@ Use **python-docx** to explore document structure before editing. This is useful
 - Finding the right text/context to target for edits
 - Understanding document organization
 
+> **Redlined documents: python-docx is blind to tracked changes.**
+> `paragraph.text` silently drops everything inside `<w:ins>`/`<w:del>` — a
+> redlined document reads as mangled prose with no error. If the document has
+> (or will receive) tracked changes, read it with docx_editor
+> (`list_paragraphs()` / `get_visible_text()`) or `pandoc --track-changes=all`.
+>
+> **Never carry paragraph indexes between libraries.** python-docx
+> `doc.paragraphs` lists body-level paragraphs only (table cells excluded);
+> docx-editor `P{n}` refs number every paragraph including table cells — the
+> numberings diverge at the first table (a 3000-paragraph doc can have 3027
+> `P` refs), so `P{n}` ≠ `paragraphs[n-1]`.
+
 ```python
 from docx import Document
 
@@ -111,6 +124,11 @@ doc.add_paragraph("This is body text.")
 # Add heading and more content
 doc.add_heading("Section 1", 1)
 doc.add_paragraph("Section content here.")
+
+# Add lists (built-in styles)
+doc.add_paragraph("First bullet", style="List Bullet")
+doc.add_paragraph("Second bullet", style="List Bullet")
+doc.add_paragraph("First numbered item", style="List Number")
 
 # Add a table
 table = doc.add_table(rows=2, cols=2)
@@ -194,8 +212,14 @@ with Document.open("contract.docx", author=author) as doc:
 # Workspace is cleaned up automatically on normal exit — WITHOUT saving.
 # There is no dirty check: unsaved edits are silently discarded, so always
 # call save() before the block ends.
-# On exception, the workspace is preserved for inspection in the user cache
-# dir (~/.cache/docx-editor/<hash>/ on Linux; error messages print the exact path)
+# On exception, the workspace dir (doc.workspace_path) is kept — but it holds
+# only state already flushed by save(); unsaved edits live in memory and are
+# LOST, and the next open() succeeds with no trace of them. To keep work when
+# a step fails, catch the exception INSIDE the with block and
+# doc.save("rescue.docx") — once the block exits, the document is closed.
+# (A rescue save to a different path flags the workspace as diverged from the
+# source, so the NEXT open() of the source raises WorkspaceSyncError — pass
+# force_recreate=True to discard; rescue.docx already holds your edits.)
 ```
 
 Without context manager:
@@ -256,6 +280,11 @@ doc.batch_edit(ops)
 # document edges; each prints as "P{i}#{hash}| full text":
 for info in doc.context(match.paragraph_ref, window=2):
     print(info)
+
+# Fetch ONE paragraph by number — single-item counterpart to
+# list_paragraphs_structured(). 1-based (P1 is index=1), returns ParagraphInfo
+# with full untruncated text; ParagraphIndexError when out of range:
+info = doc.get_paragraph(match.paragraph_index)
 
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()
@@ -460,6 +489,9 @@ doc.reject_group(result.group_id)   # undo the whole rewrite, or:
 # revisions report group_id=None and old group ids raise RevisionError.
 # save() keeps groups alive (the Document stays open). Foreign/pre-session
 # revisions never have a group — resolve those by id or author.
+# Revision ids ARE stable: they are the w:id attributes stored in the document
+# XML and survive save()/close()/reopen — resolving by id in a later session
+# is safe (groups are not).
 
 # Accept or reject all revisions (returns count of revisions processed)
 doc.accept_all()
@@ -719,7 +751,7 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `HashMismatchError`    | `paragraph_index`, `expected_hash`, `actual_hash`, `paragraph_preview`                  | Retry with `P{paragraph_index}#{actual_hash}`.                                                   |
 | `TextNotFoundError`    | `search_text`, `paragraph_ref`, `paragraph_preview`, `occurrence`, `total_occurrences`  | Use `paragraph_preview` to pick a substring that actually appears; if `total_occurrences` is set, retry with an `occurrence` < `total_occurrences`. |
 | `AmbiguousTextError`   | `search_text`, `paragraph_ref`, `paragraph_preview`, `total_occurrences`                | The target matched more than once with no `occurrence` given. Enumerate with `find_all()` and pick, or pass an explicit `occurrence` (0-based).      |
-| `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` or call `list_paragraphs()` to pick a valid ref.                 |
+| `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` and retry with `get_paragraph(i)`, or call `list_paragraphs()` to pick a valid ref. |
 | `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (a missing paragraph ref, an element that is not an `EditOperation`, or a duplicate paragraph in `batch_rewrite` — `batch_edit` allows repeats, applied sequentially). Batch methods never raise the inner types directly. |
 | `RevisionError`        | `revision_id`, `group_id` (set when the error is about that id, else None)              | Unknown `group_id` passed to `accept_group()`/`reject_group()`. Groups are in-memory and per-open-Document: use the `EditResult.group_id` you were handed in this session; after `close()`/reopen resolve by revision id or author instead. |
 | `CommentError`         | `comment_id` (set when a comment id was targeted, else None)                            | Replying to a nonexistent comment id — call `list_comments()` and retry with a real id. With `comment_id=None` the arguments themselves were invalid; fix them per the message. |
@@ -727,6 +759,7 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `DocumentNotFoundError`| `path`                                                                                  | The file doesn't exist at `path` — fix the path (typo, wrong cwd) before retrying. |
 | `InvalidDocumentError` | `path`                                                                                  | The file at `path` is not a valid .docx — wrong suffix, a directory, empty/truncated/not a ZIP, missing word/document.xml, or malformed XML. Not an in-loop retry: the message names which check failed; fix or re-export the input file. |
 | `WorkspaceSyncError`   | `workspace_path`, `source_path`                                                         | Workspace and source disagree (unsaved edits from a previous session, or the source changed on disk). **Do not retry blindly** — `force_recreate=True` (open) / `force=True` (save) DISCARDS one side; to rescue the workspace's edits first, save them elsewhere: `Workspace(source, create=False).save("rescued.docx")`. |
+| `WorkspaceLockedError` | `pid`, `lock_path`                                                                      | A live session already holds this document's workspace — another process, or an unclosed `Document` in THIS one. Close it (or stop that process) and retry; `Document.open(path, force_recreate=True)` takes the workspace over but DISCARDS the holder's unsaved edits. Locks left by dead processes are reclaimed automatically and never raise. |
 | `DocumentOpenError`    | `path`, `owner_file`                                                                    | **Do not retry blindly.** The destination is open in Word. Stop and tell the user to close it. Only pass `force=True` if the user confirms the `~$` lock is stale (crashed session). |
 
 ```python
@@ -925,7 +958,8 @@ Rules:
 - Exit code 2 means timeout — the kernel is alive and your code is still running. Exit code 3 means no session is running.
 - Exit code 4 means the kernel died mid-exec or is unreachable: its state (open documents, variables) is lost. Recover with `docx-session stop` then `start`, and re-open your documents.
 - `eval` output: library dataclasses (SearchResult, ParagraphInfo, ParagraphLocation, Revision, Comment) arrive as real JSON objects (`"serialized": true`, datetimes as ISO strings, tuples as lists) — access fields directly, never string-parse a repr. `"serialized": false` means the value wasn't JSON-serializable and `value` holds its `repr` string. On exit 1 the envelope carries `"error": {"type", "message", <structured recovery fields — e.g. actual_hash, total_occurrences>}` plus a compact, path-free `traceback` (`"error"` is null for the rare raise that bypasses the kernel-side capture, e.g. SystemExit — fall back to `traceback`). On exit 4 the envelope has `"status": "dead"`; on exit 3 (no session) there is no envelope at all.
-- `status` reports `state: busy` while an exec is in flight — a busy session is healthy, don't stop/restart it.
+- `eval` of an edit call returns the `EditResult` as a plain JSON *string* (it is a `str` subclass, so its value is just the new ref) — `group_id`/`revision_ids` are lost in transit. Keep the result in a kernel-side variable and eval a dict projection when you need them: `docx-session exec "r = doc.replace(...)"` then `docx-session eval "{'ref': str(r), 'group_id': r.group_id}"`.
+- `status` reports `state: busy` while an exec is in flight — a busy session is healthy, don't stop/restart it. The report is a point-in-time snapshot: a sub-second exec can already read `idle` by the time you check, so never conclude from `idle` that code didn't run.
 - Variables persist between `exec` calls: keep refs returned by edits in Python variables instead of re-running `list_paragraphs()`.
 - Use absolute paths inside `exec` — the kernel's cwd is whatever `start` captured.
 - A `exec` sent while the kernel is still busy **queues** behind the running one; `--timeout` covers the whole wait. A timeout does not cancel the running code.
@@ -987,13 +1021,13 @@ Benefits:
 
 If unsure, ask the user: "Should I use Opus (best), Sonnet (recommended) or Haiku (faster/cheaper) for this task?"
 
-**Editing in parallel**: NOT safe for the same document. The workspace is keyed by the document's absolute path in the user cache dir, so two processes editing the same file share one workspace and will overwrite each other. Edit the same document sequentially. Different files never collide (each gets its own workspace), so editing distinct documents in parallel is fine.
+**Editing in parallel**: NOT possible for the same document — the workspace is keyed by the document's absolute path and advisory-locked: while a live session holds it, a second `Document.open()` raises `WorkspaceLockedError` naming the holder's `pid` and `lock_path` (no silent clobbering; the holder can be another process or an unclosed `Document` in this same process). Edit sequentially, or take the workspace over with `Document.open(path, force_recreate=True)` — that DISCARDS the holder's unsaved edits. Locks left by dead processes are reclaimed automatically. Different files never collide (each gets its own workspace), so editing distinct documents in parallel is fine.
 
 ### Limitations
 
 - **Text in shapes/text boxes**: May not be accessible via standard paragraph iteration
 - **Charts**: Text inside charts is embedded in separate XML, not easily editable
-- **Concurrent editing**: Not supported on same document (use sequential access)
+- **Concurrent editing**: Not supported — a second open of the same document raises `WorkspaceLockedError`; use sequential access
 - **Most edits**: Are in paragraphs and tables, which are well supported
 
 ## Converting Documents to Images
