@@ -257,6 +257,16 @@ class SearchResult:
     methods count within one paragraph — ``paragraph_occurrence`` bridges the
     two: pass it as the ``occurrence=`` of a follow-up edit to target exactly
     the match ``find_text`` located.
+
+    ``paragraph_index`` is the 1-based document-order index of the containing
+    paragraph — the same integer embedded in ``paragraph_ref`` — so consumers
+    never need to string-parse the ref to compare or sort by position.
+
+    ``repr()``/``str()`` are compact one-liners
+    (``SearchResult(P3#a7b2 occ=0 '30 days')``) so printing a list of results
+    stays cheap; matched text longer than 60 characters is elided with
+    ``"..."`` in the display only. Every field — including the full ``text``
+    — remains accessible as an attribute.
     """
 
     start: int  # Start offset in the paragraph's visible text
@@ -265,6 +275,12 @@ class SearchResult:
     paragraph_ref: str  # Hash-anchored ref like "P3#a7b2"
     paragraph_occurrence: int  # Occurrence index of this match within its paragraph
     spans_revision: bool  # True if the match crosses a tracked-revision boundary
+    paragraph_index: int  # 1-based index of the containing paragraph (same as in paragraph_ref)
+
+    def __repr__(self) -> str:
+        text = self.text if len(self.text) <= 60 else self.text[:57] + "..."
+        spans = " spans_rev" if self.spans_revision else ""
+        return f"SearchResult({self.paragraph_ref} occ={self.paragraph_occurrence} {text!r}{spans})"
 
 
 @dataclass(frozen=True)
@@ -1252,6 +1268,7 @@ class RevisionManager:
             paragraph_ref=f"P{located.paragraph_index}#{compute_paragraph_hash(located.paragraph)}",
             paragraph_occurrence=located.paragraph_occurrence,
             spans_revision=located.match.spans_boundary,
+            paragraph_index=located.paragraph_index,
         )
 
     def find_all(self, text: str, paragraph: str | None = None) -> list[SearchResult]:
@@ -1300,6 +1317,7 @@ class RevisionManager:
                         paragraph_ref=paragraph_ref,
                         paragraph_occurrence=local_occ,
                         spans_revision=match.spans_boundary,
+                        paragraph_index=idx,
                     )
                 )
                 local_occ += 1

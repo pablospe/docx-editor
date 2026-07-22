@@ -99,32 +99,50 @@ Return the total number of paragraphs in the document. A cheap bounds check for 
 count = doc.paragraph_count()
 ```
 
-#### `list_paragraphs(max_chars=80, *, start=1, limit=None)`
+#### `list_paragraphs(max_chars=80, *, start=1, limit=200)`
 
 List paragraphs with hash-anchored references. Refs are **1-based global** indexes (`P1`, `P2`, …) and stay correct across pages — a slice starting at paragraph 51 emits `P51#…`, not `P1#…`.
+
+**Changed in 0.6.1:** a bare call now returns at most 200 paragraphs (previously all of them). Whenever paragraphs remain beyond the returned window — default or explicit `limit` — the last list entry is a **truncation notice** instead of a paragraph, e.g. `"... 50 more paragraphs; use start=201 or limit=None"`. Notice lines always start with `...` and never match the `P{index}#{hash}` ref shape; filter them with `entry.startswith("...")` when consuming entries as refs. Pass `limit=None` for the full, notice-free listing.
 
 **Parameters:**
 
 - `max_chars` (int): Maximum preview length (must be `>= 0`). Use `0` for refs only (e.g. `P1#a7b2`), with no preview or `| ` separator.
 - `start` (int): 1-based index of the first paragraph to return (default 1). A `start` beyond the last paragraph yields an empty list.
-- `limit` (int | None): Maximum number of paragraphs to return, or `None` for all paragraphs from `start` onward (default `None`).
+- `limit` (int | None): Maximum number of paragraphs to return (default 200), or `None` for all paragraphs from `start` onward.
 
-**Returns:** List of strings in the form `P{index}#{hash}| preview text`, or bare `P{index}#{hash}` (no `| ` separator) when `max_chars=0`.
+**Returns:** List of strings in the form `P{index}#{hash}| preview text`, or bare `P{index}#{hash}` (no `| ` separator) when `max_chars=0` — plus one trailing `... N more paragraphs; use start=… or limit=None` notice when the window did not reach the end of the document.
 
 **Example:**
 
 ```python
-refs = doc.list_paragraphs()
-for ref in refs:
-    print(ref)
+page1 = doc.list_paragraphs()          # up to P200, then "... N more" notice
+page2 = doc.list_paragraphs(start=201)  # next page, per the notice
+refs = [e for e in page1 if not e.startswith("...")]  # drop the notice line
+everything = doc.list_paragraphs(limit=None)  # uncapped, never a notice
+```
 
-# Page through a large document — you pick the page size; refs stay
-# globally indexed (with size 50, page 2 starts at P51)
-count = doc.paragraph_count()
-page_size = 50
-for start in range(1, count + 1, page_size):
-    for ref in doc.list_paragraphs(start=start, limit=page_size):
-        print(ref)  # process this page of refs
+`list_paragraphs_structured()` (same `start`/`limit` semantics, returns typed `ParagraphInfo` records with full untruncated text) shares the 200-record default cap but appends **no notice** — every entry stays a `ParagraphInfo`. Detect truncation by checking whether the last record's `index` is still below `paragraph_count()` (robust for any `start`), or pass `limit=None`.
+
+#### `context(ref, window=2)`
+
+Return the paragraphs surrounding `ref`, in document order — the "show me the section around this match" helper. Fetches the referenced paragraph plus up to `window` paragraphs on each side, clamped at the document edges (no padding, no wrap-around).
+
+**Parameters:**
+
+- `ref` (str): Paragraph reference (e.g. `P3#a7b2`) from `list_paragraphs()`, `find_text()`/`find_all()`, or an edit result.
+- `window` (int): Paragraphs to include on *each side* of the referenced one (default 2, so up to 5 records). Must be `>= 0`; `0` returns just the referenced paragraph.
+
+**Returns:** List of `ParagraphInfo` records (index, ref, full text) — identical to what `list_paragraphs_structured()` would emit for the same span.
+
+**Raises:** `ValueError` if `ref` is malformed or `window < 0`; [`ParagraphIndexError`](#exceptions) / [`HashMismatchError`](#exceptions) for an out-of-range or stale `ref`.
+
+**Example:**
+
+```python
+match = doc.find_text("Termination")
+for info in doc.context(match.paragraph_ref, window=2):
+    print(info)  # "P{i}#{hash}| full paragraph text"
 ```
 
 #### `get_paragraph_location(ref)`
@@ -945,6 +963,7 @@ from docx_editor import SearchResult
 | `paragraph_ref` | str | Hash-anchored ref like `P3#a7b2`, usable as the `paragraph=` argument of follow-up edits |
 | `paragraph_occurrence` | int | Occurrence index of this match within its paragraph, usable as the `occurrence=` argument of follow-up edits |
 | `spans_revision` | bool | True if the match crosses a tracked-revision boundary |
+| `paragraph_index` | int | 1-based index of the containing paragraph — the same integer embedded in `paragraph_ref`, so you never string-parse the ref |
 
 `start`/`end` are offsets within the matched paragraph's visible text, **not**
 document-wide offsets. Coordinate systems differ between search and edit:
@@ -954,6 +973,13 @@ document-wide offsets. Coordinate systems differ between search and edit:
 `paragraph_ref` when chaining into an edit. `paragraph_ref`
 is computed at search time and — like refs from `list_paragraphs()` — goes
 stale once that paragraph is edited.
+
+`repr()`/`str()` are compact one-liners —
+`SearchResult(P3#a7b2 occ=0 '30 days')`, with a trailing `spans_rev` marker
+when `spans_revision` is true — so printing a whole `find_all()` list stays
+cheap. Matched text longer than 60 characters is elided with `...` in the
+display only; every field, including the full `text`, remains accessible as
+an attribute.
 
 ### Example
 

@@ -523,7 +523,7 @@ Pass '-' to read the code from stdin — no shell quoting to fight; also the eas
 route for code starting with '-' (argparse would read a bare "-x" as a flag):
 
 docx-session exec - <<'PY'
-for p in doc.list_paragraphs():
+for p in doc.list_paragraphs(limit=None):
     print(p)
 PY"""
 
@@ -532,7 +532,7 @@ Pass '-' to read the expression from stdin — no shell quoting to fight; also t
 easy route for expressions starting with '-' (argparse would read a bare "-x" as a flag):
 
 docx-session eval - <<'PY'
-[str(p) for p in doc.list_paragraphs() if 'deadline' in str(p)]
+[str(p) for p in doc.list_paragraphs(limit=None) if 'deadline' in str(p)]
 PY"""
 
 

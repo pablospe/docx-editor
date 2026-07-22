@@ -15,7 +15,9 @@ from docx_editor.exceptions import (
     DocumentNotFoundError,
     DocumentOpenError,
     DocxEditError,
+    HashMismatchError,
     InvalidDocumentError,
+    ParagraphIndexError,
     WorkspaceSyncError,
 )
 from docx_editor.workspace import Workspace
@@ -841,6 +843,107 @@ class TestDocumentFindText:
         doc.close()
         with pytest.raises(DocumentClosedError, match="closed"):
             doc.find_text("test")
+
+
+class TestDocumentContext:
+    """Document.context() — the paragraphs around a ref, clamped at the edges."""
+
+    @pytest.fixture
+    def ten_para_docx(self, simple_docx, temp_dir):
+        """simple.docx with its body swapped for 10 one-line paragraphs."""
+        body = "".join(f"<w:p><w:r><w:t>Paragraph {i}</w:t></w:r></w:p>" for i in range(1, 11))
+        dest = temp_dir / "ten.docx"
+        replace_document_xml(simple_docx, dest, f"<w:document {NS}><w:body>{body}</w:body></w:document>")
+        return dest
+
+    def test_middle_returns_full_window(self, ten_para_docx):
+        doc = Document.open(ten_para_docx)
+        try:
+            ref = doc.get_paragraph(5).ref
+            records = doc.context(ref)  # default window=2 -> 5 records
+            assert [info.index for info in records] == [3, 4, 5, 6, 7]
+            # Records are exactly what the structured listing emits for the span.
+            assert records == doc.list_paragraphs_structured(start=3, limit=5)
+        finally:
+            doc.close()
+
+    def test_clamps_at_document_start(self, ten_para_docx):
+        doc = Document.open(ten_para_docx)
+        try:
+            ref = doc.get_paragraph(1).ref
+            records = doc.context(ref, window=3)
+            assert [info.index for info in records] == [1, 2, 3, 4]
+        finally:
+            doc.close()
+
+    def test_clamps_at_document_end(self, ten_para_docx):
+        doc = Document.open(ten_para_docx)
+        try:
+            ref = doc.get_paragraph(10).ref
+            records = doc.context(ref, window=3)
+            assert [info.index for info in records] == [7, 8, 9, 10]
+        finally:
+            doc.close()
+
+    def test_window_zero_returns_just_the_paragraph(self, ten_para_docx):
+        doc = Document.open(ten_para_docx)
+        try:
+            ref = doc.get_paragraph(4).ref
+            assert doc.context(ref, window=0) == [doc.get_paragraph(4)]
+        finally:
+            doc.close()
+
+    def test_search_result_ref_plugs_in(self, ten_para_docx):
+        doc = Document.open(ten_para_docx)
+        try:
+            match = doc.find_text("Paragraph 7")
+            assert match is not None
+            records = doc.context(match.paragraph_ref, window=1)
+            assert [info.index for info in records] == [6, 7, 8]
+        finally:
+            doc.close()
+
+    def test_negative_window_raises(self, ten_para_docx):
+        doc = Document.open(ten_para_docx)
+        try:
+            ref = doc.get_paragraph(1).ref
+            with pytest.raises(ValueError, match="window must be >= 0"):
+                doc.context(ref, window=-1)
+        finally:
+            doc.close()
+
+    def test_malformed_ref_raises_value_error(self, ten_para_docx):
+        doc = Document.open(ten_para_docx)
+        try:
+            with pytest.raises(ValueError, match="Invalid paragraph reference"):
+                doc.context("not-a-ref")
+        finally:
+            doc.close()
+
+    def test_stale_hash_raises(self, ten_para_docx):
+        doc = Document.open(ten_para_docx)
+        try:
+            ref = doc.get_paragraph(2).ref
+            doc.replace("Paragraph 2", "Mutated", paragraph=ref)
+            with pytest.raises(HashMismatchError):
+                doc.context(ref)
+        finally:
+            doc.close()
+
+    def test_out_of_range_raises(self, ten_para_docx):
+        doc = Document.open(ten_para_docx)
+        try:
+            with pytest.raises(ParagraphIndexError):
+                doc.context("P999#0000")
+        finally:
+            doc.close()
+
+    def test_after_close_raises(self, ten_para_docx):
+        doc = Document.open(ten_para_docx)
+        ref = doc.get_paragraph(1).ref
+        doc.close()
+        with pytest.raises(DocumentClosedError, match="closed"):
+            doc.context(ref)
 
 
 class TestPublicApiSurface:

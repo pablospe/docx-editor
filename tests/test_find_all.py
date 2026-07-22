@@ -140,6 +140,74 @@ class TestFindAllDocumentWide:
         assert plain[0].spans_revision is False
 
 
+class TestSearchResultErgonomics:
+    """0.6.1 token-ergonomics contract: paragraph_index field + compact repr."""
+
+    def test_paragraph_index_matches_ref_document_wide(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        results = doc.find_all("committee")
+        assert results, "fixture must produce matches"
+        for r in results:
+            assert r.paragraph_index == int(r.paragraph_ref.split("#")[0][1:])
+
+    def test_paragraph_index_matches_ref_scoped(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[2].split("|")[0]
+        for r in doc.find_all("committee", paragraph=ref):
+            assert r.paragraph_ref == ref
+            assert r.paragraph_index == 3
+
+    def test_find_text_carries_paragraph_index(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        match = doc.find_text("[P05]")
+        assert match is not None
+        assert match.paragraph_index == 5
+        assert match.paragraph_ref.startswith("P5#")
+
+    def test_repr_is_compact_one_liner(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        r = doc.find_all("item")[0]
+        text = repr(r)
+        assert "\n" not in text
+        assert r.paragraph_ref in text
+        assert f"occ={r.paragraph_occurrence}" in text
+        assert "'item'" in text
+        # No dataclass field-name boilerplate; short matches stay short.
+        assert "start=" not in text
+        assert "paragraph_ref=" not in text
+        assert len(text) < 60
+        # str() shares the compact form (dataclasses have no separate __str__).
+        assert str(r) == text
+
+    def test_repr_spans_rev_marker_only_when_spanning(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        doc.insert_after("review", "XX", paragraph=ref)
+
+        spanning = doc.find_all("reviewXX")[0]
+        assert spanning.spans_revision is True
+        assert repr(spanning).endswith(" spans_rev)")
+
+        plain = doc.find_all("[P01]")[0]
+        assert plain.spans_revision is False
+        assert "spans_rev" not in repr(plain)
+
+    def test_repr_elides_long_matched_text(self):
+        # Sentence-length search anchors are a documented pattern; the repr
+        # elides the display at 60 chars while the attribute keeps full text.
+        r = SearchResult(
+            start=0,
+            end=70,
+            text="x" * 70,
+            paragraph_ref="P1#abcd",
+            paragraph_occurrence=0,
+            spans_revision=False,
+            paragraph_index=1,
+        )
+        assert repr(r) == f"SearchResult(P1#abcd occ=0 '{'x' * 57}...')"
+        assert r.text == "x" * 70
+
+
 class TestFindAllScoped:
     def test_scoped_returns_only_that_paragraphs_hits(self, multi_para_doc):
         doc, _ = multi_para_doc

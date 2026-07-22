@@ -7,6 +7,7 @@ from pathlib import Path
 
 import defusedxml.minidom
 import pytest
+from conftest import replace_document_xml
 
 from docx_editor import (
     Document,
@@ -192,11 +193,15 @@ class TestListParagraphs:
             full = doc.list_paragraphs()
             assert len(full) >= 3, "fixture needs >=3 paragraphs for this test"
             page = doc.list_paragraphs(start=2, limit=2)
-            assert len(page) == 2
+            # Two refs plus a continuation notice (the 4-paragraph fixture
+            # has one paragraph left beyond the window).
+            assert len(page) == 3
             # Global 1-based indexing preserved across pages
             assert page[0].startswith("P2#")
             assert page[1].startswith("P3#")
-            assert page == full[1:3]
+            assert page[:2] == full[1:3]
+            # Singular case: the notice noun pluralizes with the count.
+            assert page[2] == "... 1 more paragraph; use start=4 or limit=None"
         finally:
             doc.close()
 
@@ -229,17 +234,23 @@ class TestListParagraphs:
         finally:
             doc.close()
 
-    def test_default_behavior_unchanged(self, temp_docx):
+    def test_small_doc_default_equals_unbounded(self, temp_docx):
+        # Below the 200-paragraph default cap, a bare call is identical to
+        # limit=None: every paragraph, no truncation notice.
         doc = Document.open(temp_docx)
         try:
+            assert doc.paragraph_count() < 200
             assert doc.list_paragraphs() == doc.list_paragraphs(start=1, limit=None)
         finally:
             doc.close()
 
-    def test_pagination_limit_zero_returns_empty(self, temp_docx):
+    def test_pagination_limit_zero_returns_only_notice(self, temp_docx):
+        # limit=0 returns no refs, but the uniform notice rule still reports
+        # everything that remains.
         doc = Document.open(temp_docx)
         try:
-            assert doc.list_paragraphs(limit=0) == []
+            count = doc.paragraph_count()
+            assert doc.list_paragraphs(limit=0) == [f"... {count} more paragraphs; use start=1 or limit=None"]
         finally:
             doc.close()
 
@@ -265,6 +276,109 @@ class TestListParagraphs:
         try:
             with pytest.raises(ValueError, match="max_chars must be >= 0"):
                 doc.list_paragraphs(max_chars=-1)
+        finally:
+            doc.close()
+
+
+# ==================== Default-cap / truncation-notice Tests ====================
+
+
+class TestListParagraphsDefaultCap:
+    """The 0.6.1 token-ergonomics contract: bare calls cap at 200 paragraphs."""
+
+    TOTAL = 250
+
+    @pytest.fixture
+    def big_docx(self, simple_docx, temp_dir):
+        """simple.docx with its body swapped for 250 one-line paragraphs."""
+        body = "".join(f"<w:p><w:r><w:t>Paragraph {i}</w:t></w:r></w:p>" for i in range(1, self.TOTAL + 1))
+        dest = temp_dir / "big.docx"
+        replace_document_xml(simple_docx, dest, f"<w:document {NS}><w:body>{body}</w:body></w:document>")
+        return dest
+
+    def test_default_cap_returns_200_plus_notice(self, big_docx):
+        doc = Document.open(big_docx)
+        try:
+            result = doc.list_paragraphs()
+            assert len(result) == 201
+            assert result[0].startswith("P1#")
+            assert result[199].startswith("P200#")
+            assert result[200] == "... 50 more paragraphs; use start=201 or limit=None"
+        finally:
+            doc.close()
+
+    def test_limit_none_returns_everything_no_notice(self, big_docx):
+        doc = Document.open(big_docx)
+        try:
+            result = doc.list_paragraphs(limit=None)
+            assert len(result) == self.TOTAL
+            assert all(re.match(r"^P\d+#[0-9a-f]{4}\| ", entry) for entry in result)
+        finally:
+            doc.close()
+
+    def test_explicit_limit_notice_reports_next_start(self, big_docx):
+        # The notice is truncation-based, not default-based: explicit
+        # paginating callers get the continuation hint too.
+        doc = Document.open(big_docx)
+        try:
+            result = doc.list_paragraphs(start=11, limit=30)
+            assert len(result) == 31
+            assert result[0].startswith("P11#")
+            assert result[29].startswith("P40#")
+            assert result[30] == "... 210 more paragraphs; use start=41 or limit=None"
+        finally:
+            doc.close()
+
+    def test_window_reaching_end_has_no_notice(self, big_docx):
+        doc = Document.open(big_docx)
+        try:
+            last_page = doc.list_paragraphs(start=201, limit=50)
+            assert len(last_page) == 50
+            assert last_page[-1].startswith("P250#")
+            exact_fit = doc.list_paragraphs(start=1, limit=self.TOTAL)
+            assert len(exact_fit) == self.TOTAL
+            assert exact_fit[-1].startswith("P250#")
+        finally:
+            doc.close()
+
+    def test_start_beyond_total_stays_empty(self, big_docx):
+        doc = Document.open(big_docx)
+        try:
+            assert doc.list_paragraphs(start=self.TOTAL + 1) == []
+        finally:
+            doc.close()
+
+    def test_notice_never_matches_ref_pattern(self, big_docx):
+        # The documented filter rule: notice lines start with "..." and can
+        # never be mistaken for a P{i}#{hash} ref.
+        doc = Document.open(big_docx)
+        try:
+            result = doc.list_paragraphs()
+            assert result[-1].startswith("...")
+            assert not re.match(r"^P\d+#", result[-1])
+            refs = [entry for entry in result if not entry.startswith("...")]
+            assert len(refs) == 200
+        finally:
+            doc.close()
+
+    def test_structured_default_cap_no_notice(self, big_docx):
+        # The structured variant caps too, but stays homogeneously typed:
+        # no notice record, truncation detected via paragraph_count().
+        doc = Document.open(big_docx)
+        try:
+            result = doc.list_paragraphs_structured()
+            assert len(result) == 200
+            assert all(isinstance(info, ParagraphInfo) for info in result)
+            assert len(result) < doc.paragraph_count()
+        finally:
+            doc.close()
+
+    def test_structured_limit_none_returns_everything(self, big_docx):
+        doc = Document.open(big_docx)
+        try:
+            result = doc.list_paragraphs_structured(limit=None)
+            assert len(result) == self.TOTAL
+            assert result[-1].index == self.TOTAL
         finally:
             doc.close()
 

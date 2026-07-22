@@ -61,15 +61,13 @@ P2#f3c1| Payment is due within 30 days...
 P3#b2c4| Section 5 describes review obligations...
 ```
 
-For large documents, page through paragraphs with `start`/`limit`. You choose the page size; refs keep their global 1-based index (with a page size of 50, page 2 starts at `P51`, not `P1`):
+A bare `list_paragraphs()` call returns at most 200 paragraphs. When more remain, the last entry is a truncation notice (e.g. `"... 50 more paragraphs; use start=201 or limit=None"`) telling you the next `start`; notice lines always begin with `...` and never look like refs. Refs keep their global 1-based index across pages (page 2 starts at `P201`, not `P1`):
 
 ```python
 with Document.open("contract.docx") as doc:
-    total = doc.paragraph_count()
-    page_size = 50
-    for start in range(1, total + 1, page_size):
-        for paragraph in doc.list_paragraphs(start=start, limit=page_size):
-            print(paragraph)
+    page1 = doc.list_paragraphs()                 # up to P200, then "... N more" notice
+    page2 = doc.list_paragraphs(start=201)        # next page, per the notice
+    everything = doc.list_paragraphs(limit=None)  # uncapped, never a notice
 ```
 
 Use the `P{index}#{hash}` part as the `paragraph=` argument. Edit methods return a new paragraph ref after the hash changes, so keep the returned value when chaining edits in the same paragraph.

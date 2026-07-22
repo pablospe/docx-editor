@@ -152,7 +152,7 @@ def run_single(path: Path, do_pdf: bool) -> dict:
     try:
         # Stage 2: read
         try:
-            paras = doc.list_paragraphs_structured()
+            paras = doc.list_paragraphs_structured(limit=None)
             visible = doc.get_visible_text()
             revs = doc.list_revisions()
             stages["read"] = {
