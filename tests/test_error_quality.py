@@ -1241,9 +1241,9 @@ class TestCommentIdValidation:
     def test_reply_text_must_be_non_empty_string(self, doc_path):
         doc, cid = self._build_commented_doc(doc_path)
         try:
-            with pytest.raises(ValueError, match="'reply_text' must be a non-empty string, got None"):
+            with pytest.raises(ValueError, match="'reply' must be a non-empty string, got None"):
                 doc.reply_to_comment(cid, None)  # type: ignore[arg-type]
-            with pytest.raises(ValueError, match="'reply_text' must be a non-empty string, got ''"):
+            with pytest.raises(ValueError, match="'reply' must be a non-empty string, got ''"):
                 doc.reply_to_comment(cid, "")
             reply_id = doc.reply_to_comment(cid, "a real reply")
             assert isinstance(reply_id, int)

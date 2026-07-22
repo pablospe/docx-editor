@@ -415,7 +415,7 @@ class CommentManager:
         # Must fail before any marker is inserted into document.xml — a None
         # reply would otherwise be serialized into comments.xml as "None".
         if not isinstance(reply_text, str) or not reply_text:
-            raise ValueError(f"reply_to_comment(): 'reply_text' must be a non-empty string, got {reply_text!r}")
+            raise ValueError(f"reply_to_comment(): 'reply' must be a non-empty string, got {reply_text!r}")
         if parent_comment_id not in self.existing_comments:
             raise CommentError(
                 f"Parent comment with id={parent_comment_id} not found",

@@ -241,20 +241,22 @@ class Workspace:
                 document's directory (e.g. ".docx" keeps it next to the file).
 
         Raises:
+            ValueError: If ``author`` is neither None nor a non-empty string.
+                Checked first, before any filesystem access.
             DocumentNotFoundError: If the source document doesn't exist
             InvalidDocumentError: If the path is not a valid .docx document:
-                wrong suffix, a directory, not a zip archive, a part contains
-                malformed XML, or the required word/document.xml part is
-                missing
+                wrong suffix, a directory, an empty/truncated file or not a
+                zip archive, a part contains malformed XML, or the required
+                word/document.xml part is missing. Carries ``path`` (the
+                input that failed validation).
             WorkspaceLockedError: If a live session already holds this
-                document's workspace (see _acquire_lock). Checked first: a
-                live holder masks the sync/exists errors below until it
-                closes.
+                document's workspace (see _acquire_lock). Checked first among
+                the workspace checks: a live holder masks the sync/exists
+                errors below until it closes.
             WorkspaceExistsError: If workspace exists and create=True
             WorkspaceSyncError: If create=True and an existing workspace holds
                 unsaved changes from a previous session, or the source document
                 changed on disk since the workspace was created
-            ValueError: If ``author`` is neither None nor a non-empty string
         """
         # Fail fast on a junk author before any filesystem access: an empty
         # string would silently fall back to the system username (silent
