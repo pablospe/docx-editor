@@ -321,6 +321,8 @@ if doc.count_matches("Section 5") > 1:
 
 Replace text with tracked changes. When the target sits inside another author's pending insertion, that insertion is preserved: the matched text gets a nested `<w:del>` under your authorship and the replacement lands in your own sibling `<w:ins>` (Word's behavior), instead of silently rewriting the other author's proposal.
 
+Words shared by `find` and `replace_with` at either end are trimmed first, so only the changed words become revisions — a replace that only adds or only removes words is written as a pure insertion or deletion. The replacement insertion carries the formatting (`rPr`) of the run that contributed the most characters to the replaced span, ties breaking to the earliest run. When `replace_with` equals the found text, the call is a **no-op**: no revisions are created and the returned `EditResult` equals the input `paragraph` ref with `group_id=None` and `revision_ids=()` — that triple is how callers detect the no-op.
+
 **Parameters:**
 
 - `find` (str): Text to find and replace

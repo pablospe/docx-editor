@@ -1114,3 +1114,46 @@ class TestEditOperationConstructors:
     def test_insert_none_text_rejected(self):
         with pytest.raises(ValueError, match=r"EditOperation\.insert_before\(\): 'text' must be a string"):
             EditOperation.insert_before("anchor", None, paragraph="P2#f3c1")  # type: ignore[arg-type]
+
+
+class TestBatchEditTrimming:
+    """batch_edit replace ops flow through the same trimming choke point."""
+
+    def test_batch_replace_is_trimmed(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="shall review item 3. The",
+                replace_with="shall review thing 3. The",
+                paragraph=refs[2].split("|")[0],
+            )
+        ]
+        results = doc.batch_edit(ops)
+        assert len(results) == 1
+        assert results[0].group_id is not None
+
+        dom = doc._document_editor.dom
+        del_content = "".join(dt.firstChild.data for dt in dom.getElementsByTagName("w:delText") if dt.firstChild)
+        assert del_content == "item"
+        ins_elems = dom.getElementsByTagName("w:ins")
+        assert len(ins_elems) == 1
+        ins_content = "".join(wt.firstChild.data for wt in ins_elems[0].getElementsByTagName("w:t") if wt.firstChild)
+        assert ins_content == "thing"
+        assert "shall review thing 3. The report" in doc.get_visible_text()
+
+    def test_batch_noop_replace(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        ref = refs[4].split("|")[0]
+
+        ops = [EditOperation(action="replace", find="item 5", replace_with="item 5", paragraph=ref)]
+        results = doc.batch_edit(ops)
+
+        assert len(results) == 1
+        assert results[0] == ref
+        assert results[0].group_id is None
+        assert results[0].revision_ids == ()
+        assert doc.list_revisions() == []

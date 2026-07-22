@@ -492,7 +492,9 @@ class TestOwnInsertionSplits:
         ref = find_ref(doc, "quick brown fox")
         first = doc.insert_after("fox", " ZE9", paragraph=ref)
 
-        result = doc.replace(" ZE9", " QX7", paragraph=first)
+        # No token shared with " ZE9" (not even the space), so affix trimming
+        # cannot narrow the match — the whole insertion is consumed.
+        result = doc.replace(" ZE9", "QX7", paragraph=first)
 
         # The old insertion is fully consumed and the replacement re-wrapped
         # in a fresh <w:ins> — a revision this operation created, so its

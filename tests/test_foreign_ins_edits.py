@@ -861,3 +861,62 @@ class TestDocumentIntegration:
             assert "PROPOSAL" in revisions[0].text
         finally:
             doc.close()
+
+
+class TestForeignInsMajorityRPrAndTrimming:
+    """Site D foreign-ins replaces get majority rPr and affix trimming."""
+
+    def test_replacement_carries_majority_rpr(self, temp_xml):
+        xml_path = temp_xml(
+            "<w:p>"
+            + _foreign_ins(
+                '<w:r><w:t xml:space="preserve">in </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bolded stuff</w:t></w:r>'
+            )
+            + "</w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        # find/replace share no words, so trimming cannot mask the rule
+        mgr.replace_text("in bolded", "z")
+
+        own_ins = [e for e in _ins_elems(mgr) if e.getAttribute("w:author") == AUTHOR_B]
+        assert len(own_ins) == 1
+        assert len(own_ins[0].getElementsByTagName("w:b")) == 1
+        _assert_no_nested_ins(mgr)
+
+    def test_trimming_inside_foreign_ins(self, temp_xml):
+        xml_path = temp_xml("<w:p>" + _foreign_ins("<w:r><w:t>keep old keep</w:t></w:r>") + "</w:p>")
+        mgr = _make_manager(xml_path)
+        mgr.replace_text("keep old keep", "keep new keep")
+
+        # Only the changed word is revised
+        dels = _del_elems(mgr)
+        assert len(dels) == 1
+        assert _del_text(dels[0]) == "old"
+        own_ins = [e for e in _ins_elems(mgr) if e.getAttribute("w:author") == AUTHOR_B]
+        assert len(own_ins) == 1
+        assert _ins_visible_text(own_ins[0]) == "new"
+        assert _visible_text(mgr) == "keep new keep"
+        _assert_no_nested_ins(mgr)
+
+    def test_trim_narrows_boundary_spanning_match_into_ins(self, temp_xml):
+        # Pre-trim the match spans plain text + A's insertion; post-trim only
+        # "old" (inside the ins) is revised, so dispatch must follow the
+        # narrowed match, nesting the del inside A's ins.
+        xml_path = temp_xml(
+            '<w:p><w:r><w:t xml:space="preserve">keep </w:t></w:r>'
+            + _foreign_ins("<w:r><w:t>old stuff</w:t></w:r>")
+            + "</w:p>"
+        )
+        mgr = _make_manager(xml_path)
+        mgr.replace_text("keep old", "keep new")
+
+        dels = _del_elems(mgr)
+        assert len(dels) == 1
+        assert _del_text(dels[0]) == "old"
+        a_ins = [e for e in _ins_elems(mgr) if e.getAttribute("w:author") == AUTHOR_A]
+        assert dels[0] in _nested_dels(a_ins[0])
+        own_ins = [e for e in _ins_elems(mgr) if e.getAttribute("w:author") == AUTHOR_B]
+        assert len(own_ins) == 1
+        assert _ins_visible_text(own_ins[0]) == "new"
+        assert _visible_text(mgr) == "keep new stuff"
+        _assert_no_nested_ins(mgr)

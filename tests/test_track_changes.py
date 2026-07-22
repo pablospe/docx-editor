@@ -7,7 +7,7 @@ import pytest
 from conftest import find_ref
 
 from docx_editor import Document, TextNotFoundError
-from docx_editor.track_changes import Revision, RevisionManager, _escape_xml
+from docx_editor.track_changes import Revision, RevisionManager, _escape_xml, _trim_replace_affixes
 from docx_editor.xml_editor import DocxXMLEditor, build_text_map
 
 
@@ -1548,3 +1548,64 @@ class TestSmartQuoteEndToEnd:
             assert "‘" in joined and "’" in joined
         finally:
             doc2.close()
+
+
+class TestTrimReplaceAffixes:
+    """Unit tests for _trim_replace_affixes word-level common affix trimming."""
+
+    def test_no_common_affixes(self):
+        assert _trim_replace_affixes("cats", "cat") == (0, 0)
+
+    def test_identical_strings_trim_fully(self):
+        find = "same text here"
+        prefix, suffix = _trim_replace_affixes(find, find)
+        assert find[prefix : len(find) - suffix] == ""
+
+    def test_prefix_only(self):
+        prefix, suffix = _trim_replace_affixes("term of two", "term of three")
+        assert (prefix, suffix) == (len("term of "), 0)
+
+    def test_suffix_only(self):
+        prefix, suffix = _trim_replace_affixes("two years remain", "three years remain")
+        assert (prefix, suffix) == (0, len(" years remain"))
+
+    def test_prefix_and_suffix(self):
+        find = "term of two (2) years, unless"
+        replace_with = "term of three (3) years, unless"
+        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        assert find[prefix : len(find) - suffix] == "two (2)"
+        assert replace_with[prefix : len(replace_with) - suffix] == "three (3)"
+
+    def test_whitespace_not_double_consumed(self):
+        find, replace_with = "delete this word", "delete word"
+        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        assert find[prefix : len(find) - suffix] == "this "
+        assert replace_with[prefix : len(replace_with) - suffix] == ""
+
+    def test_empty_replacement_means_no_trimming(self):
+        assert _trim_replace_affixes(" here", "") == (0, 0)
+        assert _trim_replace_affixes("gone", "") == (0, 0)
+
+    def test_overlap_bound_shrinking(self):
+        find, replace_with = "a a a", "a a"
+        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        assert find[prefix : len(find) - suffix] == " a"
+        assert replace_with[prefix : len(replace_with) - suffix] == ""
+
+    def test_overlap_bound_growing(self):
+        find, replace_with = "a a", "a a a"
+        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        assert find[prefix : len(find) - suffix] == ""
+        assert replace_with[prefix : len(replace_with) - suffix] == " a"
+
+    def test_word_level_not_char_level(self):
+        # "cats"/"cat" share characters but not whole words: no trimming.
+        prefix, suffix = _trim_replace_affixes("two cats sat", "two cat sat")
+        assert (prefix, suffix) == (len("two "), len(" sat"))
+        assert _trim_replace_affixes("cats", "cat") == (0, 0)
+
+    def test_unicode_smart_quote_tokens(self):
+        find = "“term” of x"
+        replace_with = "“term” of y"
+        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        assert (prefix, suffix) == (len("“term” of "), 0)

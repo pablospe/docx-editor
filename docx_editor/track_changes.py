@@ -1510,6 +1510,15 @@ class RevisionManager:
         Finds the specified occurrence of `find` text and replaces it with `replace_with`,
         creating a tracked deletion for the old text and insertion for the new text.
 
+        Words shared by ``find`` and ``replace_with`` at either end are
+        trimmed before revisions are written, so only the changed words become
+        a deletion/insertion pair. A replace that only adds or only removes
+        words degenerates into a pure insertion or deletion; when
+        ``replace_with`` equals the found text, nothing is written and -1 is
+        returned (no-op). The insertion carries the formatting (rPr) of the
+        run that contributed the most characters to the trimmed span, ties
+        breaking to the earliest run.
+
         Args:
             find: Text to find and replace
             replace_with: Replacement text
@@ -1519,7 +1528,8 @@ class RevisionManager:
             paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope the search
 
         Returns:
-            The change ID of the insertion
+            The change ID of the insertion (or of the deletion when the
+            replace degenerates to a pure deletion; -1 for a no-op)
 
         Raises:
             ValueError: If ``find`` is not a non-empty string, ``replace_with``
@@ -1637,6 +1647,22 @@ class RevisionManager:
             result.append((info["run"], info["rPr_xml"], before, matched, after, nid))
         return result
 
+    def _majority_rPr(self, parts: list[tuple[Element, str, str, str, str, int]]) -> str:
+        """rPr of the run(s) contributing the most characters to the match.
+
+        Tallies ``len(matched_part)`` per distinct serialized rPr string, in
+        first-seen order; ties break to the earliest-seen rPr. Grouping by
+        serialized string means semantically equal but differently-ordered
+        rPr children tally separately — deterministic, and runs from the same
+        source serialize identically.
+        """
+        tally: dict[str, int] = {}
+        for _run, rPr_xml, _before, matched, _after, _nid in parts:
+            tally[rPr_xml] = tally.get(rPr_xml, 0) + len(matched)
+        if not tally:
+            return ""
+        return max(tally, key=lambda k: tally[k])
+
     def _classify_segments(self, match: TextMapMatch) -> list[tuple[bool | None, list[TextPosition]]]:
         """Group match positions into contiguous segments by revision context.
 
@@ -1658,10 +1684,31 @@ class RevisionManager:
         return segments
 
     def _replace_across_nodes(self, match: TextMapMatch, replace_with: str) -> int:
-        """Replace text spanning multiple w:t elements, handling mixed revision contexts."""
-        if match.spans_boundary:
-            return self._replace_mixed_state(match, replace_with)
-        return self._replace_same_context(match, replace_with)
+        """Replace text spanning multiple w:t elements, handling mixed revision contexts.
+
+        Words shared by the matched text and ``replace_with`` at either end
+        are trimmed first, so only the changed words become revisions. A
+        replace whose span trims to nothing on one side degenerates into a
+        pure insertion or deletion; one that trims away entirely (replacement
+        equals the match) is a no-op returning -1.
+        """
+        prefix, suffix = _trim_replace_affixes(match.text, replace_with)
+        del_text = match.text[prefix : len(match.text) - suffix]
+        ins_text = replace_with[prefix : len(replace_with) - suffix]
+
+        if not del_text and not ins_text:
+            return -1
+        if not ins_text:
+            return self._delete_across_nodes(match.narrowed(prefix, suffix))
+        if not del_text:
+            if prefix:
+                return self._insert_near_match(match.narrowed(0, len(match.text) - prefix), ins_text, "after")
+            return self._insert_near_match(match.narrowed(len(match.text) - suffix, 0), ins_text, "before")
+
+        trimmed = match.narrowed(prefix, suffix)
+        if trimmed.spans_boundary:
+            return self._replace_mixed_state(trimmed, ins_text)
+        return self._replace_same_context(trimmed, ins_text)
 
     def _replace_same_context(self, match: TextMapMatch, replace_with: str) -> int:
         """Replace text spanning multiple runs in the same revision context.
@@ -1690,8 +1737,8 @@ class RevisionManager:
 
                 self._remove_from_insertion(match.positions)
 
-                first_rPr = parts[0][1]
-                new_run_xml = f"<w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r>"
+                ins_rPr = self._majority_rPr(parts)
+                new_run_xml = f"<w:r>{ins_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r>"
 
                 if ins_elem and ins_elem.parentNode:
                     # ins_elem still in DOM — insert replacement inside it
@@ -1721,8 +1768,8 @@ class RevisionManager:
             # splitting the foreign ins when trailing content follows.
             first_id, last_del = self._delete_from_ins_positions(match.positions)
 
-            first_rPr = parts[0][1]
-            replacement_xml = f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>"
+            ins_rPr = self._majority_rPr(parts)
+            replacement_xml = f"<w:ins><w:r>{ins_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>"
             if last_del is None:  # pragma: no cover - a foreign group always creates a del
                 return first_id
             del_ins = self._find_ancestor(last_del, "w:ins")
@@ -1736,8 +1783,9 @@ class RevisionManager:
                     return int(node.getAttribute("w:id"))
             return first_id  # pragma: no cover - the fragment always yields a w:ins
 
-        # Use first run's rPr for the insertion
-        first_rPr = parts[0][1]
+        # The insertion carries the rPr of the run that contributed the most
+        # characters to the match (ties → earliest run)
+        ins_rPr = self._majority_rPr(parts)
 
         # Group parts by run for multi-w:t preservation
         run_order: list[int] = []
@@ -1777,7 +1825,7 @@ class RevisionManager:
 
                     # Insert replacement after the last deletion
                     if base_idx + parts_emitted == total_parts:
-                        fragments.append(f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>")
+                        fragments.append(f"<w:ins><w:r>{ins_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>")
 
                     if after:
                         fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(after)}</w:t></w:r>")
@@ -1823,8 +1871,11 @@ class RevisionManager:
         """
         segments = self._classify_segments(match)
 
-        # Get rPr from first position's run for the new insertion
+        # First position's run anchors the insertion point; the insertion's
+        # rPr follows the majority-by-characters rule across the whole match
         first_run, first_rPr = self._get_run_info(match.positions[0].node)
+        parts = self._build_cross_boundary_parts(match)
+        ins_rPr = self._majority_rPr(parts) if parts else first_rPr
 
         # Find the first affected element to use as insertion reference point.
         # For regular text, it's the run; for ins text, it's the w:ins element.
@@ -1853,7 +1904,7 @@ class RevisionManager:
 
         # Insert replacement after the last <w:del> sibling following the marker,
         # so it appears after any preserved prefix text.
-        ins_xml = f"<w:ins><w:r>{first_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>"
+        ins_xml = f"<w:ins><w:r>{ins_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r></w:ins>"
         last_del = None
         sibling = marker.nextSibling
         while sibling:
@@ -2880,6 +2931,34 @@ class RevisionManager:
 def _tokenize_words(text: str) -> list[str]:
     """Split text into alternating word and whitespace tokens."""
     return re.findall(r"\S+|\s+", text)
+
+
+def _trim_replace_affixes(find: str, replace_with: str) -> tuple[int, int]:
+    """Compute the character lengths of the word-level common prefix and
+    suffix shared by ``find`` and ``replace_with``.
+
+    Trimming is word-granular (tokens from :func:`_tokenize_words`) so a
+    replace only revises whole changed words, matching the diff granularity
+    of ``rewrite_paragraph``. The suffix scan is bounded by each side's
+    remainder after the prefix, so a token shared at both ends is never
+    consumed twice.
+
+    Returns:
+        ``(prefix_len, suffix_len)`` in characters.
+    """
+    f_toks = _tokenize_words(find)
+    r_toks = _tokenize_words(replace_with)
+
+    i = 0
+    while i < len(f_toks) and i < len(r_toks) and f_toks[i] == r_toks[i]:
+        i += 1
+    j = 0
+    while j < len(f_toks) - i and j < len(r_toks) - i and f_toks[-(j + 1)] == r_toks[-(j + 1)]:
+        j += 1
+
+    prefix_len = sum(len(tok) for tok in f_toks[:i])
+    suffix_len = sum(len(tok) for tok in f_toks[len(f_toks) - j :])
+    return prefix_len, suffix_len
 
 
 def _set_xml_space_preserve(wt_elem) -> None:

@@ -59,6 +59,29 @@ class TextMapMatch:
     positions: list[TextPosition]  # TextPosition entries for the match
     spans_boundary: bool  # True if match spans different revision contexts
 
+    def narrowed(self, prefix_len: int, suffix_len: int) -> "TextMapMatch":
+        """Return a copy of this match with ``prefix_len``/``suffix_len``
+        characters trimmed off its ends.
+
+        ``spans_boundary`` is recomputed for the narrowed span with the same
+        ins-uniformity rule as :func:`find_in_text_map`, so a trimmed match
+        dispatches to the same code path a direct search for it would.
+        """
+        end = len(self.text) - suffix_len
+        positions = self.positions[prefix_len:end]
+        if positions:
+            first_ins = positions[0].is_inside_ins
+            spans = any(p.is_inside_ins != first_ins for p in positions)
+        else:
+            spans = False
+        return TextMapMatch(
+            start=self.start + prefix_len,
+            end=self.end - suffix_len,
+            text=self.text[prefix_len:end],
+            positions=positions,
+            spans_boundary=spans,
+        )
+
 
 def _require_valid_occurrence(occurrence: int | None, label: str = "", allow_none: bool = True) -> None:
     """Reject a non-int or negative ``occurrence`` before it can hit an int
