@@ -1515,9 +1515,10 @@ class RevisionManager:
         a deletion/insertion pair. A replace that only adds or only removes
         words degenerates into a pure insertion or deletion; when
         ``replace_with`` equals the found text, nothing is written and -1 is
-        returned (no-op). The insertion carries the formatting (rPr) of the
-        run that contributed the most characters to the trimmed span, ties
-        breaking to the earliest run.
+        returned (no-op). The insertion carries the formatting (rPr) that
+        covers the most characters of the trimmed span — runs sharing
+        identical formatting tally together, ties breaking to the
+        earliest-seen formatting.
 
         Args:
             find: Text to find and replace
@@ -1783,8 +1784,8 @@ class RevisionManager:
                     return int(node.getAttribute("w:id"))
             return first_id  # pragma: no cover - the fragment always yields a w:ins
 
-        # The insertion carries the rPr of the run that contributed the most
-        # characters to the match (ties → earliest run)
+        # The insertion carries the rPr covering the most characters of the
+        # match (same-rPr runs tally together; ties → earliest seen)
         ins_rPr = self._majority_rPr(parts)
 
         # Group parts by run for multi-w:t preservation

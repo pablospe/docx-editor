@@ -861,9 +861,10 @@ class Document:
         text. Words shared by ``find`` and ``replace_with`` at either end are
         trimmed first, so only the changed words become revisions — a replace
         that only adds or only removes words is written as a pure insertion
-        or deletion. The insertion carries the formatting (rPr) of the run
-        that contributed the most characters to the replaced span, with ties
-        breaking to the earliest run.
+        or deletion. The insertion carries the formatting (rPr) that covers
+        the most characters of the replaced span — runs sharing identical
+        formatting tally together, with ties breaking to the earliest-seen
+        formatting.
 
         When ``replace_with`` equals the found text, the call is a no-op: no
         revisions are created and the returned EditResult equals the input
