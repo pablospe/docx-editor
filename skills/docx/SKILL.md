@@ -75,9 +75,9 @@ Use **python-docx** to explore document structure before editing. This is useful
 >
 > **Never carry paragraph indexes between libraries.** python-docx
 > `doc.paragraphs` lists body-level paragraphs only (table cells excluded);
-> docx-editor `P{n}` refs number every paragraph including table cells — the
+> docx-editor `P{i}` refs number every paragraph including table cells — the
 > numberings diverge at the first table (a 3000-paragraph doc can have 3027
-> `P` refs), so `P{n}` ≠ `paragraphs[n-1]`.
+> `P` refs), so `P{i}` ≠ `paragraphs[i-1]`.
 
 ```python
 from docx import Document
@@ -217,9 +217,11 @@ with Document.open("contract.docx", author=author) as doc:
 # LOST, and the next open() succeeds with no trace of them. To keep work when
 # a step fails, catch the exception INSIDE the with block and
 # doc.save("rescue.docx") — once the block exits, the document is closed.
-# (A rescue save to a different path flags the workspace as diverged from the
-# source, so the NEXT open() of the source raises WorkspaceSyncError — pass
-# force_recreate=True to discard; rescue.docx already holds your edits.)
+# (Swallow the exception and the block exits normally: the workspace is
+# cleaned up and the next open() is clean. Re-raise after the rescue save,
+# though, and the kept workspace stays flagged as diverged — the next open()
+# of the source then raises WorkspaceSyncError; force_recreate=True discards
+# it, and rescue.docx already holds your edits.)
 ```
 
 Without context manager:
@@ -967,7 +969,7 @@ Rules:
 - `doc.save()` raises `WorkspaceSyncError` if the file changed on disk while the session held it open (e.g. the user edited it in Word). Ask the user before retrying with `doc.save(force=True)` — force overwrites their changes.
 - A session that saved to a different path (or whose save failed) and never called `doc.close()` leaves the workspace flagged as holding unsaved changes; the next `Document.open()` of the same source raises `WorkspaceSyncError` instead of silently carrying those edits over. `Document.open(path, force_recreate=True)` recovers but **discards** those edits — to rescue them first, save the orphaned workspace to a new file: `from docx_editor.workspace import Workspace; Workspace("contract.docx", create=False).save("rescued.docx")` (deep import — `Workspace` is not exported at package root), then reopen the source with `force_recreate=True`.
 - `Document.open()` raises `WorkspaceLockedError` if a live session (another process, or an unclosed `Document` in this one) already holds the document's workspace. Close the other session, or use `Document.open(path, force_recreate=True)` to take the workspace over, discarding its unsaved edits. Stale locks from dead processes are reclaimed automatically.
-- Concurrent sessions via `--session-file` must edit *different* documents — the same document still shares one workspace (see "Editing in parallel" below).
+- Concurrent sessions via `--session-file` must edit *different* documents — a second session opening the same document raises `WorkspaceLockedError` (see "Editing in parallel" below).
 - For a single edit, a one-off script is still fine — session mode pays off with repeated operations.
 
 ### Complementary Tools
