@@ -626,15 +626,27 @@ revision. Accepting the group applies the whole edit — the safe alternative to
 resolving a multi-revision edit (especially a rewrite) revision by revision,
 which garbles the text if only some are applied.
 
-Groups are **in-memory and per-open-Document**: after `close()`/reopen,
-revisions report `group_id=None` and old group ids raise
-[`RevisionError`](#revisionerror). `save()` does not invalidate groups (the
-Document stays open and revision ids are preserved). Revisions authored
-outside the current session (foreign reviewers, previous sessions) have no
-group — accept/reject them by id or author as before. If groups ever need to
-survive across sessions, the workspace `meta.json` (which never enters the
-`.docx`) is the natural extension point; that persistence is intentionally not
-implemented today.
+Group ids are **in-memory and per-open-Document**, renumbered on each open.
+Edits made through the open Document **record** their group
+(`Revision.group_source == "recorded"`). For revisions already in the file —
+previous sessions, foreign reviewers, Word round-trips — nothing is persisted
+in the `.docx` (Word has no grouping concept and strips unknown markup), so
+groups are **inferred** at parse time instead
+(`Revision.group_source == "inferred"`): contiguous revisions in the same
+paragraph sharing identical `w:author` + `w:date` reconstruct as one group.
+That heuristic almost always matches the original logical edits — one caveat:
+`w:date` has second precision, so two edits to the *same paragraph* within the
+same second merge into one inferred group. When Word already resolved part of
+a former edit, the remainder reconstructs as a smaller (rump) group, and
+`accept_group()`/`reject_group()` handle it fine. Revisions missing an author
+or date, sitting outside any paragraph (e.g. table-row markers), or carrying
+nonconforming ids stay ungrouped (`group_id=None`).
+
+Never carry a `group_id` across sessions: reopening renumbers groups from 1,
+so a stale id from a previous session may silently resolve to a *different*
+group rather than raise. Always take group ids from the current session's
+`EditResult` or `list_revisions()`. `save()` does not invalidate groups (the
+Document stays open and revision ids are preserved).
 
 **Parameters:**
 
@@ -642,7 +654,7 @@ implemented today.
 
 **Returns:** Number of revisions accepted (int). Members already resolved individually are skipped (and not counted).
 
-**Raises:** [`RevisionError`](#revisionerror) if the group id is unknown (never allocated, or allocated by a previous session on this document).
+**Raises:** [`RevisionError`](#revisionerror) if the group id is unknown to this open Document.
 
 **Example:**
 
@@ -656,7 +668,8 @@ doc.accept_group(result.group_id)  # apply the whole rewrite
 Reject every revision created by one logical edit operation — the counterpart
 of [`accept_group()`](#accept_groupgroup_id). Rejecting the group undoes the
 whole edit, restoring the exact pre-edit text (deletions restored, insertions
-removed). Same group semantics and lifetime as `accept_group()`.
+removed). Same group semantics and lifetime as `accept_group()` — including
+recorded vs inferred groups and per-open renumbering.
 
 **Parameters:**
 
@@ -806,7 +819,8 @@ from docx_editor import Revision
 | `author` | str | The revision author |
 | `date` | datetime or None | When the revision was made |
 | `text` | str | The inserted or deleted text |
-| `group_id` | int or None | Revision group of the edit that created it in this session (see [`accept_group()`](#accept_groupgroup_id)); None for foreign or pre-session revisions |
+| `group_id` | int or None | Revision group this revision belongs to (see [`accept_group()`](#accept_groupgroup_id)): recorded for this session's edits, inferred by reconstruction for revisions already in the file; None only for ungroupable revisions (missing author/date, outside any paragraph, nonconforming id) |
+| `group_source` | str or None | Provenance of `group_id`: `"recorded"` (created through this open Document) or `"inferred"` (reconstructed at parse time from same-paragraph contiguity + identical author and date); None iff `group_id` is None |
 
 ### Example
 
@@ -890,7 +904,7 @@ from docx_editor import EditResult
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `group_id` | int or None | Revision group holding every revision this edit created, for [`accept_group()`](#accept_groupgroup_id) / [`reject_group()`](#reject_groupgroup_id). None when the edit created no new revisions (e.g. text spliced into one of your own pending insertions, a no-change rewrite, or a rewrite whose changes all merged into your own pending insertions). Valid only while this Document stays open. |
+| `group_id` | int or None | Revision group holding every revision this edit created, for [`accept_group()`](#accept_groupgroup_id) / [`reject_group()`](#reject_groupgroup_id). None when the edit created no new revisions (e.g. text spliced into one of your own pending insertions, a no-change rewrite, or a rewrite whose changes all merged into your own pending insertions). Valid only while this Document stays open — after reopen the same revisions belong to a freshly inferred group with a new id. |
 | `revision_ids` | tuple[int, ...] | The `w:id`s of the group's member revisions, in creation order; `()` when `group_id` is None |
 
 ### Example
@@ -1085,7 +1099,7 @@ except CommentError as e:
 
 ### `RevisionError`
 
-Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`. Revision groups are in-memory and per-open-`Document`, so ids from a previous session are unknown; resolve those revisions by id or author instead. Structured fields: `revision_id` and `group_id` — set when the error is about that specific id (`group_id` for unknown-group errors), `None` otherwise.
+Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`. Group ids are per-open-`Document` and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use a group id from the current session's `EditResult` or `list_revisions()` — a stale id from a previous session may raise this, or worse, silently resolve to a different group. Structured fields: `revision_id` and `group_id` — set when the error is about that specific id (`group_id` for unknown-group errors), `None` otherwise.
 
 ```python
 from docx_editor.exceptions import RevisionError

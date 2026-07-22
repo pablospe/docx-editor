@@ -37,7 +37,9 @@ from docx_editor import Document, Revision
 # including its trailing bracketed note run. None of the fixture's revisions
 # nest, so nested_under/contains_ids keep their defaults. Ids 1007/1008 carry
 # identical text in the same paragraph — type + occurrence (in each type's own
-# view) is what tells them apart.
+# view) is what tells them apart. Every revision differs from its document-
+# order neighbor by paragraph, author, or date, so group reconstruction
+# infers eight singleton groups, numbered 1-8 in document order.
 EXPECTED_REVISIONS = [
     Revision(
         id=1001,
@@ -47,6 +49,8 @@ EXPECTED_REVISIONS = [
         text="inserted",
         paragraph_ref="P3#e6b4",
         occurrence=0,
+        group_id=1,
+        group_source="inferred",
     ),
     Revision(
         id=1002,
@@ -56,6 +60,8 @@ EXPECTED_REVISIONS = [
         text="old ",
         paragraph_ref="P4#1750",
         occurrence=0,
+        group_id=2,
+        group_source="inferred",
     ),
     Revision(
         id=1003,
@@ -65,6 +71,8 @@ EXPECTED_REVISIONS = [
         text="colour",
         paragraph_ref="P5#a192",
         occurrence=0,
+        group_id=3,
+        group_source="inferred",
     ),
     Revision(
         id=1004,
@@ -74,6 +82,8 @@ EXPECTED_REVISIONS = [
         text="color",
         paragraph_ref="P5#a192",
         occurrence=0,
+        group_id=4,
+        group_source="inferred",
     ),
     Revision(
         id=1005,
@@ -83,6 +93,8 @@ EXPECTED_REVISIONS = [
         text="reenter",
         paragraph_ref="P6#975f",
         occurrence=0,
+        group_id=5,
+        group_source="inferred",
     ),
     Revision(
         id=1006,
@@ -92,6 +104,8 @@ EXPECTED_REVISIONS = [
         text="— or is it?",
         paragraph_ref="P8#1b23",
         occurrence=0,
+        group_id=6,
+        group_source="inferred",
     ),
     Revision(
         id=1007,
@@ -101,6 +115,8 @@ EXPECTED_REVISIONS = [
         text="DRAFT ",
         paragraph_ref="P9#5772",
         occurrence=0,
+        group_id=7,
+        group_source="inferred",
     ),
     Revision(
         id=1008,
@@ -110,6 +126,8 @@ EXPECTED_REVISIONS = [
         text="DRAFT ",
         paragraph_ref="P9#5772",
         occurrence=0,
+        group_id=8,
+        group_source="inferred",
     ),
 ]
 

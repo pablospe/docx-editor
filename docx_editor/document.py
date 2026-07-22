@@ -69,8 +69,10 @@ class Document:
         result = doc.replace("30 days", "60 days", paragraph=ref)
         doc.add_comment("Section 5", "Please review")
 
-        # Every edit's revisions form a group — accept/reject them as a unit
-        # (group ids live only while this Document is open):
+        # Every edit's revisions form a group — accept/reject them as a unit.
+        # Group ids are per-open-Document (renumbered on each open; revisions
+        # already in the file get inferred groups reconstructed at parse
+        # time), so always use ids from this session:
         result = doc.rewrite_paragraph(result, "The board shall approve.")
         doc.reject_group(result.group_id)  # undo the whole rewrite
 
@@ -1225,9 +1227,11 @@ class Document:
             locatable, e.g. nested revisions), plus ``nested_under`` and
             ``contains_ids`` describing revision nesting (e.g. a foreign
             deletion inside another author's pending insertion), and
-            ``group_id`` linking revisions created by the same edit
-            operation in this session (None for foreign or pre-session
-            revisions).
+            ``group_id``/``group_source`` linking revisions from the same
+            logical edit — recorded for this session's edits, inferred by
+            parse-time reconstruction for revisions already in the file
+            (``group_id`` is None only for ungroupable revisions, e.g.
+            missing author/date).
 
         Raises:
             ValueError: If ``paragraph`` is malformed
@@ -1292,9 +1296,15 @@ class Document:
         resolving a multi-revision edit (especially a rewrite) revision by
         revision can leave the text garbled if only some are applied.
 
-        Groups are in-memory and live only while this Document is open:
-        after close()/reopen, revisions report ``group_id=None`` and old
-        group ids raise. save() does not invalidate groups.
+        Group ids are in-memory and per-open-Document, renumbered on each
+        open. Revisions already in the file (previous sessions, foreign
+        reviewers) get inferred groups reconstructed at parse time —
+        contiguous same-paragraph revisions sharing identical author and
+        date — so whole logical edits resolve as a unit after reopen too
+        (see ``Revision.group_source``). Always use a group id from this
+        session's EditResult or list_revisions(); a stale id from a
+        previous session may resolve to a different group. save() does not
+        invalidate groups.
 
         Args:
             group_id: Group id from an EditResult (or a Revision's
@@ -1305,8 +1315,7 @@ class Document:
             individually are skipped (and not counted).
 
         Raises:
-            RevisionError: If the group id is unknown (never allocated, or
-                allocated by a previous session on this document).
+            RevisionError: If the group id is unknown to this open Document.
 
         Example:
             result = doc.rewrite_paragraph(ref, "New text.")
@@ -1320,7 +1329,8 @@ class Document:
 
         The counterpart of :meth:`accept_group` — rejecting the group undoes
         the whole edit, restoring the exact pre-edit text (deletions are
-        restored, insertions removed).
+        restored, insertions removed). Same group semantics and lifetime as
+        accept_group(), including inferred groups after reopen.
 
         Args:
             group_id: Group id from an EditResult (or a Revision's
@@ -1331,8 +1341,7 @@ class Document:
             individually are skipped (and not counted).
 
         Raises:
-            RevisionError: If the group id is unknown (never allocated, or
-                allocated by a previous session on this document).
+            RevisionError: If the group id is unknown to this open Document.
 
         Example:
             result = doc.rewrite_paragraph(ref, "New text.")
