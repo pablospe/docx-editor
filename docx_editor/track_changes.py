@@ -41,6 +41,20 @@ from .xml_editor import (
     render_plain_wt,
 )
 
+# Provenance of a revision group: created by an edit through this open
+# Document ("recorded") vs reconstructed at parse time ("inferred").
+GroupSource = Literal["recorded", "inferred"]
+
+
+@dataclass
+class _RegistrySnapshot:
+    """Copy of the group registry, for rollback alongside a DOM snapshot."""
+
+    counter: int
+    groups: dict[int, tuple[int, ...]]
+    revision_groups: dict[int, int | None]
+    group_sources: dict[int, GroupSource]
+
 
 @dataclass
 class EditOperation:
@@ -223,8 +237,10 @@ class EditResult(str):
       into one of your own pending insertions (physically merged, so it is
       inseparable from the earlier operation at the XML level), a rewrite
       that found no differences, or a rewrite whose changes all landed
-      inside your own pending insertions. Groups live only for the current
-      open Document (see ``Document.accept_group``).
+      inside your own pending insertions. Group ids are per-open-Document
+      and renumbered on each open — after close()/reopen the same revisions
+      belong to a freshly inferred group with a new id, so never carry a
+      group_id across sessions (see ``Document.accept_group``).
     - ``revision_ids``: the w:ids of the group's member revisions, in
       creation order, as of this edit's return; ``()`` when ``group_id`` is
       None. A later edit that splits one of these insertions adds the
@@ -315,10 +331,25 @@ class Revision:
       deletion inside another author's pending insertion), else None.
     - ``contains_ids``: ids of revisions nested inside this one, in document
       order.
-    - ``group_id``: id of the revision group this revision was created in
-      (all revisions from one logical edit share it — see
-      ``Document.accept_group``). None for revisions that predate the open
-      Document session or were authored elsewhere.
+    - ``group_id``: id of the revision group this revision belongs to (all
+      revisions from one logical edit share it — see
+      ``Document.accept_group``). Edits made through the open Document
+      record their group directly; revisions already in the file get an
+      *inferred* group reconstructed at parse time (see ``group_source``).
+      None only when the revision is ungroupable: it sits outside any
+      paragraph, lacks an author or date, shares a duplicated id with
+      another revision (id-keyed lookup cannot tell the occurrences
+      apart), or is a mid-session split half of a foreign insertion.
+      Revisions with non-numeric ids are omitted from ``list_revisions()``
+      entirely — no id-keyed operation could target them.
+    - ``group_source``: provenance of ``group_id`` — ``"recorded"`` for
+      groups created by edits through this open Document, ``"inferred"``
+      for groups reconstructed at parse time by the heuristic (contiguous
+      same-paragraph revisions sharing identical ``w:author`` + ``w:date``
+      are one group). Inferred groups usually match the original logical
+      edits, but two edits to the same paragraph within the same second
+      merge into one group (``w:date`` has second precision). None iff
+      ``group_id`` is None.
     """
 
     id: int
@@ -331,6 +362,7 @@ class Revision:
     nested_under: int | None = None
     contains_ids: tuple[int, ...] = ()
     group_id: int | None = None
+    group_source: GroupSource | None = None
 
     def __repr__(self) -> str:
         kind = "ins" if self.type == "insertion" else "del"
@@ -338,7 +370,8 @@ class Revision:
         preview = self.text[:30] + ("..." if len(self.text) > 30 else "")
         nested = f", nested_under={self.nested_under}" if self.nested_under is not None else ""
         contains = f", contains={list(self.contains_ids)}" if self.contains_ids else ""
-        group = f", group={self.group_id}" if self.group_id is not None else ""
+        inferred = "(inferred)" if self.group_source == "inferred" else ""
+        group = f", group={self.group_id}{inferred}" if self.group_id is not None else ""
         return f"Revision({kind} {self.id}{location}: '{preview}' by {self.author}{nested}{contains}{group})"
 
 
@@ -385,6 +418,27 @@ def _descendant_revision_ids(elem) -> tuple[int, ...]:
 
     walk(elem)
     return tuple(ids)
+
+
+def _revision_elements(root) -> list[Element]:
+    """All <w:ins>/<w:del> elements under ``root``, in document order.
+
+    Same unconditional-recursion pattern as ``_descendant_revision_ids``:
+    nested revisions (e.g. a w:del inside a w:ins) are included, each
+    appearing right after its host.
+    """
+    elems: list[Element] = []
+
+    def walk(node) -> None:
+        for child in node.childNodes:
+            if child.nodeType != child.ELEMENT_NODE:
+                continue
+            if child.tagName in ("w:ins", "w:del"):
+                elems.append(child)
+            walk(child)
+
+    walk(root)
+    return elems
 
 
 def _insertion_text_nodes(elem) -> list:
@@ -499,15 +553,109 @@ class RevisionManager:
         self.editor = editor
         # Revision groups: every revision created by one logical operation
         # shares a group id, so callers can accept/reject the operation as a
-        # unit. In-memory only — groups live for the lifetime of this manager
-        # (i.e. the open Document); nothing is written into the .docx.
+        # unit. The registry is in-memory and rebuilt on every open — nothing
+        # is written into the .docx. Revisions already present in the file
+        # get inferred groups from _reconstruct_groups below; edits made
+        # through this manager record theirs and continue the numbering.
         self._groups: dict[int, tuple[int, ...]] = {}
         # Maps revision id -> group id. A None value means explicitly
-        # ungrouped: a split-off tail of a pre-session insertion, registered
-        # so the active _grouped capture cannot claim it (membership is
-        # key-based) while group_id_of/list_revisions still report None.
+        # ungrouped: a split-off tail of an ungroupable own insertion,
+        # registered so the active _grouped capture cannot claim it
+        # (membership is key-based) while group_id_of/list_revisions still
+        # report None.
         self._revision_groups: dict[int, int | None] = {}
+        # Maps group id -> provenance ("recorded" | "inferred").
+        self._group_sources: dict[int, GroupSource] = {}
         self._group_counter = 1
+        self._reconstruct_groups()
+
+    def _reconstruct_groups(self) -> None:
+        """Infer revision groups for the revisions already in the document.
+
+        Word offers no grouping concept, so nothing about the original
+        logical edits survives in the file; this reconstructs them with a
+        heuristic: maximal runs of consecutive revisions (document order,
+        nested revisions included) in the *same paragraph* sharing identical
+        raw ``w:author`` + ``w:date`` strings become one group. Same-paragraph
+        contiguity is load-bearing — (author, date) alone would merge every
+        edit an author made in the same second across the whole document.
+        Singletons get groups too, matching live behavior where a
+        one-revision edit gets a one-member group.
+
+        Known, accepted imprecisions:
+
+        - Two logical edits to the same paragraph within the same second
+          (w:date has second precision) merge into one group — accepted
+          over-merge, pinned by test.
+        - A revision inside a nested paragraph (e.g. a text box's
+          w:txbxContent) interrupts the outer paragraph's run in document
+          order — conservative over-split.
+        - Foreign revisions group by the same heuristic; provenance is
+          always honest ("inferred").
+        - When Word already resolved part of a former edit, the remaining
+          revisions reconstruct as a rump group — accept_group/reject_group
+          are rump-tolerant.
+
+        A revision stays unregistered (group_id None, breaking the current
+        run) when it has no ancestor <w:p> (e.g. w:trPr row markers), an
+        empty author or date, or a non-numeric id (nonconforming producers;
+        list_revisions() omits non-numeric ids entirely — no id-keyed
+        operation could target them). A duplicated id is wholly ungrouped —
+        every occurrence, whether or not individually groupable — because
+        id-keyed lookup cannot tell the occurrences apart, so no group may
+        contain an ambiguous member.
+        """
+        run_key: tuple[int, str, str] | None = None
+        run_members: list[int] = []
+
+        def close_run() -> None:
+            nonlocal run_members
+            if run_members:
+                group_id = self._group_counter
+                self._group_counter += 1
+                self._groups[group_id] = tuple(run_members)
+                for rev_id in run_members:
+                    self._revision_groups[rev_id] = group_id
+                self._group_sources[group_id] = "inferred"
+                run_members = []
+
+        elements = _revision_elements(self.editor.dom.documentElement)
+
+        # Pre-scan for duplicated ids, independent of groupability: an
+        # ungroupable occurrence (e.g. missing its date) must still bar its
+        # groupable twin from winning a group that id-keyed lookup would
+        # then report for both elements.
+        seen_ids: set[int] = set()
+        duplicate_ids: set[int] = set()
+        for elem in elements:
+            try:
+                elem_id = int(elem.getAttribute("w:id"))
+            except ValueError:
+                continue
+            if elem_id in seen_ids:
+                duplicate_ids.add(elem_id)
+            seen_ids.add(elem_id)
+
+        for elem in elements:
+            paragraph = _ancestor_paragraph(elem)
+            author = elem.getAttribute("w:author")
+            date = elem.getAttribute("w:date")
+            try:
+                rev_id = int(elem.getAttribute("w:id"))
+            except ValueError:
+                rev_id = None
+            if paragraph is None or not author or not date or rev_id is None or rev_id in duplicate_ids:
+                if rev_id is not None and rev_id in duplicate_ids:
+                    self._revision_groups[rev_id] = None  # explicitly ungrouped
+                close_run()
+                run_key = None
+                continue
+            key = (id(paragraph), author, date)
+            if key != run_key:
+                close_run()
+                run_key = key
+            run_members.append(rev_id)
+        close_run()
 
     @contextmanager
     def _grouped(self) -> Iterator[_GroupCapture]:
@@ -520,16 +668,18 @@ class RevisionManager:
         authored by us — a split half of a *foreign* insertion gets a fresh
         id but keeps the foreign author, and must not join our group —
         (ii) still attached to the DOM, excluding create-then-remove churn,
-        and (iii) not already registered by ``_adopt_split_tail`` — a
-        split-off tail of one of our *own* insertions is adopted into its
-        origin group (or marked ungrouped when the origin predates this
-        session), never claimed by the splitting operation.
+        and (iii) not already registered — by ``_adopt_split_tail``, which
+        adopts a split-off tail of one of our *own* insertions into its
+        origin group (or marks it ungrouped when the origin has no group),
+        never letting the splitting operation claim it; or by
+        ``_reconstruct_groups`` (redundantly — the collector only reports
+        freshly assigned ids, which pre-existing revisions never have).
         A group id is allocated only when that filtered set is non-empty;
         it is exposed on the yielded _GroupCapture after the block exits.
         If the operation raises, nothing is registered.
         """
         capture = _GroupCapture()
-        with self.editor.collect_tracked_changes() as collected:
+        with self.editor.collect_tracked_changes() as collected, self.editor.frozen_timestamp():
             yield capture
         members: list[int] = []
         seen: set[int] = set()
@@ -557,6 +707,7 @@ class RevisionManager:
             self._groups[group_id] = tuple(members)
             for rev_id in members:
                 self._revision_groups[rev_id] = group_id
+            self._group_sources[group_id] = "recorded"
             capture.group_id = group_id
 
     def _adopt_split_tail(self, original_ins, new_nodes) -> None:
@@ -566,9 +717,10 @@ class RevisionManager:
         the trailing half is re-created as a fresh <w:ins> with a fresh w:id.
         That tail is leftover content of the *original* insertion's operation,
         not of the operation doing the splitting — so it joins the original
-        insertion's group, keeping reject_group/accept_group of that earlier
-        operation complete. When the origin has no group (a pre-session
-        insertion by this author), the tail is registered as explicitly
+        insertion's group — recorded or inferred alike, keeping
+        reject_group/accept_group of that earlier operation complete. When
+        the origin has no group (an ungroupable insertion by this author,
+        e.g. one missing its w:date), the tail is registered as explicitly
         ungrouped (None) instead. Either registration stops the active
         ``_grouped`` capture from claiming the tail for the splitting
         operation — otherwise rejecting that operation's group would rip a
@@ -585,30 +737,41 @@ class RevisionManager:
                 if origin_group is not None:
                     self._groups[origin_group] = (*self._groups[origin_group], tail_id)
 
-    def _registry_snapshot(self) -> tuple[int, dict[int, tuple[int, ...]], dict[int, int | None]]:
+    def _registry_snapshot(self) -> _RegistrySnapshot:
         """Snapshot the group registry for rollback alongside a DOM snapshot."""
-        return (self._group_counter, dict(self._groups), dict(self._revision_groups))
+        return _RegistrySnapshot(
+            counter=self._group_counter,
+            groups=dict(self._groups),
+            revision_groups=dict(self._revision_groups),
+            group_sources=dict(self._group_sources),
+        )
 
-    def _restore_registry(self, snapshot: tuple[int, dict[int, tuple[int, ...]], dict[int, int | None]]) -> None:
+    def _restore_registry(self, snapshot: _RegistrySnapshot) -> None:
         """Restore the group registry captured by ``_registry_snapshot``."""
-        self._group_counter, self._groups, self._revision_groups = snapshot
+        self._group_counter = snapshot.counter
+        self._groups = snapshot.groups
+        self._revision_groups = snapshot.revision_groups
+        self._group_sources = snapshot.group_sources
 
     def group_id_of(self, revision_id: int) -> int | None:
-        """Group id of a revision created through this manager, or None."""
+        """Group id of a revision (recorded or inferred), or None if ungrouped."""
         return self._revision_groups.get(revision_id)
 
     def group_revisions(self, group_id: int) -> tuple[int, ...]:
-        """Member revision ids of ``group_id``, in creation order.
+        """Member revision ids of ``group_id``, in creation order (recorded
+        groups) or document order (inferred groups).
 
         Raises:
-            RevisionError: If the group id is unknown to this manager (groups
-                exist only for edits made through the current open Document).
+            RevisionError: If the group id is unknown to this manager (group
+                ids are per-open-Document and renumbered on each open).
         """
         members = self._groups.get(group_id)
         if members is None:
             raise RevisionError(
-                f"Unknown revision group: {group_id}. Groups exist only for edits made "
-                f"through the current open Document; they are not persisted in the file.",
+                f"Unknown revision group: {group_id}. Group ids are per-open-Document and "
+                f"renumbered on each open (recorded for this session's edits, inferred by "
+                f"reconstruction for revisions already in the file); use a group_id from "
+                f"this session's EditResult or list_revisions().",
                 group_id=group_id,
             )
         return members
@@ -1827,6 +1990,12 @@ class RevisionManager:
         point falls mid-run. Returns the last element that belongs to the
         left side of the split point (None when the split point is at the
         very start of the insertion's content).
+
+        Group caveat: when the enclosing *foreign* insertion is later split
+        into fresh-id halves, those halves are not adopted into the origin's
+        inferred group (adoption is deliberately limited to our own
+        insertions) — resolving that group then affects only part of the
+        visual insertion. Foreign grouping is best-effort by design.
         """
         run, rPr_xml = self._get_run_info(edge_node)
         if not run:  # pragma: no cover - a w:t node always sits inside a run
@@ -2455,6 +2624,13 @@ class RevisionManager:
         rev_id = elem.getAttribute("w:id")
         if not rev_id:
             return None
+        try:
+            rev_id_int = int(rev_id)
+        except ValueError:
+            # Nonconforming producer: Revision.id is an int and every
+            # id-keyed operation targets ints, so a non-numeric w:id is
+            # unrepresentable — omit it rather than crash the listing.
+            return None
 
         author = elem.getAttribute("w:author") or "Unknown"
         date_str = elem.getAttribute("w:date")
@@ -2489,7 +2665,7 @@ class RevisionManager:
                     view: Literal["accepted", "original"] = "accepted" if rev_type == "insertion" else "original"
                     occurrence = _occurrence_in_text_map(ctx.text_map(paragraph, view), elem, text)
 
-        rev_id_int = int(rev_id)
+        group_id = self._revision_groups.get(rev_id_int)
         return Revision(
             id=rev_id_int,
             type=rev_type,
@@ -2500,7 +2676,8 @@ class RevisionManager:
             occurrence=occurrence,
             nested_under=_nearest_revision_ancestor_id(elem),
             contains_ids=_descendant_revision_ids(elem),
-            group_id=self._revision_groups.get(rev_id_int),
+            group_id=group_id,
+            group_source=self._group_sources.get(group_id) if group_id is not None else None,
         )
 
     def accept_revision(self, revision_id: int) -> bool:
