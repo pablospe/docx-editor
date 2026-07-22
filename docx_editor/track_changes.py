@@ -786,7 +786,7 @@ class RevisionManager:
             )
         return members
 
-    def _resolve_paragraph(self, ref: ParagraphRef, paragraphs: list | None = None):
+    def _resolve_paragraph(self, ref: ParagraphRef, paragraphs: list[Element] | None = None):
         """Resolve a ParagraphRef to its <w:p> element, validating the hash.
 
         Args:
@@ -978,7 +978,7 @@ class RevisionManager:
         else:
             raise ValueError(f"Unknown action: {op.action}")
 
-    def _apply_single_edit(self, op: EditOperation, paragraphs: list | None = None) -> int:
+    def _apply_single_edit(self, op: EditOperation, paragraphs: list[Element] | None = None) -> int:
         """Apply a single edit operation. Paragraph hash was already validated.
 
         ``paragraphs`` is the batch's shared <w:p> snapshot (see batch_edit);
@@ -1026,6 +1026,8 @@ class RevisionManager:
             that is not an EditOperation at all comes back as an invalid
             result (``paragraph=None``), never as an exception.
         """
+        if not operations:
+            return []
         # One <w:p> walk for the whole dry run — validation is read-only, so
         # the snapshot is trivially stable (same sharing as batch_edit).
         paragraphs = self.editor.dom.getElementsByTagName("w:p")
@@ -1047,7 +1049,7 @@ class RevisionManager:
             )
         return results
 
-    def _validate_single(self, op: EditOperation, paragraphs: list | None = None) -> str | None:
+    def _validate_single(self, op: EditOperation, paragraphs: list[Element] | None = None) -> str | None:
         """Return an error message if ``op`` would fail, or None if it is valid.
 
         Reuses ``_resolve_paragraph``, ``_resolve_action_target``, and

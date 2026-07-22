@@ -1,7 +1,7 @@
 """Tests for XMLEditor and DocxXMLEditor classes."""
 
 import pytest
-from conftest import parse_paragraph
+from conftest import count_dom_walks, parse_paragraph
 
 from docx_editor.exceptions import MultipleNodesFoundError, NodeNotFoundError
 from docx_editor.xml_editor import (
@@ -436,19 +436,10 @@ class TestDocxXMLEditorGetNextChangeId:
 
     def test_second_allocation_does_no_full_dom_scan(self, tracked_changes_xml, monkeypatch):
         """Only the first allocation scans the document; later ones increment."""
-        from xml.dom import minidom
-
         editor = DocxXMLEditor(tracked_changes_xml, rsid="00AABBCC", author="Test")
         assert editor._get_next_change_id() == 2  # seeds via full scan
 
-        walks = []
-        original = minidom.Document.getElementsByTagName
-
-        def counting(self, name):
-            walks.append(name)
-            return original(self, name)
-
-        monkeypatch.setattr(minidom.Document, "getElementsByTagName", counting)
+        walks = count_dom_walks(monkeypatch)
         assert editor._get_next_change_id() == 3
         assert editor._get_next_change_id() == 4
         assert walks == []
@@ -476,6 +467,20 @@ class TestDocxXMLEditorGetNextChangeId:
             "<w:r><w:t>x</w:t></w:r></w:ins></w:p>",
         )
         assert editor._get_next_change_id() == 3
+
+    def test_parse_fragment_folds_preset_id_attached_directly(self, tracked_changes_xml):
+        """Ids fold in at parse time, so attaching nodes without going through
+        the insert helpers (and therefore without attribute injection) still
+        cannot collide with a later allocation."""
+        editor = DocxXMLEditor(tracked_changes_xml, rsid="00AABBCC", author="Test")
+        assert editor._get_next_change_id() == 2  # seeds via full scan
+        body = editor.dom.getElementsByTagName("w:body")[0]
+        for node in editor._parse_fragment(
+            '<w:p><w:ins w:id="50" w:author="A" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>direct</w:t></w:r></w:ins></w:p>"
+        ):
+            body.appendChild(node)
+        assert editor._get_next_change_id() == 51
 
 
 class TestDocxXMLEditorNamespaces:

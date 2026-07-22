@@ -79,49 +79,58 @@ def build_large_doc(n_paragraphs: int = N_PARAGRAPHS) -> tuple[Path, Path]:
 def run_batch(persist_path: Path, n_ops: int, *, dry_run: bool) -> float:
     """Time one batch_edit of n_ops on a fresh copy; return elapsed seconds."""
     tmp = tempfile.mkdtemp(prefix="bench_scale_run_")
-    dest = Path(tmp) / "b.docx"
-    shutil.copy(persist_path, dest)
-    doc = Document.open(dest, force_recreate=True)
     try:
-        refs = doc.list_paragraphs(limit=None)
-        n_paras = len(refs)
-        # Coprime stride spreads targets across the document; beyond n_paras
-        # ops it revisits paragraphs (valid: hashes are validated upfront
-        # against the pre-batch state, and each paragraph holds three
-        # 'committee' occurrences).
-        assert n_ops <= 2 * n_paras, f"at most {2 * n_paras} ops supported"
-        ops = [
-            EditOperation.replace(
-                "committee",
-                f"BOARD_{i}",
-                paragraph=refs[(i * 397) % n_paras].split("|")[0],
-                occurrence=0,
-            )
-            for i in range(n_ops)
-        ]
-
-        start = time.perf_counter()
-        if dry_run:
-            results = doc.batch_edit(ops, dry_run=True)
-            elapsed = time.perf_counter() - start
-            invalid = [r for r in results if not r.valid]
-            assert not invalid, f"dry_run flagged {len(invalid)} valid op(s) as invalid: {invalid[0].error}"
-        else:
-            results = doc.batch_edit(ops)
-            elapsed = time.perf_counter() - start
-            fresh = {entry.split("|")[0] for entry in doc.list_paragraphs(limit=None)}
-            stale = [r for r in results if str(r) not in fresh]
-            assert not stale, f"{len(stale)} returned ref(s) invalid after batch, e.g. {stale[0]}"
-        return elapsed
+        dest = Path(tmp) / "b.docx"
+        shutil.copy(persist_path, dest)
+        doc = Document.open(dest, force_recreate=True)
+        try:
+            return _timed_batch(doc, n_ops, dry_run=dry_run)
+        finally:
+            doc.close()
     finally:
-        doc.close()
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _timed_batch(doc: Document, n_ops: int, *, dry_run: bool) -> float:
+    """Build and time the batch; assert the results are correct."""
+    refs = doc.list_paragraphs(limit=None)
+    n_paras = len(refs)
+    # Coprime stride spreads targets across the document; beyond n_paras
+    # ops it revisits paragraphs (valid: hashes are validated upfront
+    # against the pre-batch state, and each paragraph holds three
+    # 'committee' occurrences).
+    assert n_ops <= 2 * n_paras, f"at most {2 * n_paras} ops supported"
+    ops = [
+        EditOperation.replace(
+            "committee",
+            f"BOARD_{i}",
+            paragraph=refs[(i * 397) % n_paras].split("|")[0],
+            occurrence=0,
+        )
+        for i in range(n_ops)
+    ]
+
+    start = time.perf_counter()
+    if dry_run:
+        results = doc.batch_edit(ops, dry_run=True)
+        elapsed = time.perf_counter() - start
+        invalid = [r for r in results if not r.valid]
+        assert not invalid, f"dry_run flagged {len(invalid)} valid op(s) as invalid: {invalid[0].error}"
+    else:
+        results = doc.batch_edit(ops)
+        elapsed = time.perf_counter() - start
+        fresh = {entry.split("|")[0] for entry in doc.list_paragraphs(limit=None)}
+        stale = [r for r in results if str(r) not in fresh]
+        assert not stale, f"{len(stale)} returned ref(s) invalid after batch, e.g. {stale[0]}"
+    return elapsed
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="batch_edit scaling benchmark")
     parser.add_argument("--ops", type=int, default=None, help="extra op count to measure (e.g. 1000)")
     args = parser.parse_args()
+    if args.ops is not None and args.ops < 1:
+        parser.error("--ops must be >= 1")
 
     op_counts = [10, 40, 120]
     if args.ops is not None and args.ops not in op_counts:

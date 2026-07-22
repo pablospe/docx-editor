@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from conftest import count_dom_walks
 
 from docx_editor import (
     AmbiguousTextError,
@@ -1167,20 +1168,6 @@ class TestBatchEditFullDomWalks:
     timing-free."""
 
     @staticmethod
-    def _counting_walks(monkeypatch):
-        from xml.dom import minidom
-
-        walks = []
-        original = minidom.Document.getElementsByTagName
-
-        def counting(self, name):
-            walks.append(name)
-            return original(self, name)
-
-        monkeypatch.setattr(minidom.Document, "getElementsByTagName", counting)
-        return walks
-
-    @staticmethod
     def _replace_ops(refs, indices):
         return [
             EditOperation.replace(f"item {i + 1}", f"ITEM_{i + 1}", paragraph=refs[i].split("|")[0]) for i in indices
@@ -1193,7 +1180,7 @@ class TestBatchEditFullDomWalks:
         refs = doc.list_paragraphs()
         doc.batch_edit(self._replace_ops(refs, [9]))
 
-        walks = self._counting_walks(monkeypatch)
+        walks = count_dom_walks(monkeypatch)
 
         refs = doc.list_paragraphs()
         doc.batch_edit(self._replace_ops(refs, [0, 1, 2]))
@@ -1215,7 +1202,7 @@ class TestBatchEditFullDomWalks:
         doc, _ = multi_para_doc
         refs = doc.list_paragraphs()
 
-        walks = self._counting_walks(monkeypatch)
+        walks = count_dom_walks(monkeypatch)
 
         results = doc.batch_edit(self._replace_ops(refs, [0, 1, 2]), dry_run=True)
         assert all(r.valid for r in results)
