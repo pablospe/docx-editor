@@ -1313,8 +1313,9 @@ class DocxXMLEditor(XMLEditor):
         one edit as several groups.
 
         One changeset = one outermost ``frozen_timestamp()`` scope, stamped
-        via ``_get_next_changeset_timestamp`` (collision-bumped so two changesets
-        never share a second). Reentrant by reuse: a nested entry joins the
+        via ``_get_next_changeset_timestamp`` (collision-bumped so two
+        changesets by the same author never share a second within one open
+        session). Reentrant by reuse: a nested entry joins the
         enclosing changeset — ``batch_edit``/``batch_rewrite`` open the scope
         once for the whole call and the per-op ``_grouped()`` freezes join
         it. Only the outermost entry allocates a stamp and clears it on exit.

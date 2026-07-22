@@ -890,10 +890,10 @@ class TestChangesetDateStamping:
     """Collision-bumped w:date stamping at changeset granularity (ISSUES.md #53).
 
     One changeset = one single edit call or one whole batch_edit/batch_rewrite
-    call. Distinct changesets by the same author never share a second (the
-    stamp is bumped past the previous one on collision), so parse-time
-    reconstruction (#46) never merges them; all ops of one batch call share
-    one date by design.
+    call. Within one open session, distinct changesets by the same author
+    never share a second (the stamp is bumped past the previous one on
+    collision), so parse-time reconstruction (#46) never merges them; all ops
+    of one batch call share one date by design.
     """
 
     def test_batch_ops_share_one_date(self, temp_docx, ticking_clock):
@@ -977,6 +977,20 @@ class TestChangesetDateStamping:
                 datetime(2025, 6, 1, 12, 0, 10, tzinfo=timezone.utc),
             }
 
+    def test_clock_regression_keeps_dates_monotonic(self, temp_docx, settable_clock):
+        # A clock step back (e.g. NTP) is treated as a collision: dates
+        # never go backwards, pinned at previous+1 per changeset until
+        # the clock catches up.
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            first = doc.replace("quick", "speedy", paragraph=ref)
+            settable_clock.current = datetime(2025, 6, 1, 11, 59, 30)
+            doc.replace("lazy", "sleepy", paragraph=first)
+            assert {rev.date for rev in doc.list_revisions()} == {
+                datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+                datetime(2025, 6, 1, 12, 0, 1, tzinfo=timezone.utc),
+            }
+
     def test_two_batches_same_second_get_distinct_dates(self, temp_docx, frozen_clock):
         # Two batch_edit calls are two changesets even inside one real
         # second — distinct dates, two inferred groups after reopen.
@@ -997,7 +1011,7 @@ class TestChangesetDateStamping:
         # frozen_timestamp is reentrant-by-reuse: an inner scope joins the
         # enclosing changeset (batch wrapper + per-op _grouped). Only the
         # outermost entry allocates a stamp; only the outermost exit clears.
-        editor = DocxXMLEditor(temp_xml("<w:p><w:r><w:t>x</w:t></w:r></w:p>"), rsid="00000000", author=AUTHOR_B)
+        editor = _make_manager(temp_xml("<w:p><w:r><w:t>x</w:t></w:r></w:p>")).editor
         with editor.frozen_timestamp():
             outer = editor._frozen_timestamp
             assert outer is not None
