@@ -502,10 +502,13 @@ doc.reject_group(result.group_id)   # undo the whole rewrite, or:
 # group (r.group_source == "inferred"; session edits are "recorded"). So
 # accept_group/reject_group work after reopen too — but always take the
 # group_id from THIS session's list_revisions()/EditResult; a stale id
-# from a previous session may resolve to a different group. Caveat:
-# w:date has second precision, so two edits to the same paragraph in the
-# same second merge into one inferred group. save() keeps groups alive
-# (the Document stays open).
+# from a previous session may resolve to a different group. Own edits
+# stamp collision-bumped whole-second dates (two changesets by one author
+# never share a second within one open session); all ops of one
+# batch_edit/batch_rewrite call share one date (one changeset). Revisions
+# from other sources — foreign authors, or own edits from a previous
+# session — still merge on identical author + date. save() keeps groups
+# alive (the Document stays open).
 # Revision ids, unlike group ids, ARE stable: they are the w:id attributes
 # stored in the document XML and survive save()/close()/reopen — resolving
 # by revision id in a later session is always safe.

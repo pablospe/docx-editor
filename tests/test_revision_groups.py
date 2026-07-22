@@ -16,7 +16,7 @@ identical raw ``w:author`` + ``w:date`` are one group
 """
 
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -83,6 +83,26 @@ def ticking_clock(monkeypatch):
             return cls(2025, 6, 1, 12, _TickingDatetime._tick // 60, _TickingDatetime._tick % 60, tzinfo=tz)
 
     monkeypatch.setattr("docx_editor.xml_editor.datetime", _TickingDatetime)
+
+
+@pytest.fixture
+def settable_clock(monkeypatch):
+    """A clock the test drives explicitly.
+
+    ``now()`` returns whatever instant the test last assigned to the
+    class-level ``current``; assign a later value to advance time.
+    """
+
+    class _SettableDatetime(datetime):
+        current = datetime(2025, 6, 1, 12, 0, 0)
+
+        @classmethod
+        def now(cls, tz=None):
+            c = cls.current
+            return cls(c.year, c.month, c.day, c.hour, c.minute, c.second, tzinfo=tz)
+
+    monkeypatch.setattr("docx_editor.xml_editor.datetime", _SettableDatetime)
+    return _SettableDatetime
 
 
 @pytest.fixture
@@ -776,8 +796,10 @@ class TestGroupReconstructionAcrossReopen:
             doc.save()
 
         with Document.open(temp_docx) as doc:
-            # Same author and same (frozen) second everywhere: same-paragraph
-            # contiguity is what partitions the edits into three groups.
+            # Same author; the batch's ops share one date and the third
+            # (single) edit gets a collision-bumped second. All three edits
+            # land in distinct paragraphs, so same-paragraph contiguity
+            # partitions them into three groups regardless of dates.
             by_gid: dict[int, set[str]] = {}
             for rev in doc.list_revisions():
                 assert rev.group_id is not None and rev.paragraph_ref is not None
@@ -808,22 +830,27 @@ class TestGroupReconstructionAcrossReopen:
             doc.accept_group(gid)
             assert _paragraph_text(doc, 1) == new_text
 
-    def test_same_paragraph_same_second_over_merges(self, temp_docx, frozen_clock):
-        # Accepted relaxation, pinned: w:date has second precision, so two
-        # separate edits to the SAME paragraph in the same second are
-        # indistinguishable and reconstruct as one merged group.
+    def test_same_paragraph_same_second_two_groups(self, temp_docx, frozen_clock):
+        # Headline of ISSUES.md #53: two separate edits to the SAME
+        # paragraph while the wall clock sits in one second get
+        # collision-bumped dates (T and T+1), so reconstruction keeps
+        # them apart after reopen instead of over-merging.
         with Document.open(temp_docx) as doc:
             ref = find_ref(doc, "quick brown fox")
             first = doc.replace("quick", "speedy", paragraph=ref)
             second = doc.replace("lazy", "sleepy", paragraph=first)
             assert first.group_id != second.group_id  # two live groups...
+            assert {rev.date for rev in doc.list_revisions()} == {
+                datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+                datetime(2025, 6, 1, 12, 0, 1, tzinfo=timezone.utc),
+            }
             doc.save()
 
         with Document.open(temp_docx) as doc:
             revisions = doc.list_revisions()
             assert len(revisions) == 4
             gids = {rev.group_id for rev in revisions}
-            assert len(gids) == 1 and None not in gids  # ...one after reopen
+            assert len(gids) == 2 and None not in gids  # ...two after reopen
 
     def test_rump_group_after_partial_accept(self, temp_docx):
         with Document.open(temp_docx) as doc:
@@ -857,6 +884,154 @@ class TestGroupReconstructionAcrossReopen:
             assert rev.group_id == result.group_id
             assert rev.group_source == "recorded"
             assert "(inferred)" not in repr(rev)
+
+
+class TestChangesetDateStamping:
+    """Collision-bumped w:date stamping at changeset granularity (ISSUES.md #53).
+
+    One changeset = one single edit call or one whole batch_edit/batch_rewrite
+    call. Within one open session, distinct changesets by the same author
+    never share a second (the stamp is bumped past the previous one on
+    collision), so parse-time reconstruction (#46) never merges them; all ops
+    of one batch call share one date by design.
+    """
+
+    def test_batch_ops_share_one_date(self, temp_docx, ticking_clock):
+        # Adversarial clock: every now() lands in a new second. One
+        # batch_edit call is one changeset — all its revisions must still
+        # carry ONE date, and same-paragraph ops of that one call merge
+        # into one inferred group after reopen (changeset granularity,
+        # pinned as a contract).
+        with Document.open(temp_docx) as doc:
+            ref_fox = find_ref(doc, "quick brown fox")
+            ref_sample = find_ref(doc, "sample document for testing")
+            doc.batch_edit([
+                EditOperation.replace("quick", "speedy", paragraph=ref_fox),
+                EditOperation.replace("lazy", "sleepy", paragraph=ref_fox),
+                EditOperation.delete("sample ", paragraph=ref_sample),
+            ])
+            doc.save()
+
+        with Document.open(temp_docx) as doc:
+            revisions = doc.list_revisions()
+            assert len({rev.date for rev in revisions}) == 1  # one changeset date
+            by_para: dict[str, set[int]] = {}
+            for rev in revisions:
+                assert rev.group_id is not None and rev.paragraph_ref is not None
+                by_para.setdefault(rev.paragraph_ref, set()).add(rev.group_id)
+            assert len(by_para) == 2
+            assert all(len(gids) == 1 for gids in by_para.values())
+
+    def test_batch_rewrite_shares_one_date(self, temp_docx, ticking_clock):
+        # One batch_rewrite call is one changeset: a 50-paragraph batch must
+        # not push dates 49 s into the future. Rewrites always land in
+        # distinct paragraphs (duplicates are rejected), so contiguity still
+        # reconstructs one group per paragraph despite the shared date.
+        with Document.open(temp_docx) as doc:
+            ref_fox = find_ref(doc, "quick brown fox")
+            ref_sample = find_ref(doc, "sample document for testing")
+            doc.batch_rewrite([
+                (ref_fox, "A slow red cat crawls beneath the energetic dog."),
+                (ref_sample, "Entirely different sample text."),
+            ])
+            doc.save()
+
+        with Document.open(temp_docx) as doc:
+            revisions = doc.list_revisions()
+            assert len({rev.date for rev in revisions}) == 1
+            by_para: dict[str, set[int]] = {}
+            for rev in revisions:
+                assert rev.group_id is not None and rev.paragraph_ref is not None
+                by_para.setdefault(rev.paragraph_ref, set()).add(rev.group_id)
+            assert len(by_para) == 2
+            assert all(len(gids) == 1 for gids in by_para.values())
+
+    def test_no_bump_when_seconds_differ(self, temp_docx, settable_clock):
+        # The bump only fires on collision: once real time moves past the
+        # previous stamp, the true wall clock is used, not previous+1.
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            first = doc.replace("quick", "speedy", paragraph=ref)
+            settable_clock.current = datetime(2025, 6, 1, 12, 0, 5)
+            doc.replace("lazy", "sleepy", paragraph=first)
+            assert {rev.date for rev in doc.list_revisions()} == {
+                datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+                datetime(2025, 6, 1, 12, 0, 5, tzinfo=timezone.utc),
+            }
+
+    def test_drift_bounded_by_changesets_per_second(self, temp_docx, settable_clock):
+        # Drift is bounded by changesets per real second: N single edits in
+        # one second stamp T, T+1, ..., T+N-1, and the drift collapses as
+        # soon as real time passes the bumped value.
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            first = doc.replace("quick", "speedy", paragraph=ref)
+            doc.replace("lazy", "sleepy", paragraph=first)
+            doc.delete("sample ", paragraph=find_ref(doc, "sample document for testing"))
+            settable_clock.current = datetime(2025, 6, 1, 12, 0, 10)
+            doc.replace("well-structured", "tidy", paragraph=find_ref(doc, "well-structured document"))
+            assert {rev.date for rev in doc.list_revisions()} == {
+                datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+                datetime(2025, 6, 1, 12, 0, 1, tzinfo=timezone.utc),
+                datetime(2025, 6, 1, 12, 0, 2, tzinfo=timezone.utc),
+                datetime(2025, 6, 1, 12, 0, 10, tzinfo=timezone.utc),
+            }
+
+    def test_clock_regression_keeps_dates_monotonic(self, temp_docx, settable_clock):
+        # A clock step back (e.g. NTP) is treated as a collision: dates
+        # never go backwards, pinned at previous+1 per changeset until
+        # the clock catches up.
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            first = doc.replace("quick", "speedy", paragraph=ref)
+            settable_clock.current = datetime(2025, 6, 1, 11, 59, 30)
+            doc.replace("lazy", "sleepy", paragraph=first)
+            assert {rev.date for rev in doc.list_revisions()} == {
+                datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+                datetime(2025, 6, 1, 12, 0, 1, tzinfo=timezone.utc),
+            }
+
+    def test_two_batches_same_second_get_distinct_dates(self, temp_docx, frozen_clock):
+        # Two batch_edit calls are two changesets even inside one real
+        # second — distinct dates, two inferred groups after reopen.
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            (first,) = doc.batch_edit([EditOperation.replace("quick", "speedy", paragraph=ref)])
+            doc.batch_edit([EditOperation.replace("lazy", "sleepy", paragraph=first)])
+            assert len({rev.date for rev in doc.list_revisions()}) == 2
+            doc.save()
+
+        with Document.open(temp_docx) as doc:
+            revisions = doc.list_revisions()
+            assert len(revisions) == 4
+            gids = {rev.group_id for rev in revisions}
+            assert len(gids) == 2 and None not in gids
+
+    def test_nested_frozen_timestamp_reuses_outer_stamp(self, temp_xml):
+        # frozen_timestamp is reentrant-by-reuse: an inner scope joins the
+        # enclosing changeset (batch wrapper + per-op _grouped). Only the
+        # outermost entry allocates a stamp; only the outermost exit clears.
+        editor = _make_manager(temp_xml("<w:p><w:r><w:t>x</w:t></w:r></w:p>")).editor
+        with editor.frozen_timestamp():
+            outer = editor._frozen_timestamp
+            assert outer is not None
+            with editor.frozen_timestamp():
+                assert editor._frozen_timestamp == outer
+            assert editor._frozen_timestamp == outer
+        assert editor._frozen_timestamp is None
+
+    def test_w16du_dateutc_matches_bumped_date(self, temp_xml, frozen_clock):
+        # w:date and w16du:dateUtc read the same stamp variable — a bumped
+        # changeset must bump both, never just w:date.
+        manager = _make_manager(temp_xml("<w:p><w:r><w:t>alpha beta gamma</w:t></w:r></w:p>"))
+        manager.replace_text("alpha", "ALPHA")
+        manager.replace_text("gamma", "GAMMA")
+        elements = [e for tag in ("w:ins", "w:del") for e in manager.editor.dom.getElementsByTagName(tag)]
+        assert all(e.getAttribute("w16du:dateUtc") == e.getAttribute("w:date") for e in elements)
+        assert {e.getAttribute("w:date") for e in elements} == {
+            "2025-06-01T12:00:00Z",
+            "2025-06-01T12:00:01Z",
+        }
 
 
 class TestMonotonicChangeIds:
