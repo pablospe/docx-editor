@@ -12,7 +12,7 @@ import zlib
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 from xml.dom.minidom import Element
@@ -1239,6 +1239,9 @@ class DocxXMLEditor(XMLEditor):
         self._max_change_id = -1
         self._tracked_change_collector: list[Element] | None = None
         self._frozen_timestamp: str | None = None
+        # Last stamped (author, second) — the one collision counter behind
+        # _next_changeset_timestamp.
+        self._last_changeset_stamp: tuple[str, datetime] | None = None
 
     def _get_next_change_id(self) -> int:
         """Get the next available change ID by checking all tracked change elements."""
@@ -1276,6 +1279,25 @@ class DocxXMLEditor(XMLEditor):
         finally:
             self._tracked_change_collector = None
 
+    def _next_changeset_timestamp(self) -> str:
+        """Whole-second UTC stamp for one changeset, collision-bumped.
+
+        True wall clock, except when this editor's previous changeset by the
+        same author already occupies this (or a later) second — then previous
+        second + 1, keeping (author, second) unique per changeset so
+        parse-time group reconstruction never merges two changesets. The
+        same rule keeps stamps monotonic per author across a clock
+        regression (e.g. an NTP step back): dates never go backwards,
+        pinned at previous + 1 until the clock catches up.
+        """
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        if self._last_changeset_stamp is not None:
+            last_author, last_second = self._last_changeset_stamp
+            if last_author == self.author and now <= last_second:
+                now = last_second + timedelta(seconds=1)
+        self._last_changeset_stamp = (self.author, now)
+        return now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
     @contextmanager
     def frozen_timestamp(self) -> Iterator[None]:
         """Stamp every element injected in this context with ONE ``w:date``.
@@ -1285,12 +1307,19 @@ class DocxXMLEditor(XMLEditor):
         several times — crossing a second boundary mid-operation would spread
         the operation's revisions across two ``w:date`` values, and parse-time
         group reconstruction (which keys on identical dates) would then reopen
-        one edit as several groups. Does not nest — same single-slot design as
-        ``collect_tracked_changes``.
+        one edit as several groups.
+
+        One changeset = one outermost ``frozen_timestamp()`` scope, stamped
+        via ``_next_changeset_timestamp`` (collision-bumped so two changesets
+        never share a second). Reentrant by reuse: a nested entry joins the
+        enclosing changeset — ``batch_edit``/``batch_rewrite`` open the scope
+        once for the whole call and the per-op ``_grouped()`` freezes join
+        it. Only the outermost entry allocates a stamp and clears it on exit.
         """
         if self._frozen_timestamp is not None:
-            raise RuntimeError("frozen_timestamp() does not nest")
-        self._frozen_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            yield
+            return
+        self._frozen_timestamp = self._next_changeset_timestamp()
         try:
             yield
         finally:
