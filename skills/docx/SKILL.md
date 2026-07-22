@@ -504,10 +504,13 @@ doc.reject_group(result.group_id)   # undo the whole rewrite, or:
 # group_id from THIS session's list_revisions()/EditResult; a stale id
 # from a previous session may resolve to a different group. Own edits
 # stamp collision-bumped whole-second dates (two changesets by one author
-# never share a second); all ops of one batch_edit/batch_rewrite call
-# share one date (one changeset). Foreign revisions with identical
-# author + date still merge. save() keeps groups alive (the Document
-# stays open).
+# from a previous session may resolve to a different group. Own edits
+# stamp collision-bumped whole-second dates (two changesets by one author
+# never share a second within one open session); all ops of one
+# batch_edit/batch_rewrite call share one date (one changeset). Revisions
+# from other sources — foreign authors, or own edits from a previous
+# session — still merge on identical author + date. save() keeps groups
+# alive (the Document stays open).
 # Revision ids, unlike group ids, ARE stable: they are the w:id attributes
 # stored in the document XML and survive save()/close()/reopen — resolving
 # by revision id in a later session is always safe.

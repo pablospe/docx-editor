@@ -346,13 +346,14 @@ class Revision:
       groups created by edits through this open Document, ``"inferred"``
       for groups reconstructed at parse time by the heuristic (contiguous
       same-paragraph revisions sharing identical ``w:author`` + ``w:date``
-      are one group). Our own writes stamp collision-bumped dates (two
-      changesets by one author never share a second), so inferred groups
-      match the original changesets; same-paragraph ops of one
-      ``batch_edit``/``batch_rewrite`` call share their date and merge by
-      design. Foreign revisions with identical author + date can still
-      over-merge (``w:date`` has second precision). None iff ``group_id``
-      is None.
+      are one group). Our own writes stamp collision-bumped dates (within
+      one open session, two changesets by one author never share a
+      second), so inferred groups match the original changesets;
+      same-paragraph ops of one ``batch_edit``/``batch_rewrite`` call
+      share their date and merge by design. The counter is per-session,
+      so own writes from a previous session merge like foreign revisions:
+      identical author + date can still over-merge (``w:date`` has second
+      precision). None iff ``group_id`` is None.
     """
 
     id: int
@@ -588,11 +589,14 @@ class RevisionManager:
         Known, accepted imprecisions:
 
         - Same-paragraph over-merge is confined to one batch call for our
-          own writes: each changeset stamps a collision-bumped date (never
-          reused across an author's changesets), so only ops of a single
+          own writes within one open session: each changeset stamps a
+          collision-bumped date (never reused across an author's
+          changesets in that session), so only ops of a single
           batch_edit/batch_rewrite call — which share their date by
-          design — merge. Foreign producers stamping identical author +
-          date (w:date has second precision) can still over-merge.
+          design — merge. The counter is not seeded from dates already in
+          the file, so a previous session's own writes behave like
+          foreign ones: identical author + date (w:date has second
+          precision) can still over-merge.
         - A revision inside a nested paragraph (e.g. a text box's
           w:txbxContent) interrupts the outer paragraph's run in document
           order — conservative over-split.

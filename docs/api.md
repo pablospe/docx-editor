@@ -655,12 +655,14 @@ groups are **inferred** at parse time instead
 paragraph sharing identical `w:author` + `w:date` reconstruct as one group.
 That heuristic matches this library's own edits exactly: each changeset (one
 edit call, or one whole `batch_edit`/`batch_rewrite` call) stamps a
-collision-bumped whole-second date, so two changesets by the same author never
-share a second; all ops of one batch call share one date (one changeset) and
-same-paragraph batch ops merge by design. Foreign revisions with identical
-`w:author` + `w:date` still merge (`w:date` has second precision). When Word
-already resolved part of
-a former edit, the remainder reconstructs as a smaller (rump) group, and
+collision-bumped whole-second date, so within one open session two changesets
+by the same author never share a second; all ops of one batch call share one
+date (one changeset) and same-paragraph batch ops merge by design. The
+collision counter is per-session (not seeded from dates already in the file),
+so own writes from a *previous* session merge like foreign revisions: any
+revisions with identical `w:author` + `w:date` merge (`w:date` has second
+precision). When Word already resolved part of a former edit, the remainder
+reconstructs as a smaller (rump) group, and
 `accept_group()`/`reject_group()` handle it fine. Revisions missing an author
 or date, sitting outside any paragraph (e.g. table-row markers), or sharing a
 duplicated id stay ungrouped (`group_id=None`), as does the trailing half

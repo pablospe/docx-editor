@@ -1240,7 +1240,7 @@ class DocxXMLEditor(XMLEditor):
         self._tracked_change_collector: list[Element] | None = None
         self._frozen_timestamp: str | None = None
         # Last stamped (author, second) — the one collision counter behind
-        # _next_changeset_timestamp.
+        # _get_next_changeset_timestamp.
         self._last_changeset_stamp: tuple[str, datetime] | None = None
 
     def _get_next_change_id(self) -> int:
@@ -1279,7 +1279,7 @@ class DocxXMLEditor(XMLEditor):
         finally:
             self._tracked_change_collector = None
 
-    def _next_changeset_timestamp(self) -> str:
+    def _get_next_changeset_timestamp(self) -> str:
         """Whole-second UTC stamp for one changeset, collision-bumped.
 
         True wall clock, except when this editor's previous changeset by the
@@ -1288,7 +1288,10 @@ class DocxXMLEditor(XMLEditor):
         parse-time group reconstruction never merges two changesets. The
         same rule keeps stamps monotonic per author across a clock
         regression (e.g. an NTP step back): dates never go backwards,
-        pinned at previous + 1 until the clock catches up.
+        pinned at previous + 1 until the clock catches up. The counter is
+        per-editor-instance (one open session) — it is not seeded from
+        dates already persisted in the document, so uniqueness does not
+        extend across sessions.
         """
         now = datetime.now(timezone.utc).replace(microsecond=0)
         if self._last_changeset_stamp is not None:
@@ -1310,7 +1313,7 @@ class DocxXMLEditor(XMLEditor):
         one edit as several groups.
 
         One changeset = one outermost ``frozen_timestamp()`` scope, stamped
-        via ``_next_changeset_timestamp`` (collision-bumped so two changesets
+        via ``_get_next_changeset_timestamp`` (collision-bumped so two changesets
         never share a second). Reentrant by reuse: a nested entry joins the
         enclosing changeset — ``batch_edit``/``batch_rewrite`` open the scope
         once for the whole call and the per-op ``_grouped()`` freezes join
@@ -1319,7 +1322,7 @@ class DocxXMLEditor(XMLEditor):
         if self._frozen_timestamp is not None:
             yield
             return
-        self._frozen_timestamp = self._next_changeset_timestamp()
+        self._frozen_timestamp = self._get_next_changeset_timestamp()
         try:
             yield
         finally:
