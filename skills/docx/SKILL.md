@@ -169,6 +169,19 @@ pip install "docx-editor[session]"  # + docx-session persistent CLI
 - **Creating** new documents and reading structure uses python-docx, which the `[create]` extra pulls in
 - **Session mode** (`docx-session`) needs the `[session]` extra
 
+On a modern Debian/Ubuntu (or any interpreter marked [PEP-668](https://peps.python.org/pep-0668/)
+externally-managed), a bare `pip install` into the system Python is refused —
+install into a virtualenv:
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate   # if this errors "ensurepip is not
+                                                # available", first: apt install python3-venv
+pip install docx-editor                          # add [create] / [session] as needed
+
+# or with uv:   uv venv && uv pip install docx-editor
+# or, for just the docx-session CLI:  pipx install "docx-editor[session]"
+```
+
 ### Author Name for Track Changes
 
 **IMPORTANT**: Never use "Claude" or any AI name as the author. Use one of these approaches:
@@ -352,7 +365,7 @@ doc.close()
 
 **Return values:** All edit methods return an `EditResult` — a `str` subclass whose value is the new paragraph reference (e.g., `"P2#c3d4"`); use it for follow-up edits on the same paragraph without calling `list_paragraphs()` again. It also carries `group_id` (the revision group holding every revision the edit created — pass to `accept_group()`/`reject_group()`) and `revision_ids` (the members' change ids). `group_id` is `None` when the edit created no new revisions (e.g. text spliced into one of your own pending insertions). A single edit routinely creates **more than two** revisions: a replace whose (trimmed) span crosses run boundaries (e.g. part of the text is bold) creates one deletion per run plus the insertion, and a rewrite creates one revision per diff hunk — resolve them via `group_id`, never by guessing id pairs.
 
-**Replace granularity:** `replace()` trims words shared by `find` and `replace_with` at either end, so only the changed words are written as revisions — a replace that only adds or only removes words becomes a pure insertion or deletion. The insertion carries the formatting that covers the most characters of the replaced span — runs sharing identical formatting tally together (ties → earliest-seen formatting). Replacing text with itself is a **no-op**: no revisions are written and the returned `EditResult` equals the input ref with `group_id=None` and `revision_ids=()` — check that triple to detect it.
+**Replace granularity:** `replace()` trims words shared by `find` and `replace_with` at either end, so only the changed words are written as revisions — a replace that only adds or only removes words becomes a pure insertion or deletion. The insertion carries the formatting that covers the most characters of the replaced span — runs sharing identical formatting tally together (ties → earliest-seen formatting). **Accepting** a replace that straddled mixed formatting therefore leaves the replacement uniformly in that one majority format, while each deletion run keeps its own original formatting — so a **reject** restores the pre-edit mix. Replacing text with itself is a **no-op**: no revisions are written and the returned `EditResult` equals the input ref with `group_id=None` and `revision_ids=()` — check that triple to detect it.
 
 **Multi-author documents:** Editing inside *another* author's pending insertion preserves their proposal, matching Word: deletions nest a `<w:del>` under your authorship inside their `<w:ins>`, and replacements/insertions put your text in your own sibling `<w:ins>` (splitting theirs when needed) instead of silently rewriting it. `accept_all(author=...)` / `reject_all(author=...)` then resolve each author's changes independently. Only your own pending insertions are edited in place.
 
@@ -626,6 +639,17 @@ session over someone else's redlines, or your own after reopen) take the
 unit. Fall back to per-id `accept_revision(id)` / `reject_revision(id)`
 (pick by `.text`/`.type`/`.paragraph_ref`) only for revisions inside a group
 you don't want to resolve whole.
+
+**Caveat — group separability doesn't survive a reopen.** Two edits to the
+**same paragraph** made in one `batch_edit`/`batch_rewrite` share that call's
+single changeset date, so after a save + reopen they reconstruct as **one**
+inferred group — `accept_group`/`reject_group` can no longer resolve them apart
+(the changeset tier is unaffected: the whole call stays one exact changeset). If
+you may need to accept one and reject the other in a *later* session, make them
+**separate edit calls** rather than same-paragraph ops in one batch — distinct
+calls get distinct collision-bumped dates and so survive reopen as distinct
+groups (and changesets). Different-paragraph ops never merge; only same-paragraph
+ones do (see the inferred-group rule under Revision Management API).
 
 ## Redlining Workflow (Document Review)
 
@@ -1009,6 +1033,8 @@ Rules:
 - `eval` of an edit call returns the `EditResult` as a plain JSON *string* (it is a `str` subclass, so its value is just the new ref) — `group_id`/`revision_ids` are lost in transit. Keep the result in a kernel-side variable and eval a dict projection when you need them: `docx-session exec "r = doc.replace(...)"` then `docx-session eval "{'ref': str(r), 'group_id': r.group_id}"`.
 - `status` reports `state: busy` while an exec is in flight — a busy session is healthy, don't stop/restart it. The report is a point-in-time snapshot: a sub-second exec can already read `idle` by the time you check, so never conclude from `idle` that code didn't run.
 - Variables persist between `exec` calls: keep refs returned by edits in Python variables instead of re-running `list_paragraphs()`.
+- **Never one `exec` per edit.** Each `docx-session` call is a fresh CLI round-trip (~250 ms of subprocess + IPC overhead) that dwarfs the edit itself — 50 edits sent as 50 `exec` calls take ~12 s, the same 50 batched into one `exec` is a single round-trip (~0.3 s: the ~250 ms overhead plus the in-kernel loop), ~40x less overhead. Loop inside a single `exec`, or use `batch_edit`.
+- **Project fields kernel-side for large reads.** `eval` serializes the whole value to JSON (~150 chars per `SearchResult`), so a big `find_all` returns tens of KB of context. Return only the fields you need — e.g. `docx-session eval "[(r.paragraph_ref, r.paragraph_occurrence) for r in doc.find_all('30 days')]"` — instead of the full objects (same idea as the `EditResult` projection above).
 - Use absolute paths inside `exec` — the kernel's cwd is whatever `start` captured.
 - A `exec` sent while the kernel is still busy **queues** behind the running one; `--timeout` covers the whole wait. A timeout does not cancel the running code.
 - The session is non-interactive: `input()` (and anything reading stdin) raises `StdinNotImplementedError` rather than hanging.

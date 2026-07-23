@@ -24,6 +24,18 @@ pip install "docx-editor[create]"   # + python-docx, for creating new documents
 pip install "docx-editor[session]"  # + docx-session persistent CLI
 ```
 
+On a modern Debian/Ubuntu (or any interpreter marked [PEP-668](https://peps.python.org/pep-0668/)
+externally-managed), a bare `pip install` into the system Python is refused — install
+into a virtualenv instead:
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate   # errors "ensurepip is not available"?
+                                                # first: apt install python3-venv
+pip install docx-editor
+# or with uv:  uv venv && uv pip install docx-editor
+# or pipx for just the CLI:  pipx install "docx-editor[session]"
+```
+
 ## Quick Start
 
 ```python
