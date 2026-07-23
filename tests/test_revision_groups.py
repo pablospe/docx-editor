@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from conftest import find_ref
+from conftest import count_dom_walks, find_ref
 
 from docx_editor import Document, EditOperation, EditResult, RevisionError
 from docx_editor.exceptions import BatchOperationError, DocxEditError
@@ -1340,3 +1340,88 @@ class TestChangesetTier:
                 assert rev.changeset_id is not None
                 by_cs.setdefault(rev.changeset_id, set()).add((rev.author, rev.date))
             assert all(len(keys) == 1 for keys in by_cs.values())
+
+
+class TestAcceptPathIndex:
+    """The group/changeset accept path builds one w:id->element index per call
+    instead of scanning the whole document per member (ISSUES.md #57).
+
+    Each resolution does exactly two Document-level walks (one w:ins scan, one
+    w:del scan) to build the index, no matter how many revisions it spans.
+    Pre-#57, accept_revision/reject_revision each did up to two full-document
+    walks, repeated per member per pass (O(members x doc)) — a 240-revision
+    accept_changeset paid ~960 walks.
+    """
+
+    # A host insertion whose content includes a nested deletion, both by the
+    # same author+date so reconstruction bundles them into ONE inferred group.
+    NESTED_BODY = (
+        f'<w:p><w:ins w:id="1" w:author="{AUTHOR_A}" w:date="{DATE_A}">'
+        "<w:r><w:t>alpha </w:t></w:r>"
+        f'<w:del w:id="2" w:author="{AUTHOR_A}" w:date="{DATE_A}">'
+        "<w:r><w:delText>beta </w:delText></w:r></w:del>"
+        "<w:r><w:t>gamma</w:t></w:r></w:ins></w:p>"
+    )
+
+    @staticmethod
+    def _accepted_text(manager: RevisionManager) -> str:
+        """Accepted-view text of the manager's DOM (w:delText excluded)."""
+        return "".join(
+            node.firstChild.data
+            for node in manager.editor.dom.getElementsByTagName("w:t")
+            if node.firstChild is not None
+        )
+
+    @pytest.mark.parametrize("method", ["accept_changeset", "reject_changeset"])
+    def test_changeset_resolution_builds_index_once(self, temp_docx, monkeypatch, method):
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            # One batch = one changeset over three groups = six revisions.
+            doc.batch_edit([
+                EditOperation.replace("quick", "speedy", paragraph=ref),
+                EditOperation.replace("brown", "red", paragraph=ref),
+                EditOperation.replace("lazy", "sleepy", paragraph=ref),
+            ])
+            changeset_id = doc.list_revisions()[0].changeset_id
+            assert changeset_id is not None
+            assert len(doc.list_revisions()) == 6
+
+            walks = count_dom_walks(monkeypatch)
+            assert getattr(doc, method)(changeset_id) == 6
+            # One index build, not one scan per member per pass.
+            assert walks == ["w:ins", "w:del"]
+            assert doc.list_revisions() == []
+
+    @pytest.mark.parametrize("method", ["accept_group", "reject_group"])
+    def test_group_resolution_builds_index_once(self, temp_docx, monkeypatch, method):
+        with Document.open(temp_docx) as doc:
+            ref = find_ref(doc, "quick brown fox")
+            result = doc.replace("quick", "speedy", paragraph=ref)  # one group, two revs
+
+            walks = count_dom_walks(monkeypatch)
+            assert getattr(doc, method)(result.group_id) == 2
+            assert walks == ["w:ins", "w:del"]
+            assert doc.list_revisions() == []
+
+    def test_reject_group_with_nested_member_counts_once(self, temp_xml):
+        # Rejecting the host insertion removes its whole subtree; the nested
+        # deletion (id 2, resolved first in reverse-id order) detaches with the
+        # host and must be counted exactly once. Connectivity — not a fresh
+        # per-member scan — is what stops the detached member being re-resolved
+        # (which would mutate a detached subtree and over-count).
+        manager = _make_manager(temp_xml(self.NESTED_BODY))
+        assert manager.group_revisions(1) == (1, 2)  # host ins + nested del
+
+        assert manager.reject_group(1) == 2
+        assert manager.list_revisions() == []
+        assert self._accepted_text(manager) == ""
+
+    def test_accept_group_with_nested_member_counts_once(self, temp_xml):
+        # Accepting keeps the insertion (unwrapped) and applies the nested
+        # deletion (removed): both members counted once, neither skipped.
+        manager = _make_manager(temp_xml(self.NESTED_BODY))
+        assert manager.group_revisions(1) == (1, 2)
+
+        assert manager.accept_group(1) == 2
+        assert manager.list_revisions() == []
+        assert self._accepted_text(manager) == "alpha gamma"
