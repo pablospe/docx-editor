@@ -2932,7 +2932,67 @@ class RevisionManager:
             changeset_source=self._changeset_sources.get(changeset_id) if changeset_id is not None else None,
         )
 
-    def accept_revision(self, revision_id: int) -> bool:
+    def _revision_element_index(self) -> dict[str, Element]:
+        """Map ``w:id`` -> its <w:ins>/<w:del> element, one full-DOM walk per tag.
+
+        Built once per group/changeset resolution and threaded through
+        ``accept_revision``/``reject_revision`` so locating a member is an O(1)
+        lookup instead of a fresh full-document scan (ISSUES.md #57).
+
+        One element per id is exact for this path: a duplicate w:id never
+        becomes a group member — ``_reconstruct_groups`` bars every duplicated
+        id from every inferred group, and our own allocator keeps recorded ids
+        unique — so a member id always maps to a single element. The
+        w:ins-before-w:del insertion order only settles a tie-break group
+        members never hit (it mirrors the fresh scan, which checks insertions
+        first).
+        """
+        element_index: dict[str, Element] = {}
+        for tag in ("w:ins", "w:del"):
+            for elem in self.editor.dom.getElementsByTagName(tag):
+                element_index.setdefault(elem.getAttribute("w:id"), elem)
+        return element_index
+
+    def _is_in_document(self, elem) -> bool:
+        """True if ``elem`` is still attached to the live document tree.
+
+        Accepting/rejecting a revision detaches its element (unwrap or
+        removeChild), and a member nested inside an already-resolved member
+        detaches together with its host. Either way the element is no longer
+        reachable from the document root, so a snapshot lookup must treat it as
+        gone — reproducing the "not found by getElementsByTagName" signal the
+        fresh scan relied on for rump tolerance and no-double-count.
+        """
+        node = elem
+        root = self.editor.dom
+        while node is not None:
+            if node is root:
+                return True
+            node = node.parentNode
+        return False
+
+    def _find_revision_element(self, revision_id: int, element_index: dict[str, Element] | None) -> Element | None:
+        """Locate the live <w:ins>/<w:del> element for ``revision_id``.
+
+        ``element_index is None`` scans the document fresh (insertions before
+        deletions), matching the historical lookup exactly. Otherwise the id is
+        resolved through the pre-built ``element_index`` and confirmed
+        still-attached via ``_is_in_document``.
+        """
+        if element_index is None:
+            for ins_elem in self.editor.dom.getElementsByTagName("w:ins"):
+                if ins_elem.getAttribute("w:id") == str(revision_id):
+                    return ins_elem
+            for del_elem in self.editor.dom.getElementsByTagName("w:del"):
+                if del_elem.getAttribute("w:id") == str(revision_id):
+                    return del_elem
+            return None
+        elem = element_index.get(str(revision_id))
+        if elem is None or not self._is_in_document(elem):
+            return None
+        return elem
+
+    def accept_revision(self, revision_id: int, element_index: dict[str, Element] | None = None) -> bool:
         """Accept a revision by ID.
 
         For insertions: removes the w:ins wrapper, keeping the content.
@@ -2940,28 +3000,26 @@ class RevisionManager:
 
         Args:
             revision_id: The w:id of the revision to accept
+            element_index: Optional pre-built w:id -> element map (see
+                ``_revision_element_index``) that lets group/changeset
+                resolution skip a full-DOM scan per member. ``None`` scans
+                fresh (standalone calls, accept_all/reject_all).
 
         Returns:
             True if revision was accepted, False if not found
         """
-        # Try to find as insertion
-        for ins_elem in self.editor.dom.getElementsByTagName("w:ins"):
-            if ins_elem.getAttribute("w:id") == str(revision_id):
-                # Accept insertion: unwrap the content
-                self._unwrap_element(ins_elem)
-                return True
+        elem = self._find_revision_element(revision_id, element_index)
+        if elem is None:
+            return False
+        if elem.tagName == "w:ins":
+            # Accept insertion: unwrap the content
+            self._unwrap_element(elem)
+        else:  # w:del
+            # Accept deletion: remove the element entirely
+            self._remove_element(elem)
+        return True
 
-        # Try to find as deletion
-        for del_elem in self.editor.dom.getElementsByTagName("w:del"):
-            if del_elem.getAttribute("w:id") == str(revision_id):
-                # Accept deletion: remove the element entirely
-                parent = del_elem.parentNode
-                parent.removeChild(del_elem)
-                return True
-
-        return False
-
-    def reject_revision(self, revision_id: int) -> bool:
+    def reject_revision(self, revision_id: int, element_index: dict[str, Element] | None = None) -> bool:
         """Reject a revision by ID.
 
         For insertions: removes the w:ins element and its content entirely.
@@ -2969,28 +3027,26 @@ class RevisionManager:
 
         Args:
             revision_id: The w:id of the revision to reject
+            element_index: Optional pre-built w:id -> element map (see
+                ``_revision_element_index``) that lets group/changeset
+                resolution skip a full-DOM scan per member. ``None`` scans
+                fresh (standalone calls, accept_all/reject_all).
 
         Returns:
             True if revision was rejected, False if not found
         """
-        # Try to find as insertion
-        for ins_elem in self.editor.dom.getElementsByTagName("w:ins"):
-            if ins_elem.getAttribute("w:id") == str(revision_id):
-                # Reject insertion: remove entirely
-                parent = ins_elem.parentNode
-                parent.removeChild(ins_elem)
-                return True
+        elem = self._find_revision_element(revision_id, element_index)
+        if elem is None:
+            return False
+        if elem.tagName == "w:ins":
+            # Reject insertion: remove entirely
+            self._remove_element(elem)
+        else:  # w:del
+            # Reject deletion: restore the deleted text
+            self._restore_deletion(elem)
+        return True
 
-        # Try to find as deletion
-        for del_elem in self.editor.dom.getElementsByTagName("w:del"):
-            if del_elem.getAttribute("w:id") == str(revision_id):
-                # Reject deletion: restore the deleted text
-                self._restore_deletion(del_elem)
-                return True
-
-        return False
-
-    def _resolve_ids(self, members: Iterable[int], resolve: Callable[[int], bool]) -> int:
+    def _resolve_ids(self, members: Iterable[int], resolve: Callable[[int, dict[str, Element] | None], bool]) -> int:
         """Apply ``resolve`` (accept/reject_revision) to every id in ``members``.
 
         Same reverse-id, loop-until-no-progress pattern as accept_all/
@@ -2998,23 +3054,31 @@ class RevisionManager:
         resolvable once their host is processed, and members already resolved
         individually are simply skipped. Shared by group and changeset
         resolution (a changeset passes the union of its groups' revisions).
+
+        The w:id -> element index is built once here and threaded through every
+        ``resolve`` call, so resolution costs two full-DOM walks total instead
+        of one scan per member per pass (ISSUES.md #57). The index stays valid
+        across passes: accept/reject only ever *detach* elements, and
+        ``_is_in_document`` (inside ``resolve``) treats a detached member as
+        already gone.
         """
         members = list(members)
+        element_index = self._revision_element_index()
         count = 0
         while True:
             progressed = False
             for rev_id in sorted(members, reverse=True):
-                if resolve(rev_id):
+                if resolve(rev_id, element_index):
                     count += 1
                     progressed = True
             if not progressed:
                 return count
 
-    def _resolve_group(self, group_id: int, resolve: Callable[[int], bool]) -> int:
+    def _resolve_group(self, group_id: int, resolve: Callable[[int, dict[str, Element] | None], bool]) -> int:
         """Apply ``resolve`` to every member revision of a group."""
         return self._resolve_ids(self.group_revisions(group_id), resolve)
 
-    def _resolve_changeset(self, changeset_id: int, resolve: Callable[[int], bool]) -> int:
+    def _resolve_changeset(self, changeset_id: int, resolve: Callable[[int, dict[str, Element] | None], bool]) -> int:
         """Apply ``resolve`` to every revision across all groups of a changeset.
 
         A revision belongs to exactly one group, so the changeset's groups
@@ -3151,6 +3215,10 @@ class RevisionManager:
             child = elem.firstChild
             parent.insertBefore(child, elem)
         parent.removeChild(elem)
+
+    def _remove_element(self, elem) -> None:
+        """Detach an element (and its whole subtree) from its parent."""
+        elem.parentNode.removeChild(elem)
 
     def _restore_deletion(self, del_elem) -> None:
         """Restore deleted content by converting w:delText back to w:t."""
