@@ -221,15 +221,16 @@ Revisions form three nested tiers: an individual **revision**, the **group** of 
 from docx_editor import EditOperation
 
 # Every edit method returns an EditResult carrying group_id and changeset_id.
-result = doc.rewrite_paragraph("P2#f3c1", "Payment is due within 90 days.")
+result = doc.rewrite_paragraph("P3#b2c4", "Section 5 has been revised in full.")
 doc.accept_group(result.group_id)           # resolve one logical edit as a unit
 
-# One batch_edit is one changeset that may span several groups:
-refs = doc.batch_edit([
+# One batch_edit is one changeset that may span several groups (edit paragraphs
+# the rewrite above didn't touch, so their refs are still fresh):
+new_refs = doc.batch_edit([
     EditOperation.replace("30 days", "60 days", paragraph="P2#f3c1"),
     EditOperation.delete("obsolete clause", paragraph="P5#d4e5"),
 ])
-doc.reject_changeset(refs[0].changeset_id)  # undo the whole batch in one call
+doc.reject_changeset(new_refs[0].changeset_id)  # undo the whole batch in one call
 ```
 
 Every `Revision` also carries `group_id`/`group_source` and `changeset_id`/`changeset_source` — the source is `"recorded"` for edits made in this session and `"inferred"` for revisions reconstructed when an existing document is reopened. Group and changeset ids are renumbered each time the document is opened, so always resolve them with an id from the current session's `EditResult` or `list_revisions()`.

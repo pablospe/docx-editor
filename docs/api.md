@@ -1257,7 +1257,7 @@ from docx_editor.exceptions import DocumentNotFoundError
 
 Raised by `Document.open()` when the source path is not a valid `.docx` — wrong
 suffix, a directory, an empty/truncated file, not a ZIP, missing
-`word/document.xml`, or malformed OOXML. Structured field: `path` (the source
+`word/document.xml`, or malformed XML. Structured field: `path` (the source
 path). Not an in-loop retry: the message names which check failed; fix or
 re-export the input file.
 

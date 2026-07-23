@@ -512,12 +512,12 @@ doc.reject_group(result.group_id)   # undo the whole rewrite, or:
 # the same recorded-vs-inferred semantics as the group fields. changeset ids
 # are per-open-Document (renumbered on each open, like group ids). Raises
 # RevisionError for an unknown changeset id.
-batch = doc.batch_edit([
+results = doc.batch_edit([
     EditOperation.replace("old", "new", paragraph="P4#1a2b"),
     EditOperation.delete("stale clause", paragraph="P6#3c4d"),
 ])
-doc.reject_changeset(batch[0].changeset_id)   # undo the whole call, or:
-# doc.accept_changeset(batch[0].changeset_id) # apply it in full
+doc.reject_changeset(results[0].changeset_id)   # undo the whole call, or:
+# doc.accept_changeset(results[0].changeset_id) # apply it in full
 
 # Group ids are in-memory and per-open-Document, renumbered on each open.
 # Pre-existing revisions (previous sessions, foreign reviewers, Word
