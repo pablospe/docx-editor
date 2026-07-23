@@ -169,7 +169,7 @@ pip install "docx-editor[session]"  # + docx-session persistent CLI
 - **Creating** new documents and reading structure uses python-docx, which the `[create]` extra pulls in
 - **Session mode** (`docx-session`) needs the `[session]` extra
 
-On a modern Debian/Ubuntu (or any interpreter marked **PEP-668**
+On a modern Debian/Ubuntu (or any interpreter marked [PEP-668](https://peps.python.org/pep-0668/)
 externally-managed), a bare `pip install` into the system Python is refused —
 install into a virtualenv:
 
@@ -1033,7 +1033,7 @@ Rules:
 - `eval` of an edit call returns the `EditResult` as a plain JSON *string* (it is a `str` subclass, so its value is just the new ref) — `group_id`/`revision_ids` are lost in transit. Keep the result in a kernel-side variable and eval a dict projection when you need them: `docx-session exec "r = doc.replace(...)"` then `docx-session eval "{'ref': str(r), 'group_id': r.group_id}"`.
 - `status` reports `state: busy` while an exec is in flight — a busy session is healthy, don't stop/restart it. The report is a point-in-time snapshot: a sub-second exec can already read `idle` by the time you check, so never conclude from `idle` that code didn't run.
 - Variables persist between `exec` calls: keep refs returned by edits in Python variables instead of re-running `list_paragraphs()`.
-- **Never one `exec` per edit.** Each `docx-session` call is a fresh CLI round-trip (~250 ms of subprocess + IPC overhead) that dwarfs the edit itself — 50 edits sent as 50 `exec` calls take ~12 s, the same 50 in one in-kernel loop ~0.2 s (~60x faster). Loop inside a single `exec`, or use `batch_edit`.
+- **Never one `exec` per edit.** Each `docx-session` call is a fresh CLI round-trip (~250 ms of subprocess + IPC overhead) that dwarfs the edit itself — 50 edits sent as 50 `exec` calls take ~12 s, the same 50 batched into one `exec` is a single round-trip (~0.3 s: the ~250 ms overhead plus the in-kernel loop), ~40x less overhead. Loop inside a single `exec`, or use `batch_edit`.
 - **Project fields kernel-side for large reads.** `eval` serializes the whole value to JSON (~150 chars per `SearchResult`), so a big `find_all` returns tens of KB of context. Return only the fields you need — e.g. `docx-session eval "[(r.paragraph_ref, r.paragraph_occurrence) for r in doc.find_all('30 days')]"` — instead of the full objects (same idea as the `EditResult` projection above).
 - Use absolute paths inside `exec` — the kernel's cwd is whatever `start` captured.
 - A `exec` sent while the kernel is still busy **queues** behind the running one; `--timeout` covers the whole wait. A timeout does not cancel the running code.
