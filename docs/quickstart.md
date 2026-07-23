@@ -72,6 +72,8 @@ with Document.open("contract.docx") as doc:
 
 Use the `P{index}#{hash}` part as the `paragraph=` argument. Edit methods return a new paragraph ref after the hash changes, so keep the returned value when chaining edits in the same paragraph.
 
+When the search text appears more than once in the target paragraph, pass `occurrence=` (0-based, so `occurrence=1` is the second match) to `replace()`, `delete()`, `insert_after()`, `insert_before()`, and `add_comment()`. Omitting it requires a unique match — otherwise the call raises `AmbiguousTextError`.
+
 ## Track Changes
 
 ### Replace Text
@@ -83,7 +85,7 @@ with Document.open("contract.docx") as doc:
     doc.save()
 ```
 
-This creates a tracked deletion of `30 days` and a tracked insertion of `60 days`.
+This creates a tracked deletion of `30` and a tracked insertion of `60`. `replace()` trims the common prefix and suffix and tracks only the differing words, so the unchanged surrounding word (` days`) is left intact rather than deleted and re-inserted.
 
 ### Delete Text
 
@@ -128,6 +130,18 @@ with Document.open("contract.docx") as doc:
     ])
     print(new_refs)
     doc.save()
+```
+
+To validate a batch before applying it, pass `dry_run=True`. This checks every operation up front and returns a list of `EditValidationResult` objects (each with `valid` and `error`) without modifying the document:
+
+```python
+with Document.open("contract.docx") as doc:
+    results = doc.batch_edit([
+        EditOperation.replace("30 days", "60 days", paragraph="P2#f3c1"),
+        EditOperation.delete("obsolete clause", paragraph="P5#d4e5"),
+    ], dry_run=True)
+    for r in results:
+        print(r.index, r.valid, r.error)
 ```
 
 ## Comments
@@ -198,6 +212,28 @@ doc.accept_revision(revision_id=1)
 # For deletions, reject restores the deleted content.
 doc.reject_revision(revision_id=1)
 ```
+
+### Accept or Reject a Group or Changeset
+
+Revisions form three nested tiers: an individual **revision**, the **group** of revisions from one logical edit (e.g. a single `replace()` or `rewrite_paragraph()`), and the **changeset** of all groups from one whole call (`batch_edit()` / `batch_rewrite()`). Accept or reject a whole tier in one call:
+
+```python
+from docx_editor import EditOperation
+
+# Every edit method returns an EditResult carrying group_id and changeset_id.
+result = doc.rewrite_paragraph("P3#b2c4", "Section 5 has been revised in full.")
+doc.accept_group(result.group_id)           # resolve one logical edit as a unit
+
+# One batch_edit is one changeset that may span several groups (edit paragraphs
+# the rewrite above didn't touch, so their refs are still fresh):
+new_refs = doc.batch_edit([
+    EditOperation.replace("30 days", "60 days", paragraph="P2#f3c1"),
+    EditOperation.delete("obsolete clause", paragraph="P5#d4e5"),
+])
+doc.reject_changeset(new_refs[0].changeset_id)  # undo the whole batch in one call
+```
+
+Every `Revision` also carries `group_id`/`group_source` and `changeset_id`/`changeset_source` — the source is `"recorded"` for edits made in this session and `"inferred"` for revisions reconstructed when an existing document is reopened. Group and changeset ids are renumbered each time the document is opened, so always resolve them with an id from the current session's `EditResult` or `list_revisions()`.
 
 ### Accept or Reject All
 
