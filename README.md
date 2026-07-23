@@ -23,8 +23,8 @@ Pure Python library for Word document track changes and comments, without requir
 - **Cross-Boundary Editing**: Find and replace text spanning multiple XML elements and revision boundaries
 - **Mixed-State Editing**: Atomic decomposition for text spanning `<w:ins>`/`<w:del>` boundaries
 - **Comments**: Add, reply, resolve, and delete comments
-- **Revision Management**: List, accept, and reject tracked changes
-- **Session Mode**: Optional persistent kernel (`docx-session start/exec/eval/stop`) keeps documents open across many small commands — ideal for AI agents (`pip install "docx-editor[session]"`)
+- **Revision Management**: List, accept, and reject tracked changes at three granularities — individual revisions, groups (one logical edit), and changesets (one whole `batch_edit`/`batch_rewrite` call); `EditResult` and `Revision` objects carry `group_id` and `changeset_id`
+- **Session Mode**: Optional persistent kernel (`docx-session start/exec/eval/status/stop`) keeps documents open across many small commands — ideal for AI agents (`pip install "docx-editor[session]"`)
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **No Dependencies**: Only requires `defusedxml` for secure XML parsing
 
@@ -89,6 +89,9 @@ with Document.open("contract.docx", author=author) as doc:
     doc.replace("net", "gross", paragraph=r)  # chain without list_paragraphs()
     doc.delete("obsolete text", paragraph="P5#d4e5")
     doc.insert_after("Section 5", " (as amended)", paragraph="P3#b2c4")
+    # Repeated text? Pass occurrence= (0-based) to pick which match; omitting it
+    # requires a unique match, else AmbiguousTextError.
+    doc.replace("the", "The", paragraph="P4#c5d6", occurrence=2)
 
     # Rewrite entire paragraph (automatic word-level diff)
     doc.rewrite_paragraph("P2#f3c1",
@@ -151,6 +154,10 @@ with Document.open("contract.docx", author="Editor") as doc:
     ])
     doc.save()
 ```
+
+Pass `dry_run=True` to validate every operation up front without touching the
+document — `doc.batch_edit(ops, dry_run=True)` returns a list of
+`EditValidationResult` instead of applying the edits.
 
 ### Saving into synced folders
 

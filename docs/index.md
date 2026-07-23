@@ -11,7 +11,7 @@ Pure Python library for Word document track changes and comments, without requir
 - **Paragraph Rewrite**: rewrite a paragraph and generate tracked changes from the diff
 - **Track Changes**: Replace, delete, and insert text with revision tracking
 - **Comments**: Add, reply, resolve, and delete comments
-- **Revision Management**: List, accept, and reject tracked changes
+- **Revision Management**: Accept/reject tracked changes at three granularities — individual revisions, groups (one logical edit), and changesets (one whole `batch_edit`/`batch_rewrite` call)
 - **Cross-Boundary Editing**: Find and replace text spanning multiple XML elements
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **No Dependencies**: Only requires `defusedxml` for secure XML parsing
@@ -38,6 +38,8 @@ with Document.open("contract.docx", author="Legal Team") as doc:
     # P2#f3c1| Payment is due within 30 days...
 
     # Edit methods require a paragraph ref and return the updated ref.
+    # Pass occurrence= (0-based) to disambiguate repeated text; omitting it
+    # requires a unique match, else AmbiguousTextError.
     ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
     ref = doc.insert_after("Payment", " terms", paragraph=ref)
     doc.delete("obsolete text", paragraph="P5#d4e5")

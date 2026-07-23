@@ -134,7 +134,7 @@ Return one paragraph as a structured `ParagraphInfo` record — the single-item 
 
 **Returns:** `ParagraphInfo` (index, hash-anchored ref, full untruncated text) for the paragraph at `index`.
 
-**Raises:** [`ParagraphIndexError`](#exceptions) if `index` is out of range (`< 1` or greater than `paragraph_count()`).
+**Raises:** [`ParagraphIndexError`](#paragraphindexerror) if `index` is out of range (`< 1` or greater than `paragraph_count()`).
 
 **Example:**
 
@@ -154,7 +154,7 @@ Return the paragraphs surrounding `ref`, in document order — the "show me the 
 
 **Returns:** List of `ParagraphInfo` records (index, ref, full text) — identical to what `list_paragraphs_structured()` would emit for the same span.
 
-**Raises:** `ValueError` if `ref` is malformed or `window < 0`; [`ParagraphIndexError`](#exceptions) / [`HashMismatchError`](#exceptions) for an out-of-range or stale `ref`.
+**Raises:** `ValueError` if `ref` is malformed or `window < 0`; [`ParagraphIndexError`](#paragraphindexerror) / [`HashMismatchError`](#hashmismatcherror) for an out-of-range or stale `ref`.
 
 **Example:**
 
@@ -246,7 +246,7 @@ Find text in the document, including text spanning XML element boundaries.
 
 **Returns:** [`SearchResult`](#searchresult), or None if not found
 
-**Raises:** `ValueError` if `text` is empty or `paragraph` is malformed; [`ParagraphIndexError`](#exceptions) / [`HashMismatchError`](#exceptions) for an out-of-range or stale `paragraph`.
+**Raises:** `ValueError` if `text` is empty or `paragraph` is malformed; [`ParagraphIndexError`](#paragraphindexerror) / [`HashMismatchError`](#hashmismatcherror) for an out-of-range or stale `paragraph`.
 
 **Example:**
 
@@ -275,7 +275,7 @@ what a follow-up edit needs.
 
 **Returns:** list of [`SearchResult`](#searchresult), empty when nothing matches (no-match is not an error for an enumeration API)
 
-**Raises:** `ValueError` if `text` is empty or `paragraph` is malformed; [`ParagraphIndexError`](#exceptions) / [`HashMismatchError`](#exceptions) for an out-of-range or stale `paragraph`.
+**Raises:** `ValueError` if `text` is empty or `paragraph` is malformed; [`ParagraphIndexError`](#paragraphindexerror) / [`HashMismatchError`](#hashmismatcherror) for an out-of-range or stale `paragraph`.
 
 **Example:**
 
@@ -585,7 +585,7 @@ List all tracked changes in the document.
 
 **Returns:** List of Revision objects
 
-**Raises:** The `paragraph` ref is validated exactly like in the edit methods — `ValueError` (malformed ref), [`ParagraphIndexError`](#exceptions) (index out of range), [`HashMismatchError`](#exceptions) (stale hash).
+**Raises:** The `paragraph` ref is validated exactly like in the edit methods — `ValueError` (malformed ref), [`ParagraphIndexError`](#paragraphindexerror) (index out of range), [`HashMismatchError`](#hashmismatcherror) (stale hash).
 
 **Example:**
 
@@ -916,6 +916,10 @@ from docx_editor import Revision
 | `author` | str | The revision author |
 | `date` | datetime or None | When the revision was made |
 | `text` | str | The inserted or deleted text |
+| `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits outside any `<w:p>` (e.g. a `<w:trPr>` row marker) |
+| `occurrence` | int or None | 0-based occurrence index of `text` within the containing paragraph, counted in the view where the revision's text lives (the visible view for insertions, the original pre-revision view for deletions). For insertions it plugs directly into the `occurrence=` parameter of the anchor APIs; None whenever targeting-by-text does not apply (empty text, a host insertion partly consumed by a nested deletion, or a nested deletion) |
+| `nested_under` | int or None | id of the nearest enclosing revision (e.g. a foreign deletion inside another author's pending insertion), else None |
+| `contains_ids` | tuple[int, ...] | ids of the revisions nested inside this one, in document order (empty tuple when none) |
 | `group_id` | int or None | Revision group this revision belongs to (see [`accept_group()`](#accept_groupgroup_id)): recorded for this session's edits, inferred by reconstruction for revisions already in the file; None only for ungroupable revisions (missing author/date, outside any paragraph, duplicated id, or a mid-session split half of a foreign insertion) |
 | `group_source` | str or None | Provenance of `group_id`: `"recorded"` (created through this open Document) or `"inferred"` (reconstructed at parse time from same-paragraph contiguity + identical author and date); None iff `group_id` is None |
 | `changeset_id` | int or None | Changeset (one whole call) this revision's group belongs to (see [`accept_changeset()`](#accept_changesetchangeset_id) / [`reject_changeset()`](#reject_changesetchangeset_id)) — the `(author, date)` class over groups; None iff `group_id` is None |
@@ -1161,6 +1165,41 @@ except AmbiguousTextError as e:
                 occurrence=r.paragraph_occurrence)
 ```
 
+### `HashMismatchError`
+
+Raised when a `paragraph` ref's hash no longer matches the paragraph's current
+content — the paragraph changed (usually by an earlier edit) since the ref was
+listed, so the ref is stale. Structured fields: `paragraph_index` (1-based),
+`expected_hash` (the hash in the stale ref), `actual_hash` (the paragraph's
+current hash), and `paragraph_preview` (the current text). Recover by retrying
+with the fresh ref `P{paragraph_index}#{actual_hash}`, or re-list paragraphs.
+
+```python
+from docx_editor.exceptions import HashMismatchError
+
+try:
+    doc.replace("old", "new", paragraph="P2#f3c1")
+except HashMismatchError as e:
+    doc.replace("old", "new", paragraph=f"P{e.paragraph_index}#{e.actual_hash}")
+```
+
+### `ParagraphIndexError`
+
+Raised when a paragraph index is out of range — `< 1` or greater than
+`paragraph_count()` (for example `get_paragraph(0)`). Structured fields:
+`index` (the offending index) and `total_paragraphs` (how many the document
+has). Clamp to `1..total_paragraphs` and retry, or call `list_paragraphs()`
+to pick a valid ref.
+
+```python
+from docx_editor.exceptions import ParagraphIndexError
+
+try:
+    para = doc.get_paragraph(index)
+except ParagraphIndexError as e:
+    para = doc.get_paragraph(max(1, min(e.index, e.total_paragraphs)))
+```
+
 ### `BatchOperationError`
 
 The only exception `batch_edit()` / `batch_rewrite()` raise for a failing
@@ -1212,6 +1251,18 @@ Raised by `Document.open()` when the source file does not exist. Structured fiel
 
 ```python
 from docx_editor.exceptions import DocumentNotFoundError
+```
+
+### `InvalidDocumentError`
+
+Raised by `Document.open()` when the source path is not a valid `.docx` — wrong
+suffix, a directory, an empty/truncated file, not a ZIP, missing
+`word/document.xml`, or malformed OOXML. Structured field: `path` (the source
+path). Not an in-loop retry: the message names which check failed; fix or
+re-export the input file.
+
+```python
+from docx_editor.exceptions import InvalidDocumentError
 ```
 
 ### `DocumentClosedError`

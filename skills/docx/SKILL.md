@@ -260,6 +260,9 @@ match = doc.find_text("30 days")
 # Optionally scope to one paragraph — occurrence then counts within it:
 match = doc.find_text("30 days", paragraph="P2#f3c1")
 
+# Just need the count? doc.count_matches("30 days") returns the document-wide
+# occurrence total (no paragraph scope) without building SearchResults.
+
 # Enumerate EVERY match in one call (returns list[SearchResult], [] if none).
 # Each result plugs straight into a follow-up edit — no occurrence math needed.
 # Edit them all in one atomic batch; reversed() puts same-paragraph ops in the
@@ -445,7 +448,7 @@ doc.close()
 ### Revision Management API
 
 ```python
-from docx_editor import Document
+from docx_editor import Document, EditOperation
 import os
 
 author = os.environ.get("USER") or "Reviewer"
@@ -466,6 +469,9 @@ for r in revisions:
     # outside any paragraph, duplicated id, or a mid-session split half
     # of a foreign insertion).
     print(f"  group_id={r.group_id} group_source={r.group_source}")
+    # Changeset: the whole edit CALL the group belongs to (see below).
+    # changeset_source mirrors group_source ("recorded" vs "inferred").
+    print(f"  changeset_id={r.changeset_id} changeset_source={r.changeset_source}")
 
 # Filter by author
 their_changes = doc.list_revisions(author="OtherUser")
@@ -496,6 +502,22 @@ doc.reject_revision(their_changes[0].id)
 result = doc.rewrite_paragraph("P3#a7b2", "Entirely new paragraph text.")
 doc.reject_group(result.group_id)   # undo the whole rewrite, or:
 # doc.accept_group(result.group_id) # apply it in full
+
+# Accept or reject a whole edit CALL as one changeset (returns count
+# processed). The tiers nest: revision < group < changeset. One
+# batch_edit/batch_rewrite is ONE changeset that may span several groups, so
+# accept_changeset resolves the entire call at once while accept_group resolves
+# a single logical edit within it. Every EditResult carries changeset_id
+# alongside group_id; Revision objects carry changeset_id/changeset_source with
+# the same recorded-vs-inferred semantics as the group fields. changeset ids
+# are per-open-Document (renumbered on each open, like group ids). Raises
+# RevisionError for an unknown changeset id.
+batch = doc.batch_edit([
+    EditOperation.replace("old", "new", paragraph="P4#1a2b"),
+    EditOperation.delete("stale clause", paragraph="P6#3c4d"),
+])
+doc.reject_changeset(batch[0].changeset_id)   # undo the whole call, or:
+# doc.accept_changeset(batch[0].changeset_id) # apply it in full
 
 # Group ids are in-memory and per-open-Document, renumbered on each open.
 # Pre-existing revisions (previous sessions, foreign reviewers, Word
@@ -779,7 +801,7 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `AmbiguousTextError`   | `search_text`, `paragraph_ref`, `paragraph_preview`, `total_occurrences`                | The target matched more than once with no `occurrence` given. Enumerate with `find_all()` and pick, or pass an explicit `occurrence` (0-based).      |
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` and retry with `get_paragraph(i)`, or call `list_paragraphs()` to pick a valid ref. |
 | `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (a missing paragraph ref, an element that is not an `EditOperation`, or a duplicate paragraph in `batch_rewrite` — `batch_edit` allows repeats, applied sequentially). Batch methods never raise the inner types directly. |
-| `RevisionError`        | `revision_id`, `group_id` (set when the error is about that id, else None)              | Unknown `group_id` passed to `accept_group()`/`reject_group()`. Group ids are per-open-Document and renumbered on each open (recorded for this session's edits, inferred for pre-existing revisions): use a `group_id` from this session's `EditResult` or `list_revisions()`, never one saved from a previous session. |
+| `RevisionError`        | `revision_id`, `group_id`, `changeset_id` (whichever the error is about is set, the rest None) | Unknown `group_id` passed to `accept_group()`/`reject_group()`, or unknown `changeset_id` passed to `accept_changeset()`/`reject_changeset()`. Group and changeset ids are per-open-Document and renumbered on each open (recorded for this session's edits, inferred for pre-existing revisions): use an id from this session's `EditResult` or `list_revisions()`, never one saved from a previous session. |
 | `CommentError`         | `comment_id` (set when a comment id was targeted, else None)                            | Replying to a nonexistent comment id — call `list_comments()` and retry with a real id. With `comment_id=None` the arguments themselves were invalid; fix them per the message. |
 | `DocumentClosedError`  | `path`                                                                                  | The `Document` was used after `close()`. Reopen with `Document.open(e.path)`; edits not saved before the `close()` were discarded with the workspace. |
 | `DocumentNotFoundError`| `path`                                                                                  | The file doesn't exist at `path` — fix the path (typo, wrong cwd) before retrying. |
@@ -983,7 +1005,7 @@ Rules:
 - Exit code 1 means the code raised: the traceback is on stderr, the session survives — fix the call and continue (introspect with `docx-session exec "import inspect; print(inspect.signature(doc.replace))"` when unsure).
 - Exit code 2 means timeout — the kernel is alive and your code is still running. Exit code 3 means no session is running.
 - Exit code 4 means the kernel died mid-exec or is unreachable: its state (open documents, variables) is lost. Recover with `docx-session stop` then `start`, and re-open your documents.
-- `eval` output: library dataclasses (SearchResult, ParagraphInfo, ParagraphLocation, Revision, Comment) arrive as real JSON objects (`"serialized": true`, datetimes as ISO strings, tuples as lists) — access fields directly, never string-parse a repr. `"serialized": false` means the value wasn't JSON-serializable and `value` holds its `repr` string. On exit 1 the envelope carries `"error": {"type", "message", <structured recovery fields — e.g. actual_hash, total_occurrences>}` plus a compact, path-free `traceback` (`"error"` is null for the rare raise that bypasses the kernel-side capture, e.g. SystemExit — fall back to `traceback`). On exit 4 the envelope has `"status": "dead"`; on exit 3 (no session) there is no envelope at all.
+- `eval` output: library dataclasses (SearchResult, ParagraphInfo, ParagraphLocation, Revision, Comment) arrive as real JSON objects (`"serialized": true`, datetimes as ISO strings, tuples as lists) — access fields directly, never string-parse a repr. `"serialized": false` means the value wasn't JSON-serializable and `value` holds its `repr` string. On exit 1 the envelope carries `"error": {"type", "message", <structured recovery fields — e.g. actual_hash, total_occurrences>}` plus a compact, machine-path-stripped `traceback` (library frames appear as relative `docx_editor/...` paths and the eval line as `<docx-session eval>`; only absolute machine paths are stripped) (`"error"` is null for the rare raise that bypasses the kernel-side capture, e.g. SystemExit — fall back to `traceback`). On exit 4 the envelope has `"status": "dead"`; on exit 3 (no session) there is no envelope at all.
 - `eval` of an edit call returns the `EditResult` as a plain JSON *string* (it is a `str` subclass, so its value is just the new ref) — `group_id`/`revision_ids` are lost in transit. Keep the result in a kernel-side variable and eval a dict projection when you need them: `docx-session exec "r = doc.replace(...)"` then `docx-session eval "{'ref': str(r), 'group_id': r.group_id}"`.
 - `status` reports `state: busy` while an exec is in flight — a busy session is healthy, don't stop/restart it. The report is a point-in-time snapshot: a sub-second exec can already read `idle` by the time you check, so never conclude from `idle` that code didn't run.
 - Variables persist between `exec` calls: keep refs returned by edits in Python variables instead of re-running `list_paragraphs()`.
