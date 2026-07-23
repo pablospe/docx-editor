@@ -1363,6 +1363,19 @@ class TestAcceptPathIndex:
         "<w:r><w:t>gamma</w:t></w:r></w:ins></w:p>"
     )
 
+    # Same nesting, but the host id (5) is HIGHER than the nested id (2), so
+    # reverse-id order processes the host FIRST — before the nested member is
+    # ever resolved on its own. This is the branch _is_in_document is written
+    # for (a member detaching together with its already-resolved host), which
+    # NESTED_BODY (host id 1 < nested id 2) never reaches.
+    NESTED_BODY_HOST_HIGH = (
+        f'<w:p><w:ins w:id="5" w:author="{AUTHOR_A}" w:date="{DATE_A}">'
+        "<w:r><w:t>alpha </w:t></w:r>"
+        f'<w:del w:id="2" w:author="{AUTHOR_A}" w:date="{DATE_A}">'
+        "<w:r><w:delText>beta </w:delText></w:r></w:del>"
+        "<w:r><w:t>gamma</w:t></w:r></w:ins></w:p>"
+    )
+
     @staticmethod
     def _accepted_text(manager: RevisionManager) -> str:
         """Accepted-view text of the manager's DOM (w:delText excluded)."""
@@ -1421,6 +1434,31 @@ class TestAcceptPathIndex:
         # deletion (removed): both members counted once, neither skipped.
         manager = _make_manager(temp_xml(self.NESTED_BODY))
         assert manager.group_revisions(1) == (1, 2)
+
+        assert manager.accept_group(1) == 2
+        assert manager.list_revisions() == []
+        assert self._accepted_text(manager) == "alpha gamma"
+
+    def test_reject_group_host_removed_before_nested_is_resolved(self, temp_xml):
+        # host id 5 > nested id 2, so reverse-id order rejects the host w:ins
+        # FIRST, removing its whole subtree — the nested w:del is gone before it
+        # is ever resolved on its own. The connectivity guard skips it (count 1,
+        # not 2, and no mutation of a detached subtree). This order-dependent
+        # count is pre-existing and identical under the old fresh-scan path (a
+        # fresh scan would likewise not find the removed nested del).
+        manager = _make_manager(temp_xml(self.NESTED_BODY_HOST_HIGH))
+        assert manager.group_revisions(1) == (5, 2)  # host ins first, nested del
+
+        assert manager.reject_group(1) == 1  # host applied; nested detached with it
+        assert manager.list_revisions() == []
+        assert self._accepted_text(manager) == ""
+
+    def test_accept_group_host_high_still_resolves_both(self, temp_xml):
+        # host id 5 > nested id 2: accepting the host UNWRAPS it (content, incl.
+        # the nested del, stays attached), so the nested member is still live
+        # and gets resolved on its own — both counted, unlike the reject case.
+        manager = _make_manager(temp_xml(self.NESTED_BODY_HOST_HIGH))
+        assert manager.group_revisions(1) == (5, 2)
 
         assert manager.accept_group(1) == 2
         assert manager.list_revisions() == []
