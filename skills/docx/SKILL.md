@@ -814,6 +814,49 @@ tracked delete removes text from that view; an insert adds to it). Across
 different paragraphs, operations are applied in reverse document order — a
 behavior that keeps one `list_paragraphs()` snapshot valid for the whole batch.
 
+### Paragraph Structure (splitting on `\n`)
+
+A `\n` in edit text means a **tracked paragraph split** at that point. There is
+no way to embed a literal newline in a paragraph's text — Word paragraphs are
+inherently single-line, and a raw `\n` in a run would be an invisible,
+unreviewable artifact. So the library gives `\n` its universal meaning:
+
+- **Mechanism.** The first paragraph's paragraph *mark* is flagged as an
+  inserted revision; the tail (everything after the split point) moves into a
+  new following paragraph as unchanged content. **Accepting** keeps the split;
+  **rejecting** removes the mark and **rejoins** the two paragraphs.
+- **Where it works.** Any content text: `replace(find, "a\nb")`,
+  `insert_after`/`insert_before`, `rewrite_paragraph`, and the same inside a
+  `batch_edit` `EditOperation`. Multiple `\n`s make multiple splits.
+- **One unit.** A `\n`-containing operation is ONE revision group covering the
+  deletion, the inserted runs in every resulting paragraph, and each inserted
+  mark — `reject_group` reverts the whole split atomically; one call is still
+  one changeset.
+
+```python
+# Split a paragraph while replacing text; both halves are tracked.
+r = doc.replace("...year.", "...year.\nA new clause follows.", paragraph="P4#a1b2")
+r.refs            # ("P4#…", "P5#…") — every resulting paragraph, in order
+r.refs[0] == r    # True — the string value is always the first paragraph
+doc.reject_group(r.group_id)   # rejoins into the original single paragraph
+
+# Explicit sugar for a pure split (no text change), cut before an anchor:
+res = doc.split_paragraph("P4#a1b2", before="However,")
+first_ref, second_ref = res.refs
+```
+
+**`EditResult.refs`** carries every resulting paragraph ref (length 1 for a
+normal edit, ≥2 for a split). A split shifts the index of every later
+paragraph, so **re-resolve** stale refs (`list_paragraphs()`/`find_text()`)
+before reusing them — this is the same re-resolve discipline that already
+applies after any edit.
+
+**Rejected characters.** Every other C0 control character is rejected at all
+text inputs with a teaching `ValueError` (`CommentError` for comment text):
+tab (`\t`), carriage return (`\r`), NUL, DEL, etc. — they would enter the
+document as invisible literals. Only `\n` is special (a split). A real tab
+(`\t` → `<w:tab/>`) is deferred to the tabs feature.
+
 ### Error Handling & Recovery
 
 All LLM-facing errors inherit from `DocxEditError` and carry structured fields so you can retry in-loop without re-reading the document. Catch the specific class or the base — both work.
@@ -826,7 +869,8 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` and retry with `get_paragraph(i)`, or call `list_paragraphs()` to pick a valid ref. |
 | `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (a missing paragraph ref, an element that is not an `EditOperation`, or a duplicate paragraph in `batch_rewrite` — `batch_edit` allows repeats, applied sequentially). Batch methods never raise the inner types directly. |
 | `RevisionError`        | `revision_id`, `group_id`, `changeset_id` (whichever the error is about is set, the rest None) | Unknown `group_id` passed to `accept_group()`/`reject_group()`, or unknown `changeset_id` passed to `accept_changeset()`/`reject_changeset()`. Group and changeset ids are per-open-Document and renumbered on each open (recorded for this session's edits, inferred for pre-existing revisions): use an id from this session's `EditResult` or `list_revisions()`, never one saved from a previous session. |
-| `CommentError`         | `comment_id` (set when a comment id was targeted, else None)                            | Replying to a nonexistent comment id — call `list_comments()` and retry with a real id. With `comment_id=None` the arguments themselves were invalid; fix them per the message. |
+| `CommentError`         | `comment_id` (set when a comment id was targeted, else None)                            | Replying to a nonexistent comment id — call `list_comments()` and retry with a real id. With `comment_id=None` the arguments themselves were invalid; fix them per the message. A `\t`/`\r`/other control character in `anchor_text` or `comment_text` also raises this — strip it (comments hold no newlines either). |
+| `ValueError`           | *(builtin — message names the field)*                                                  | Bad argument caught before any mutation: a malformed ref, a bad `occurrence`, or a **control character** (`\t`, `\r`, NUL, …) in edit text. Only `\n` is allowed, and only in content (it means a tracked paragraph split); it is rejected in search/anchor text. Remove the control character — never smuggle layout as `\t`/`\r`. |
 | `DocumentClosedError`  | `path`                                                                                  | The `Document` was used after `close()`. Reopen with `Document.open(e.path)`; edits not saved before the `close()` were discarded with the workspace. |
 | `DocumentNotFoundError`| `path`                                                                                  | The file doesn't exist at `path` — fix the path (typo, wrong cwd) before retrying. |
 | `InvalidDocumentError` | `path`                                                                                  | The file at `path` is not a valid .docx — wrong suffix, a directory, empty/truncated/not a ZIP, missing word/document.xml, or malformed XML. Not an in-loop retry: the message names which check failed; fix or re-export the input file. |

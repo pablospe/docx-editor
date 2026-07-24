@@ -419,6 +419,187 @@ class TestGroupSessionScope:
         assert doc.reject_group(result.group_id) == 2
 
 
+def _mark_ins_xml(rev_id, author: str = AUTHOR_A, date: str = DATE_A) -> str:
+    """A paragraph-mark insertion (empty <w:ins> inside <w:pPr><w:rPr>)."""
+    return f'<w:ins w:id="{rev_id}" w:author="{author}" w:date="{date}"/>'
+
+
+def _split_paragraph_xml(mark_id, content_id, text: str, **kw) -> str:
+    """A first-half paragraph: mark inserted, plus one inserted content run."""
+    return f"<w:p><w:pPr><w:rPr>{_mark_ins_xml(mark_id, **kw)}</w:rPr></w:pPr>{_ins_xml(content_id, text, **kw)}</w:p>"
+
+
+class TestSplitReconstruction:
+    """A reopened tracked split spans two paragraphs; the mark makes it one group."""
+
+    def test_reopened_split_reconstructs_as_one_group(self, temp_xml):
+        body = _split_paragraph_xml(2, 1, "first ") + f"<w:p>{_ins_xml(3, 'second')}</w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        gid = manager.group_id_of(1)
+        assert gid is not None
+        assert {manager.group_id_of(i) for i in (1, 2, 3)} == {gid}
+        assert set(manager.group_revisions(gid)) == {1, 2, 3}
+        assert manager._group_sources[gid] == "inferred"
+
+    def test_reopened_multi_split_reconstructs_as_one_group(self, temp_xml):
+        body = _split_paragraph_xml(10, 1, "a") + _split_paragraph_xml(11, 3, "b") + f"<w:p>{_ins_xml(5, 'c')}</w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        gid = manager.group_id_of(1)
+        assert gid is not None
+        assert {manager.group_id_of(i) for i in (1, 3, 5, 10, 11)} == {gid}
+
+    def test_adjacent_paragraphs_without_mark_stay_separate(self, temp_xml):
+        # Same author+date, adjacent paragraphs, but no inserted mark — the two
+        # edits are unrelated and must reconstruct as two groups (the rule's
+        # negative control).
+        body = f"<w:p>{_ins_xml(1, 'first')}</w:p><w:p>{_ins_xml(2, 'second')}</w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        assert manager.group_id_of(1) != manager.group_id_of(2)
+
+    def test_split_continuation_needs_matching_author_and_date(self, temp_xml):
+        # A mark by a different author/date than the tail's revision is not a
+        # continuation — the durable signal must match on both.
+        body = (
+            _split_paragraph_xml(2, 1, "first ", author=AUTHOR_A)
+            + f"<w:p>{_ins_xml(3, 'second', author=AUTHOR_B, date=DATE_B)}</w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+
+        assert manager.group_id_of(1) != manager.group_id_of(3)
+
+    def test_split_refuses_paragraph_with_section_mark(self, temp_xml):
+        # A paragraph-level w:sectPr marks a section boundary; splitting it
+        # would corrupt the section structure, so it is refused (no mutation).
+        body = (
+            '<w:p><w:pPr><w:sectPr><w:type w:val="nextPage"/></w:sectPr></w:pPr>'
+            "<w:r><w:t>Section end here</w:t></w:r></w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+
+        with pytest.raises(RevisionError, match="section mark"):
+            manager.replace_text("end", "end\nsplit")
+        # No partial mutation: the original text is intact.
+        assert "Section end here" in manager.editor.dom.toxml()
+
+    def test_split_inside_existing_revision_is_atomic(self, temp_xml):
+        # A split whose boundary lands inside a pre-existing (foreign) insertion
+        # is not yet supported. It must refuse BEFORE mutating: a single edit has
+        # no DOM rollback, so a partial delete/insert would otherwise be left
+        # behind (the tail-collection raise used to fire mid-mutation).
+        body = f"<w:p><w:r><w:t>Hello</w:t></w:r>{_ins_xml(1, 'WORLD', author=AUTHOR_A)}</w:p>"
+        manager = _make_manager(temp_xml(body))
+        before = manager.editor.dom.toxml()
+
+        with pytest.raises(RevisionError, match="existing revision"):
+            # match.end (after "Hello") lands at the start of the foreign <w:ins>.
+            manager.replace_text("Hello", "a\nb")
+
+        # Byte-for-byte unchanged — no orphaned deletion/insertion.
+        assert manager.editor.dom.toxml() == before
+
+    def test_split_inserted_segment_inherits_run_format(self, temp_xml):
+        # The segment inserted at the start of the new paragraph copies the rPr
+        # of the tail it sits before, so it keeps the surrounding formatting
+        # instead of dropping to document default.
+        body = "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hello World</w:t></w:r></w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        manager.replace_text("Hello", "A\nB")
+
+        b_runs = [
+            r
+            for r in manager.editor.dom.getElementsByTagName("w:r")
+            if (ts := r.getElementsByTagName("w:t")) and ts[0].firstChild and ts[0].firstChild.data == "B"
+        ]
+        assert b_runs, "inserted 'B' run not found"
+        rprs = b_runs[0].getElementsByTagName("w:rPr")
+        assert rprs and rprs[0].getElementsByTagName("w:b"), "split-inserted segment lost its bold rPr"
+
+    def test_multi_split_at_end_all_segments_inherit_format(self, temp_xml):
+        # Appending "A\nB\nC" past the last word makes every tail paragraph empty
+        # when its segment is inserted; each must still inherit the boundary
+        # formatting (not just the first segment).
+        body = "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hello</w:t></w:r></w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        manager.insert_text_after("Hello", "A\nB\nC")
+
+        for seg in ("A", "B", "C"):
+            runs = [
+                r
+                for r in manager.editor.dom.getElementsByTagName("w:r")
+                if (ts := r.getElementsByTagName("w:t")) and ts[0].firstChild and ts[0].firstChild.data == seg
+            ]
+            assert runs, f"segment {seg!r} run not found"
+            rpr = runs[0].getElementsByTagName("w:rPr")
+            assert rpr and rpr[0].getElementsByTagName("w:b"), f"segment {seg!r} lost bold formatting"
+
+    def test_consecutive_newlines_make_an_empty_paragraph(self, temp_xml):
+        # "\n\nC" past the end makes an empty middle paragraph; the split whose
+        # current paragraph has no runs falls back to empty formatting cleanly.
+        body = "<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        manager.insert_text_after("Hello", "\n\nC")
+
+        # Hello | (empty) | C  — three paragraphs, no crash, no lost content.
+        assert len(manager.editor.dom.getElementsByTagName("w:p")) == 3
+        texts = [t.firstChild.data for t in manager.editor.dom.getElementsByTagName("w:t") if t.firstChild]
+        assert "C" in texts
+
+    def test_split_formatted_paragraph_copies_and_cleans_pPr(self, temp_xml):
+        # Splitting a paragraph with rich properties: the tail copies pStyle +
+        # rPr formatting but drops the tracked pPrChange and the mark revision;
+        # the original keeps its pPr and takes the inserted split mark.
+        del_mark = '<w:del w:id="7" w:author="X" w:date="2024-01-01T00:00:00Z"/>'
+        ppr_change = '<w:pPrChange w:id="8" w:author="X" w:date="2024-01-01T00:00:00Z"><w:pPr/></w:pPrChange>'
+        body = (
+            f'<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:rPr><w:b/>{del_mark}</w:rPr>{ppr_change}</w:pPr>'
+            "<w:r><w:rPr><w:b/></w:rPr><w:t>Hello World</w:t></w:r></w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+
+        manager.replace_text("Hello", "A\nB")
+
+        paras = manager.editor.dom.getElementsByTagName("w:p")
+        assert len(paras) == 2
+        tail_pPr = paras[1].getElementsByTagName("w:pPr")[0]
+        assert tail_pPr.getElementsByTagName("w:pStyle")  # formatting copied
+        assert not tail_pPr.getElementsByTagName("w:pPrChange")  # tracked change dropped
+        tail_rPr = tail_pPr.getElementsByTagName("w:rPr")
+        assert tail_rPr and tail_rPr[0].getElementsByTagName("w:b")  # rPr formatting copied
+        assert not tail_rPr[0].getElementsByTagName("w:del")  # mark dropped from the copy
+
+    def test_split_paragraph_pStyle_without_rPr(self, temp_xml):
+        # pPr present but no rPr: the mark check finds no ins mark, and flagging
+        # the split creates the rPr before the pPrChange anchor.
+        ppr_change = '<w:pPrChange w:id="9" w:author="X" w:date="2024-01-01T00:00:00Z"><w:pPr/></w:pPrChange>'
+        body = f'<w:p><w:pPr><w:pStyle w:val="Body"/>{ppr_change}</w:pPr><w:r><w:t>Hello World</w:t></w:r></w:p>'
+        manager = _make_manager(temp_xml(body))
+
+        manager.replace_text("Hello", "A\nB")
+
+        paras = manager.editor.dom.getElementsByTagName("w:p")
+        assert len(paras) == 2
+        p1_rPr = paras[0].getElementsByTagName("w:pPr")[0].getElementsByTagName("w:rPr")
+        assert p1_rPr and p1_rPr[0].getElementsByTagName("w:ins")  # split mark in the new rPr
+
+    def test_split_continuation_ignores_foreign_authored_mark(self, temp_xml):
+        # run_para carries a paragraph mark by a DIFFERENT author than the
+        # current run's revision, so the next paragraph is not a continuation.
+        body = (
+            f"<w:p><w:pPr><w:rPr>{_mark_ins_xml(1, author=AUTHOR_B, date=DATE_B)}</w:rPr></w:pPr>"
+            f"{_ins_xml(2, 'mine', author=AUTHOR_A, date=DATE_A)}</w:p>"
+            f"<w:p>{_ins_xml(3, 'next', author=AUTHOR_A, date=DATE_A)}</w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+
+        assert manager.group_id_of(2) != manager.group_id_of(3)
+
+
 class TestForeignInsGrouping:
     """Author/attachment filters keep foreign fragments out of our groups."""
 

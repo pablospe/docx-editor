@@ -20,6 +20,7 @@ from .track_changes import (
     Revision,
     RevisionManager,
     SearchResult,
+    _ancestor_paragraph,
 )
 from .workspace import Workspace
 from .xml_editor import (
@@ -350,16 +351,83 @@ class Document:
         new_hash = compute_paragraph_hash(p)
         return f"P{ref.index}#{new_hash}"
 
-    def _edit_result(self, old_ref: str, group_id: int | None, paragraphs: list[Element] | None = None) -> EditResult:
+    def _edit_result(
+        self,
+        old_ref: str,
+        group_id: int | None,
+        paragraphs: list[Element] | None = None,
+        element_index: dict[str, Element] | None = None,
+    ) -> EditResult:
         """Build an EditResult from a mutated paragraph's old ref, group, and changeset."""
         revision_ids = self._revision_manager.group_revisions(group_id) if group_id is not None else ()
         changeset_id = self._revision_manager.changeset_id_of(group_id) if group_id is not None else None
+        if paragraphs is None:
+            paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        refs = self._resulting_refs(old_ref, group_id, paragraphs, element_index)
         return EditResult(
-            self._compute_new_ref(old_ref, paragraphs),
+            refs[0],
             group_id=group_id,
             revision_ids=revision_ids,
             changeset_id=changeset_id,
+            refs=refs,
         )
+
+    def _resulting_refs(
+        self,
+        old_ref: str,
+        group_id: int | None,
+        paragraphs: list[Element],
+        element_index: dict[str, Element] | None = None,
+    ) -> tuple[str, ...]:
+        """Refs of every paragraph a group's revisions landed in, document order.
+
+        A ``\\n`` edit splits one paragraph into several, so the group spans
+        more than one; this reads the *live* positions of the group's own
+        paragraphs, staying correct even when a split elsewhere in the same
+        batch shifted every later index. ``element_index`` (a pre-built ``w:id``
+        -> element map) is passed by a batch in which some op split, forcing the
+        identity path for *every* op so a shifted non-split op still resolves to
+        its live paragraph. Falls back to the single recomputed ref at
+        ``old_ref``'s index when the edit created no group (a no-op).
+        """
+        mgr = self._revision_manager
+        # Cheap path: no group, or (outside a splitting batch) a group that made
+        # no split — one paragraph at ``old_ref``'s index. split_count() is
+        # DOM-walk-free, so a no-split edit never pays for an element index.
+        if group_id is None or (element_index is None and mgr.split_count(group_id) == 0):
+            return (self._compute_new_ref(old_ref, paragraphs),)
+        # Locate the group's paragraphs by identity so refs stay correct even
+        # after a split shifted every later index.
+        if element_index is None:
+            element_index = mgr._revision_element_index()
+        index_map = {id(p): i for i, p in enumerate(paragraphs, start=1)}
+        # First resulting paragraph = the lowest live index among the group's
+        # own paragraphs. A pure split (split_paragraph) leaves the tail
+        # paragraph with no revision of its own, so the resulting paragraphs are
+        # `split_count + 1` consecutive siblings starting there — walk them.
+        member_paras = [
+            para
+            for rev_id in mgr.group_revisions(group_id)
+            if (elem := element_index.get(str(rev_id))) is not None
+            and (para := _ancestor_paragraph(elem)) is not None
+            and id(para) in index_map
+        ]
+        # Both fallbacks below are defensive: a split group's revisions always
+        # resolve to live, consecutive paragraphs, so member_paras is non-empty
+        # and the sibling walk never runs short.
+        if not member_paras:  # pragma: no cover
+            return (self._compute_new_ref(old_ref, paragraphs),)
+        current = min(member_paras, key=lambda p: index_map[id(p)])
+        refs: list[str] = []
+        for _ in range(mgr.split_count(group_id) + 1):
+            if current is None or id(current) not in index_map:  # pragma: no cover
+                break
+            refs.append(f"P{index_map[id(current)]}#{compute_paragraph_hash(current)}")
+            sibling = current.nextSibling
+            while sibling is not None and (sibling.nodeType != sibling.ELEMENT_NODE or sibling.tagName != "w:p"):
+                sibling = sibling.nextSibling
+            current = sibling
+        return tuple(refs) if refs else (self._compute_new_ref(old_ref, paragraphs),)
 
     def paragraph_count(self) -> int:
         """Return the total number of paragraphs in the document.
@@ -1017,6 +1085,47 @@ class Document:
         change_id = self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
         return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
+    def split_paragraph(self, ref: str, *, before: str, occurrence: int | None = None) -> EditResult:
+        """Split a paragraph into two with a tracked paragraph break.
+
+        Explicit sugar for the ``\\n``-means-split behavior: the paragraph is
+        cut immediately before ``before``, its paragraph mark flagged as an
+        inserted revision and the tail (from ``before`` on) moved into a new
+        following paragraph. Accepting keeps the split; rejecting the group
+        rejoins the two paragraphs. Equivalent to
+        ``insert_before(before, "\\n", ...)``.
+
+        Args:
+            ref: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1").
+            before: Text to split before (keyword-only); the break lands at its
+                start. Must be a non-empty string present in the paragraph.
+            occurrence: Which occurrence of ``before`` within the paragraph
+                (0 = first). Omitted → ``before`` must be unique in the
+                paragraph, else AmbiguousTextError.
+
+        Returns:
+            EditResult — the first paragraph's ref (with updated hash); its
+            ``refs`` tuple carries the refs of both resulting paragraphs, and
+            ``group_id``/``revision_ids`` cover the whole split.
+
+        Raises:
+            ValueError: If ``before`` is not a non-empty string, ``ref`` is not
+                a ref string, or ``occurrence`` is negative or not an integer.
+            TextNotFoundError: If ``before`` is absent or ``occurrence`` is out
+                of range for the paragraph.
+            AmbiguousTextError: If ``occurrence`` is omitted and ``before``
+                matches more than once in the paragraph.
+            HashMismatchError: If the paragraph hash is stale.
+
+        Example:
+            result = doc.split_paragraph("P2#f3c1", before="However,")
+            r1, r2 = result.refs
+        """
+        self._ensure_open()
+        _require_ref_string(ref)
+        change_id = self._revision_manager.insert_text_before(before, "\n", occurrence=occurrence, paragraph=ref)
+        return self._edit_result(ref, self._revision_manager.group_id_of(change_id))
+
     @overload
     def batch_edit(self, operations: list[EditOperation], *, dry_run: Literal[False] = ...) -> list[EditResult]: ...
 
@@ -1083,12 +1192,19 @@ class Document:
         change_ids = self._revision_manager.batch_edit(operations)
         if not change_ids:
             return []
-        # One <w:p> walk for all result refs — batch ops never change the
-        # paragraph set, so the snapshot is valid for every op.
+        # One shared <w:p> walk for all result refs. A \n split shifts every
+        # later paragraph's index, so if ANY op split, resolve EVERY op's ref by
+        # element identity (one shared revision-element index) — otherwise a
+        # shifted non-split op would report a stale index. A no-split batch skips
+        # the index entirely, so its DOM-walk count stays constant (ISSUES.md #51).
+        mgr = self._revision_manager
+        group_ids = [mgr.group_id_of(change_id) for change_id in change_ids]
+        any_split = any(gid is not None and mgr.split_count(gid) for gid in group_ids)
         paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        element_index = mgr._revision_element_index() if any_split else None
         return [
-            self._edit_result(op.paragraph, self._revision_manager.group_id_of(change_id), paragraphs)
-            for op, change_id in zip(operations, change_ids, strict=True)
+            self._edit_result(op.paragraph, gid, paragraphs, element_index)
+            for op, gid in zip(operations, group_ids, strict=True)
         ]
 
     def rewrite_paragraph(self, ref: str, new_text: str) -> EditResult:
@@ -1162,7 +1278,16 @@ class Document:
         if not isinstance(rewrites, list):
             raise ValueError(f"batch_rewrite(): 'rewrites' must be a list of (ref, new_text) tuples, got {rewrites!r}")
         group_ids = self._revision_manager.batch_rewrite(rewrites)
-        return [self._edit_result(ref, group_id) for (ref, _), group_id in zip(rewrites, group_ids, strict=True)]
+        # Shared <w:p> walk; if any rewrite split, resolve every ref by element
+        # identity so a shifted later rewrite never reports a stale index.
+        mgr = self._revision_manager
+        any_split = any(gid is not None and mgr.split_count(gid) for gid in group_ids)
+        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        element_index = mgr._revision_element_index() if any_split else None
+        return [
+            self._edit_result(ref, group_id, paragraphs, element_index)
+            for (ref, _), group_id in zip(rewrites, group_ids, strict=True)
+        ]
 
     # ==================== Comments API ====================
 
