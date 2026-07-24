@@ -412,12 +412,15 @@ class Document:
             and (para := _ancestor_paragraph(elem)) is not None
             and id(para) in index_map
         ]
-        if not member_paras:
+        # Both fallbacks below are defensive: a split group's revisions always
+        # resolve to live, consecutive paragraphs, so member_paras is non-empty
+        # and the sibling walk never runs short.
+        if not member_paras:  # pragma: no cover
             return (self._compute_new_ref(old_ref, paragraphs),)
         current = min(member_paras, key=lambda p: index_map[id(p)])
         refs: list[str] = []
         for _ in range(mgr.split_count(group_id) + 1):
-            if current is None or id(current) not in index_map:
+            if current is None or id(current) not in index_map:  # pragma: no cover
                 break
             refs.append(f"P{index_map[id(current)]}#{compute_paragraph_hash(current)}")
             sibling = current.nextSibling

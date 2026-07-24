@@ -371,3 +371,37 @@ class TestRewriteMultiSplitRefused:
         # Wholesale replacement is one hunk containing the newline — allowed.
         doc.rewrite_paragraph(ref, "First half.\nSecond half.")
         assert doc.paragraph_count() == before + 1
+
+    def test_rewrite_append_newline_is_an_insert_hunk_split(self, doc):
+        ref = find_ref(doc, "quick brown fox")
+        before = doc.paragraph_count()
+        current = doc.get_paragraph(ParagraphRef.parse(ref).index).text
+        # Keeping the old text and appending "\n..." diffs into a pure INSERT
+        # hunk, exercising the newline branch of _rewrite_insert_at (with an
+        # empty first segment).
+        doc.rewrite_paragraph(ref, current + "\nAppended tail.")
+        assert doc.paragraph_count() == before + 1
+        assert "Appended tail." in doc.get_visible_text().splitlines()
+
+    def test_rewrite_append_text_then_newline(self, doc):
+        ref = find_ref(doc, "quick brown fox")
+        before = doc.paragraph_count()
+        current = doc.get_paragraph(ParagraphRef.parse(ref).index).text
+        # Insert hunk whose first segment is non-empty ("... and more."), so the
+        # text lands in the original paragraph before the break opens a new one.
+        doc.rewrite_paragraph(ref, current + " And more.\nAppended tail.")
+        assert doc.paragraph_count() == before + 1
+        lines = doc.get_visible_text().splitlines()
+        assert any(line.endswith("And more.") for line in lines)
+        assert "Appended tail." in lines
+
+
+class TestSplitEmptyFirstSegment:
+    def test_replace_with_leading_newline(self, doc):
+        ref = find_ref(doc, "quick brown fox")
+        before = doc.paragraph_count()
+        # replace_with starts with "\n" → the first segment is empty (no text
+        # reinserted where the match was); the tail opens a new paragraph.
+        doc.replace("dog.", "\nTail after break.", paragraph=ref)
+        assert doc.paragraph_count() == before + 1
+        assert "Tail after break." in doc.get_visible_text().splitlines()

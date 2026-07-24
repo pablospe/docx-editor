@@ -814,7 +814,7 @@ class RevisionManager:
         this, a reopened split — whose revisions span two paragraphs — would
         reconstruct as two separate inferred groups.
         """
-        if prev_para is None:
+        if prev_para is None:  # pragma: no cover - run_para is always set alongside run_key
             return False
         mark = _paragraph_mark_ins(prev_para)
         if mark is None:
@@ -3679,7 +3679,7 @@ class RevisionManager:
         if p1 is None:  # pragma: no cover - a mark-ins always sits in a paragraph
             return
         p2 = _next_element_sibling(p1.nextSibling)
-        if p2 is None or getattr(p2, "tagName", "") != "w:p":
+        if p2 is None or getattr(p2, "tagName", "") != "w:p":  # pragma: no cover - a mark implies a following paragraph
             return  # best effort: no following paragraph to rejoin into
         downstream_mark = _paragraph_mark_ins(p2)
         p2_pPr = _first_child_element(p2, "w:pPr")
@@ -3688,8 +3688,8 @@ class RevisionManager:
                 continue
             p1.appendChild(child)
         p2_parent = p2.parentNode
-        if p2_parent is not None:  # a live sibling always has a parent; guards ty narrowing
-            p2_parent.removeChild(p2)
+        assert p2_parent is not None  # a live sibling always has a parent (narrows for ty)
+        p2_parent.removeChild(p2)
         if downstream_mark is not None:
             # p1 now ends where p2 did, so it inherits p2's break-to-successor
             # mark (same id/author/date, still a live group member). insertBefore

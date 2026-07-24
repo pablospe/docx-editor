@@ -1396,3 +1396,9 @@ class TestControlCharRejection:
         doc, ref = hello_doc
         with pytest.raises(CommentError):
             doc.add_comment("Hel\nlo", "fine comment", paragraph=ref)
+
+    def test_reply_to_comment_rejects_control_char(self, hello_doc):
+        doc, ref = hello_doc
+        cid = doc.add_comment("Hello", "a comment", paragraph=ref)
+        with pytest.raises(CommentError, match="control character"):
+            doc.reply_to_comment(cid, "bad\treply")

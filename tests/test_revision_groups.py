@@ -518,6 +518,55 @@ class TestSplitReconstruction:
         rprs = b_runs[0].getElementsByTagName("w:rPr")
         assert rprs and rprs[0].getElementsByTagName("w:b"), "split-inserted segment lost its bold rPr"
 
+    def test_split_formatted_paragraph_copies_and_cleans_pPr(self, temp_xml):
+        # Splitting a paragraph with rich properties: the tail copies pStyle +
+        # rPr formatting but drops the tracked pPrChange and the mark revision;
+        # the original keeps its pPr and takes the inserted split mark.
+        del_mark = '<w:del w:id="7" w:author="X" w:date="2024-01-01T00:00:00Z"/>'
+        ppr_change = '<w:pPrChange w:id="8" w:author="X" w:date="2024-01-01T00:00:00Z"><w:pPr/></w:pPrChange>'
+        body = (
+            f'<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:rPr><w:b/>{del_mark}</w:rPr>{ppr_change}</w:pPr>'
+            "<w:r><w:rPr><w:b/></w:rPr><w:t>Hello World</w:t></w:r></w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+
+        manager.replace_text("Hello", "A\nB")
+
+        paras = manager.editor.dom.getElementsByTagName("w:p")
+        assert len(paras) == 2
+        tail_pPr = paras[1].getElementsByTagName("w:pPr")[0]
+        assert tail_pPr.getElementsByTagName("w:pStyle")  # formatting copied
+        assert not tail_pPr.getElementsByTagName("w:pPrChange")  # tracked change dropped
+        tail_rPr = tail_pPr.getElementsByTagName("w:rPr")
+        assert tail_rPr and tail_rPr[0].getElementsByTagName("w:b")  # rPr formatting copied
+        assert not tail_rPr[0].getElementsByTagName("w:del")  # mark dropped from the copy
+
+    def test_split_paragraph_pStyle_without_rPr(self, temp_xml):
+        # pPr present but no rPr: the mark check finds no ins mark, and flagging
+        # the split creates the rPr before the pPrChange anchor.
+        ppr_change = '<w:pPrChange w:id="9" w:author="X" w:date="2024-01-01T00:00:00Z"><w:pPr/></w:pPrChange>'
+        body = f'<w:p><w:pPr><w:pStyle w:val="Body"/>{ppr_change}</w:pPr><w:r><w:t>Hello World</w:t></w:r></w:p>'
+        manager = _make_manager(temp_xml(body))
+
+        manager.replace_text("Hello", "A\nB")
+
+        paras = manager.editor.dom.getElementsByTagName("w:p")
+        assert len(paras) == 2
+        p1_rPr = paras[0].getElementsByTagName("w:pPr")[0].getElementsByTagName("w:rPr")
+        assert p1_rPr and p1_rPr[0].getElementsByTagName("w:ins")  # split mark in the new rPr
+
+    def test_split_continuation_ignores_foreign_authored_mark(self, temp_xml):
+        # run_para carries a paragraph mark by a DIFFERENT author than the
+        # current run's revision, so the next paragraph is not a continuation.
+        body = (
+            f"<w:p><w:pPr><w:rPr>{_mark_ins_xml(1, author=AUTHOR_B, date=DATE_B)}</w:rPr></w:pPr>"
+            f"{_ins_xml(2, 'mine', author=AUTHOR_A, date=DATE_A)}</w:p>"
+            f"<w:p>{_ins_xml(3, 'next', author=AUTHOR_A, date=DATE_A)}</w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+
+        assert manager.group_id_of(2) != manager.group_id_of(3)
+
 
 class TestForeignInsGrouping:
     """Author/attachment filters keep foreign fragments out of our groups."""
