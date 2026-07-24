@@ -1,0 +1,3744 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Edit docx with python">
+      
+      
+        <meta name="author" content="Pablo Speciale">
+      
+      
+        <link rel="canonical" href="https://pablospe.github.io/docx-editor/api/">
+      
+      
+        <link rel="prev" href="../quickstart/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>API Reference - docx-editor</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="white" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#api-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="docx-editor" class="md-header__button md-logo" aria-label="docx-editor" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            docx-editor
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              API Reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="white" data-md-color-accent="deep-orange"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="deep-orange"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/pablospe/docx-editor" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    pablospe/docx-editor
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="docx-editor" class="md-nav__button md-logo" aria-label="docx-editor" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    docx-editor
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/pablospe/docx-editor" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    pablospe/docx-editor
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#document" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Document
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Document">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#opening-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opening Documents
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Opening Documents">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#documentopenpath-authornone-force_recreatefalse-workspace_dirnone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Document.open(path, author=None, force_recreate=False, workspace_dir=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspace-location" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workspace location
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Properties
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Properties">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#author" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        author
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#source_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        source_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspace_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        workspace_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#track-changes-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Track Changes Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Track Changes Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#paragraph_count" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        paragraph_count()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#list_paragraphsmax_chars80-start1-limit200" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_paragraphs(max_chars=80, *, start=1, limit=200)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_paragraphindex" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_paragraph(index)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#contextref-window2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        context(ref, window=2)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_paragraph_locationref" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_paragraph_location(ref)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#list_paragraph_locations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_paragraph_locations()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_visible_text" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_visible_text()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_original_text" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_original_text()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#find_texttext-occurrence0-paragraphnone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_text(text, occurrence=0, paragraph=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#find_alltext-paragraphnone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_all(text, paragraph=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#count_matchestext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        count_matches(text)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replacefind-replace_with-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        replace(find, replace_with, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deletetext-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delete(text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#insert_afteranchor-text-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        insert_after(anchor, text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#insert_beforeanchor-text-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        insert_before(anchor, text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#split_paragraphref-before-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        split_paragraph(ref, *, before, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rewrite_paragraphref-new_text" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rewrite_paragraph(ref, new_text)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch_editoperations-dry_runfalse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_edit(operations, *, dry_run=False)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch_rewriterewrites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_rewrite(rewrites)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#comment-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comment Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Comment Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#add_commentanchor_text-comment-paragraphnone-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_comment(anchor_text, comment, *, paragraph=None, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reply_to_commentcomment_id-reply" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reply_to_comment(comment_id, reply)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#list_commentsauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_comments(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resolve_commentcomment_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        resolve_comment(comment_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete_commentcomment_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delete_comment(comment_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revision-management-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revision Management Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revision Management Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#list_revisionsauthornone-paragraphnone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_revisions(author=None, paragraph=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_revisionrevision_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_revision(revision_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_revisionrevision_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_revision(revision_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_groupgroup_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_group(group_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_groupgroup_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_group(group_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_changesetchangeset_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_changeset(changeset_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_changesetchangeset_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_changeset(changeset_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_allauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_all(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_allauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_all(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#save-and-close-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save and Close Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Save and Close Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#savepathnone-validatefalse-forcefalse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        save(path=None, validate=False, force=False)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#closecleanuptrue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        close(cleanup=True)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#comment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Comment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#revision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#editoperation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditOperation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="EditOperation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#constructors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Constructors
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Constructors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#editoperationreplacefind-replace_with-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditOperation.replace(find, replace_with, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editoperationdeletetext-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditOperation.delete(text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editoperationinsert_afteranchor-text-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditOperation.insert_after(anchor, text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editoperationinsert_beforeanchor-text-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditOperation.insert_before(anchor, text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#editresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="EditResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#editvalidationresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditValidationResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="EditValidationResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#searchresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SearchResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SearchResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deprecated-internals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deprecated internals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exceptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exceptions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Exceptions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#textnotfounderror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TextNotFoundError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ambiguoustexterror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AmbiguousTextError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hashmismatcherror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HashMismatchError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paragraphindexerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ParagraphIndexError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batchoperationerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BatchOperationError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commenterror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CommentError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revisionerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RevisionError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#documentnotfounderror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DocumentNotFoundError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#invaliddocumenterror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        InvalidDocumentError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#documentclosederror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DocumentClosedError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspaceexistserror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkspaceExistsError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspacesyncerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkspaceSyncError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#documentopenerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DocumentOpenError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspacelockederror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkspaceLockedError
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#document" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Document
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Document">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#opening-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opening Documents
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Opening Documents">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#documentopenpath-authornone-force_recreatefalse-workspace_dirnone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Document.open(path, author=None, force_recreate=False, workspace_dir=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspace-location" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workspace location
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Properties
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Properties">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#author" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        author
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#source_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        source_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspace_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        workspace_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#track-changes-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Track Changes Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Track Changes Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#paragraph_count" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        paragraph_count()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#list_paragraphsmax_chars80-start1-limit200" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_paragraphs(max_chars=80, *, start=1, limit=200)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_paragraphindex" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_paragraph(index)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#contextref-window2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        context(ref, window=2)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_paragraph_locationref" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_paragraph_location(ref)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#list_paragraph_locations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_paragraph_locations()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_visible_text" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_visible_text()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_original_text" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_original_text()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#find_texttext-occurrence0-paragraphnone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_text(text, occurrence=0, paragraph=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#find_alltext-paragraphnone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_all(text, paragraph=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#count_matchestext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        count_matches(text)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replacefind-replace_with-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        replace(find, replace_with, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deletetext-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delete(text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#insert_afteranchor-text-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        insert_after(anchor, text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#insert_beforeanchor-text-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        insert_before(anchor, text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#split_paragraphref-before-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        split_paragraph(ref, *, before, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rewrite_paragraphref-new_text" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rewrite_paragraph(ref, new_text)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch_editoperations-dry_runfalse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_edit(operations, *, dry_run=False)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch_rewriterewrites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_rewrite(rewrites)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#comment-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comment Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Comment Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#add_commentanchor_text-comment-paragraphnone-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_comment(anchor_text, comment, *, paragraph=None, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reply_to_commentcomment_id-reply" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reply_to_comment(comment_id, reply)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#list_commentsauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_comments(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resolve_commentcomment_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        resolve_comment(comment_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete_commentcomment_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delete_comment(comment_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revision-management-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revision Management Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revision Management Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#list_revisionsauthornone-paragraphnone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list_revisions(author=None, paragraph=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_revisionrevision_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_revision(revision_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_revisionrevision_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_revision(revision_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_groupgroup_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_group(group_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_groupgroup_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_group(group_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_changesetchangeset_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_changeset(changeset_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_changesetchangeset_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_changeset(changeset_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_allauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_all(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reject_allauthornone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reject_all(author=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#save-and-close-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save and Close Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Save and Close Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#savepathnone-validatefalse-forcefalse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        save(path=None, validate=False, force=False)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#closecleanuptrue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        close(cleanup=True)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#comment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Comment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#revision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#editoperation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditOperation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="EditOperation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#constructors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Constructors
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Constructors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#editoperationreplacefind-replace_with-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditOperation.replace(find, replace_with, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editoperationdeletetext-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditOperation.delete(text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editoperationinsert_afteranchor-text-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditOperation.insert_after(anchor, text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editoperationinsert_beforeanchor-text-paragraph-occurrencenone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditOperation.insert_before(anchor, text, *, paragraph, occurrence=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#editresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="EditResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#editvalidationresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EditValidationResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="EditValidationResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#searchresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SearchResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SearchResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attributes_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deprecated-internals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deprecated internals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exceptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exceptions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Exceptions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#textnotfounderror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TextNotFoundError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ambiguoustexterror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AmbiguousTextError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hashmismatcherror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HashMismatchError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paragraphindexerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ParagraphIndexError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batchoperationerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BatchOperationError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commenterror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CommentError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revisionerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RevisionError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#documentnotfounderror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DocumentNotFoundError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#invaliddocumenterror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        InvalidDocumentError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#documentclosederror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DocumentClosedError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspaceexistserror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkspaceExistsError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspacesyncerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkspaceSyncError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#documentopenerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DocumentOpenError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workspacelockederror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkspaceLockedError
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="api-reference">API Reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h1>
+<h2 id="document">Document<a class="headerlink" href="#document" title="Permanent link">&para;</a></h2>
+<p>The main entry point for docx-editor. Provides methods for opening documents, making tracked changes, managing comments, and handling revisions.</p>
+<pre><code class="language-python">from docx_editor import Document
+</code></pre>
+<h3 id="opening-documents">Opening Documents<a class="headerlink" href="#opening-documents" title="Permanent link">&para;</a></h3>
+<h4 id="documentopenpath-authornone-force_recreatefalse-workspace_dirnone"><code>Document.open(path, author=None, force_recreate=False, workspace_dir=None)</code><a class="headerlink" href="#documentopenpath-authornone-force_recreatefalse-workspace_dirnone" title="Permanent link">&para;</a></h4>
+<p>Open a Word document for editing.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>path</code> (str | Path): Path to the .docx file</li>
+<li><code>author</code> (str, optional): Author name for tracked changes. Defaults to system username.</li>
+<li><code>force_recreate</code> (bool): If True, delete any existing workspace (stale or in-sync) before opening — whatever XML it holds is discarded — and re-unpack from the current source. Use this to recover from <code>WorkspaceSyncError</code>. Defaults to False.</li>
+<li><code>workspace_dir</code> (str | Path, optional): Base directory for the workspace. Overrides the <code>DOCX_EDITOR_WORKSPACE_DIR</code> environment variable and the platform cache default (see <a href="#workspace-location">Workspace location</a>). A relative path resolves against the document's directory, so <code>workspace_dir=".docx"</code> keeps the workspace next to the file. Defaults to None.</li>
+</ul>
+<p><strong>Returns:</strong> Document instance ready for editing</p>
+<p><strong>Raises:</strong></p>
+<ul>
+<li><code>WorkspaceSyncError</code>: If the source <code>.docx</code> was modified since the workspace was created, or if a leftover workspace holds unsaved changes from a previous session — any session that made edits without a final successful <code>save()</code> back to the source (it saved to a different path, its save failed, or it closed with <code>close(cleanup=False)</code>). Pass <code>force_recreate=True</code> to discard the workspace and re-unpack from the current source. The workspace is never deleted silently. The error message includes the workspace path.</li>
+<li><code>WorkspaceLockedError</code>: If a live session — another process, or an unclosed <code>Document</code> in this one — already holds the document's workspace. Close the other session, or pass <code>force_recreate=True</code> to take the workspace over and discard its unsaved edits. Locks left by dead processes are reclaimed silently.</li>
+<li><code>WorkspaceError</code>: If the workspace directory cannot be created (e.g. the base is not writable), the home directory backing the default cache cannot be determined, or an existing workspace was unpacked from a different document. The message names the override to set.</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc = Document.open(&quot;contract.docx&quot;)
+doc = Document.open(&quot;contract.docx&quot;, author=&quot;Legal Team&quot;)
+</code></pre>
+<h4 id="workspace-location">Workspace location<a class="headerlink" href="#workspace-location" title="Permanent link">&para;</a></h4>
+<p>When you open a document, its unpacked OOXML contents are stored in a workspace directory. By default this lives under the platform user cache, in a subfolder <code>docx-editor/&lt;hash&gt;</code> where <code>&lt;hash&gt;</code> is derived from the document's absolute path:</p>
+<table>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Default base directory</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Linux</td>
+<td><code>$XDG_CACHE_HOME/docx-editor</code> (falls back to <code>~/.cache/docx-editor</code>)</td>
+</tr>
+<tr>
+<td>macOS</td>
+<td><code>~/Library/Caches/docx-editor</code></td>
+</tr>
+<tr>
+<td>Windows</td>
+<td><code>%LOCALAPPDATA%\docx-editor</code> (falls back to <code>~\AppData\Local\docx-editor</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>To override the location:</p>
+<ul>
+<li>Set the <code>DOCX_EDITOR_WORKSPACE_DIR</code> environment variable to a base directory, or</li>
+<li>Pass <code>workspace_dir=</code> to <code>Document.open()</code> (takes precedence over the environment variable).</li>
+</ul>
+<p>Both overrides are tilde-expanded, and an empty value counts as unset. A <strong>relative</strong> override resolves against the document's directory, so <code>workspace_dir=".docx"</code> reproduces the old next-to-file layout (handy for debugging). An <strong>absolute</strong> override is used as-is. (A relative <code>XDG_CACHE_HOME</code> / <code>%LOCALAPPDATA%</code> is ignored, per the XDG spec.)</p>
+<p>Cleanup semantics are unchanged: the workspace persists until <code>close()</code> is called, and <code>close(cleanup=False)</code> preserves it for inspection. <code>close()</code> removes only the document's own workspace folder — the base directory is shared and is never deleted, so it is safe to point <code>workspace_dir</code> at a directory you also use for other things.</p>
+<p>The workspace directory is created with owner-only permissions (<code>0o700</code>), since it holds the document's plaintext in a shared cache location. Use <code>doc.workspace_path</code> to locate it.</p>
+<blockquote>
+<p><strong>Note:</strong> The default location moved from the old <code>.docx/&lt;stem&gt;/</code> folder next to the document to the platform cache. Workspaces created by older versions are no longer found and are simply ignored. Delete leftover <code>.docx/</code> folders, or pass <code>workspace_dir=".docx"</code> to keep using the old layout.</p>
+</blockquote>
+<h3 id="properties">Properties<a class="headerlink" href="#properties" title="Permanent link">&para;</a></h3>
+<h4 id="author"><code>author</code><a class="headerlink" href="#author" title="Permanent link">&para;</a></h4>
+<p>Get the author name for tracked changes.</p>
+<pre><code class="language-python">print(doc.author)  # &quot;Legal Team&quot;
+</code></pre>
+<h4 id="source_path"><code>source_path</code><a class="headerlink" href="#source_path" title="Permanent link">&para;</a></h4>
+<p>Get the path to the source document.</p>
+<pre><code class="language-python">print(doc.source_path)  # Path(&quot;/path/to/contract.docx&quot;)
+</code></pre>
+<h4 id="workspace_path"><code>workspace_path</code><a class="headerlink" href="#workspace_path" title="Permanent link">&para;</a></h4>
+<p>Get the path to this document's workspace folder. Since the workspace lives in the user cache by default, this is how you locate the unpacked XML — for example after <code>close(cleanup=False)</code>, or when a workspace was preserved because an exception was raised. Either way the workspace holds the last state flushed by <code>save()</code>: tracked-change edits made but not saved live only in memory and are <strong>not</strong> in it. (A first <code>add_comment()</code> is the exception — it writes comment-part scaffolding into the workspace and flags it as diverged before any save; the unsaved comment text itself is still memory-only.)</p>
+<pre><code class="language-python">print(doc.workspace_path)  # Path(&quot;/home/you/.cache/docx-editor/0bebafb463a87cfa&quot;)
+</code></pre>
+<h3 id="track-changes-methods">Track Changes Methods<a class="headerlink" href="#track-changes-methods" title="Permanent link">&para;</a></h3>
+<h4 id="paragraph_count"><code>paragraph_count()</code><a class="headerlink" href="#paragraph_count" title="Permanent link">&para;</a></h4>
+<p>Return the total number of paragraphs in the document. A cheap bounds check for pagination — avoids building the full <code>list_paragraphs()</code> result just to learn the count.</p>
+<p><strong>Returns:</strong> Total number of paragraphs (the highest valid 1-based ref index).</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">count = doc.paragraph_count()
+</code></pre>
+<h4 id="list_paragraphsmax_chars80-start1-limit200"><code>list_paragraphs(max_chars=80, *, start=1, limit=200)</code><a class="headerlink" href="#list_paragraphsmax_chars80-start1-limit200" title="Permanent link">&para;</a></h4>
+<p>List paragraphs with hash-anchored references. Refs are <strong>1-based global</strong> indexes (<code>P1</code>, <code>P2</code>, …) and stay correct across pages — a slice starting at paragraph 51 emits <code>P51#…</code>, not <code>P1#…</code>.</p>
+<p><strong>Changed in 0.6.1:</strong> a bare call now returns at most 200 paragraphs (previously all of them). Whenever paragraphs remain beyond the returned window — default or explicit <code>limit</code> — the last list entry is a <strong>truncation notice</strong> instead of a paragraph, e.g. <code>"... 50 more paragraphs; use start=201 or limit=None"</code>. Notice lines always start with <code>...</code> and never match the <code>P{index}#{hash}</code> ref shape; filter them with <code>entry.startswith("...")</code> when consuming entries as refs. Pass <code>limit=None</code> for the full, notice-free listing.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>max_chars</code> (int): Maximum preview length (must be <code>&gt;= 0</code>). Use <code>0</code> for refs only (e.g. <code>P1#a7b2</code>), with no preview or <code>|</code> separator.</li>
+<li><code>start</code> (int): 1-based index of the first paragraph to return (default 1). A <code>start</code> beyond the last paragraph yields an empty list.</li>
+<li><code>limit</code> (int | None): Maximum number of paragraphs to return (default 200), or <code>None</code> for all paragraphs from <code>start</code> onward.</li>
+</ul>
+<p><strong>Returns:</strong> List of strings in the form <code>P{index}#{hash}| preview text</code>, or bare <code>P{index}#{hash}</code> (no <code>|</code> separator) when <code>max_chars=0</code> — plus one trailing <code>... N more paragraphs; use start=… or limit=None</code> notice when the window did not reach the end of the document.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">page1 = doc.list_paragraphs()          # up to P200, then &quot;... N more&quot; notice
+page2 = doc.list_paragraphs(start=201)  # next page, per the notice
+refs = [e for e in page1 if not e.startswith(&quot;...&quot;)]  # drop the notice line
+everything = doc.list_paragraphs(limit=None)  # uncapped, never a notice
+</code></pre>
+<p><code>list_paragraphs_structured()</code> (same <code>start</code>/<code>limit</code> semantics, returns typed <code>ParagraphInfo</code> records with full untruncated text) shares the 200-record default cap but appends <strong>no notice</strong> — every entry stays a <code>ParagraphInfo</code>. Detect truncation by checking whether the last record's <code>index</code> is still below <code>paragraph_count()</code> (robust for any <code>start</code>), or pass <code>limit=None</code>.</p>
+<h4 id="get_paragraphindex"><code>get_paragraph(index)</code><a class="headerlink" href="#get_paragraphindex" title="Permanent link">&para;</a></h4>
+<p>Return one paragraph as a structured <code>ParagraphInfo</code> record — the single-item counterpart to <code>list_paragraphs_structured()</code>. The returned record is identical to the one that method would emit for the same paragraph, without building a list.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>index</code> (int): 1-based paragraph index (<code>P1</code> is <code>index=1</code>). Must be in <code>1 .. paragraph_count()</code>.</li>
+</ul>
+<p><strong>Returns:</strong> <code>ParagraphInfo</code> (index, hash-anchored ref, full untruncated text) for the paragraph at <code>index</code>.</p>
+<p><strong>Raises:</strong> <a href="#paragraphindexerror"><code>ParagraphIndexError</code></a> if <code>index</code> is out of range (<code>&lt; 1</code> or greater than <code>paragraph_count()</code>).</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">info = doc.get_paragraph(1)
+print(info.ref, info.text)  # &quot;P1#a7b2&quot; &quot;Full paragraph text...&quot;
+</code></pre>
+<h4 id="contextref-window2"><code>context(ref, window=2)</code><a class="headerlink" href="#contextref-window2" title="Permanent link">&para;</a></h4>
+<p>Return the paragraphs surrounding <code>ref</code>, in document order — the "show me the section around this match" helper. Fetches the referenced paragraph plus up to <code>window</code> paragraphs on each side, clamped at the document edges (no padding, no wrap-around).</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>ref</code> (str): Paragraph reference (e.g. <code>P3#a7b2</code>) from <code>list_paragraphs()</code>, <code>find_text()</code>/<code>find_all()</code>, or an edit result.</li>
+<li><code>window</code> (int): Paragraphs to include on <em>each side</em> of the referenced one (default 2, so up to 5 records). Must be <code>&gt;= 0</code>; <code>0</code> returns just the referenced paragraph.</li>
+</ul>
+<p><strong>Returns:</strong> List of <code>ParagraphInfo</code> records (index, ref, full text) — identical to what <code>list_paragraphs_structured()</code> would emit for the same span.</p>
+<p><strong>Raises:</strong> <code>ValueError</code> if <code>ref</code> is malformed or <code>window &lt; 0</code>; <a href="#paragraphindexerror"><code>ParagraphIndexError</code></a> / <a href="#hashmismatcherror"><code>HashMismatchError</code></a> for an out-of-range or stale <code>ref</code>.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">match = doc.find_text(&quot;Termination&quot;)
+for info in doc.context(match.paragraph_ref, window=2):
+    print(info)  # &quot;P{i}#{hash}| full paragraph text&quot;
+</code></pre>
+<h4 id="get_paragraph_locationref"><code>get_paragraph_location(ref)</code><a class="headerlink" href="#get_paragraph_locationref" title="Permanent link">&para;</a></h4>
+<p>Report whether a paragraph lives in the document body or inside a table cell, whether it is a list item, its heading context (style, outline level, and the chain of headings above it), and its section index.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>ref</code> (str): Paragraph reference from <code>list_paragraphs()</code>, such as <code>P2#f3c1</code></li>
+</ul>
+<p><strong>Returns:</strong> <code>ParagraphLocation</code>. <code>location.in_table</code> is <code>False</code> for body paragraphs; <code>True</code> when the paragraph is inside a <code>&lt;w:tc&gt;</code> cell, in which case <code>location.table</code> carries the 1-based table index, row, <code>w:gridSpan</code>-aware logical column, and nesting depth. <code>location.list</code> is a <code>ListItem(num_id, ilvl)</code> for list paragraphs, <code>None</code> otherwise: a direct <code>w:pPr/w:numPr</code> wins when present — including Word's <code>numId=0</code> "numbering disabled" marker, which reports <code>None</code> with no style fallback — otherwise the numbering defined by the paragraph's style applies, with <code>w:basedOn</code> inheritance chains resolved. Rendered display numbers (e.g. "7.2(a)") are not computed.</p>
+<p><code>location.style</code> is the raw <code>w:pStyle</code> style id (e.g. <code>"Heading1"</code>), <code>None</code> when the paragraph carries no explicit style — no name resolution against <code>word/styles.xml</code>. <code>location.outline_level</code> is the 0-based outline level (<code>0</code> == Heading 1, so a document heading level is <code>outline_level + 1</code>): a direct <code>w:outlineLvl</code> on the paragraph wins, and the spec's <code>w:val="9"</code> marker means body text (<code>None</code>); otherwise the level defined by the paragraph's style applies, with <code>w:basedOn</code> inheritance chains resolved. <code>location.heading_path</code> is the chain of nearest preceding headings that contains the paragraph, outermost first (e.g. <code>("Chapter one", "Termination")</code>), built from each heading's current visible text; a heading's own path lists only its ancestors, never itself. Headings inside table cells participate in document order. <code>location.section</code> is the paragraph's 1-based section index: a paragraph carrying a direct <code>w:pPr/w:sectPr</code> closes a section and belongs to the section it closes, the next paragraph starts the following one, and the body-level <code>w:sectPr</code> defines the final section — single-section documents report <code>1</code> everywhere.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">loc = doc.get_paragraph_location(&quot;P3#a7b2&quot;)
+if loc.in_table:
+    cell = loc.table
+    print(f&quot;table {cell.index} r{cell.row} c{cell.col} (depth {cell.depth})&quot;)
+if loc.list:
+    print(f&quot;list numId={loc.list.num_id} level={loc.list.ilvl}&quot;)
+if loc.outline_level is not None:
+    print(f&quot;heading level {loc.outline_level + 1}: style={loc.style}&quot;)
+print(&quot; &gt; &quot;.join(loc.heading_path))  # e.g. &quot;Chapter one &gt; Termination&quot;
+print(f&quot;section {loc.section}&quot;)
+</code></pre>
+<h4 id="list_paragraph_locations"><code>list_paragraph_locations()</code><a class="headerlink" href="#list_paragraph_locations" title="Permanent link">&para;</a></h4>
+<p>Batch counterpart to <code>get_paragraph_location()</code>: pair every paragraph with its structural location in one pass, precomputing table indexes, style outline levels, style numbering, heading paths, and section indexes once instead of rescanning the document per ref.</p>
+<p><strong>Returns:</strong> List of <code>(ref, ParagraphLocation)</code> tuples in document order, where <code>ref</code> is the same <code>P{index}#{hash}</code> token emitted by <code>list_paragraphs()</code>. Each location carries the same table, list, style, outline-level, heading-path, and section info as <code>get_paragraph_location()</code>.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">for ref, loc in doc.list_paragraph_locations():
+    if loc.in_table:
+        cell = loc.table
+        print(f&quot;{ref}: table {cell.index} r{cell.row} c{cell.col} (depth {cell.depth})&quot;)
+    if loc.list:
+        print(f&quot;{ref}: list numId={loc.list.num_id} level={loc.list.ilvl}&quot;)
+    if loc.heading_path:
+        print(f&quot;{ref}: under {' &gt; '.join(loc.heading_path)}&quot;)
+</code></pre>
+<h4 id="get_visible_text"><code>get_visible_text()</code><a class="headerlink" href="#get_visible_text" title="Permanent link">&para;</a></h4>
+<p>Get flattened visible document text. Inserted text is included and deleted text is excluded.</p>
+<p><strong>Returns:</strong> Visible text with paragraphs separated by newlines (str)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">text = doc.get_visible_text()
+</code></pre>
+<h4 id="get_original_text"><code>get_original_text()</code><a class="headerlink" href="#get_original_text" title="Permanent link">&para;</a></h4>
+<p>Get flattened original (pre-revision) document text. Deleted text is included and inserted text is excluded — the inverse of <code>get_visible_text()</code>. For intra-paragraph revisions this equals what <code>get_visible_text()</code> would return after <code>reject_all()</code>, without modifying the document (paragraph-level revisions such as inserted paragraph marks only affect line boundaries). Read-only: paragraph references and editing operations keep working on the visible view.</p>
+<p><strong>Returns:</strong> Original text with paragraphs separated by newlines (str)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">text = doc.get_original_text()
+</code></pre>
+<h4 id="find_texttext-occurrence0-paragraphnone"><code>find_text(text, occurrence=0, paragraph=None)</code><a class="headerlink" href="#find_texttext-occurrence0-paragraphnone" title="Permanent link">&para;</a></h4>
+<p>Find text in the document, including text spanning XML element boundaries.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>text</code> (str): Text to search for (must be non-empty)</li>
+<li><code>occurrence</code> (int): Which occurrence to return, 0-based (0 = first). Counted document-wide when <code>paragraph</code> is None, and within the paragraph when scoped. Defaults to 0.</li>
+<li><code>paragraph</code> (str, optional): Paragraph reference (e.g. <code>P2#f3c1</code>) to scope the search — the same scoping <code>find_all</code> offers. <code>None</code> searches the whole document. Defaults to None.</li>
+</ul>
+<p><strong>Returns:</strong> <a href="#searchresult"><code>SearchResult</code></a>, or None if not found</p>
+<p><strong>Raises:</strong> <code>ValueError</code> if <code>text</code> is empty or <code>paragraph</code> is malformed; <a href="#paragraphindexerror"><code>ParagraphIndexError</code></a> / <a href="#hashmismatcherror"><code>HashMismatchError</code></a> for an out-of-range or stale <code>paragraph</code>.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">match = doc.find_text(&quot;Aim: To&quot;)
+if match:
+    if match.spans_revision:
+        print(&quot;Text spans a tracked-revision boundary&quot;)
+    # The ref + in-paragraph occurrence pin the exact match for a follow-up edit
+    doc.replace(
+        &quot;Aim: To&quot;, &quot;Goal: To&quot;,
+        paragraph=match.paragraph_ref, occurrence=match.paragraph_occurrence,
+    )
+</code></pre>
+<h4 id="find_alltext-paragraphnone"><code>find_all(text, paragraph=None)</code><a class="headerlink" href="#find_alltext-paragraphnone" title="Permanent link">&para;</a></h4>
+<p>Find every match of <code>text</code>, in document order. One call replaces the N+1
+<code>find_text</code> probes needed to enumerate N hits, and each result carries exactly
+what a follow-up edit needs.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>text</code> (str): Text to search for (must be non-empty)</li>
+<li><code>paragraph</code> (str, optional): Paragraph reference (e.g. <code>P2#f3c1</code>) to scope the search. <code>None</code> searches the whole document. Defaults to None.</li>
+</ul>
+<p><strong>Returns:</strong> list of <a href="#searchresult"><code>SearchResult</code></a>, empty when nothing matches (no-match is not an error for an enumeration API)</p>
+<p><strong>Raises:</strong> <code>ValueError</code> if <code>text</code> is empty or <code>paragraph</code> is malformed; <a href="#paragraphindexerror"><code>ParagraphIndexError</code></a> / <a href="#hashmismatcherror"><code>HashMismatchError</code></a> for an out-of-range or stale <code>paragraph</code>.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python"># Edit every match in one atomic batch. reversed() puts same-paragraph ops in
+# the required descending occurrence order, so this is safe however the
+# matches are distributed:
+ops = [
+    EditOperation.replace(r.text, &quot;60 days&quot;,
+                          paragraph=r.paragraph_ref, occurrence=r.paragraph_occurrence)
+    for r in reversed(doc.find_all(&quot;30 days&quot;))
+]
+doc.batch_edit(ops)
+</code></pre>
+<p>Editing one match at a time (<code>doc.replace(...)</code> per result) also works when
+every paragraph holds at most one match. With several matches in one
+paragraph, an edit invalidates the paragraph's remaining refs and shifts the
+occurrence numbers of the matches after it — either re-run <code>find_all</code> after
+each edit, or batch the same-paragraph ops in <strong>descending</strong> occurrence order
+as above; an edit never shifts the matches before it. (Ascending order
+mis-targets; descending is not valid for search strings that overlap
+themselves, e.g. <code>"aa"</code> in <code>"aaaa"</code>.)</p>
+<h4 id="count_matchestext"><code>count_matches(text)</code><a class="headerlink" href="#count_matchestext" title="Permanent link">&para;</a></h4>
+<p>Count visible text matches across the document.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>text</code> (str): Text to search for</li>
+</ul>
+<p><strong>Returns:</strong> Number of occurrences found (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">if doc.count_matches(&quot;Section 5&quot;) &gt; 1:
+    print(&quot;Use paragraph refs and occurrence to target the intended match&quot;)
+</code></pre>
+<h4 id="replacefind-replace_with-paragraph-occurrencenone"><code>replace(find, replace_with, *, paragraph, occurrence=None)</code><a class="headerlink" href="#replacefind-replace_with-paragraph-occurrencenone" title="Permanent link">&para;</a></h4>
+<p>Replace text with tracked changes. When the target sits inside another author's pending insertion, that insertion is preserved: the matched text gets a nested <code>&lt;w:del&gt;</code> under your authorship and the replacement lands in your own sibling <code>&lt;w:ins&gt;</code> (Word's behavior), instead of silently rewriting the other author's proposal.</p>
+<p>Words shared by <code>find</code> and <code>replace_with</code> at either end are trimmed first, so only the changed words become revisions — a replace that only adds or only removes words is written as a pure insertion or deletion. The replacement insertion carries the formatting (<code>rPr</code>) that covers the most characters of the replaced span (runs sharing identical formatting tally together), ties breaking to the earliest-seen formatting. <strong>Accepting</strong> a replace that straddled mixed formatting therefore leaves the replacement uniformly in that one majority format, while each deletion run keeps its own original formatting — so a <strong>reject</strong> restores the pre-edit mix. When <code>replace_with</code> equals the found text, the call is a <strong>no-op</strong>: no revisions are created and the returned <code>EditResult</code> equals the input <code>paragraph</code> ref with <code>group_id=None</code> and <code>revision_ids=()</code> — that triple is how callers detect the no-op.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>find</code> (str): Text to find and replace</li>
+<li><code>replace_with</code> (str): Replacement text</li>
+<li><code>paragraph</code> (str): Paragraph reference from <code>list_paragraphs()</code>, such as <code>P2#f3c1</code></li>
+<li><code>occurrence</code> (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, <a href="#ambiguoustexterror"><code>AmbiguousTextError</code></a> is raised instead of silently editing the first match.</li>
+</ul>
+<p><strong>Returns:</strong> Updated paragraph reference (<a href="#editresult"><code>EditResult</code></a> — a <code>str</code> subclass also carrying the edit's <code>group_id</code>/<code>changeset_id</code>/<code>revision_ids</code>)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">ref = doc.replace(&quot;30 days&quot;, &quot;60 days&quot;, paragraph=&quot;P2#f3c1&quot;)
+doc.replace(&quot;net&quot;, &quot;gross&quot;, paragraph=ref)
+</code></pre>
+<h4 id="deletetext-paragraph-occurrencenone"><code>delete(text, *, paragraph, occurrence=None)</code><a class="headerlink" href="#deletetext-paragraph-occurrencenone" title="Permanent link">&para;</a></h4>
+<p>Mark text as deleted with tracked changes. Deleting text inside another author's pending insertion nests a <code>&lt;w:del&gt;</code> under your authorship inside their <code>&lt;w:ins&gt;</code>, preserving their proposal; only your own pending insertions are edited in place.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>text</code> (str): Text to mark as deleted</li>
+<li><code>paragraph</code> (str): Paragraph reference from <code>list_paragraphs()</code>, such as <code>P2#f3c1</code></li>
+<li><code>occurrence</code> (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, <a href="#ambiguoustexterror"><code>AmbiguousTextError</code></a> is raised instead of silently editing the first match.</li>
+</ul>
+<p><strong>Returns:</strong> Updated paragraph reference (<a href="#editresult"><code>EditResult</code></a> — a <code>str</code> subclass also carrying the edit's <code>group_id</code>/<code>changeset_id</code>/<code>revision_ids</code>)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">ref = doc.delete(&quot;obsolete clause&quot;, paragraph=&quot;P5#d4e5&quot;)
+</code></pre>
+<h4 id="insert_afteranchor-text-paragraph-occurrencenone"><code>insert_after(anchor, text, *, paragraph, occurrence=None)</code><a class="headerlink" href="#insert_afteranchor-text-paragraph-occurrencenone" title="Permanent link">&para;</a></h4>
+<p>Insert text after anchor with tracked changes. An anchor inside another author's pending insertion produces your own sibling <code>&lt;w:ins&gt;</code> (splitting theirs when the anchor falls mid-content) rather than splicing your words into their proposal.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>anchor</code> (str): Text to find as insertion point</li>
+<li><code>text</code> (str): Text to insert after the anchor</li>
+<li><code>paragraph</code> (str): Paragraph reference from <code>list_paragraphs()</code>, such as <code>P2#f3c1</code></li>
+<li><code>occurrence</code> (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, <a href="#ambiguoustexterror"><code>AmbiguousTextError</code></a> is raised instead of silently editing the first match.</li>
+</ul>
+<p><strong>Returns:</strong> Updated paragraph reference (<a href="#editresult"><code>EditResult</code></a> — a <code>str</code> subclass also carrying the edit's <code>group_id</code>/<code>changeset_id</code>/<code>revision_ids</code>)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">ref = doc.insert_after(&quot;Section 5&quot;, &quot; (as amended)&quot;, paragraph=&quot;P3#b2c4&quot;)
+</code></pre>
+<h4 id="insert_beforeanchor-text-paragraph-occurrencenone"><code>insert_before(anchor, text, *, paragraph, occurrence=None)</code><a class="headerlink" href="#insert_beforeanchor-text-paragraph-occurrencenone" title="Permanent link">&para;</a></h4>
+<p>Insert text before anchor with tracked changes. Foreign pending insertions are treated the same as in <code>insert_after()</code>.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>anchor</code> (str): Text to find as insertion point</li>
+<li><code>text</code> (str): Text to insert before the anchor</li>
+<li><code>paragraph</code> (str): Paragraph reference from <code>list_paragraphs()</code>, such as <code>P2#f3c1</code></li>
+<li><code>occurrence</code> (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, <a href="#ambiguoustexterror"><code>AmbiguousTextError</code></a> is raised instead of silently editing the first match.</li>
+</ul>
+<p><strong>Returns:</strong> Updated paragraph reference (<a href="#editresult"><code>EditResult</code></a> — a <code>str</code> subclass also carrying the edit's <code>group_id</code>/<code>changeset_id</code>/<code>revision_ids</code>)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">ref = doc.insert_before(&quot;Section 6&quot;, &quot;New clause: &quot;, paragraph=&quot;P4#a7b2&quot;)
+</code></pre>
+<blockquote>
+<p><strong>Newlines split paragraphs.</strong> A <code>\n</code> in any content text (<code>replace</code>'s
+<code>replace_with</code>, <code>insert_after</code>/<code>insert_before</code>'s <code>text</code>, <code>rewrite_paragraph</code>'s
+<code>new_text</code>, or a <code>batch_edit</code> op) is a <strong>tracked paragraph split</strong>: the first
+paragraph's mark is flagged inserted and the tail moves into a new paragraph.
+Accepting keeps the split; rejecting rejoins. All other C0 control characters
+(<code>\t</code>, <code>\r</code>, …) are rejected with a teaching <code>ValueError</code>. See
+<a href="#split_paragraphref-before-occurrencenone"><code>split_paragraph</code></a> and <a href="#editresult"><code>EditResult</code></a>.</p>
+</blockquote>
+<h4 id="split_paragraphref-before-occurrencenone"><code>split_paragraph(ref, *, before, occurrence=None)</code><a class="headerlink" href="#split_paragraphref-before-occurrencenone" title="Permanent link">&para;</a></h4>
+<p>Split a paragraph into two with a tracked paragraph break, cutting immediately
+before <code>before</code>. Explicit sugar for the <code>\n</code>-means-split behavior (equivalent to
+<code>insert_before(before, "\n", ...)</code>): the paragraph mark is flagged as an inserted
+revision and the tail (from <code>before</code> on) moves into a new following paragraph.
+Accepting keeps the split; rejecting the group rejoins the two paragraphs.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>ref</code> (str): Paragraph reference from <code>list_paragraphs()</code>, such as <code>P2#f3c1</code></li>
+<li><code>before</code> (str, keyword-only): Text to split before; the break lands at its start. Must be a non-empty string in the paragraph.</li>
+<li><code>occurrence</code> (int | None): Which occurrence of <code>before</code> within the paragraph, 0-based. Omitted → <code>before</code> must be unique in the paragraph, else <a href="#ambiguoustexterror"><code>AmbiguousTextError</code></a>.</li>
+</ul>
+<p><strong>Returns:</strong> The first paragraph's reference (<a href="#editresult"><code>EditResult</code></a>); its <code>refs</code> tuple carries the refs of <strong>both</strong> resulting paragraphs.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">result = doc.split_paragraph(&quot;P2#f3c1&quot;, before=&quot;However,&quot;)
+first_ref, second_ref = result.refs
+doc.reject_group(result.group_id)  # rejoin
+</code></pre>
+<h4 id="rewrite_paragraphref-new_text"><code>rewrite_paragraph(ref, new_text)</code><a class="headerlink" href="#rewrite_paragraphref-new_text" title="Permanent link">&para;</a></h4>
+<p>Rewrite a paragraph using tracked changes generated from a word-level diff.</p>
+<p>A rewrite typically produces many revisions (one per diff hunk), none of which
+is a self-contained edit — accepting only some of them by id garbles the
+paragraph. All of one rewrite's revisions therefore share a revision group;
+resolve them as a unit with <a href="#accept_groupgroup_id"><code>accept_group()</code></a> /
+<a href="#reject_groupgroup_id"><code>reject_group()</code></a>.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>ref</code> (str): Paragraph reference from <code>list_paragraphs()</code></li>
+<li><code>new_text</code> (str): Desired paragraph text</li>
+</ul>
+<p><strong>Returns:</strong> Updated paragraph reference (<a href="#editresult"><code>EditResult</code></a> — a <code>str</code> subclass also carrying the edit's <code>group_id</code>/<code>changeset_id</code>/<code>revision_ids</code>; <code>group_id</code> is <code>None</code> when <code>new_text</code> equals the current text, or when every change landed inside your own pending insertions and was merged in place)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">result = doc.rewrite_paragraph(&quot;P2#f3c1&quot;, &quot;Payment is due within 60 days after invoice receipt.&quot;)
+doc.reject_group(result.group_id)  # changed your mind — undo the whole rewrite
+</code></pre>
+<h4 id="batch_editoperations-dry_runfalse"><code>batch_edit(operations, *, dry_run=False)</code><a class="headerlink" href="#batch_editoperations-dry_runfalse" title="Permanent link">&para;</a></h4>
+<p>Apply multiple edits after validating paragraph hashes up front. If any hash is
+stale, the entire batch is rejected before any edits are applied.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>operations</code> (list[EditOperation]): Edit operations to apply</li>
+<li><code>dry_run</code> (bool): If True, validate every operation without applying any edits and return one <a href="#editvalidationresult"><code>EditValidationResult</code></a> per operation, in input order; the document is left unchanged. Each operation is validated independently against the current document — sequential effects between multiple operations on the same paragraph are <strong>not</strong> simulated. Defaults to False.</li>
+</ul>
+<p><strong>Returns:</strong> Updated paragraph references in input order (list of <a href="#editresult"><code>EditResult</code></a>) — each operation that creates revisions gets its own revision group, so one op can be accepted and another rejected (<code>group_id</code> is <code>None</code> for an op that created no new revisions, e.g. text spliced into one of your own pending insertions); with <code>dry_run=True</code>, a list of <a href="#editvalidationresult"><code>EditValidationResult</code></a> instead</p>
+<p><strong>Raises:</strong> <a href="#batchoperationerror"><code>BatchOperationError</code></a> — the only exception a non-dry-run batch raises for a failing operation, whatever the underlying cause (stale hash, malformed ref, missing text, ambiguous target). <code>operation_index</code> names the failing op; <code>original</code> (also <code>__cause__</code>) holds the underlying typed exception. The batch is atomic: nothing is applied on failure.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">from docx_editor import EditOperation
+
+ops = [
+    EditOperation.replace(&quot;old&quot;, &quot;new&quot;, paragraph=&quot;P2#f3c1&quot;),
+    EditOperation.delete(&quot;remove this&quot;, paragraph=&quot;P5#d4e5&quot;),
+]
+
+# Pre-flight the batch, then apply
+results = doc.batch_edit(ops, dry_run=True)
+if all(r.valid for r in results):
+    new_refs = doc.batch_edit(ops)
+</code></pre>
+<p>Prefer the typed constructors (<a href="#editoperation"><code>EditOperation</code></a>) — they validate
+arguments when the operation is built, so mistakes fail fast instead of at apply time.</p>
+<p>Multiple operations on the same paragraph apply sequentially in input order:
+each operation's find/anchor text and <code>occurrence</code> resolve against the
+paragraph's visible text as left by the previous operations in the batch (a
+tracked delete removes text from that view; an insert adds to it). Across
+different paragraphs, operations are applied in reverse document order — a
+behavior that keeps one <code>list_paragraphs()</code> snapshot valid for the whole batch.</p>
+<h4 id="batch_rewriterewrites"><code>batch_rewrite(rewrites)</code><a class="headerlink" href="#batch_rewriterewrites" title="Permanent link">&para;</a></h4>
+<p>Rewrite multiple paragraphs after validating paragraph hashes up front.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>rewrites</code> (list[tuple[str, str]]): Pairs of paragraph ref and desired text</li>
+</ul>
+<p><strong>Returns:</strong> Updated paragraph references in input order (list of <a href="#editresult"><code>EditResult</code></a>); each rewrite gets its own revision group (<code>group_id</code> is <code>None</code> for a rewrite that made no change or whose changes fully merged into your own pending insertions)</p>
+<p><strong>Raises:</strong> <a href="#batchoperationerror"><code>BatchOperationError</code></a> — same single-exception contract as <code>batch_edit()</code>.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">new_refs = doc.batch_rewrite([
+    (&quot;P1#a7b2&quot;, &quot;Updated first paragraph.&quot;),
+    (&quot;P3#c3d4&quot;, &quot;Updated third paragraph.&quot;),
+])
+</code></pre>
+<h3 id="comment-methods">Comment Methods<a class="headerlink" href="#comment-methods" title="Permanent link">&para;</a></h3>
+<h4 id="add_commentanchor_text-comment-paragraphnone-occurrencenone"><code>add_comment(anchor_text, comment, *, paragraph=None, occurrence=None)</code><a class="headerlink" href="#add_commentanchor_text-comment-paragraphnone-occurrencenone" title="Permanent link">&para;</a></h4>
+<p>Add a comment anchored to specific text. Anchors are located with the same
+visible-text search used by <code>count_matches()</code> and the tracked-change edit
+methods, so anchors that span <code>w:t</code> run boundaries (formatting changes,
+smart-quote splits, <code>w:ins</code> wrappers) are found.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>anchor_text</code> (str): Text to attach the comment to</li>
+<li><code>comment</code> (str): The comment content</li>
+<li><code>paragraph</code> (str, optional): Paragraph reference (e.g. <code>P3#a7b2</code>) to scope the search. <code>None</code> searches the whole document. Defaults to None.</li>
+<li><code>occurrence</code> (int | None): Which occurrence to anchor to, 0-based (0 = first), counted within <code>paragraph</code> when given and document-wide otherwise. Omitted → the anchor must be unique in the search scope, else <a href="#ambiguoustexterror"><code>AmbiguousTextError</code></a>.</li>
+</ul>
+<p><strong>Returns:</strong> The comment ID (int). IDs are allocated sequentially starting at 0 in a document with no existing comments — always use the returned ID rather than guessing.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">cid = doc.add_comment(&quot;Section 5&quot;, &quot;Please review this section&quot;)
+doc.add_comment(&quot;term&quot;, &quot;Note on the 2nd 'term'&quot;, paragraph=&quot;P3#a7b2&quot;, occurrence=1)
+</code></pre>
+<h4 id="reply_to_commentcomment_id-reply"><code>reply_to_comment(comment_id, reply)</code><a class="headerlink" href="#reply_to_commentcomment_id-reply" title="Permanent link">&para;</a></h4>
+<p>Add a reply to an existing comment.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>comment_id</code> (int): ID of the comment to reply to</li>
+<li><code>reply</code> (str): The reply content</li>
+</ul>
+<p><strong>Returns:</strong> The new comment ID for the reply (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.reply_to_comment(0, &quot;I agree with this change&quot;)
+</code></pre>
+<h4 id="list_commentsauthornone"><code>list_comments(author=None)</code><a class="headerlink" href="#list_commentsauthornone" title="Permanent link">&para;</a></h4>
+<p>List all comments in the document.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>author</code> (str, optional): If provided, filter by author name</li>
+</ul>
+<p><strong>Returns:</strong> List of Comment objects (with replies nested)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">comments = doc.list_comments()
+for c in comments:
+    print(f&quot;{c.author}: {c.text}&quot;)
+</code></pre>
+<h4 id="resolve_commentcomment_id"><code>resolve_comment(comment_id)</code><a class="headerlink" href="#resolve_commentcomment_id" title="Permanent link">&para;</a></h4>
+<p>Mark a comment as resolved.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>comment_id</code> (int): ID of the comment to resolve</li>
+</ul>
+<p><strong>Returns:</strong> True if resolved, False if not found (bool)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.resolve_comment(0)
+</code></pre>
+<h4 id="delete_commentcomment_id"><code>delete_comment(comment_id)</code><a class="headerlink" href="#delete_commentcomment_id" title="Permanent link">&para;</a></h4>
+<p>Delete a comment from the document.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>comment_id</code> (int): ID of the comment to delete</li>
+</ul>
+<p><strong>Returns:</strong> True if deleted, False if not found (bool)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.delete_comment(0)
+</code></pre>
+<h3 id="revision-management-methods">Revision Management Methods<a class="headerlink" href="#revision-management-methods" title="Permanent link">&para;</a></h3>
+<h4 id="list_revisionsauthornone-paragraphnone"><code>list_revisions(author=None, paragraph=None)</code><a class="headerlink" href="#list_revisionsauthornone-paragraphnone" title="Permanent link">&para;</a></h4>
+<p>List all tracked changes in the document.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>author</code> (str, optional): If provided, filter by author name</li>
+<li><code>paragraph</code> (str, optional): If provided, only return revisions in this paragraph (hash-anchored ref from <code>list_paragraphs()</code>, e.g. <code>"P3#a7b2"</code>)</li>
+</ul>
+<p><strong>Returns:</strong> List of Revision objects</p>
+<p><strong>Raises:</strong> The <code>paragraph</code> ref is validated exactly like in the edit methods — <code>ValueError</code> (malformed ref), <a href="#paragraphindexerror"><code>ParagraphIndexError</code></a> (index out of range), <a href="#hashmismatcherror"><code>HashMismatchError</code></a> (stale hash).</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">revisions = doc.list_revisions()
+for r in revisions:
+    print(f&quot;{r.type}: {r.text} by {r.author}&quot;)
+</code></pre>
+<h4 id="accept_revisionrevision_id"><code>accept_revision(revision_id)</code><a class="headerlink" href="#accept_revisionrevision_id" title="Permanent link">&para;</a></h4>
+<p>Accept a revision by ID.</p>
+<ul>
+<li>For insertions: keeps the inserted content</li>
+<li>For deletions: permanently removes the deleted content</li>
+<li>Nested revisions: accepting an insertion unwraps it in place, so a deletion another author nested inside it survives as an independent pending deletion</li>
+</ul>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>revision_id</code> (int): ID of the revision to accept</li>
+</ul>
+<p><strong>Returns:</strong> True if accepted, False if not found (bool)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.accept_revision(1)
+</code></pre>
+<h4 id="reject_revisionrevision_id"><code>reject_revision(revision_id)</code><a class="headerlink" href="#reject_revisionrevision_id" title="Permanent link">&para;</a></h4>
+<p>Reject a revision by ID.</p>
+<ul>
+<li>For insertions: removes the inserted content</li>
+<li>For deletions: restores the deleted content</li>
+<li>Nested revisions: rejecting an insertion removes everything inside it — deletions another author nested inside it disappear with it</li>
+</ul>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>revision_id</code> (int): ID of the revision to reject</li>
+</ul>
+<p><strong>Returns:</strong> True if rejected, False if not found (bool)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.reject_revision(1)
+</code></pre>
+<h4 id="accept_groupgroup_id"><code>accept_group(group_id)</code><a class="headerlink" href="#accept_groupgroup_id" title="Permanent link">&para;</a></h4>
+<p>Accept every revision created by one logical edit operation.</p>
+<p>Each edit method (<code>replace()</code>, <code>delete()</code>, <code>insert_after()</code>, <code>insert_before()</code>,
+<code>rewrite_paragraph()</code>, and every operation of a batch) registers the revisions
+it creates as one <strong>revision group</strong>; the returned <a href="#editresult"><code>EditResult</code></a>
+carries the <code>group_id</code>, and <code>list_revisions()</code> stamps it on each member
+revision. Accepting the group applies the whole edit — the safe alternative to
+resolving a multi-revision edit (especially a rewrite) revision by revision,
+which garbles the text if only some are applied.</p>
+<p>Group ids are <strong>in-memory and per-open-Document</strong>, renumbered on each open.
+Edits made through the open Document <strong>record</strong> their group
+(<code>Revision.group_source == "recorded"</code>). For revisions already in the file —
+previous sessions, foreign reviewers, Word round-trips — nothing is persisted
+in the <code>.docx</code> (Word has no grouping concept and strips unknown markup), so
+groups are <strong>inferred</strong> at parse time instead
+(<code>Revision.group_source == "inferred"</code>): contiguous revisions in the same
+paragraph sharing identical <code>w:author</code> + <code>w:date</code> reconstruct as one group.
+That heuristic matches this library's own edits exactly: each changeset (one
+edit call, or one whole <code>batch_edit</code>/<code>batch_rewrite</code> call) stamps a
+collision-bumped whole-second date, so within one open session two changesets
+by the same author never share a second; all ops of one batch call share one
+date (one changeset) and same-paragraph batch ops merge by design. The
+collision counter is per-session (not seeded from dates already in the file),
+so own writes from a <em>previous</em> session merge like foreign revisions: any
+revisions with identical <code>w:author</code> + <code>w:date</code> merge (<code>w:date</code> has second
+precision). When Word already resolved part of a former edit, the remainder
+reconstructs as a smaller (rump) group, and
+<code>accept_group()</code>/<code>reject_group()</code> handle it fine. Revisions missing an author
+or date, sitting outside any paragraph (e.g. table-row markers), or sharing a
+duplicated id stay ungrouped (<code>group_id=None</code>), as does the trailing half
+created when an edit splits a <em>foreign</em> author's pending insertion mid-session
+(foreign grouping is best-effort); revisions with non-numeric ids are omitted
+from <code>list_revisions()</code> entirely (no id-keyed operation could target them).</p>
+<p>Never carry a <code>group_id</code> across sessions: reopening renumbers groups from 1,
+so a stale id from a previous session may silently resolve to a <em>different</em>
+group rather than raise. Always take group ids from the current session's
+<code>EditResult</code> or <code>list_revisions()</code>. <code>save()</code> does not invalidate groups (the
+Document stays open and revision ids are preserved).</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>group_id</code> (int): Group id from an <code>EditResult</code> (or a <code>Revision.group_id</code>)</li>
+</ul>
+<p><strong>Returns:</strong> Number of revisions accepted (int). Members already resolved individually are skipped (and not counted).</p>
+<p><strong>Raises:</strong> <a href="#revisionerror"><code>RevisionError</code></a> if the group id is unknown to this open Document.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">result = doc.rewrite_paragraph(ref, &quot;New text.&quot;)
+doc.accept_group(result.group_id)  # apply the whole rewrite
+</code></pre>
+<h4 id="reject_groupgroup_id"><code>reject_group(group_id)</code><a class="headerlink" href="#reject_groupgroup_id" title="Permanent link">&para;</a></h4>
+<p>Reject every revision created by one logical edit operation — the counterpart
+of <a href="#accept_groupgroup_id"><code>accept_group()</code></a>. Rejecting the group undoes the
+whole edit, restoring the exact pre-edit text (deletions restored, insertions
+removed). Same group semantics and lifetime as <code>accept_group()</code> — including
+recorded vs inferred groups and per-open renumbering.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>group_id</code> (int): Group id from an <code>EditResult</code> (or a <code>Revision.group_id</code>)</li>
+</ul>
+<p><strong>Returns:</strong> Number of revisions rejected (int). Members already resolved individually are skipped (and not counted).</p>
+<p><strong>Raises:</strong> <a href="#revisionerror"><code>RevisionError</code></a> if the group id is unknown.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">result = doc.rewrite_paragraph(ref, &quot;New text.&quot;)
+doc.reject_group(result.group_id)  # undo the whole rewrite
+</code></pre>
+<h4 id="accept_changesetchangeset_id"><code>accept_changeset(changeset_id)</code><a class="headerlink" href="#accept_changesetchangeset_id" title="Permanent link">&para;</a></h4>
+<p>Accept every revision created by <strong>one whole call</strong> — the <em>intent</em> tier, one
+level above a group:</p>
+<pre><code>one call (a single edit, or an entire batch_edit / batch_rewrite)
+  = one changeset  ⊇  one-or-more groups  ⊇  revisions
+</code></pre>
+<p>A single edit is a one-group changeset; a whole <code>batch_edit</code>/<code>batch_rewrite</code> is
+one changeset over all the groups it created. Each returned
+<a href="#editresult"><code>EditResult</code></a> carries the <code>changeset_id</code>, and <code>list_revisions()</code>
+stamps <code>changeset_id</code>/<code>changeset_source</code> on each member revision. Accepting the
+changeset applies the entire call. <strong>There is no tier above this</strong> — the model
+stops at three: revision &lt; group &lt; changeset.</p>
+<p>A changeset is the <code>(author, date)</code> <strong>equivalence class over groups</strong> — a
+<em>global</em> class, not a contiguous run: a <code>batch_edit</code> whose ops land in different
+paragraphs is one changeset even though its groups are non-contiguous. Edits
+made here <strong>record</strong> their changeset (<code>changeset_source == "recorded"</code>);
+revisions already in the file get <strong>inferred</strong> changesets, partitioning the
+reconstructed groups by identical <code>w:author</code> + <code>w:date</code>
+(<code>changeset_source == "inferred"</code>). Same lifetime and caveats as groups:
+changeset ids are in-memory and per-open-<code>Document</code>, renumbered on each open, so
+always take one from the current session's <code>EditResult</code> or <code>list_revisions()</code>.
+Rump-tolerant — after Word has resolved part of the changeset, the remainder
+resolves fine.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>changeset_id</code> (int): Changeset id from an <code>EditResult</code> (or a <code>Revision.changeset_id</code>)</li>
+</ul>
+<p><strong>Returns:</strong> Number of revisions accepted across the changeset's groups (int). Members already resolved individually are skipped (and not counted).</p>
+<p><strong>Raises:</strong> <a href="#revisionerror"><code>RevisionError</code></a> if the changeset id is unknown to this open Document.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">results = doc.batch_edit([...])           # one changeset over several groups
+doc.accept_changeset(results[0].changeset_id)  # accept the whole batch at once
+</code></pre>
+<h4 id="reject_changesetchangeset_id"><code>reject_changeset(changeset_id)</code><a class="headerlink" href="#reject_changesetchangeset_id" title="Permanent link">&para;</a></h4>
+<p>Reject every revision created by one whole call — the counterpart of
+<a href="#accept_changesetchangeset_id"><code>accept_changeset()</code></a>. Rejecting the changeset
+undoes the entire call (every group), restoring the exact pre-call text. Same
+changeset semantics and lifetime as <code>accept_changeset()</code> — including recorded
+vs inferred changesets and per-open renumbering.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>changeset_id</code> (int): Changeset id from an <code>EditResult</code> (or a <code>Revision.changeset_id</code>)</li>
+</ul>
+<p><strong>Returns:</strong> Number of revisions rejected across the changeset's groups (int). Members already resolved individually are skipped (and not counted).</p>
+<p><strong>Raises:</strong> <a href="#revisionerror"><code>RevisionError</code></a> if the changeset id is unknown to this open Document.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">results = doc.batch_edit([...])
+doc.reject_changeset(results[0].changeset_id)  # undo the whole batch
+</code></pre>
+<h4 id="accept_allauthornone"><code>accept_all(author=None)</code><a class="headerlink" href="#accept_allauthornone" title="Permanent link">&para;</a></h4>
+<p>Accept all revisions.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>author</code> (str, optional): If provided, only accept revisions by this author</li>
+</ul>
+<p><strong>Returns:</strong> Number of revisions accepted (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">count = doc.accept_all()
+print(f&quot;Accepted {count} revisions&quot;)
+</code></pre>
+<h4 id="reject_allauthornone"><code>reject_all(author=None)</code><a class="headerlink" href="#reject_allauthornone" title="Permanent link">&para;</a></h4>
+<p>Reject all revisions.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>author</code> (str, optional): If provided, only reject revisions by this author</li>
+</ul>
+<p><strong>Returns:</strong> Number of revisions rejected (int)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">count = doc.reject_all(author=&quot;OtherUser&quot;)
+</code></pre>
+<h3 id="save-and-close-methods">Save and Close Methods<a class="headerlink" href="#save-and-close-methods" title="Permanent link">&para;</a></h3>
+<h4 id="savepathnone-validatefalse-forcefalse"><code>save(path=None, validate=False, force=False)</code><a class="headerlink" href="#savepathnone-validatefalse-forcefalse" title="Permanent link">&para;</a></h4>
+<p>Save the document.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>path</code> (str | Path, optional): Output path. Defaults to original source path.</li>
+<li><code>validate</code> (bool): If True, validate with LibreOffice before saving. Defaults to False.</li>
+<li><code>force</code> (bool): If True, skip save-time safety checks. By default <code>save()</code> refuses to overwrite the source if it changed on disk since it was opened (raising <a href="#workspacesyncerror"><code>WorkspaceSyncError</code></a>), or to write a destination that appears open in Word — a <code>~$</code> owner file exists next to it (raising <a href="#documentopenerror"><code>DocumentOpenError</code></a>). Pass <code>force=True</code> only for a confirmed-stale lock left by a crashed session. Defaults to False.</li>
+</ul>
+<p><strong>Returns:</strong> Path to the saved document (Path)</p>
+<p>After saving to a different path (or a save that fails), the workspace is flagged as holding unsaved changes; a later <code>Document.open()</code> of the source raises <code>WorkspaceSyncError</code> until the workspace is saved back to the source or discarded with <code>force_recreate=True</code>. See <a href="#workspacesyncerror"><code>WorkspaceSyncError</code></a> below.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.save()  # Save to original path
+doc.save(&quot;contract_v2.docx&quot;)  # Save to new path
+</code></pre>
+<h4 id="closecleanuptrue"><code>close(cleanup=True)</code><a class="headerlink" href="#closecleanuptrue" title="Permanent link">&para;</a></h4>
+<p>Close the document and clean up workspace. Releases the advisory workspace lock in both cleanup modes — closing is what frees the document for another session to open (see <a href="#workspacelockederror"><code>WorkspaceLockedError</code></a>).</p>
+<blockquote>
+<p><strong>Warning:</strong> closing without saving discards unsaved edits. There is no dirty check: <code>close()</code> (the default <code>cleanup=True</code>, including normal context-manager exit) deletes the workspace and everything not yet written by <code>save()</code> is silently lost. <code>close(cleanup=False)</code> keeps the workspace on disk, but a later <code>Document.open()</code> of the same source raises <code>WorkspaceSyncError</code> if it holds unsaved changes, rather than silently carrying them over.</p>
+</blockquote>
+<p>Any operation on the document after <code>close()</code> raises <a href="#documentclosederror"><code>DocumentClosedError</code></a>.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>cleanup</code> (bool): If True, delete the workspace folder. Defaults to True.</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-python">doc.save()   # persist edits first —
+doc.close()  # close() alone discards anything unsaved
+
+# Or, instead of the above: keep the workspace on disk for inspection
+doc.close(cleanup=False)
+</code></pre>
+<hr />
+<h2 id="comment">Comment<a class="headerlink" href="#comment" title="Permanent link">&para;</a></h2>
+<p>Represents a document comment. IDs are allocated sequentially starting at 0 in
+a document with no existing comments — always use the ID returned by
+<code>add_comment()</code> / <code>reply_to_comment()</code> rather than assuming a numbering scheme.</p>
+<pre><code class="language-python">from docx_editor import Comment
+</code></pre>
+<h3 id="attributes">Attributes<a class="headerlink" href="#attributes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>int</td>
+<td>The comment ID</td>
+</tr>
+<tr>
+<td><code>text</code></td>
+<td>str</td>
+<td>The comment content</td>
+</tr>
+<tr>
+<td><code>author</code></td>
+<td>str</td>
+<td>The comment author</td>
+</tr>
+<tr>
+<td><code>date</code></td>
+<td>datetime or None</td>
+<td>When the comment was created</td>
+</tr>
+<tr>
+<td><code>resolved</code></td>
+<td>bool</td>
+<td>Whether the comment is resolved</td>
+</tr>
+<tr>
+<td><code>replies</code></td>
+<td>list[Comment]</td>
+<td>Nested replies to this comment</td>
+</tr>
+</tbody>
+</table>
+<h3 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">comments = doc.list_comments()
+for comment in comments:
+    print(f&quot;ID: {comment.id}&quot;)
+    print(f&quot;Text: {comment.text}&quot;)
+    print(f&quot;Author: {comment.author}&quot;)
+    print(f&quot;Date: {comment.date}&quot;)
+    print(f&quot;Resolved: {comment.resolved}&quot;)
+    print(f&quot;Replies: {len(comment.replies)}&quot;)
+</code></pre>
+<hr />
+<h2 id="revision">Revision<a class="headerlink" href="#revision" title="Permanent link">&para;</a></h2>
+<p>Represents a tracked change (insertion or deletion).</p>
+<pre><code class="language-python">from docx_editor import Revision
+</code></pre>
+<h3 id="attributes_1">Attributes<a class="headerlink" href="#attributes_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>int</td>
+<td>The revision ID</td>
+</tr>
+<tr>
+<td><code>type</code></td>
+<td>str</td>
+<td>Either "insertion" or "deletion"</td>
+</tr>
+<tr>
+<td><code>author</code></td>
+<td>str</td>
+<td>The revision author</td>
+</tr>
+<tr>
+<td><code>date</code></td>
+<td>datetime or None</td>
+<td>When the revision was made</td>
+</tr>
+<tr>
+<td><code>text</code></td>
+<td>str</td>
+<td>The inserted or deleted text</td>
+</tr>
+<tr>
+<td><code>paragraph_ref</code></td>
+<td>str or None</td>
+<td>Hash-anchored reference (<code>"P{i}#{hash}"</code>) of the containing paragraph; None when the revision sits outside any <code>&lt;w:p&gt;</code> (e.g. a <code>&lt;w:trPr&gt;</code> row marker)</td>
+</tr>
+<tr>
+<td><code>occurrence</code></td>
+<td>int or None</td>
+<td>0-based occurrence index of <code>text</code> within the containing paragraph, counted in the view where the revision's text lives (the visible view for insertions, the original pre-revision view for deletions). For insertions it plugs directly into the <code>occurrence=</code> parameter of the anchor APIs; None whenever targeting-by-text does not apply (empty text, a host insertion partly consumed by a nested deletion, or a nested deletion)</td>
+</tr>
+<tr>
+<td><code>nested_under</code></td>
+<td>int or None</td>
+<td>id of the nearest enclosing revision (e.g. a foreign deletion inside another author's pending insertion), else None</td>
+</tr>
+<tr>
+<td><code>contains_ids</code></td>
+<td>tuple[int, ...]</td>
+<td>ids of the revisions nested inside this one, in document order (empty tuple when none)</td>
+</tr>
+<tr>
+<td><code>group_id</code></td>
+<td>int or None</td>
+<td>Revision group this revision belongs to (see <a href="#accept_groupgroup_id"><code>accept_group()</code></a>): recorded for this session's edits, inferred by reconstruction for revisions already in the file; None only for ungroupable revisions (missing author/date, outside any paragraph, duplicated id, or a mid-session split half of a foreign insertion)</td>
+</tr>
+<tr>
+<td><code>group_source</code></td>
+<td>str or None</td>
+<td>Provenance of <code>group_id</code>: <code>"recorded"</code> (created through this open Document) or <code>"inferred"</code> (reconstructed at parse time from same-paragraph contiguity + identical author and date); None iff <code>group_id</code> is None</td>
+</tr>
+<tr>
+<td><code>changeset_id</code></td>
+<td>int or None</td>
+<td>Changeset (one whole call) this revision's group belongs to (see <a href="#accept_changesetchangeset_id"><code>accept_changeset()</code></a> / <a href="#reject_changesetchangeset_id"><code>reject_changeset()</code></a>) — the <code>(author, date)</code> class over groups; None iff <code>group_id</code> is None</td>
+</tr>
+<tr>
+<td><code>changeset_source</code></td>
+<td>str or None</td>
+<td>Provenance of <code>changeset_id</code>: <code>"recorded"</code> or <code>"inferred"</code>; None iff <code>changeset_id</code> is None</td>
+</tr>
+</tbody>
+</table>
+<h3 id="example_1">Example<a class="headerlink" href="#example_1" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">revisions = doc.list_revisions()
+for rev in revisions:
+    symbol = &quot;+&quot; if rev.type == &quot;insertion&quot; else &quot;-&quot;
+    print(f&quot;{symbol} {rev.text} (by {rev.author})&quot;)
+</code></pre>
+<hr />
+<h2 id="editoperation">EditOperation<a class="headerlink" href="#editoperation" title="Permanent link">&para;</a></h2>
+<p>A single edit operation for <code>batch_edit()</code>. Build operations with the typed
+constructors below — they validate arguments at construction time with the same
+rules <code>batch_edit()</code> applies, so mistakes surface immediately. The raw
+<code>EditOperation(action=..., ...)</code> form remains supported.</p>
+<pre><code class="language-python">from docx_editor import EditOperation
+</code></pre>
+<h3 id="constructors">Constructors<a class="headerlink" href="#constructors" title="Permanent link">&para;</a></h3>
+<h4 id="editoperationreplacefind-replace_with-paragraph-occurrencenone"><code>EditOperation.replace(find, replace_with, *, paragraph, occurrence=None)</code><a class="headerlink" href="#editoperationreplacefind-replace_with-paragraph-occurrencenone" title="Permanent link">&para;</a></h4>
+<ul>
+<li><code>find</code> (str): Text to find and replace. Must be non-empty.</li>
+<li><code>replace_with</code> (str): Replacement text. Empty string is allowed (replacing
+  with nothing is a valid tracked deletion).</li>
+</ul>
+<h4 id="editoperationdeletetext-paragraph-occurrencenone"><code>EditOperation.delete(text, *, paragraph, occurrence=None)</code><a class="headerlink" href="#editoperationdeletetext-paragraph-occurrencenone" title="Permanent link">&para;</a></h4>
+<ul>
+<li><code>text</code> (str): Text to mark as deleted. Must be non-empty.</li>
+</ul>
+<h4 id="editoperationinsert_afteranchor-text-paragraph-occurrencenone"><code>EditOperation.insert_after(anchor, text, *, paragraph, occurrence=None)</code><a class="headerlink" href="#editoperationinsert_afteranchor-text-paragraph-occurrencenone" title="Permanent link">&para;</a></h4>
+<h4 id="editoperationinsert_beforeanchor-text-paragraph-occurrencenone"><code>EditOperation.insert_before(anchor, text, *, paragraph, occurrence=None)</code><a class="headerlink" href="#editoperationinsert_beforeanchor-text-paragraph-occurrencenone" title="Permanent link">&para;</a></h4>
+<ul>
+<li><code>anchor</code> (str): Text to find as insertion point. Must be non-empty.</li>
+<li><code>text</code> (str): Text to insert.</li>
+</ul>
+<p>All constructors also take:</p>
+<ul>
+<li><code>paragraph</code> (str): Paragraph reference from <code>list_paragraphs()</code>, such as <code>P2#f3c1</code></li>
+<li><code>occurrence</code> (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph at apply time; if it matches more than once, the batch fails with a <a href="#batchoperationerror"><code>BatchOperationError</code></a> wrapping an <a href="#ambiguoustexterror"><code>AmbiguousTextError</code></a>. Must be &gt;= 0 when given.</li>
+</ul>
+<p><strong>Raises:</strong> <code>ValueError</code> at construction time if the paragraph ref is malformed,
+<code>occurrence</code> is negative, a search-target argument (<code>find</code>, delete <code>text</code>,
+<code>anchor</code>) is empty, or a payload argument (<code>replace_with</code>, insert <code>text</code>) is
+<code>None</code> — payloads may be empty strings, search targets may not. Each
+signature mirrors the corresponding <code>Document</code> method 1:1, so
+<code>doc.replace(...)</code> translates mechanically to <code>EditOperation.replace(...)</code>.</p>
+<h3 id="example_2">Example<a class="headerlink" href="#example_2" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">new_refs = doc.batch_edit([
+    EditOperation.replace(&quot;30 days&quot;, &quot;60 days&quot;, paragraph=&quot;P2#f3c1&quot;),
+    EditOperation.delete(&quot;obsolete clause&quot;, paragraph=&quot;P5#d4e5&quot;),
+    EditOperation.insert_after(&quot;Section 5&quot;, &quot; (as amended)&quot;, paragraph=&quot;P7#b1c2&quot;),
+])
+</code></pre>
+<hr />
+<h2 id="editresult">EditResult<a class="headerlink" href="#editresult" title="Permanent link">&para;</a></h2>
+<p>The return value of every tracked-edit method (<code>replace()</code>, <code>delete()</code>,
+<code>insert_after()</code>, <code>insert_before()</code>, <code>rewrite_paragraph()</code>, and the elements of
+<code>batch_edit()</code> / <code>batch_rewrite()</code> results). A <code>str</code> <strong>subclass</strong> — the string
+value is the new hash-anchored paragraph reference (e.g. <code>"P2#c3d4"</code>), so an
+<code>EditResult</code> works unchanged anywhere a ref string is expected — with the
+edit's revision-group info attached.</p>
+<pre><code class="language-python">from docx_editor import EditResult
+</code></pre>
+<h3 id="attributes_2">Attributes<a class="headerlink" href="#attributes_2" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>group_id</code></td>
+<td>int or None</td>
+<td>Revision group holding every revision this edit created, for <a href="#accept_groupgroup_id"><code>accept_group()</code></a> / <a href="#reject_groupgroup_id"><code>reject_group()</code></a>. None when the edit created no new revisions (e.g. text spliced into one of your own pending insertions, a no-change rewrite, or a rewrite whose changes all merged into your own pending insertions). Valid only while this Document stays open — after reopen the same revisions belong to a freshly inferred group with a new id.</td>
+</tr>
+<tr>
+<td><code>changeset_id</code></td>
+<td>int or None</td>
+<td>Changeset (one whole call) this edit's group belongs to, for <a href="#accept_changesetchangeset_id"><code>accept_changeset()</code></a> / <a href="#reject_changesetchangeset_id"><code>reject_changeset()</code></a>. Every <code>EditResult</code> from one <code>batch_edit</code>/<code>batch_rewrite</code> shares it; None iff <code>group_id</code> is None. Per-open-<code>Document</code>, like <code>group_id</code>.</td>
+</tr>
+<tr>
+<td><code>revision_ids</code></td>
+<td>tuple[int, ...]</td>
+<td>The <code>w:id</code>s of the group's member revisions, in creation order; <code>()</code> when <code>group_id</code> is None</td>
+</tr>
+<tr>
+<td><code>refs</code></td>
+<td>tuple[str, ...]</td>
+<td>Every resulting paragraph ref, in document order. <code>(str(self),)</code> for a normal edit; for a <code>\n</code> paragraph split it carries the first paragraph (== the string value) plus one ref per new paragraph the split created. A split shifts later indexes, so re-resolve stale refs before reuse.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="example_3">Example<a class="headerlink" href="#example_3" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">result = doc.replace(&quot;30 days&quot;, &quot;60 days&quot;, paragraph=&quot;P2#f3c1&quot;)
+print(str(result))          # &quot;P2#c3d4&quot; — the new paragraph ref
+print(result.group_id)      # 1
+print(result.changeset_id)  # 1 — a single edit is a one-group changeset
+print(result.revision_ids)  # (0, 1) — the del and the ins
+print(result.refs)          # (&quot;P2#c3d4&quot;,) — one ref (a split would give more)
+
+# A newline splits the paragraph; refs covers both halves:
+split = doc.replace(&quot;end.&quot;, &quot;end.\nNew paragraph.&quot;, paragraph=&quot;P2#c3d4&quot;)
+print(split.refs)           # (&quot;P2#…&quot;, &quot;P3#…&quot;)
+
+doc.replace(&quot;net&quot;, &quot;gross&quot;, paragraph=result)  # usable as a plain ref
+doc.reject_group(result.group_id)              # undo the first edit entirely
+</code></pre>
+<hr />
+<h2 id="editvalidationresult">EditValidationResult<a class="headerlink" href="#editvalidationresult" title="Permanent link">&para;</a></h2>
+<p>The outcome of validating one <code>EditOperation</code> in a <code>batch_edit(ops, dry_run=True)</code>
+call. One result is returned per operation, in input order.</p>
+<pre><code class="language-python">from docx_editor import EditValidationResult
+</code></pre>
+<h3 id="attributes_3">Attributes<a class="headerlink" href="#attributes_3" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>index</code></td>
+<td>int</td>
+<td>0-based position of the operation in the input list</td>
+</tr>
+<tr>
+<td><code>paragraph</code></td>
+<td>str or None</td>
+<td>The operation's paragraph ref (<code>None</code> if it was missing)</td>
+</tr>
+<tr>
+<td><code>valid</code></td>
+<td>bool</td>
+<td>True if the operation would apply cleanly</td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td>str or None</td>
+<td>Human-readable reason when not valid</td>
+</tr>
+</tbody>
+</table>
+<h3 id="example_4">Example<a class="headerlink" href="#example_4" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">from docx_editor import EditOperation
+
+ops = [
+    EditOperation.replace(&quot;old&quot;, &quot;new&quot;, paragraph=&quot;P2#f3c1&quot;),
+    EditOperation.delete(&quot;remove this&quot;, paragraph=&quot;P5#d4e5&quot;),
+]
+results = doc.batch_edit(ops, dry_run=True)
+for r in results:
+    if not r.valid:
+        print(f&quot;op {r.index} on {r.paragraph}: {r.error}&quot;)
+if all(r.valid for r in results):
+    new_refs = doc.batch_edit(ops)
+</code></pre>
+<hr />
+<h2 id="searchresult">SearchResult<a class="headerlink" href="#searchresult" title="Permanent link">&para;</a></h2>
+<p>The result of <code>Document.find_text()</code> (a single match, or None) and
+<code>Document.find_all()</code> (a list of them). Carries no XML/DOM internals.</p>
+<pre><code class="language-python">from docx_editor import SearchResult
+</code></pre>
+<h3 id="attributes_4">Attributes<a class="headerlink" href="#attributes_4" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>start</code></td>
+<td>int</td>
+<td>Start offset of the match in the containing paragraph's visible text</td>
+</tr>
+<tr>
+<td><code>end</code></td>
+<td>int</td>
+<td>Exclusive end offset, same coordinate space</td>
+</tr>
+<tr>
+<td><code>text</code></td>
+<td>str</td>
+<td>The matched text</td>
+</tr>
+<tr>
+<td><code>paragraph_ref</code></td>
+<td>str</td>
+<td>Hash-anchored ref like <code>P3#a7b2</code>, usable as the <code>paragraph=</code> argument of follow-up edits</td>
+</tr>
+<tr>
+<td><code>paragraph_occurrence</code></td>
+<td>int</td>
+<td>Occurrence index of this match within its paragraph, usable as the <code>occurrence=</code> argument of follow-up edits</td>
+</tr>
+<tr>
+<td><code>spans_revision</code></td>
+<td>bool</td>
+<td>True if the match crosses a tracked-revision boundary</td>
+</tr>
+<tr>
+<td><code>paragraph_index</code></td>
+<td>int</td>
+<td>1-based index of the containing paragraph — the same integer embedded in <code>paragraph_ref</code>, so you never string-parse the ref</td>
+</tr>
+</tbody>
+</table>
+<p><code>start</code>/<code>end</code> are offsets within the matched paragraph's visible text, <strong>not</strong>
+document-wide offsets. Coordinate systems differ between search and edit:
+<code>find_text</code>'s <code>occurrence</code> counts matches document-wide (unless scoped with
+<code>paragraph=</code>), while edit methods count within one paragraph —
+<code>paragraph_occurrence</code> bridges the two, so always pass it alongside
+<code>paragraph_ref</code> when chaining into an edit. <code>paragraph_ref</code>
+is computed at search time and — like refs from <code>list_paragraphs()</code> — goes
+stale once that paragraph is edited.</p>
+<p><code>repr()</code>/<code>str()</code> are compact one-liners —
+<code>SearchResult(P3#a7b2 occ=0 '30 days')</code>, with a trailing <code>spans_rev</code> marker
+when <code>spans_revision</code> is true — so printing a whole <code>find_all()</code> list stays
+cheap. Matched text longer than 60 characters is elided with <code>...</code> in the
+display only; every field, including the full <code>text</code>, remains accessible as
+an attribute.</p>
+<h3 id="example_5">Example<a class="headerlink" href="#example_5" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">match = doc.find_text(&quot;30 days&quot;)
+if match:
+    doc.replace(
+        &quot;30 days&quot;, &quot;60 days&quot;,
+        paragraph=match.paragraph_ref, occurrence=match.paragraph_occurrence,
+    )
+</code></pre>
+<hr />
+<h2 id="deprecated-internals">Deprecated internals<a class="headerlink" href="#deprecated-internals" title="Permanent link">&para;</a></h2>
+<p>The text-map machinery (<code>TextMap</code>, <code>TextMapMatch</code>, <code>TextPosition</code>,
+<code>build_text_map</code>, <code>find_in_text_map</code>) is no longer part of the public API:
+these names have been removed from <code>docx_editor.__all__</code>, and accessing them
+via the top-level package emits a <code>DeprecationWarning</code>. They will be removed
+from the package namespace in the next release.</p>
+<p>Use <code>Document.find_text()</code> / <a href="#searchresult"><code>SearchResult</code></a> instead. If you
+genuinely need the internals (raw DOM positions), import them from
+<code>docx_editor.xml_editor</code>.</p>
+<hr />
+<h2 id="exceptions">Exceptions<a class="headerlink" href="#exceptions" title="Permanent link">&para;</a></h2>
+<h3 id="textnotfounderror"><code>TextNotFoundError</code><a class="headerlink" href="#textnotfounderror" title="Permanent link">&para;</a></h3>
+<p>Raised when the specified text is not found in the document, or when an
+explicit <code>occurrence</code> is out of range — the error then carries <code>occurrence</code>
+and <code>total_occurrences</code> and its message reports the actual count instead of
+claiming the text is absent. Other structured fields: <code>search_text</code>,
+<code>paragraph_ref</code>, <code>paragraph_preview</code>.</p>
+<pre><code class="language-python">from docx_editor.exceptions import TextNotFoundError
+
+try:
+    doc.replace(&quot;nonexistent text&quot;, &quot;new text&quot;, paragraph=&quot;P2#f3c1&quot;)
+except TextNotFoundError as e:
+    print(f&quot;Text not found: {e}&quot;)
+</code></pre>
+<h3 id="ambiguoustexterror"><code>AmbiguousTextError</code><a class="headerlink" href="#ambiguoustexterror" title="Permanent link">&para;</a></h3>
+<p>Raised when an edit target matches more than once in the search scope and no
+<code>occurrence</code> was given. Not a <code>TextNotFoundError</code> subclass — the text <em>was</em>
+found. Structured fields: <code>search_text</code>, <code>paragraph_ref</code> (None when
+document-wide), <code>paragraph_preview</code> (None when document-wide),
+<code>total_occurrences</code>.</p>
+<pre><code class="language-python">from docx_editor.exceptions import AmbiguousTextError
+
+try:
+    doc.replace(&quot;term&quot;, &quot;clause&quot;, paragraph=&quot;P2#f3c1&quot;)
+except AmbiguousTextError as e:
+    r = doc.find_all(&quot;term&quot;, paragraph=e.paragraph_ref)[0]
+    doc.replace(&quot;term&quot;, &quot;clause&quot;, paragraph=r.paragraph_ref,
+                occurrence=r.paragraph_occurrence)
+</code></pre>
+<h3 id="hashmismatcherror"><code>HashMismatchError</code><a class="headerlink" href="#hashmismatcherror" title="Permanent link">&para;</a></h3>
+<p>Raised when a <code>paragraph</code> ref's hash no longer matches the paragraph's current
+content — the paragraph changed (usually by an earlier edit) since the ref was
+listed, so the ref is stale. Structured fields: <code>paragraph_index</code> (1-based),
+<code>expected_hash</code> (the hash in the stale ref), <code>actual_hash</code> (the paragraph's
+current hash), and <code>paragraph_preview</code> (the current text). Recover by retrying
+with the fresh ref <code>P{paragraph_index}#{actual_hash}</code>, or re-list paragraphs.</p>
+<pre><code class="language-python">from docx_editor.exceptions import HashMismatchError
+
+try:
+    doc.replace(&quot;old&quot;, &quot;new&quot;, paragraph=&quot;P2#f3c1&quot;)
+except HashMismatchError as e:
+    doc.replace(&quot;old&quot;, &quot;new&quot;, paragraph=f&quot;P{e.paragraph_index}#{e.actual_hash}&quot;)
+</code></pre>
+<h3 id="paragraphindexerror"><code>ParagraphIndexError</code><a class="headerlink" href="#paragraphindexerror" title="Permanent link">&para;</a></h3>
+<p>Raised when a paragraph index is out of range — <code>&lt; 1</code> or greater than
+<code>paragraph_count()</code> (for example <code>get_paragraph(0)</code>). Structured fields:
+<code>index</code> (the offending index) and <code>total_paragraphs</code> (how many the document
+has). Clamp to <code>1..total_paragraphs</code> and retry, or call <code>list_paragraphs()</code>
+to pick a valid ref.</p>
+<pre><code class="language-python">from docx_editor.exceptions import ParagraphIndexError
+
+try:
+    para = doc.get_paragraph(index)
+except ParagraphIndexError as e:
+    para = doc.get_paragraph(max(1, min(e.index, e.total_paragraphs)))
+</code></pre>
+<h3 id="batchoperationerror"><code>BatchOperationError</code><a class="headerlink" href="#batchoperationerror" title="Permanent link">&para;</a></h3>
+<p>The only exception <code>batch_edit()</code> / <code>batch_rewrite()</code> raise for a failing
+operation. Structured fields: <code>operation_index</code> (0-based position of the
+failing op), <code>reason</code> (human-readable message), <code>original</code> (the underlying
+typed exception, also set as <code>__cause__</code>; <code>None</code> for batch-level rule
+violations that have no underlying exception, e.g. a missing paragraph ref or
+a duplicate paragraph in <code>batch_rewrite</code>).</p>
+<pre><code class="language-python">from docx_editor.exceptions import BatchOperationError, HashMismatchError
+
+while ops:
+    try:
+        doc.batch_edit(ops)
+        break
+    except BatchOperationError as e:
+        if isinstance(e.original, HashMismatchError):
+            op = ops[e.operation_index]
+            op.paragraph = f&quot;P{e.original.paragraph_index}#{e.original.actual_hash}&quot;
+        else:
+            ops.pop(e.operation_index)
+</code></pre>
+<h3 id="commenterror"><code>CommentError</code><a class="headerlink" href="#commenterror" title="Permanent link">&para;</a></h3>
+<p>Raised when a comment operation fails. Structured field: <code>comment_id</code> (the comment id the operation targeted, e.g. the parent id of a failed reply; <code>None</code> when no comment id applies).</p>
+<pre><code class="language-python">from docx_editor.exceptions import CommentError
+
+try:
+    doc.reply_to_comment(999, &quot;reply&quot;)
+except CommentError as e:
+    print(f&quot;Comment {e.comment_id} not found&quot;)
+</code></pre>
+<h3 id="revisionerror"><code>RevisionError</code><a class="headerlink" href="#revisionerror" title="Permanent link">&para;</a></h3>
+<p>Raised when a revision operation fails — most commonly an unknown group id passed to <code>accept_group()</code> / <code>reject_group()</code>, or an unknown changeset id passed to <code>accept_changeset()</code> / <code>reject_changeset()</code>. Group and changeset ids are per-open-<code>Document</code> and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use an id from the current session's <code>EditResult</code> or <code>list_revisions()</code> — a stale id from a previous session may raise this, or worse, silently resolve to a different group/changeset. Structured fields: <code>revision_id</code>, <code>group_id</code>, and <code>changeset_id</code> — set when the error is about that specific id (<code>group_id</code> for unknown-group errors, <code>changeset_id</code> for unknown-changeset errors), <code>None</code> otherwise.</p>
+<pre><code class="language-python">from docx_editor.exceptions import RevisionError
+</code></pre>
+<h3 id="documentnotfounderror"><code>DocumentNotFoundError</code><a class="headerlink" href="#documentnotfounderror" title="Permanent link">&para;</a></h3>
+<p>Raised by <code>Document.open()</code> when the source file does not exist. Structured field: <code>path</code> (the path that did not exist).</p>
+<pre><code class="language-python">from docx_editor.exceptions import DocumentNotFoundError
+</code></pre>
+<h3 id="invaliddocumenterror"><code>InvalidDocumentError</code><a class="headerlink" href="#invaliddocumenterror" title="Permanent link">&para;</a></h3>
+<p>Raised by <code>Document.open()</code> when the source path is not a valid <code>.docx</code> — wrong
+suffix, a directory, an empty/truncated file, not a ZIP, missing
+<code>word/document.xml</code>, or malformed XML. Structured field: <code>path</code> (the source
+path). Not an in-loop retry: the message names which check failed; fix or
+re-export the input file.</p>
+<pre><code class="language-python">from docx_editor.exceptions import InvalidDocumentError
+</code></pre>
+<h3 id="documentclosederror"><code>DocumentClosedError</code><a class="headerlink" href="#documentclosederror" title="Permanent link">&para;</a></h3>
+<p>Raised when any operation is attempted on a <code>Document</code> after <code>close()</code>. Closing discards the workspace (unless <code>cleanup=False</code>), so the object cannot keep serving reads or edits — reopen the source to continue. Structured field: <code>path</code> (the source path of the closed document).</p>
+<pre><code class="language-python">from docx_editor import Document
+from docx_editor.exceptions import DocumentClosedError
+
+try:
+    doc.get_visible_text()
+except DocumentClosedError as e:
+    doc = Document.open(e.path)
+</code></pre>
+<h3 id="workspaceexistserror"><code>WorkspaceExistsError</code><a class="headerlink" href="#workspaceexistserror" title="Permanent link">&para;</a></h3>
+<p>Raised when attempting to create a workspace that already exists.</p>
+<pre><code class="language-python">from docx_editor.exceptions import WorkspaceExistsError
+</code></pre>
+<h3 id="workspacesyncerror"><code>WorkspaceSyncError</code><a class="headerlink" href="#workspacesyncerror" title="Permanent link">&para;</a></h3>
+<p>Raised when the workspace is out of sync with the source document: the source changed on disk since the workspace was created, or the workspace holds unsaved changes from a previous session that the source never received. Structured fields: <code>workspace_path</code> and <code>source_path</code>.</p>
+<p><code>Document.open(path, force_recreate=True)</code> recovers but discards the workspace's unsaved edits. To rescue them first, save the orphaned workspace to a new file (<code>Workspace</code> is not exported at the package root — use the deep import):</p>
+<pre><code class="language-python">from docx_editor.exceptions import WorkspaceSyncError
+from docx_editor.workspace import Workspace
+
+try:
+    doc = Document.open(&quot;contract.docx&quot;)
+except WorkspaceSyncError:
+    Workspace(&quot;contract.docx&quot;, create=False).save(&quot;rescued.docx&quot;)  # rescue unsaved edits
+    doc = Document.open(&quot;contract.docx&quot;, force_recreate=True)
+</code></pre>
+<h3 id="documentopenerror"><code>DocumentOpenError</code><a class="headerlink" href="#documentopenerror" title="Permanent link">&para;</a></h3>
+<p>Raised by <code>save()</code> when the destination appears open in another program. Word writes a <code>~$</code> owner (lock) file next to any document it has open; if that stub exists at save time, saving would race Word's own writes, so <code>save()</code> refuses unless <code>force=True</code>. Also raised when the OS denies the final replace (on Windows, Word holding the file open is exactly this case) — <code>force=True</code> cannot suppress that one. The exception carries <code>path</code> (the destination) and <code>owner_file</code> (the <code>~$</code> file that triggered the guard, or <code>None</code> when the OS denied the replace) attributes.</p>
+<pre><code class="language-python">from docx_editor.exceptions import DocumentOpenError
+
+try:
+    doc.save()
+except DocumentOpenError as e:
+    print(f&quot;Close {e.path} in Word first (lock: {e.owner_file})&quot;)
+</code></pre>
+<h3 id="workspacelockederror"><code>WorkspaceLockedError</code><a class="headerlink" href="#workspacelockederror" title="Permanent link">&para;</a></h3>
+<p>Raised when opening a document whose workspace is locked by a live session — another process (or another <code>Document</code> object in the same process) already has it open. Two sessions sharing one workspace would silently overwrite each other's saves. Close the other session, or pass <code>force_recreate=True</code> to take the workspace over and discard its unsaved edits. Locks left behind by dead processes are reclaimed automatically and never raise. The exception carries <code>pid</code> and <code>lock_path</code> attributes.</p>
+<pre><code class="language-python">from docx_editor.exceptions import WorkspaceLockedError
+
+try:
+    doc = Document.open(&quot;contract.docx&quot;)
+except WorkspaceLockedError as e:
+    print(f&quot;Held by pid {e.pid}&quot;)
+</code></pre>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Maintained by <a href="https://pablospe.com">pablospe</a>.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/pablospe/docx-editor" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://pypi.org/project/docx-editor" target="_blank" rel="noopener" title="pypi.org" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.8 200.5c-7.7-30.9-22.3-54.2-53.4-54.2h-40.1v47.4c0 36.8-31.2 67.8-66.8 67.8H172.7c-29.2 0-53.4 25-53.4 54.3v101.8c0 29 25.2 46 53.4 54.3 33.8 9.9 66.3 11.7 106.8 0 26.9-7.8 53.4-23.5 53.4-54.3v-40.7H226.2v-13.6h160.2c31.1 0 42.6-21.7 53.4-54.2 11.2-33.5 10.7-65.7 0-108.6M286.2 444.7a20.4 20.4 0 1 1 0-40.7 20.4 20.4 0 1 1 0 40.7M167.8 248.1h106.8c29.7 0 53.4-24.5 53.4-54.3V91.9c0-29-24.4-50.7-53.4-55.6-35.8-5.9-74.7-5.6-106.8.1-45.2 8-53.4 24.7-53.4 55.6v40.7h106.9v13.6h-147c-31.1 0-58.3 18.7-66.8 54.2-9.8 40.7-10.2 66.1 0 108.6 7.6 31.6 25.7 54.2 56.8 54.2H101v-48.8c0-35.3 30.5-66.4 66.8-66.4m-6.6-183.4a20.4 20.4 0 1 1 0 40.8 20.4 20.4 0 1 1 0-40.8"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": [], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
