@@ -419,6 +419,88 @@ class TestGroupSessionScope:
         assert doc.reject_group(result.group_id) == 2
 
 
+def _mark_ins_xml(rev_id, author: str = AUTHOR_A, date: str = DATE_A) -> str:
+    """A paragraph-mark insertion (empty <w:ins> inside <w:pPr><w:rPr>)."""
+    return f'<w:ins w:id="{rev_id}" w:author="{author}" w:date="{date}"/>'
+
+
+def _split_paragraph_xml(mark_id, content_id, text: str, **kw) -> str:
+    """A first-half paragraph: mark inserted, plus one inserted content run."""
+    return f"<w:p><w:pPr><w:rPr>{_mark_ins_xml(mark_id, **kw)}</w:rPr></w:pPr>{_ins_xml(content_id, text, **kw)}</w:p>"
+
+
+class TestSplitReconstruction:
+    """A reopened tracked split spans two paragraphs; the mark makes it one group."""
+
+    def test_reopened_split_reconstructs_as_one_group(self, temp_xml):
+        body = _split_paragraph_xml(2, 1, "first ") + f"<w:p>{_ins_xml(3, 'second')}</w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        gid = manager.group_id_of(1)
+        assert gid is not None
+        assert {manager.group_id_of(i) for i in (1, 2, 3)} == {gid}
+        assert set(manager.group_revisions(gid)) == {1, 2, 3}
+        assert manager._group_sources[gid] == "inferred"
+
+    def test_reopened_multi_split_reconstructs_as_one_group(self, temp_xml):
+        body = _split_paragraph_xml(10, 1, "a") + _split_paragraph_xml(11, 3, "b") + f"<w:p>{_ins_xml(5, 'c')}</w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        gid = manager.group_id_of(1)
+        assert gid is not None
+        assert {manager.group_id_of(i) for i in (1, 3, 5, 10, 11)} == {gid}
+
+    def test_adjacent_paragraphs_without_mark_stay_separate(self, temp_xml):
+        # Same author+date, adjacent paragraphs, but no inserted mark — the two
+        # edits are unrelated and must reconstruct as two groups (the rule's
+        # negative control).
+        body = f"<w:p>{_ins_xml(1, 'first')}</w:p><w:p>{_ins_xml(2, 'second')}</w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        assert manager.group_id_of(1) != manager.group_id_of(2)
+
+    def test_split_continuation_needs_matching_author_and_date(self, temp_xml):
+        # A mark by a different author/date than the tail's revision is not a
+        # continuation — the durable signal must match on both.
+        body = (
+            _split_paragraph_xml(2, 1, "first ", author=AUTHOR_A)
+            + f"<w:p>{_ins_xml(3, 'second', author=AUTHOR_B, date=DATE_B)}</w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+
+        assert manager.group_id_of(1) != manager.group_id_of(3)
+
+    def test_split_refuses_paragraph_with_section_mark(self, temp_xml):
+        # A paragraph-level w:sectPr marks a section boundary; splitting it
+        # would corrupt the section structure, so it is refused (no mutation).
+        body = (
+            '<w:p><w:pPr><w:sectPr><w:type w:val="nextPage"/></w:sectPr></w:pPr>'
+            "<w:r><w:t>Section end here</w:t></w:r></w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+
+        with pytest.raises(RevisionError, match="section mark"):
+            manager.replace_text("end", "end\nsplit")
+        # No partial mutation: the original text is intact.
+        assert "Section end here" in manager.editor.dom.toxml()
+
+    def test_split_inside_existing_revision_is_atomic(self, temp_xml):
+        # A split whose boundary lands inside a pre-existing (foreign) insertion
+        # is not yet supported. It must refuse BEFORE mutating: a single edit has
+        # no DOM rollback, so a partial delete/insert would otherwise be left
+        # behind (the tail-collection raise used to fire mid-mutation).
+        body = f'<w:p><w:r><w:t>Hello</w:t></w:r>{_ins_xml(1, "WORLD", author=AUTHOR_A)}</w:p>'
+        manager = _make_manager(temp_xml(body))
+        before = manager.editor.dom.toxml()
+
+        with pytest.raises(RevisionError, match="existing revision"):
+            # match.end (after "Hello") lands at the start of the foreign <w:ins>.
+            manager.replace_text("Hello", "a\nb")
+
+        # Byte-for-byte unchanged — no orphaned deletion/insertion.
+        assert manager.editor.dom.toxml() == before
+
+
 class TestForeignInsGrouping:
     """Author/attachment filters keep foreign fragments out of our groups."""
 

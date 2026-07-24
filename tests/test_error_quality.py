@@ -1304,3 +1304,95 @@ class TestOwnPidLockMessage:
             assert e.pid == os.getpid()
         finally:
             doc1.close()
+
+
+@pytest.fixture
+def hello_doc(doc_path):
+    """A document with one paragraph, opened; yields (doc, first-paragraph ref)."""
+    doc = _build_doc_with_paragraphs(doc_path, ["Hello world jumps over"])
+    ref = next(iter(doc.list_paragraphs(limit=None))).split("|")[0]
+    yield doc, ref
+    doc.close()
+
+
+class TestControlCharRejection:
+    """Tab, CR, and other C0/DEL controls are rejected at every text input;
+    only '\\n' passes (a tracked paragraph split). See ISSUES.md #58+61."""
+
+    def test_replace_rejects_tab_in_content(self, hello_doc):
+        doc, ref = hello_doc
+        with pytest.raises(ValueError, match="control character"):
+            doc.replace("world", "wor\tld", paragraph=ref)
+
+    def test_replace_allows_newline_in_content(self, hello_doc):
+        doc, ref = hello_doc
+        doc.replace("world", "wor\nld", paragraph=ref)  # \n splits — allowed
+        assert doc.paragraph_count() == 2
+
+    def test_replace_rejects_newline_in_find(self, hello_doc):
+        doc, ref = hello_doc
+        with pytest.raises(ValueError, match="newline"):
+            doc.replace("Hel\nlo", "x", paragraph=ref)
+
+    def test_delete_rejects_carriage_return(self, hello_doc):
+        doc, ref = hello_doc
+        with pytest.raises(ValueError, match="control character"):
+            doc.delete("wor\rld", paragraph=ref)
+
+    def test_insert_after_rejects_null_in_text(self, hello_doc):
+        doc, ref = hello_doc
+        with pytest.raises(ValueError, match="control character"):
+            doc.insert_after("Hello", "\x00bad", paragraph=ref)
+
+    def test_insert_after_rejects_newline_in_anchor(self, hello_doc):
+        doc, ref = hello_doc
+        with pytest.raises(ValueError, match="newline"):
+            doc.insert_after("Hel\nlo", "fine", paragraph=ref)
+
+    def test_insert_after_allows_newline_in_text(self, hello_doc):
+        doc, ref = hello_doc
+        doc.insert_after("Hello", "\nnew", paragraph=ref)  # \n splits — allowed
+        assert doc.paragraph_count() == 2
+
+    def test_rewrite_rejects_tab(self, hello_doc):
+        doc, ref = hello_doc
+        with pytest.raises(ValueError, match="control character"):
+            doc.rewrite_paragraph(ref, "new\ttext")
+
+    def test_rewrite_allows_newline(self, hello_doc):
+        doc, ref = hello_doc
+        doc.rewrite_paragraph(ref, "first\nsecond")  # split — allowed
+        assert doc.paragraph_count() == 2
+
+    def test_del_char_0x7f_rejected(self, hello_doc):
+        doc, ref = hello_doc
+        with pytest.raises(ValueError, match="control character"):
+            doc.replace("world", "wor\x7fld", paragraph=ref)
+
+    def test_editoperation_replace_rejects_tab_at_construction(self):
+        with pytest.raises(ValueError, match="control character"):
+            EditOperation.replace("a", "b\tc", paragraph="P1#0000")
+
+    def test_editoperation_replace_allows_newline_at_construction(self):
+        op = EditOperation.replace("a", "b\nc", paragraph="P1#0000")
+        assert op.replace_with == "b\nc"
+
+    def test_editoperation_delete_rejects_newline_at_construction(self):
+        with pytest.raises(ValueError, match="newline"):
+            EditOperation.delete("a\nb", paragraph="P1#0000")
+
+    def test_batch_rejects_raw_op_with_control_char(self, hello_doc):
+        doc, ref = hello_doc
+        raw = EditOperation(action="replace", paragraph=ref, find="world", replace_with="wor\tld")
+        with pytest.raises(BatchOperationError):
+            doc.batch_edit([raw])
+
+    def test_add_comment_rejects_control_char_in_comment(self, hello_doc):
+        doc, ref = hello_doc
+        with pytest.raises(CommentError, match="control character"):
+            doc.add_comment("Hello", "bad\tcomment", paragraph=ref)
+
+    def test_add_comment_rejects_newline_in_anchor(self, hello_doc):
+        doc, ref = hello_doc
+        with pytest.raises(CommentError):
+            doc.add_comment("Hel\nlo", "fine comment", paragraph=ref)

@@ -395,6 +395,38 @@ Insert text before anchor with tracked changes. Foreign pending insertions are t
 ref = doc.insert_before("Section 6", "New clause: ", paragraph="P4#a7b2")
 ```
 
+> **Newlines split paragraphs.** A `\n` in any content text (`replace`'s
+> `replace_with`, `insert_after`/`insert_before`'s `text`, `rewrite_paragraph`'s
+> `new_text`, or a `batch_edit` op) is a **tracked paragraph split**: the first
+> paragraph's mark is flagged inserted and the tail moves into a new paragraph.
+> Accepting keeps the split; rejecting rejoins. All other C0 control characters
+> (`\t`, `\r`, …) are rejected with a teaching `ValueError`. See
+> [`split_paragraph`](#split_paragraphref-before-occurrencenone) and [`EditResult`](#editresult).
+
+#### `split_paragraph(ref, *, before, occurrence=None)`
+
+Split a paragraph into two with a tracked paragraph break, cutting immediately
+before `before`. Explicit sugar for the `\n`-means-split behavior (equivalent to
+`insert_before(before, "\n", ...)`): the paragraph mark is flagged as an inserted
+revision and the tail (from `before` on) moves into a new following paragraph.
+Accepting keeps the split; rejecting the group rejoins the two paragraphs.
+
+**Parameters:**
+
+- `ref` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+- `before` (str, keyword-only): Text to split before; the break lands at its start. Must be a non-empty string in the paragraph.
+- `occurrence` (int | None): Which occurrence of `before` within the paragraph, 0-based. Omitted → `before` must be unique in the paragraph, else [`AmbiguousTextError`](#ambiguoustexterror).
+
+**Returns:** The first paragraph's reference ([`EditResult`](#editresult)); its `refs` tuple carries the refs of **both** resulting paragraphs.
+
+**Example:**
+
+```python
+result = doc.split_paragraph("P2#f3c1", before="However,")
+first_ref, second_ref = result.refs
+doc.reject_group(result.group_id)  # rejoin
+```
+
 #### `rewrite_paragraph(ref, new_text)`
 
 Rewrite a paragraph using tracked changes generated from a word-level diff.
@@ -1010,6 +1042,7 @@ from docx_editor import EditResult
 | `group_id` | int or None | Revision group holding every revision this edit created, for [`accept_group()`](#accept_groupgroup_id) / [`reject_group()`](#reject_groupgroup_id). None when the edit created no new revisions (e.g. text spliced into one of your own pending insertions, a no-change rewrite, or a rewrite whose changes all merged into your own pending insertions). Valid only while this Document stays open — after reopen the same revisions belong to a freshly inferred group with a new id. |
 | `changeset_id` | int or None | Changeset (one whole call) this edit's group belongs to, for [`accept_changeset()`](#accept_changesetchangeset_id) / [`reject_changeset()`](#reject_changesetchangeset_id). Every `EditResult` from one `batch_edit`/`batch_rewrite` shares it; None iff `group_id` is None. Per-open-`Document`, like `group_id`. |
 | `revision_ids` | tuple[int, ...] | The `w:id`s of the group's member revisions, in creation order; `()` when `group_id` is None |
+| `refs` | tuple[str, ...] | Every resulting paragraph ref, in document order. `(str(self),)` for a normal edit; for a `\n` paragraph split it carries the first paragraph (== the string value) plus one ref per new paragraph the split created. A split shifts later indexes, so re-resolve stale refs before reuse. |
 
 ### Example
 
@@ -1019,6 +1052,11 @@ print(str(result))          # "P2#c3d4" — the new paragraph ref
 print(result.group_id)      # 1
 print(result.changeset_id)  # 1 — a single edit is a one-group changeset
 print(result.revision_ids)  # (0, 1) — the del and the ins
+print(result.refs)          # ("P2#c3d4",) — one ref (a split would give more)
+
+# A newline splits the paragraph; refs covers both halves:
+split = doc.replace("end.", "end.\nNew paragraph.", paragraph="P2#c3d4")
+print(split.refs)           # ("P2#…", "P3#…")
 
 doc.replace("net", "gross", paragraph=result)  # usable as a plain ref
 doc.reject_group(result.group_id)              # undo the first edit entirely

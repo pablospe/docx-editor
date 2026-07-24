@@ -29,6 +29,7 @@ from .xml_editor import (
     TextMapMatch,
     TextPosition,
     _escape_xml,
+    _reject_control_chars,
     _require_valid_occurrence,
     build_text_map,
     compute_paragraph_hash,
@@ -113,6 +114,8 @@ class EditOperation:
                 f"EditOperation.replace(): 'replace_with' must be a string (empty string is allowed), "
                 f"got {replace_with!r}"
             )
+        _reject_control_chars(find, field="'find'", ctx="EditOperation.replace(): ", allow_newline=False)
+        _reject_control_chars(replace_with, field="'replace_with'", ctx="EditOperation.replace(): ", allow_newline=True)
         return cls(
             action="replace",
             paragraph=paragraph,
@@ -142,6 +145,7 @@ class EditOperation:
             raise ValueError(
                 f"EditOperation.delete(): 'text' must be a non-empty string — the text to mark as deleted, got {text!r}"
             )
+        _reject_control_chars(text, field="'text'", ctx="EditOperation.delete(): ", allow_newline=False)
         return cls(action="delete", paragraph=paragraph, text=text, occurrence=occurrence)
 
     @classmethod
@@ -163,6 +167,8 @@ class EditOperation:
             raise ValueError(
                 f"EditOperation.{action}(): 'text' must be a string (empty string is allowed), got {text!r}"
             )
+        _reject_control_chars(anchor, field="'anchor'", ctx=f"EditOperation.{action}(): ", allow_newline=False)
+        _reject_control_chars(text, field="'text'", ctx=f"EditOperation.{action}(): ", allow_newline=True)
         return cls(action=action, paragraph=paragraph, anchor=anchor, text=text, occurrence=occurrence)
 
     @classmethod
@@ -257,11 +263,20 @@ class EditResult(str):
       None. A later edit that splits one of these insertions adds the
       split-off half to the group — ``Document.list_revisions`` reflects
       live membership.
+    - ``refs``: every resulting paragraph ref, in document order. A normal
+      edit stays inside one paragraph, so ``refs`` is ``(str(self),)``. A
+      ``\\n`` edit is a tracked paragraph split, so ``refs`` carries the first
+      paragraph (== the string value) plus one ref per new paragraph the split
+      created (``("P2#…", "P3#…", …)``). Like all refs these are valid until
+      the next structural edit; after a split, later paragraphs' indexes have
+      shifted, so re-resolve (``list_paragraphs``/``find_text``) before reusing
+      stale refs.
     """
 
     group_id: int | None
     changeset_id: int | None
     revision_ids: tuple[int, ...]
+    refs: tuple[str, ...]
 
     def __new__(
         cls,
@@ -269,11 +284,13 @@ class EditResult(str):
         group_id: int | None = None,
         revision_ids: tuple[int, ...] = (),
         changeset_id: int | None = None,
+        refs: tuple[str, ...] | None = None,
     ) -> "EditResult":
         result = super().__new__(cls, ref)
         result.group_id = group_id
         result.changeset_id = changeset_id
         result.revision_ids = revision_ids
+        result.refs = refs if refs is not None else (str(ref),)
         return result
 
 
@@ -511,6 +528,44 @@ def _has_ancestor(node, ancestor) -> bool:
     return False
 
 
+def _first_child_element(parent, tag: str) -> Element | None:
+    """The first *direct* child of ``parent`` with tag name ``tag``, or None."""
+    for child in parent.childNodes:
+        if child.nodeType == child.ELEMENT_NODE and getattr(child, "tagName", "") == tag:
+            return child
+    return None
+
+
+def _next_element_sibling(node):
+    """The next sibling that is an element (skipping text/whitespace nodes)."""
+    while node is not None and node.nodeType != node.ELEMENT_NODE:
+        node = node.nextSibling
+    return node
+
+
+def _paragraph_mark_ins(paragraph) -> Element | None:
+    """The paragraph-mark insertion of ``paragraph``: the ``<w:ins>`` marker
+    inside ``<w:pPr><w:rPr>`` that flags this paragraph's mark as an inserted
+    revision (a tracked paragraph split), or None when the mark is not tracked.
+    """
+    pPr = _first_child_element(paragraph, "w:pPr")
+    if pPr is None:
+        return None
+    rPr = _first_child_element(pPr, "w:rPr")
+    if rPr is None:
+        return None
+    return _first_child_element(rPr, "w:ins")
+
+
+def _is_paragraph_mark_ins(ins) -> bool:
+    """True if ``ins`` is a paragraph-mark insertion (child of ``w:pPr/w:rPr``)."""
+    parent = ins.parentNode
+    if parent is None or getattr(parent, "tagName", "") != "w:rPr":
+        return False
+    grandparent = parent.parentNode
+    return grandparent is not None and getattr(grandparent, "tagName", "") == "w:pPr"
+
+
 @dataclass
 class _GroupCapture:
     """Filled in by ``RevisionManager._grouped`` when its with-block exits."""
@@ -617,6 +672,10 @@ class RevisionManager:
         # bundles, so batch_rewrite -> rewrite_paragraph merges into one
         # changeset (mirrors editor.frozen_timestamp's reuse guard).
         self._in_changeset = False
+        # Ids of paragraph-mark insertions (tracked splits), recorded and
+        # inferred alike. Lets split_count() answer without a DOM walk, so
+        # result-ref building stays cheap for the common no-split edit.
+        self._paragraph_mark_ids: set[int] = set()
         self._reconstruct_groups()
 
     def _reconstruct_groups(self) -> None:
@@ -662,6 +721,7 @@ class RevisionManager:
         contain an ambiguous member.
         """
         run_key: tuple[int, str, str] | None = None
+        run_para: Element | None = None
         run_members: list[int] = []
         # (author, date) -> changeset id, for the inferred changeset tier.
         # Groups anywhere in the document sharing an (author, date) join one
@@ -719,18 +779,48 @@ class RevisionManager:
                 rev_id = int(elem.getAttribute("w:id"))
             except ValueError:
                 rev_id = None
+            if rev_id is not None and _is_paragraph_mark_ins(elem):
+                self._paragraph_mark_ids.add(rev_id)
             if paragraph is None or not author or not date or rev_id is None or rev_id in duplicate_ids:
                 if rev_id is not None and rev_id in duplicate_ids:
                     self._revision_groups[rev_id] = None  # explicitly ungrouped
                 close_run()
                 run_key = None
+                run_para = None
                 continue
-            key = (id(paragraph), author, date)
-            if key != run_key:
+            # A paragraph boundary whose mark is an inserted revision by the
+            # same author+date is NOT a group boundary: the two paragraphs were
+            # one before a tracked split, so their revisions stay one group.
+            same_run = (
+                run_key is not None
+                and author == run_key[1]
+                and date == run_key[2]
+                and (paragraph is run_para or self._is_split_continuation(run_para, paragraph, author, date))
+            )
+            if not same_run:
                 close_run()
-                run_key = key
+            run_key = (id(paragraph), author, date)
+            run_para = paragraph
             run_members.append(rev_id)
         close_run()
+
+    def _is_split_continuation(self, prev_para, new_para, author: str, date: str) -> bool:
+        """True if ``new_para`` is the tail half of a tracked split of ``prev_para``.
+
+        The signal is durable and Word-preserved: ``prev_para`` carries a
+        paragraph-mark insertion (``<w:pPr><w:rPr><w:ins>``) by this same
+        author+date and ``new_para`` is its immediate next paragraph. Without
+        this, a reopened split — whose revisions span two paragraphs — would
+        reconstruct as two separate inferred groups.
+        """
+        if prev_para is None:
+            return False
+        mark = _paragraph_mark_ins(prev_para)
+        if mark is None:
+            return False
+        if mark.getAttribute("w:author") != author or mark.getAttribute("w:date") != date:
+            return False
+        return _next_element_sibling(prev_para.nextSibling) is new_para
 
     @contextmanager
     def _grouped(self) -> Iterator[_GroupCapture]:
@@ -910,6 +1000,16 @@ class RevisionManager:
     def changeset_id_of(self, group_id: int) -> int | None:
         """Changeset id of a group (recorded or inferred), or None if unassigned."""
         return self._group_changesets.get(group_id)
+
+    def split_count(self, group_id: int) -> int:
+        """Number of tracked paragraph splits a group made.
+
+        Counts the group's paragraph-mark insertions; the split spans
+        ``split_count + 1`` consecutive paragraphs. Zero for a normal edit.
+        Answered from ``_paragraph_mark_ids`` — no DOM walk — so building an
+        EditResult stays cheap for the common no-split edit.
+        """
+        return sum(1 for rev_id in self._groups.get(group_id, ()) if rev_id in self._paragraph_mark_ids)
 
     def changeset_groups(self, changeset_id: int) -> tuple[int, ...]:
         """Member group ids of ``changeset_id``, in group-creation order
@@ -1114,14 +1214,19 @@ class RevisionManager:
         if op.action == "replace":
             if not op.find or not isinstance(op.replace_with, str):
                 raise ValueError("replace requires 'find' and a string 'replace_with'")
+            _reject_control_chars(op.find, field="'find'", ctx="replace(): ", allow_newline=False)
+            _reject_control_chars(op.replace_with, field="'replace_with'", ctx="replace(): ", allow_newline=True)
             return op.find
         elif op.action == "delete":
             if not op.text:
                 raise ValueError("delete requires 'text'")
+            _reject_control_chars(op.text, field="'text'", ctx="delete(): ", allow_newline=False)
             return op.text
         elif op.action in ("insert_after", "insert_before"):
             if not op.anchor or not isinstance(op.text, str):
                 raise ValueError(f"{op.action} requires 'anchor' and a string 'text'")
+            _reject_control_chars(op.anchor, field="'anchor'", ctx=f"{op.action}(): ", allow_newline=False)
+            _reject_control_chars(op.text, field="'text'", ctx=f"{op.action}(): ", allow_newline=True)
             return op.anchor
         else:
             raise ValueError(f"Unknown action: {op.action}")
@@ -1343,6 +1448,7 @@ class RevisionManager:
                 f"rewrite_paragraph(): 'new_text' must be a string "
                 f"(empty string is allowed — it deletes all text), got {new_text!r}"
             )
+        _reject_control_chars(new_text, field="'new_text'", ctx="rewrite_paragraph(): ", allow_newline=True)
         with self._changeset(), self._grouped() as capture:
             self._rewrite_paragraph_inner(ref_str, new_text)
         return capture.group_id
@@ -1449,6 +1555,13 @@ class RevisionManager:
             char_pos: Character position in visible text to insert at
             text: Text to insert
         """
+        if "\n" in text:
+            self._ensure_splittable(paragraph)
+            segments = text.split("\n")
+            if segments[0]:
+                self._rewrite_insert_at(paragraph, text_map, char_pos, segments[0])
+            self._apply_paragraph_splits(paragraph, char_pos + len(segments[0]), segments[1:])
+            return
         if not text_map.positions:
             # Empty paragraph — append insertion
             # Get rPr from any existing run, or use empty
@@ -1739,6 +1852,8 @@ class RevisionManager:
         """
         if not isinstance(replace_with, str):
             raise ValueError(f"'replace_with' must be a string (empty string is allowed), got {replace_with!r}")
+        _reject_control_chars(find, field="'find'", ctx="replace(): ", allow_newline=False)
+        _reject_control_chars(replace_with, field="'replace_with'", ctx="replace(): ", allow_newline=True)
         with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
@@ -1770,6 +1885,7 @@ class RevisionManager:
                 matches more than once in the search scope
             HashMismatchError: If the paragraph hash doesn't match
         """
+        _reject_control_chars(text, field="'text'", ctx="delete(): ", allow_newline=False)
         with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
@@ -1889,7 +2005,12 @@ class RevisionManager:
         replace whose span trims to nothing on one side degenerates into a
         pure insertion or deletion; one that trims away entirely (replacement
         equals the match) is a no-op returning -1.
+
+        A ``\\n`` in ``replace_with`` means a tracked paragraph split — routed
+        to :meth:`_split_replace` (no affix-trimming).
         """
+        if "\n" in replace_with:
+            return self._split_replace(match, replace_with)
         prefix, suffix = _trim_replace_affixes(match.text, replace_with)
         del_text = match.text[prefix : len(match.text) - suffix]
         ins_text = replace_with[prefix : len(replace_with) - suffix]
@@ -2693,6 +2814,8 @@ class RevisionManager:
         """Insert text before or after anchor with tracked changes."""
         if not isinstance(text, str):
             raise ValueError(f"'text' must be a string (empty string is allowed), got {text!r}")
+        _reject_control_chars(anchor, field="'anchor'", ctx=f"insert_{position}(): ", allow_newline=False)
+        _reject_control_chars(text, field="'text'", ctx=f"insert_{position}(): ", allow_newline=True)
         with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
@@ -2704,7 +2827,13 @@ class RevisionManager:
             return self._insert_near_match(match, text, position)
 
     def _insert_near_match(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:
-        """Insert text before/after a match, splitting the edge w:t at the match boundary."""
+        """Insert text before/after a match, splitting the edge w:t at the match boundary.
+
+        A ``\\n`` in ``text`` means a tracked paragraph split — routed to
+        :meth:`_split_insert`.
+        """
+        if "\n" in text:
+            return self._split_insert(match, text, position)
         positions = match.positions
         if not positions:
             return -1
@@ -2758,6 +2887,230 @@ class RevisionManager:
             if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
                 return int(node.getAttribute("w:id"))
         return -1
+
+    # ==================== Paragraph splits (\n) ====================
+
+    def _ensure_splittable(self, p1) -> None:
+        """Refuse to split a paragraph that ends a document section.
+
+        A paragraph-level ``w:sectPr`` marks a section boundary; moving it (or
+        duplicating it) across a split would silently corrupt the section
+        structure. Uncommon — the document-final section mark lives on
+        ``w:body``, not in a paragraph — so refuse cleanly rather than guess.
+        """
+        pPr = _first_child_element(p1, "w:pPr")
+        if pPr is not None and _first_child_element(pPr, "w:sectPr") is not None:
+            raise RevisionError(
+                "Cannot split a paragraph that carries a section mark (w:sectPr) — the section "
+                "boundary would be ambiguous. Edit around the section break instead."
+            )
+
+    def _reject_unsplittable_boundary(self, paragraph, text_map: TextMap, pos: int) -> None:
+        """Refuse a split whose boundary would cut inside an existing revision.
+
+        A split at visible position ``pos`` must fall on a run that is a *direct*
+        child of ``paragraph``; a boundary inside a pre-existing
+        ``<w:ins>``/``<w:del>``, hyperlink, or other inline container is not yet
+        supported. Called up front — before any delete/insert — by the split
+        dispatchers so a refused split never leaves a partial mutation (single
+        edits have no DOM rollback), and again by ``_collect_tail_nodes`` as the
+        backstop for the multi-op rewrite path. End-of-paragraph splits (empty
+        tail) are always fine.
+        """
+        if pos >= len(text_map.text):
+            return
+        edge = text_map.positions[pos]
+        run = self._find_ancestor(edge.node, "w:r")
+        if run is None or run.parentNode is not paragraph:
+            raise RevisionError(
+                "Cannot split a paragraph at a point inside an existing revision, "
+                "hyperlink, or other inline container (not yet supported)."
+            )
+
+    def _split_replace(self, match: TextMapMatch, replace_with: str) -> int:
+        """Replace ``match`` with text containing ``\\n`` — a tracked split.
+
+        Deletes the whole matched text, inserts the first segment where it was,
+        then splits the paragraph once per ``\\n``, inserting each following
+        segment at the start of the new paragraph. All revisions (del, the
+        per-paragraph insertions, and each inserted paragraph mark) are created
+        inside the caller's active ``_grouped``/``_changeset`` scope, so the
+        whole split is one revision group and one changeset. Affix-trimming is
+        deliberately skipped: a structural change reads clearer as a whole-find
+        deletion plus segmented insertions.
+        """
+        segments = replace_with.split("\n")
+        p1 = _ancestor_paragraph(match.positions[0].node)
+        self._ensure_splittable(p1)
+        # The first split lands where the match's tail begins (match.end, since
+        # the match is deleted and segment 0 reinserted where it was). Reject an
+        # unsplittable boundary now, before mutating (no single-op rollback).
+        self._reject_unsplittable_boundary(p1, build_text_map(p1), match.end)
+        start = match.start
+        self._delete_across_nodes(match)
+        if segments[0]:
+            self._rewrite_insert_at(p1, build_text_map(p1), start, segments[0])
+        return self._apply_paragraph_splits(p1, start + len(segments[0]), segments[1:])
+
+    def _split_insert(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:
+        """Insert ``text`` (containing ``\\n``) near ``match`` — a tracked split.
+
+        The first segment is inserted at the anchor boundary; each subsequent
+        ``\\n`` splits the paragraph, its segment landing at the start of the
+        new paragraph. One group, one changeset (see :meth:`_split_replace`).
+        """
+        segments = text.split("\n")
+        p1 = _ancestor_paragraph(match.positions[0].node)
+        self._ensure_splittable(p1)
+        base = match.end if position == "after" else match.start
+        # The first split lands at the anchor boundary (segment 0 is inserted
+        # there, pushing the original content right). Reject an unsplittable
+        # boundary now, before mutating (no single-op rollback).
+        self._reject_unsplittable_boundary(p1, build_text_map(p1), base)
+        if segments[0]:
+            self._rewrite_insert_at(p1, build_text_map(p1), base, segments[0])
+        return self._apply_paragraph_splits(p1, base + len(segments[0]), segments[1:])
+
+    def _apply_paragraph_splits(self, p1, split_pos: int, segments: list[str]) -> int:
+        """Split ``p1`` once per entry in ``segments``, threading the tail.
+
+        ``split_pos`` is the visible-text position in the current paragraph
+        where the first split falls; each segment is inserted at the start of
+        the paragraph it opens. Returns the id of the last inserted paragraph
+        mark (a member of the operation's group), so the caller's EditResult
+        reaches the group.
+        """
+        member_id = -1
+        current_p = p1
+        pos = split_pos
+        for segment in segments:
+            new_p, mark_id = self._split_paragraph_at_position(current_p, pos)
+            member_id = mark_id
+            if segment:
+                self._insert_ins_at_paragraph_start(new_p, segment)
+            current_p = new_p
+            pos = len(segment)
+        return member_id
+
+    def _split_paragraph_at_position(self, p1, pos: int):
+        """Split ``p1`` at visible position ``pos``.
+
+        Everything from ``pos`` onward moves into a new following paragraph
+        (a copy of ``p1``'s properties, minus any section mark); ``p1``'s
+        paragraph mark is flagged as an inserted revision. Returns the new
+        paragraph element and the mark insertion's id.
+        """
+        tail = self._collect_tail_nodes(p1, pos)
+        new_p = self._new_tail_paragraph(p1)
+        for node in tail:
+            new_p.appendChild(node)
+        mark_id = self._flag_paragraph_mark_inserted(p1)
+        return new_p, mark_id
+
+    def _collect_tail_nodes(self, p1, pos: int) -> list:
+        """Direct children of ``p1`` (in order) holding visible text from ``pos`` on.
+
+        Splits the run at the boundary when ``pos`` falls mid-run. The
+        paragraph properties (``w:pPr``) are never included. Raises
+        RevisionError when the boundary sits inside an existing revision or
+        other inline container (deferred — our own split flows always cut on a
+        run that is a direct child of the paragraph).
+        """
+        text_map = build_text_map(p1)
+        if pos >= len(text_map.text):
+            return []
+        self._reject_unsplittable_boundary(p1, text_map, pos)
+        edge = text_map.positions[pos]
+        run = self._find_ancestor(edge.node, "w:r")
+        if run is None:  # pragma: no cover - guarded by _reject_unsplittable_boundary
+            return []
+        if edge.offset_in_node == 0:
+            first_tail = run
+        else:
+            # Split the run at the offset; the tail starts at the right half.
+            boundary = self._split_foreign_ins_at(edge.node, edge.offset_in_node)
+            first_tail = _next_element_sibling(boundary.nextSibling) if boundary is not None else None
+        tail: list = []
+        node = first_tail
+        while node is not None:
+            nxt = node.nextSibling
+            tail.append(node)
+            node = nxt
+        return tail
+
+    def _new_tail_paragraph(self, p1):
+        """Create and insert an empty following paragraph copying ``p1``'s pPr.
+
+        The copy drops any section mark (``w:sectPr`` stays on the last
+        paragraph only), pPr-change tracking, and any inherited paragraph-mark
+        revision. The new ``w:p`` is stamped (paraId/rsids) via injection.
+        """
+        doc = self.editor.dom
+        new_p = doc.createElement("w:p")
+        orig_pPr = _first_child_element(p1, "w:pPr")
+        if orig_pPr is not None:
+            pPr_copy = orig_pPr.cloneNode(True)
+            assert pPr_copy is not None  # cloneNode of an element returns an element
+            # A section mark stays on the last paragraph only; pPr-change
+            # tracking and any inherited mark revision do not belong on the copy.
+            for tag in ("w:sectPr", "w:pPrChange"):
+                child = _first_child_element(pPr_copy, tag)
+                if child is not None:
+                    pPr_copy.removeChild(child)
+            rPr = _first_child_element(pPr_copy, "w:rPr")
+            if rPr is not None:
+                for tag in ("w:ins", "w:del"):
+                    mark = _first_child_element(rPr, tag)
+                    if mark is not None:
+                        rPr.removeChild(mark)
+            new_p.appendChild(pPr_copy)
+        p1.parentNode.insertBefore(new_p, p1.nextSibling)
+        self.editor._inject_attributes_to_nodes([new_p])
+        return new_p
+
+    def _flag_paragraph_mark_inserted(self, p1) -> int:
+        """Flag ``p1``'s paragraph mark as an inserted revision.
+
+        Adds an empty ``<w:ins>`` as the first child of the paragraph-mark
+        ``<w:pPr><w:rPr>`` (created in schema order when absent). Injection
+        stamps id/author/date and, inside an active ``_grouped`` scope, records
+        it as a group member. Returns the mark insertion's id.
+        """
+        doc = self.editor.dom
+        pPr = _first_child_element(p1, "w:pPr")
+        if pPr is None:
+            pPr = doc.createElement("w:pPr")
+            p1.insertBefore(pPr, p1.firstChild)
+        rPr = _first_child_element(pPr, "w:rPr")
+        if rPr is None:
+            rPr = doc.createElement("w:rPr")
+            anchor = _first_child_element(pPr, "w:sectPr") or _first_child_element(pPr, "w:pPrChange")
+            if anchor is not None:
+                pPr.insertBefore(rPr, anchor)
+            else:
+                pPr.appendChild(rPr)
+        ins = doc.createElement("w:ins")
+        rPr.insertBefore(ins, rPr.firstChild)
+        self.editor._inject_attributes_to_nodes([ins])
+        mark_id = int(ins.getAttribute("w:id"))
+        self._paragraph_mark_ids.add(mark_id)
+        return mark_id
+
+    def _insert_ins_at_paragraph_start(self, paragraph, text: str) -> None:
+        """Insert ``text`` as a tracked insertion at the start of ``paragraph``.
+
+        Lands right after ``w:pPr`` (before any moved tail content).
+        """
+        ins_xml = f"<w:ins><w:r><w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
+        pPr = _first_child_element(paragraph, "w:pPr")
+        if pPr is not None:
+            self.editor.insert_after(pPr, ins_xml)
+            return
+        first = _next_element_sibling(paragraph.firstChild)
+        if first is not None:
+            self.editor.insert_before(first, ins_xml)
+        else:
+            self.editor.append_to(paragraph, ins_xml)
 
     def list_revisions(
         self,
@@ -3039,8 +3392,13 @@ class RevisionManager:
         if elem is None:
             return False
         if elem.tagName == "w:ins":
-            # Reject insertion: remove entirely
-            self._remove_element(elem)
+            if _is_paragraph_mark_ins(elem):
+                # Reject a paragraph-mark insertion: remove the mark and rejoin
+                # the tail paragraph (the inverse of the tracked split).
+                self._rejoin_paragraph(elem)
+            else:
+                # Reject insertion: remove entirely
+                self._remove_element(elem)
         else:  # w:del
             # Reject deletion: restore the deleted text
             self._restore_deletion(elem)
@@ -3242,6 +3600,39 @@ class RevisionManager:
 
         # Unwrap the w:del element
         self._unwrap_element(del_elem)
+
+    def _rejoin_paragraph(self, mark_ins) -> None:
+        """Reject a paragraph-mark insertion: drop the mark and merge the next
+        paragraph's content back into this one — the inverse of a tracked split.
+
+        The paragraph owning the mark survives (keeping its original
+        properties, including any section mark); the following paragraph's
+        content is appended and that paragraph is removed. Order-independent
+        across a multi-split group: ``_resolve_ids`` dissolves the later (higher
+        id) marks first, so an intermediate paragraph is never removed while it
+        still owns a pending mark.
+        """
+        p1 = _ancestor_paragraph(mark_ins)
+        rPr = mark_ins.parentNode
+        rPr.removeChild(mark_ins)
+        # Tidy the empty property wrappers the split created (keep any that
+        # carried other properties).
+        if not _next_element_sibling(rPr.firstChild):
+            pPr = rPr.parentNode
+            pPr.removeChild(rPr)
+            if not _next_element_sibling(pPr.firstChild):
+                pPr.parentNode.removeChild(pPr)
+        if p1 is None:  # pragma: no cover - a mark-ins always sits in a paragraph
+            return
+        p2 = _next_element_sibling(p1.nextSibling)
+        if p2 is None or getattr(p2, "tagName", "") != "w:p":
+            return  # best effort: no following paragraph to rejoin into
+        p2_pPr = _first_child_element(p2, "w:pPr")
+        for child in list(p2.childNodes):
+            if child is p2_pPr:
+                continue
+            p1.appendChild(child)
+        p2.parentNode.removeChild(p2)
 
 
 def _tokenize_words(text: str) -> list[str]:

@@ -102,6 +102,41 @@ def _require_valid_occurrence(occurrence: int | None, label: str = "", allow_non
         raise ValueError(f"{label}occurrence must be >= 0, got {occurrence}")
 
 
+# C0 control characters (U+0000–U+001F) plus DEL (U+007F). Tab, CR, and LF all
+# fall in this range; LF ('\n') is handled separately — it means a tracked
+# paragraph split, not a rejected literal.
+_REJECTED_CONTROL_CHARS = frozenset(chr(c) for c in range(0x20) if c != 0x0A) | {"\x7f"}
+
+
+def _reject_control_chars(value: str, *, field: str, ctx: str = "", allow_newline: bool = False) -> None:
+    """Reject control characters that would corrupt the document text.
+
+    Tab, carriage return, and the other C0/DEL control characters would enter
+    a ``<w:t>`` as an invisible, unreviewable literal — a redline nobody can
+    see, and ``get_visible_text().splitlines()`` would break on it. ``\\n`` is
+    special: it means a *tracked paragraph split*, allowed in content inputs
+    (``allow_newline=True``) and rejected everywhere else (search/anchor and
+    comment text, where real paragraph text is never multi-line, so a ``\\n``
+    is always a caller bug that would otherwise fail as TextNotFoundError).
+
+    Non-str values are left for the caller's own type check.
+    """
+    if not isinstance(value, str):
+        return
+    if not allow_newline and "\n" in value:
+        raise ValueError(
+            f"{ctx}{field} must not contain a newline ('\\n') — paragraph text is never "
+            f"multi-line, so it can never match. Target text within a single paragraph."
+        )
+    for char in value:
+        if char in _REJECTED_CONTROL_CHARS:
+            raise ValueError(
+                f"{ctx}{field} must not contain control character {char!r} — it would become an "
+                f"invisible, unreviewable literal in the document. Use '\\n' for a tracked "
+                f"paragraph split; a real tab ('\\t') is deferred to the tabs feature (ISSUES.md #6)."
+            )
+
+
 def find_in_text_map(text_map: TextMap, search: str, occurrence: int = 0) -> TextMapMatch | None:
     """Find the nth occurrence of text in a text map.
 

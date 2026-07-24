@@ -24,6 +24,7 @@ from .xml_editor import (
     TextMapMatch,
     _escape_xml,
     _generate_hex_id,
+    _reject_control_chars,
     _require_valid_occurrence,
     build_text_map,
     compute_paragraph_hash,
@@ -166,6 +167,13 @@ class CommentManager:
             # Must fail here, before _place_markers mutates document.xml —
             # a crash later (html.escape) would leave orphaned range markers.
             raise CommentError(f"comment_text must be a string, got {comment_text!r}")
+        # Comments carry no split semantics, so reject '\n' too — a literal
+        # newline in a single <w:t> would be an invisible, unreviewable artifact.
+        try:
+            _reject_control_chars(anchor_text, field="anchor_text", ctx="add_comment(): ", allow_newline=False)
+            _reject_control_chars(comment_text, field="comment_text", ctx="add_comment(): ", allow_newline=False)
+        except ValueError as e:
+            raise CommentError(str(e)) from e
         _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id
@@ -416,6 +424,10 @@ class CommentManager:
         # reply would otherwise be serialized into comments.xml as "None".
         if not isinstance(reply_text, str) or not reply_text:
             raise ValueError(f"reply_to_comment(): 'reply' must be a non-empty string, got {reply_text!r}")
+        try:
+            _reject_control_chars(reply_text, field="reply", ctx="reply_to_comment(): ", allow_newline=False)
+        except ValueError as e:
+            raise CommentError(str(e)) from e
         if parent_comment_id not in self.existing_comments:
             raise CommentError(
                 f"Parent comment with id={parent_comment_id} not found",
