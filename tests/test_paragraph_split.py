@@ -14,7 +14,7 @@ import zipfile
 import pytest
 from conftest import find_ref, replace_document_xml
 
-from docx_editor import Document, EditOperation
+from docx_editor import Document, EditOperation, RevisionError
 from docx_editor.xml_editor import ParagraphRef
 
 
@@ -205,8 +205,6 @@ class TestEditResultRefs:
         assert result.refs == (str(result),)
 
     def test_split_refs_cover_both_paragraphs(self, doc):
-        from docx_editor.xml_editor import ParagraphRef
-
         ref = find_ref(doc, "quick brown fox")
         result = doc.replace("dog.", "dog.\nNew line.", paragraph=ref)
 
@@ -308,3 +306,68 @@ class TestReopenRejoin:
             assert gid is not None
             doc.reject_group(gid)
             assert doc.get_visible_text() == original
+
+
+class TestResplitRefused:
+    """A paragraph can hold at most one pending inserted mark (CT_ParaRPr allows
+    one w:ins). Re-splitting an already-split half is refused, atomically."""
+
+    def test_resplit_already_split_first_half_refused_and_atomic(self, doc):
+        ref = find_ref(doc, "quick brown fox")
+        doc.split_paragraph(ref, before="jumps")  # first half now carries a mark
+        first = find_ref(doc, "quick brown fox")  # re-resolve after the split
+        before_paras = doc.paragraph_count()
+        before_xml = doc._document_editor.dom.toxml()
+
+        with pytest.raises(RevisionError, match="already has a pending inserted paragraph mark"):
+            doc.split_paragraph(first, before="brown")
+
+        # Byte-for-byte unchanged — the refusal is up front, before any mutation.
+        assert doc.paragraph_count() == before_paras
+        assert doc._document_editor.dom.toxml() == before_xml
+
+
+class TestRejectNonTerminalMark:
+    """Rejecting the first mark of a multi-split individually must not orphan the
+    later break — it migrates onto the surviving paragraph and stays rejectable."""
+
+    def test_reject_first_mark_keeps_later_break_rejectable(self, doc):
+        ref = find_ref(doc, "quick brown fox")
+        original = doc.get_visible_text()
+        doc.replace("fox", "fox\nB\nC", paragraph=ref)
+        marks = sorted(r.id for r in doc.list_revisions() if r.type == "insertion" and r.text == "")
+        assert len(marks) == 2
+
+        doc.reject_revision(marks[0])  # the lowest-id (first) mark
+
+        # The second mark survived (migrated) and is still tracked/rejectable.
+        remaining = [r.id for r in doc.list_revisions() if r.type == "insertion" and r.text == ""]
+        assert remaining == [marks[1]]
+        assert doc.reject_revision(marks[1]) is True
+        # Both breaks rejected → the three text insertions collapse onto one line.
+        assert len(doc.get_visible_text().splitlines()) == len(original.splitlines())
+
+
+class TestRewriteMultiSplitRefused:
+    """A rewrite whose newlines diff into separate hunks would split one
+    paragraph in several places — refused atomically (a single hunk with several
+    newlines still threads fine)."""
+
+    def test_rewrite_newlines_in_separate_hunks_refused_and_atomic(self, doc):
+        ref = find_ref(doc, "quick brown fox")
+        before_paras = doc.paragraph_count()
+        before_xml = doc._document_editor.dom.toxml()
+
+        with pytest.raises(RevisionError, match="newlines that fall in separate edits"):
+            # Turning existing spaces into newlines diffs into separate \n hunks.
+            doc.rewrite_paragraph(ref, "The\nquick\nbrown fox jumps over the lazy dog.")
+
+        assert doc.paragraph_count() == before_paras
+        assert doc._document_editor.dom.toxml() == before_xml
+
+    def test_rewrite_single_contiguous_newline_change_still_splits(self, doc):
+        ref = find_ref(doc, "quick brown fox")
+        before = doc.paragraph_count()
+        # Wholesale replacement is one hunk containing the newline — allowed.
+        doc.rewrite_paragraph(ref, "First half.\nSecond half.")
+        assert doc.paragraph_count() == before + 1

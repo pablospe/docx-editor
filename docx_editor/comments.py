@@ -425,7 +425,7 @@ class CommentManager:
         if not isinstance(reply_text, str) or not reply_text:
             raise ValueError(f"reply_to_comment(): 'reply' must be a non-empty string, got {reply_text!r}")
         try:
-            _reject_control_chars(reply_text, field="reply", ctx="reply_to_comment(): ", allow_newline=False)
+            _reject_control_chars(reply_text, field="'reply'", ctx="reply_to_comment(): ", allow_newline=False)
         except ValueError as e:
             raise CommentError(str(e)) from e
         if parent_comment_id not in self.existing_comments:

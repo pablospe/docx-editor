@@ -536,7 +536,7 @@ def _first_child_element(parent, tag: str) -> Element | None:
     return None
 
 
-def _next_element_sibling(node):
+def _next_element_sibling(node) -> Element | None:
     """The next sibling that is an element (skipping text/whitespace nodes)."""
     while node is not None and node.nodeType != node.ELEMENT_NODE:
         node = node.nextSibling
@@ -720,7 +720,9 @@ class RevisionManager:
         id-keyed lookup cannot tell the occurrences apart, so no group may
         contain an ambiguous member.
         """
-        run_key: tuple[int, str, str] | None = None
+        # (author, date) of the current run. Paragraph identity is tracked
+        # separately in run_para, so it is not part of the key.
+        run_key: tuple[str, str] | None = None
         run_para: Element | None = None
         run_members: list[int] = []
         # (author, date) -> changeset id, for the inferred changeset tier.
@@ -739,11 +741,10 @@ class RevisionManager:
                 self._group_sources[group_id] = "inferred"
                 # run_members non-empty guarantees run_key is set (members are
                 # only appended after run_key becomes non-None). Its author+date
-                # are the group's; drop the paragraph identity so groups in
-                # different paragraphs still share one changeset.
+                # are the group's changeset key, so groups in different
+                # paragraphs sharing them still join one changeset.
                 assert run_key is not None
-                _, author, date = run_key
-                cs_key = (author, date)
+                cs_key = run_key
                 cs_id = changeset_by_key.get(cs_key)
                 if cs_id is None:
                     cs_id = self._changeset_counter
@@ -793,13 +794,13 @@ class RevisionManager:
             # one before a tracked split, so their revisions stay one group.
             same_run = (
                 run_key is not None
-                and author == run_key[1]
-                and date == run_key[2]
+                and author == run_key[0]
+                and date == run_key[1]
                 and (paragraph is run_para or self._is_split_continuation(run_para, paragraph, author, date))
             )
             if not same_run:
                 close_run()
-            run_key = (id(paragraph), author, date)
+            run_key = (author, date)
             run_para = paragraph
             run_members.append(rev_id)
         close_run()
@@ -1497,6 +1498,27 @@ class RevisionManager:
             new_fragment = "".join(new_tokens[j1:j2])
 
             hunks.append((tag, old_char_start, old_char_end, new_fragment))
+
+        # Preflight the split (\n) hunks against the pre-mutation state: the
+        # reversed hunk loop below has no rollback, so anything that can't split
+        # cleanly must refuse before any hunk mutates.
+        split_hunks = [(tag, s, e, frag) for (tag, s, e, frag) in hunks if tag != "delete" and "\n" in frag]
+        if len(split_hunks) > 1:
+            # Every split hunk targets this one paragraph, so a second would
+            # re-mark it (invalid — see _ensure_splittable). A single hunk with
+            # several \n is fine (it threads through fresh tail paragraphs).
+            raise RevisionError(
+                "Cannot rewrite a paragraph with newlines that fall in separate edits — that "
+                "would split one paragraph in more than one place. Use separate split_paragraph()/"
+                "replace() calls, or keep the rewrite's newlines within one contiguous change."
+            )
+        # A replace splits at its match end, an insert at its start; higher-position
+        # hunks never shift these lower/equal boundaries, so the pre-mutation
+        # positions stay valid.
+        for tag, old_char_start, old_char_end, _frag in split_hunks:
+            self._ensure_splittable(p)
+            boundary = old_char_end if tag == "replace" else old_char_start
+            self._reject_unsplittable_boundary(p, text_map, boundary)
 
         # Process hunks in reverse order for position stability
         for tag, old_char_start, old_char_end, new_fragment in reversed(hunks):
@@ -2891,18 +2913,31 @@ class RevisionManager:
     # ==================== Paragraph splits (\n) ====================
 
     def _ensure_splittable(self, p1) -> None:
-        """Refuse to split a paragraph that ends a document section.
+        """Refuse to split a paragraph that can't take a fresh tracked mark.
 
-        A paragraph-level ``w:sectPr`` marks a section boundary; moving it (or
-        duplicating it) across a split would silently corrupt the section
-        structure. Uncommon — the document-final section mark lives on
-        ``w:body``, not in a paragraph — so refuse cleanly rather than guess.
+        Two cases refuse cleanly (before any mutation):
+
+        - A paragraph-level ``w:sectPr`` marks a section boundary; moving it (or
+          duplicating it) across a split would silently corrupt the section
+          structure. Uncommon — the document-final section mark lives on
+          ``w:body``, not in a paragraph.
+        - The paragraph already carries a pending inserted paragraph mark. A
+          second split would add a second ``<w:ins>`` to one ``<w:pPr><w:rPr>``
+          (invalid OOXML — ``CT_ParaRPr`` allows one ``ins``) and mis-attribute
+          the marks to the wrong breaks. A single multi-``\\n`` op never trips
+          this (each split lands on a fresh tail paragraph); only re-splitting an
+          already-split half in a separate op does.
         """
         pPr = _first_child_element(p1, "w:pPr")
         if pPr is not None and _first_child_element(pPr, "w:sectPr") is not None:
             raise RevisionError(
                 "Cannot split a paragraph that carries a section mark (w:sectPr) — the section "
                 "boundary would be ambiguous. Edit around the section break instead."
+            )
+        if _paragraph_mark_ins(p1) is not None:
+            raise RevisionError(
+                "Cannot split a paragraph that already has a pending inserted paragraph mark — "
+                "accept or reject that split before splitting the same paragraph again."
             )
 
     def _reject_unsplittable_boundary(self, paragraph, text_map: TextMap, pos: int) -> None:
@@ -2992,7 +3027,7 @@ class RevisionManager:
             pos = len(segment)
         return member_id
 
-    def _split_paragraph_at_position(self, p1, pos: int):
+    def _split_paragraph_at_position(self, p1, pos: int) -> tuple[Element, int]:
         """Split ``p1`` at visible position ``pos``.
 
         Everything from ``pos`` onward moves into a new following paragraph
@@ -3038,7 +3073,7 @@ class RevisionManager:
             node = nxt
         return tail
 
-    def _new_tail_paragraph(self, p1):
+    def _new_tail_paragraph(self, p1) -> Element:
         """Create and insert an empty following paragraph copying ``p1``'s pPr.
 
         The copy drops any section mark (``w:sectPr`` stays on the last
@@ -3068,13 +3103,9 @@ class RevisionManager:
         self.editor._inject_attributes_to_nodes([new_p])
         return new_p
 
-    def _flag_paragraph_mark_inserted(self, p1) -> int:
-        """Flag ``p1``'s paragraph mark as an inserted revision.
-
-        Adds an empty ``<w:ins>`` as the first child of the paragraph-mark
-        ``<w:pPr><w:rPr>`` (created in schema order when absent). Injection
-        stamps id/author/date and, inside an active ``_grouped`` scope, records
-        it as a group member. Returns the mark insertion's id.
+    def _paragraph_mark_rPr(self, p1) -> Element:
+        """Return ``p1``'s paragraph-mark ``<w:pPr><w:rPr>``, creating both in
+        schema order (``w:rPr`` before any ``w:sectPr``/``w:pPrChange``) if absent.
         """
         doc = self.editor.dom
         pPr = _first_child_element(p1, "w:pPr")
@@ -3089,7 +3120,18 @@ class RevisionManager:
                 pPr.insertBefore(rPr, anchor)
             else:
                 pPr.appendChild(rPr)
-        ins = doc.createElement("w:ins")
+        return rPr
+
+    def _flag_paragraph_mark_inserted(self, p1) -> int:
+        """Flag ``p1``'s paragraph mark as an inserted revision.
+
+        Adds an empty ``<w:ins>`` as the first child of the paragraph-mark
+        ``<w:pPr><w:rPr>`` (created in schema order when absent). Injection
+        stamps id/author/date and, inside an active ``_grouped`` scope, records
+        it as a group member. Returns the mark insertion's id.
+        """
+        rPr = self._paragraph_mark_rPr(p1)
+        ins = self.editor.dom.createElement("w:ins")
         rPr.insertBefore(ins, rPr.firstChild)
         self.editor._inject_attributes_to_nodes([ins])
         mark_id = int(ins.getAttribute("w:id"))
@@ -3099,9 +3141,14 @@ class RevisionManager:
     def _insert_ins_at_paragraph_start(self, paragraph, text: str) -> None:
         """Insert ``text`` as a tracked insertion at the start of ``paragraph``.
 
-        Lands right after ``w:pPr`` (before any moved tail content).
+        Lands right after ``w:pPr`` (before any moved tail content). The run
+        inherits the formatting (rPr) of the tail it sits directly before — the
+        moved boundary run — so a split-inserted segment matches the surrounding
+        text instead of dropping to document default.
         """
-        ins_xml = f"<w:ins><w:r><w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
+        runs = paragraph.getElementsByTagName("w:r")
+        rPr_xml = get_rPr_xml(runs[0]) if runs else ""
+        ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
         pPr = _first_child_element(paragraph, "w:pPr")
         if pPr is not None:
             self.editor.insert_after(pPr, ins_xml)
@@ -3607,10 +3654,17 @@ class RevisionManager:
 
         The paragraph owning the mark survives (keeping its original
         properties, including any section mark); the following paragraph's
-        content is appended and that paragraph is removed. Order-independent
-        across a multi-split group: ``_resolve_ids`` dissolves the later (higher
-        id) marks first, so an intermediate paragraph is never removed while it
-        still owns a pending mark.
+        content is appended and that paragraph is removed.
+
+        If that following paragraph is itself an intermediate half of a
+        multi-split, its ``w:pPr`` carries its *own* pending mark (the break to
+        the paragraph after it). That mark is migrated onto the surviving
+        paragraph so the later break stays tracked — otherwise rejecting a
+        non-terminal mark individually (a public ``reject_revision``) would drop
+        it with ``p2``'s ``pPr``, leaving a permanent, untracked break.
+        ``reject_group``/``reject_changeset`` dissolve later (higher-id) marks
+        first, so ``p2`` has no mark by the time it is merged and this migration
+        is a no-op.
         """
         p1 = _ancestor_paragraph(mark_ins)
         rPr = mark_ins.parentNode
@@ -3627,12 +3681,21 @@ class RevisionManager:
         p2 = _next_element_sibling(p1.nextSibling)
         if p2 is None or getattr(p2, "tagName", "") != "w:p":
             return  # best effort: no following paragraph to rejoin into
+        downstream_mark = _paragraph_mark_ins(p2)
         p2_pPr = _first_child_element(p2, "w:pPr")
         for child in list(p2.childNodes):
             if child is p2_pPr:
                 continue
             p1.appendChild(child)
-        p2.parentNode.removeChild(p2)
+        p2_parent = p2.parentNode
+        if p2_parent is not None:  # a live sibling always has a parent; guards ty narrowing
+            p2_parent.removeChild(p2)
+        if downstream_mark is not None:
+            # p1 now ends where p2 did, so it inherits p2's break-to-successor
+            # mark (same id/author/date, still a live group member). insertBefore
+            # re-parents it out of p2's detached rPr automatically.
+            new_rPr = self._paragraph_mark_rPr(p1)
+            new_rPr.insertBefore(downstream_mark, new_rPr.firstChild)
 
 
 def _tokenize_words(text: str) -> list[str]:

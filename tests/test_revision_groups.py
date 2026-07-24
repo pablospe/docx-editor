@@ -500,6 +500,24 @@ class TestSplitReconstruction:
         # Byte-for-byte unchanged — no orphaned deletion/insertion.
         assert manager.editor.dom.toxml() == before
 
+    def test_split_inserted_segment_inherits_run_format(self, temp_xml):
+        # The segment inserted at the start of the new paragraph copies the rPr
+        # of the tail it sits before, so it keeps the surrounding formatting
+        # instead of dropping to document default.
+        body = "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hello World</w:t></w:r></w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        manager.replace_text("Hello", "A\nB")
+
+        b_runs = [
+            r
+            for r in manager.editor.dom.getElementsByTagName("w:r")
+            if (ts := r.getElementsByTagName("w:t")) and ts[0].firstChild and ts[0].firstChild.data == "B"
+        ]
+        assert b_runs, "inserted 'B' run not found"
+        rprs = b_runs[0].getElementsByTagName("w:rPr")
+        assert rprs and rprs[0].getElementsByTagName("w:b"), "split-inserted segment lost its bold rPr"
+
 
 class TestForeignInsGrouping:
     """Author/attachment filters keep foreign fragments out of our groups."""
