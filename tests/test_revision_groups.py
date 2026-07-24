@@ -518,6 +518,38 @@ class TestSplitReconstruction:
         rprs = b_runs[0].getElementsByTagName("w:rPr")
         assert rprs and rprs[0].getElementsByTagName("w:b"), "split-inserted segment lost its bold rPr"
 
+    def test_multi_split_at_end_all_segments_inherit_format(self, temp_xml):
+        # Appending "A\nB\nC" past the last word makes every tail paragraph empty
+        # when its segment is inserted; each must still inherit the boundary
+        # formatting (not just the first segment).
+        body = "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hello</w:t></w:r></w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        manager.insert_text_after("Hello", "A\nB\nC")
+
+        for seg in ("A", "B", "C"):
+            runs = [
+                r
+                for r in manager.editor.dom.getElementsByTagName("w:r")
+                if (ts := r.getElementsByTagName("w:t")) and ts[0].firstChild and ts[0].firstChild.data == seg
+            ]
+            assert runs, f"segment {seg!r} run not found"
+            rpr = runs[0].getElementsByTagName("w:rPr")
+            assert rpr and rpr[0].getElementsByTagName("w:b"), f"segment {seg!r} lost bold formatting"
+
+    def test_consecutive_newlines_make_an_empty_paragraph(self, temp_xml):
+        # "\n\nC" past the end makes an empty middle paragraph; the split whose
+        # current paragraph has no runs falls back to empty formatting cleanly.
+        body = "<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        manager.insert_text_after("Hello", "\n\nC")
+
+        # Hello | (empty) | C  — three paragraphs, no crash, no lost content.
+        assert len(manager.editor.dom.getElementsByTagName("w:p")) == 3
+        texts = [t.firstChild.data for t in manager.editor.dom.getElementsByTagName("w:t") if t.firstChild]
+        assert "C" in texts
+
     def test_split_formatted_paragraph_copies_and_cleans_pPr(self, temp_xml):
         # Splitting a paragraph with rich properties: the tail copies pStyle +
         # rPr formatting but drops the tracked pPrChange and the mark revision;

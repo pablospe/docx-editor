@@ -3019,10 +3019,17 @@ class RevisionManager:
         current_p = p1
         pos = split_pos
         for segment in segments:
+            # Formatting to fall back on when the new paragraph's tail is empty
+            # (a split at the end of the current paragraph): its trailing run
+            # carries the boundary formatting. This propagates through a run of
+            # empty tails (e.g. appending "A\nB\nC" past the last word), so every
+            # segment keeps the surrounding format instead of only the first.
+            boundary_runs = current_p.getElementsByTagName("w:r")
+            fallback_rPr = get_rPr_xml(boundary_runs[-1]) if boundary_runs else ""
             new_p, mark_id = self._split_paragraph_at_position(current_p, pos)
             member_id = mark_id
             if segment:
-                self._insert_ins_at_paragraph_start(new_p, segment)
+                self._insert_ins_at_paragraph_start(new_p, segment, fallback_rPr)
             current_p = new_p
             pos = len(segment)
         return member_id
@@ -3138,16 +3145,18 @@ class RevisionManager:
         self._paragraph_mark_ids.add(mark_id)
         return mark_id
 
-    def _insert_ins_at_paragraph_start(self, paragraph, text: str) -> None:
+    def _insert_ins_at_paragraph_start(self, paragraph, text: str, fallback_rPr_xml: str = "") -> None:
         """Insert ``text`` as a tracked insertion at the start of ``paragraph``.
 
         Lands right after ``w:pPr`` (before any moved tail content). The run
         inherits the formatting (rPr) of the tail it sits directly before — the
         moved boundary run — so a split-inserted segment matches the surrounding
-        text instead of dropping to document default.
+        text instead of dropping to document default. When the tail is empty (a
+        split at the paragraph's end), ``fallback_rPr_xml`` (the previous
+        paragraph's boundary formatting) is used instead.
         """
         runs = paragraph.getElementsByTagName("w:r")
-        rPr_xml = get_rPr_xml(runs[0]) if runs else ""
+        rPr_xml = get_rPr_xml(runs[0]) if runs else fallback_rPr_xml
         ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
         pPr = _first_child_element(paragraph, "w:pPr")
         if pPr is not None:
