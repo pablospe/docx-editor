@@ -489,7 +489,7 @@ class TestSplitReconstruction:
         # is not yet supported. It must refuse BEFORE mutating: a single edit has
         # no DOM rollback, so a partial delete/insert would otherwise be left
         # behind (the tail-collection raise used to fire mid-mutation).
-        body = f'<w:p><w:r><w:t>Hello</w:t></w:r>{_ins_xml(1, "WORLD", author=AUTHOR_A)}</w:p>'
+        body = f"<w:p><w:r><w:t>Hello</w:t></w:r>{_ins_xml(1, 'WORLD', author=AUTHOR_A)}</w:p>"
         manager = _make_manager(temp_xml(body))
         before = manager.editor.dom.toxml()
 
