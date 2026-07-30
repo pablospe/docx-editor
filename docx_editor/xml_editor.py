@@ -256,7 +256,7 @@ class ParagraphInfo:
         return f"{self.ref}| {self.text}"
 
 
-def _build_paragraph_info(paragraph, index: int, style_outlines: dict[str, int] | None = None) -> ParagraphInfo:
+def _build_paragraph_info(paragraph, index: int, style_outlines: dict[str, int]) -> ParagraphInfo:
     """Build the :class:`ParagraphInfo` record for one ``<w:p>`` element.
 
     Single source of the record for every producer
@@ -264,11 +264,11 @@ def _build_paragraph_info(paragraph, index: int, style_outlines: dict[str, int] 
     and, through the former, :meth:`Document.context`), so their output cannot
     drift. One text map serves both the hash and the text.
 
-    ``style_outlines`` is the optional ``{style_id: outline_level}`` map from
+    ``style_outlines`` is the ``{style_id: outline_level}`` map from
     :func:`_build_style_outline_map`, needed only to resolve style-defined
-    outline levels; ``None`` behaves like ``{}`` (direct ``w:outlineLvl`` still
-    resolves), which is also the graceful degradation for a document with no
-    ``word/styles.xml`` part.
+    outline levels. An empty map is the graceful degradation for a document
+    with no ``word/styles.xml`` part (a direct ``w:outlineLvl`` still resolves),
+    and is what :meth:`Document._style_maps` already returns in that case.
     """
     text_map = build_text_map(paragraph)
     style = _extract_style(paragraph)
@@ -278,7 +278,7 @@ def _build_paragraph_info(paragraph, index: int, style_outlines: dict[str, int] 
         text=text_map.text,
         in_table=_innermost_ancestor(paragraph, "w:tc") is not None,
         style=style,
-        outline_level=_extract_outline_level(paragraph, style, style_outlines or {}),
+        outline_level=_extract_outline_level(paragraph, style, style_outlines),
     )
 
 

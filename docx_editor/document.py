@@ -49,20 +49,20 @@ from .xml_editor import (
 _DEFAULT_LIST_LIMIT = 200
 
 
-def _require_ref_string(paragraph: str | None, arg: str | None = None) -> str:
+def _require_ref_string(paragraph: str | None, field: str | None = None) -> str:
     """Reject a missing or non-string paragraph ref before it can silently select
     the RevisionManager's document-wide search branch (its ``paragraph=None``
     mode is intentional at that layer, not at this one).
 
     ``paragraph`` is Optional in the edit methods' signatures only so a
-    SearchResult target can supply it; those callers pass ``arg`` (the name of
+    SearchResult target can supply it; those callers pass ``field`` (the name of
     their target parameter) to get the "or pass a SearchResult as …" hint.
     Callers whose ref is genuinely required and positional (split_paragraph)
     omit it. Returns the ref, narrowed to ``str`` for the call that follows.
     """
     if not isinstance(paragraph, str):
         message = f"'paragraph' must be a paragraph ref string like 'P3#a7b2', got {type(paragraph).__name__}"
-        raise ValueError(message if arg is None else f"{message} — {_paragraph_hint(arg)}")
+        raise ValueError(message if field is None else f"{message} — {_paragraph_hint(field)}")
     return paragraph
 
 
@@ -223,11 +223,7 @@ class Document:
         **This discards whatever unsaved edits the workspace holds** — same
         destruction as ``open(force_recreate=True)``, just without opening. To
         rescue those edits first, save the orphaned workspace elsewhere and
-        inspect it::
-
-            from docx_editor.workspace import Workspace
-            Workspace("contract.docx", create=False).save("rescued.docx")
-            Document.discard_workspace("contract.docx")
+        inspect it before discarding (see the Example below).
 
         The workspace's advisory lock sidecar goes with it, including a lock
         held by a live session — so a wedged process cannot keep the document
@@ -251,6 +247,11 @@ class Document:
             # Idempotent reset before a fresh run:
             Document.discard_workspace("contract.docx")
             doc = Document.open("contract.docx")
+
+            # Rescue the orphaned workspace's edits first:
+            from docx_editor.workspace import Workspace
+            Workspace("contract.docx", create=False).save("rescued.docx")
+            Document.discard_workspace("contract.docx")
         """
         return Workspace.delete(path, workspace_dir=workspace_dir)
 
@@ -806,6 +807,10 @@ class Document:
         Table indexes, heading paths and section indexes are deliberately *not*
         cached: those derive from ``document.xml``, which edits do change.
 
+        The returned maps are the cached objects themselves, not copies —
+        callers must treat them as read-only, since a mutation would outlive
+        the call and be seen by every later consumer.
+
         The parse deliberately skips :class:`XMLEditor`'s line-tracking parser
         (halving the cost on a large styles part): the map builders read style
         ids and attributes only, and nothing ever edits ``styles.xml``, so
@@ -1103,7 +1108,7 @@ class Document:
         """
         self._ensure_open()
         find, paragraph, occurrence = _resolve_search_target(
-            find, paragraph, occurrence, ctx="replace(): ", arg="'find'"
+            find, paragraph, occurrence, ctx="replace(): ", field="'find'"
         )
         paragraph = _require_ref_string(paragraph, "'find'")
         change_id = self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
@@ -1148,7 +1153,7 @@ class Document:
         """
         self._ensure_open()
         text, paragraph, occurrence = _resolve_search_target(
-            text, paragraph, occurrence, ctx="delete(): ", arg="'text'"
+            text, paragraph, occurrence, ctx="delete(): ", field="'text'"
         )
         paragraph = _require_ref_string(paragraph, "'text'")
         change_id = self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
@@ -1199,7 +1204,7 @@ class Document:
         """
         self._ensure_open()
         anchor, paragraph, occurrence = _resolve_search_target(
-            anchor, paragraph, occurrence, ctx="insert_after(): ", arg="'anchor'"
+            anchor, paragraph, occurrence, ctx="insert_after(): ", field="'anchor'"
         )
         paragraph = _require_ref_string(paragraph, "'anchor'")
         change_id = self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
@@ -1250,7 +1255,7 @@ class Document:
         """
         self._ensure_open()
         anchor, paragraph, occurrence = _resolve_search_target(
-            anchor, paragraph, occurrence, ctx="insert_before(): ", arg="'anchor'"
+            anchor, paragraph, occurrence, ctx="insert_before(): ", field="'anchor'"
         )
         paragraph = _require_ref_string(paragraph, "'anchor'")
         change_id = self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
@@ -1524,7 +1529,7 @@ class Document:
         """
         self._ensure_open()
         anchor_text, paragraph, occurrence = _resolve_search_target(
-            anchor_text, paragraph, occurrence, ctx="add_comment(): ", arg="'anchor_text'"
+            anchor_text, paragraph, occurrence, ctx="add_comment(): ", field="'anchor_text'"
         )
         return self._comment_manager.add_comment(anchor_text, comment, paragraph=paragraph, occurrence=occurrence)
 

@@ -164,6 +164,54 @@ def test_cli_distinguishes_the_two_timeouts(tmp_path, capsys):
         stop_session(conn)
 
 
+def test_request_discarded_behind_a_raising_command(tmp_path):
+    """An "ok" result with started=False ran NOTHING.
+
+    ipykernel aborts everything still queued behind a command that raises, so a
+    request sent while an earlier one was failing comes back clean and empty
+    having done nothing. Without ``started`` that is indistinguishable from a
+    successful silent statement — the caller would believe its edit applied.
+    """
+    from docx_editor.session import _client
+
+    conn = tmp_path / "kernel.json"
+    start_session(conn)
+    hog = _client(conn)
+    try:
+        hog.execute("import time; time.sleep(3); raise RuntimeError('boom')")
+        time.sleep(0.5)  # let the kernel pick it up and go busy
+
+        res = exec_code("discarded = 'I RAN'", connection_file=conn, timeout=30)
+        assert res.status == "ok"
+        assert res.started is False  # the tell: never dequeued
+        assert res.stdout == ""
+
+        time.sleep(4)  # let the failing command finish and the kernel settle
+        assert eval_code("globals().get('discarded')", connection_file=conn).value is None
+    finally:
+        hog.stop_channels()
+        stop_session(conn)
+
+
+def test_cli_warns_when_the_kernel_discards_the_request(tmp_path, capsys):
+    """Exit code stays 0 (contract), so the warning has to carry the signal."""
+    from docx_editor.session import EXIT_OK, _client
+
+    conn = tmp_path / "kernel.json"
+    start_session(conn)
+    hog = _client(conn)
+    try:
+        hog.execute("import time; time.sleep(3); raise RuntimeError('boom')")
+        time.sleep(0.5)
+
+        code = main(["exec", "discarded = 1", "--session-file", str(conn), "--timeout", "30"])
+        assert code == EXIT_OK
+        assert "discarded this request" in capsys.readouterr().err
+    finally:
+        hog.stop_channels()
+        stop_session(conn)
+
+
 def test_exec_docx_editing_workflow(session_conn, temp_docx):
     """End-to-end: a document stays open across separate exec calls."""
     r1 = exec_code(

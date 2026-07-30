@@ -347,13 +347,20 @@ _SILENCE_PROBE_AFTER = 10.0
 class ExecResult:
     """Outcome of one exec_code() call against the session kernel.
 
-    ``started`` distinguishes the two very different things a ``"timeout"``
-    status can mean: with ``started=True`` your code ran and was still running
-    when the clock ran out (raise ``timeout``, or make the code faster); with
-    ``started=False`` the request never left the queue, because the kernel was
-    still busy with an earlier command (nothing of yours executed — wait, or
-    check what is hogging the session). It is True on every other successful
-    exit, since ``ok``/``error`` cannot happen without executing.
+    ``started`` records whether the kernel began executing this request at all,
+    which disambiguates two statuses:
+
+    - ``"timeout"``: with ``started=True`` your code ran and was still running
+      when the clock ran out (raise ``timeout``, or make the code faster); with
+      ``started=False`` the request never left the queue, because the kernel was
+      still busy with an earlier command — nothing of yours executed, so wait or
+      check what is hogging the session.
+    - ``"ok"`` with ``started=False``: the kernel **discarded** the request
+      without running it. ipykernel aborts everything still queued behind a
+      command that raises, so a request sent while an earlier one was failing
+      comes back clean and empty having done nothing. Re-send it.
+
+    An ``"error"`` result, and any ``"ok"`` with ``started=True``, did execute.
     """
 
     status: ExecStatus
@@ -380,7 +387,9 @@ def exec_code(code: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
     Returns:
         ExecResult with status "ok", "error", "timeout", or "dead" (the kernel
         died mid-execution — its state is lost), and ``started`` telling whether
-        the kernel began executing this request at all.
+        the kernel began executing this request at all. Check ``started`` on an
+        "ok" result too: ``ok`` with ``started=False`` means the kernel aborted
+        the request behind a failing predecessor and ran nothing.
 
     Raises:
         FileNotFoundError: If no session connection file exists.
@@ -786,6 +795,16 @@ def _run(args: argparse.Namespace) -> int:
             )
         print(message, file=sys.stderr)
         return EXIT_TIMEOUT
+    if not res.started:
+        # "ok" but never dequeued: the kernel discards everything queued behind
+        # a command that raises, so this returned clean without running. Exit
+        # code stays EXIT_OK (changing it is a contract change), which is
+        # exactly why the warning has to be loud.
+        print(
+            "Warning: the kernel discarded this request without running it — it was queued behind a "
+            "command that raised. Nothing was executed; re-send it.",
+            file=sys.stderr,
+        )
     return EXIT_OK
 
 

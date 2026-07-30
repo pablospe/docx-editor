@@ -905,7 +905,7 @@ Save the document.
 
 **Returns:** Path to the saved document (Path)
 
-After saving to a different path (or a save that fails), the workspace is flagged as holding unsaved changes; a later `Document.open()` of the source raises `WorkspaceSyncError` until the workspace is saved back to the source or discarded with `force_recreate=True`. See [`WorkspaceSyncError`](#workspacesyncerror) below.
+After saving to a different path (or a save that fails), the workspace is flagged as holding unsaved changes; a later `Document.open()` of the source raises `WorkspaceSyncError` until the workspace is saved back to the source or discarded — with `force_recreate=True` on the next open, or once with [`Document.discard_workspace(path)`](#documentdiscard_workspacepath-workspace_dirnone). See [`WorkspaceSyncError`](#workspacesyncerror) below.
 
 **Example:**
 
@@ -1139,8 +1139,16 @@ hashes to `c4d8`, the row reports `current_ref="P7#c4d8"` — rebuild the
 operation with it instead of parsing the hash out of `error`. It is `None` for
 every other outcome: valid rows, malformed refs, out-of-range indexes, missing
 or ambiguous target text, and elements that are not an `EditOperation`. So
-`if row.current_ref:` is also how you tell a stale hash apart from a target
-that no longer exists.
+`if row.current_ref:` is how you spot the stale-hash rows.
+
+It clears the **hash** check only. Validation stops at the first failure, so a
+row can report a `current_ref` *and* have a target that has since moved or
+become ambiguous — the rebuilt operation is re-validated like any other, and a
+target that no longer fits fails loudly and atomically (a
+[`BatchOperationError`](#batchoperationerror) wrapping `TextNotFoundError` or
+`AmbiguousTextError`, with nothing applied). Dry-run the repaired batch, or
+re-search the paragraph, when the content may have changed materially rather
+than just shifted.
 
 ### Example
 
@@ -1211,7 +1219,8 @@ the match. Passing `paragraph=`/`occurrence=` *as well* raises `ValueError`
 
 `find_text()` returns `None` when there is no match, and that `None` is **not**
 accepted as a target (a missing match must not become a silent no-op) — it
-raises `ValueError`. Check the result first, as the examples below do, rather
+raises `ValueError` (`CommentError` from `add_comment`, which validates its
+anchor before the ref). Check the result first, as the examples below do, rather
 than piping `find_text()` straight into an edit in code that must not crash.
 
 `repr()`/`str()` are compact one-liners —
@@ -1228,11 +1237,11 @@ match = doc.find_text("30 days")
 if match:
     doc.replace(match, "60 days")          # the match pins paragraph + occurrence
 
-    # Equivalent, spelled out:
-    doc.replace(
-        match.text, "60 days",
-        paragraph=match.paragraph_ref, occurrence=match.paragraph_occurrence,
-    )
+    # The SAME single edit, spelled out — not a follow-up. Running both raises
+    # HashMismatchError, because the first one made `match` stale:
+    #   doc.replace(match.text, "60 days",
+    #               paragraph=match.paragraph_ref,
+    #               occurrence=match.paragraph_occurrence)
 
 # Sweep every match in one atomic batch (reversed() keeps same-paragraph ops in
 # the required descending-occurrence order):

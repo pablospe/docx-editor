@@ -473,6 +473,103 @@ class TestBatchEditDryRun:
         doc, _ = multi_para_doc
         assert doc.batch_edit([], dry_run=True) == []
 
+    def test_not_found_error_includes_preview(self, multi_para_doc):
+        """A not-found error carries the paragraph preview for easier debugging."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+
+        ops = [
+            EditOperation(action="replace", find="NONEXISTENT", replace_with="x", paragraph=ref),
+        ]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert results[0].valid is False
+        # The paragraph's real text ("item 1") should appear in the error preview.
+        assert "item 1" in results[0].error
+
+    def test_bad_occurrence_reports_instead_of_raising(self, multi_para_doc):
+        """A malformed op (negative occurrence) is reported, never raised; doc unchanged."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+        before = doc.get_visible_text()
+
+        ops = [
+            EditOperation(
+                action="replace",
+                find="item 1",
+                replace_with="x",
+                paragraph=ref,
+                occurrence=-1,  # malformed
+            ),
+        ]
+
+        # Must not raise despite the malformed occurrence.
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert results[0].valid is False
+        assert "occurrence" in results[0].error
+        assert doc.get_visible_text() == before
+
+    def test_missing_paragraph_ref(self, multi_para_doc):
+        """An op without a paragraph ref is invalid, with paragraph=None on the result."""
+        doc, _ = multi_para_doc
+
+        ops = [EditOperation(action="replace", find="item 1", replace_with="x", paragraph="")]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert results[0].valid is False
+        assert results[0].paragraph == ""
+        assert "paragraph" in results[0].error.lower()
+
+    def test_malformed_paragraph_ref(self, multi_para_doc):
+        """An unparseable paragraph ref is reported invalid, never raised."""
+        doc, _ = multi_para_doc
+
+        ops = [EditOperation(action="replace", find="x", replace_with="y", paragraph="not-a-ref")]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert results[0].valid is False
+        assert results[0].error
+
+    def test_missing_action_arguments(self, multi_para_doc):
+        """Each action reports its missing-argument error without raising."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        r0 = refs[0].split("|")[0]
+        r1 = refs[1].split("|")[0]
+        r2 = refs[2].split("|")[0]
+
+        ops = [
+            # replace without find/replace_with
+            EditOperation(action="replace", paragraph=r0),
+            # delete without text
+            EditOperation(action="delete", paragraph=r1),
+            # insert_after without anchor/text
+            EditOperation(action="insert_after", paragraph=r2),
+        ]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert all(r.valid is False for r in results)
+        assert "replace requires" in results[0].error
+        assert "delete requires" in results[1].error
+        assert "insert_after requires" in results[2].error
+
+    def test_unknown_action(self, multi_para_doc):
+        """An unrecognized action is reported invalid, never raised."""
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[0].split("|")[0]
+
+        ops = [EditOperation(action="frobnicate", paragraph=ref)]  # type: ignore[arg-type]
+
+        results = doc.batch_edit(ops, dry_run=True)
+
+        assert results[0].valid is False
+        assert "Unknown action" in results[0].error
+
 
 class TestDryRunCurrentRef:
     """A stale-hash row carries ``current_ref``, so recovery needs no message
@@ -485,11 +582,11 @@ class TestDryRunCurrentRef:
         stale_ref = doc.list_paragraphs()[4].split("|")[0]
         doc.replace("item 5", "CHANGED", paragraph=stale_ref)
         ops = [EditOperation.replace("CHANGED", "EDIT_5", paragraph=stale_ref)]
-        return ops, doc.batch_edit(ops, dry_run=True)[0]
+        return doc.batch_edit(ops, dry_run=True)[0]
 
     def test_stale_hash_row_reports_the_current_ref(self, multi_para_doc):
         doc, _ = multi_para_doc
-        _, row = self._stale_row(doc)
+        row = self._stale_row(doc)
 
         assert row.valid is False
         assert row.current_ref == doc.list_paragraphs()[4].split("|")[0]
@@ -498,14 +595,14 @@ class TestDryRunCurrentRef:
     def test_current_ref_is_the_hash_from_the_error_message(self, multi_para_doc):
         """Structured field and prose agree — consumers can stop regexing."""
         doc, _ = multi_para_doc
-        _, row = self._stale_row(doc)
+        row = self._stale_row(doc)
 
         assert row.current_ref is not None
         assert row.current_ref.split("#")[1] in row.error
 
     def test_retrying_with_current_ref_validates_and_applies(self, multi_para_doc):
         doc, _ = multi_para_doc
-        ops, row = self._stale_row(doc)
+        row = self._stale_row(doc)
 
         repaired = [EditOperation.replace("CHANGED", "EDIT_5", paragraph=row.current_ref)]
         assert all(r.valid for r in doc.batch_edit(repaired, dry_run=True))
@@ -613,103 +710,6 @@ class TestEditOperationSearchResultTarget:
             EditOperation.delete("a")
         with pytest.raises(ValueError, match="or pass a SearchResult as 'anchor'"):
             EditOperation.insert_before("a", "x")
-
-    def test_not_found_error_includes_preview(self, multi_para_doc):
-        """A not-found error carries the paragraph preview for easier debugging."""
-        doc, _ = multi_para_doc
-        ref = doc.list_paragraphs()[0].split("|")[0]
-
-        ops = [
-            EditOperation(action="replace", find="NONEXISTENT", replace_with="x", paragraph=ref),
-        ]
-
-        results = doc.batch_edit(ops, dry_run=True)
-
-        assert results[0].valid is False
-        # The paragraph's real text ("item 1") should appear in the error preview.
-        assert "item 1" in results[0].error
-
-    def test_bad_occurrence_reports_instead_of_raising(self, multi_para_doc):
-        """A malformed op (negative occurrence) is reported, never raised; doc unchanged."""
-        doc, _ = multi_para_doc
-        ref = doc.list_paragraphs()[0].split("|")[0]
-        before = doc.get_visible_text()
-
-        ops = [
-            EditOperation(
-                action="replace",
-                find="item 1",
-                replace_with="x",
-                paragraph=ref,
-                occurrence=-1,  # malformed
-            ),
-        ]
-
-        # Must not raise despite the malformed occurrence.
-        results = doc.batch_edit(ops, dry_run=True)
-
-        assert results[0].valid is False
-        assert "occurrence" in results[0].error
-        assert doc.get_visible_text() == before
-
-    def test_missing_paragraph_ref(self, multi_para_doc):
-        """An op without a paragraph ref is invalid, with paragraph=None on the result."""
-        doc, _ = multi_para_doc
-
-        ops = [EditOperation(action="replace", find="item 1", replace_with="x", paragraph="")]
-
-        results = doc.batch_edit(ops, dry_run=True)
-
-        assert results[0].valid is False
-        assert results[0].paragraph == ""
-        assert "paragraph" in results[0].error.lower()
-
-    def test_malformed_paragraph_ref(self, multi_para_doc):
-        """An unparseable paragraph ref is reported invalid, never raised."""
-        doc, _ = multi_para_doc
-
-        ops = [EditOperation(action="replace", find="x", replace_with="y", paragraph="not-a-ref")]
-
-        results = doc.batch_edit(ops, dry_run=True)
-
-        assert results[0].valid is False
-        assert results[0].error
-
-    def test_missing_action_arguments(self, multi_para_doc):
-        """Each action reports its missing-argument error without raising."""
-        doc, _ = multi_para_doc
-        refs = doc.list_paragraphs()
-        r0 = refs[0].split("|")[0]
-        r1 = refs[1].split("|")[0]
-        r2 = refs[2].split("|")[0]
-
-        ops = [
-            # replace without find/replace_with
-            EditOperation(action="replace", paragraph=r0),
-            # delete without text
-            EditOperation(action="delete", paragraph=r1),
-            # insert_after without anchor/text
-            EditOperation(action="insert_after", paragraph=r2),
-        ]
-
-        results = doc.batch_edit(ops, dry_run=True)
-
-        assert all(r.valid is False for r in results)
-        assert "replace requires" in results[0].error
-        assert "delete requires" in results[1].error
-        assert "insert_after requires" in results[2].error
-
-    def test_unknown_action(self, multi_para_doc):
-        """An unrecognized action is reported invalid, never raised."""
-        doc, _ = multi_para_doc
-        ref = doc.list_paragraphs()[0].split("|")[0]
-
-        ops = [EditOperation(action="frobnicate", paragraph=ref)]  # type: ignore[arg-type]
-
-        results = doc.batch_edit(ops, dry_run=True)
-
-        assert results[0].valid is False
-        assert "Unknown action" in results[0].error
 
 
 class TestStructuredBatchOperationError:

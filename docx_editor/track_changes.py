@@ -88,7 +88,7 @@ class EditOperation:
     occurrence: int | None = None  # None = target must be unique in the paragraph
 
     @staticmethod
-    def _validate_common(constructor: str, paragraph: str | None, occurrence: int | None, arg: str) -> str:
+    def _validate_common(constructor: str, paragraph: str | None, occurrence: int | None, field: str) -> str:
         """Construction-time checks shared by all typed constructors.
 
         Returns the validated ref, so callers can hand a narrowed ``str`` to the
@@ -101,7 +101,7 @@ class EditOperation:
             # hint that a SearchResult would have supplied the ref.
             raise ValueError(
                 f"Invalid paragraph reference None: expected a string like 'P3#a7b2', got NoneType — "
-                f"{_paragraph_hint(arg)}"
+                f"{_paragraph_hint(field)}"
             )
         ParagraphRef.parse(paragraph)
         _require_valid_occurrence(occurrence, f"EditOperation.{constructor}(): ")
@@ -137,7 +137,7 @@ class EditOperation:
                 SearchResult and ``paragraph``/``occurrence`` was given too.
         """
         find, paragraph, occurrence = _resolve_search_target(
-            find, paragraph, occurrence, ctx="EditOperation.replace(): ", arg="'find'"
+            find, paragraph, occurrence, ctx="EditOperation.replace(): ", field="'find'"
         )
         paragraph = cls._validate_common("replace", paragraph, occurrence, "'find'")
         if not isinstance(find, str) or not find:
@@ -182,7 +182,7 @@ class EditOperation:
                 ``paragraph``/``occurrence`` was given too.
         """
         text, paragraph, occurrence = _resolve_search_target(
-            text, paragraph, occurrence, ctx="EditOperation.delete(): ", arg="'text'"
+            text, paragraph, occurrence, ctx="EditOperation.delete(): ", field="'text'"
         )
         paragraph = cls._validate_common("delete", paragraph, occurrence, "'text'")
         if not isinstance(text, str) or not text:
@@ -202,7 +202,7 @@ class EditOperation:
         occurrence: int | None,
     ) -> "EditOperation":
         anchor, paragraph, occurrence = _resolve_search_target(
-            anchor, paragraph, occurrence, ctx=f"EditOperation.{action}(): ", arg="'anchor'"
+            anchor, paragraph, occurrence, ctx=f"EditOperation.{action}(): ", field="'anchor'"
         )
         paragraph = cls._validate_common(action, paragraph, occurrence, "'anchor'")
         if not isinstance(anchor, str) or not anchor:
@@ -284,7 +284,13 @@ class EditOperation:
 @dataclass(frozen=True)
 class _ValidationOutcome:
     """Internal result of validating one operation: why it failed, and the ref
-    that would fix it when the failure was a stale hash.
+    that re-points it at the paragraph's current content when the failure was a
+    stale hash.
+
+    ``current_ref`` clears the *hash* check only — it says nothing about whether
+    the operation's target text still exists, or is still unique, in that
+    paragraph. A rebuilt operation is re-validated like any other (and fails
+    loudly, atomically, at apply time if the target moved on).
 
     Named rather than a bare 2-tuple because both fields are ``str | None`` —
     positional unpacking would be one transposition away from reporting the
@@ -434,7 +440,7 @@ def _resolve_search_target(
     occurrence: int | None,
     *,
     ctx: str,
-    arg: str,
+    field: str,
 ) -> tuple[str, str | None, int | None]:
     """Normalize a text-or-SearchResult edit target into ``(text, paragraph, occurrence)``.
 
@@ -453,11 +459,14 @@ def _resolve_search_target(
         paragraph: The call's ``paragraph=`` argument (None when omitted).
         occurrence: The call's ``occurrence=`` argument (None when omitted).
         ctx: Message prefix naming the caller, e.g. ``"replace(): "``.
-        arg: Display name of the target parameter, e.g. ``"'find'"``.
+        field: Display name of the target parameter, e.g. ``"'find'"``.
 
     Returns:
         ``(text, paragraph, occurrence)``, for the caller to validate exactly
-        as it validates hand-written arguments.
+        as it validates hand-written arguments. A plain tuple rather than a
+        named object (cf. :class:`_ValidationOutcome`) because it is never
+        carried: every call site spreads it straight back into the three
+        distinctly-named parameters it came from, on the next line.
 
     Raises:
         ValueError: If ``target`` is a SearchResult and ``paragraph`` or
@@ -472,13 +481,13 @@ def _resolve_search_target(
     ]
     if redundant:
         raise ValueError(
-            f"{ctx}{arg} is a SearchResult, which already pins the paragraph ({target.paragraph_ref!r}) "
+            f"{ctx}{field} is a SearchResult, which already pins the paragraph ({target.paragraph_ref!r}) "
             f"and the occurrence ({target.paragraph_occurrence}) — drop {' and '.join(redundant)}"
         )
     return target.text, target.paragraph_ref, target.paragraph_occurrence
 
 
-def _paragraph_hint(arg: str) -> str:
+def _paragraph_hint(field: str) -> str:
     """Trailing hint shared by the "paragraph ref is missing" messages.
 
     ``paragraph`` is optional in the *signatures* only because a SearchResult
@@ -488,7 +497,7 @@ def _paragraph_hint(arg: str) -> str:
     by tests) and share this recovery hint, so the advice cannot drift.
     """
     return (
-        f"pass a ref from list_paragraphs()/find_text(), or pass a SearchResult as {arg} "
+        f"pass a ref from list_paragraphs()/find_text(), or pass a SearchResult as {field} "
         f"(it carries both the paragraph and the occurrence)"
     )
 
@@ -1476,12 +1485,12 @@ class RevisionManager:
         (see validate_batch); None fetches fresh.
         """
         if not op.paragraph:
-            return _ValidationOutcome("paragraph reference is required for batch mode")
+            return _ValidationOutcome(error="paragraph reference is required for batch mode")
 
         try:
             ref = ParagraphRef.parse(op.paragraph)
         except ValueError as e:
-            return _ValidationOutcome(str(e))
+            return _ValidationOutcome(error=str(e))
 
         try:
             p = self._resolve_paragraph(ref, paragraphs)
@@ -1489,9 +1498,9 @@ class RevisionManager:
             # The one mechanically fixable failure: hand back the ref that
             # targets this paragraph's current content (EditValidationResult
             # .current_ref) so callers never regex the hash out of the prose.
-            return _ValidationOutcome(str(e), f"P{e.paragraph_index}#{e.actual_hash}")
+            return _ValidationOutcome(error=str(e), current_ref=f"P{e.paragraph_index}#{e.actual_hash}")
         except ParagraphIndexError as e:
-            return _ValidationOutcome(str(e))
+            return _ValidationOutcome(error=str(e))
 
         # Resolve required args + the text this op must locate via the same
         # helper _apply_single_edit uses (which also rejects a negative
@@ -1500,14 +1509,14 @@ class RevisionManager:
         try:
             target = self._resolve_action_target(op)
         except ValueError as e:
-            return _ValidationOutcome(str(e))
+            return _ValidationOutcome(error=str(e))
 
         try:
             self._locate_in_paragraph(p, op.paragraph, target, op.occurrence)
         except (ValueError, DocxEditError) as e:
-            return _ValidationOutcome(str(e))
+            return _ValidationOutcome(error=str(e))
 
-        return _ValidationOutcome(None)
+        return _ValidationOutcome(error=None)
 
     def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> list[int | None]:
         """Rewrite multiple paragraphs with upfront hash validation.
