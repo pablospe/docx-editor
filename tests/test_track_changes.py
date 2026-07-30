@@ -1,12 +1,14 @@
 """Tests for track changes functionality."""
 
+import shutil
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import find_ref
+from conftest import find_ref, match_for
 
-from docx_editor import Document, TextNotFoundError
+from docx_editor import Document, HashMismatchError, TextNotFoundError
 from docx_editor.track_changes import Revision, RevisionManager, _escape_xml, _trim_replace_affixes
 from docx_editor.xml_editor import DocxXMLEditor, build_text_map
 
@@ -1609,3 +1611,254 @@ class TestTrimReplaceAffixes:
         replace_with = "“term” of y"
         prefix, suffix = _trim_replace_affixes(find, replace_with)
         assert (prefix, suffix) == (len("“term” of "), 0)
+
+
+class TestTrimReplaceAffixesWhitespaceOnly:
+    """Whitespace-only spans trim character-wise, so a spacing fix is a pure
+    insert/delete instead of an invisible del+ins pair (ISSUES.md #60).
+
+    Every case asserts the resulting (del, ins) split rather than raw offsets:
+    that is what decides which revisions get written.
+    """
+
+    @staticmethod
+    def _split(find: str, replace_with: str) -> tuple[str, str]:
+        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        # An affix pair that overlaps would silently corrupt the split.
+        assert prefix + suffix <= min(len(find), len(replace_with))
+        return find[prefix : len(find) - suffix], replace_with[prefix : len(replace_with) - suffix]
+
+    def test_single_to_double_space_is_pure_insert(self):
+        assert self._split(" ", "  ") == ("", " ")
+
+    def test_double_to_single_space_is_pure_delete(self):
+        assert self._split("  ", " ") == (" ", "")
+
+    def test_three_to_one_space_deletes_two(self):
+        assert self._split("   ", " ") == ("  ", "")
+
+    def test_space_to_tab_stays_a_replacement(self):
+        """Different whitespace characters share no affix — still del+ins."""
+        assert self._split(" ", "\t") == (" ", "\t")
+
+    def test_trim_applies_after_word_level_trim(self):
+        """Words trim first; only the leftover whitespace trims by character."""
+        assert self._split("a b", "a  b") == ("", " ")
+        assert self._split("thirty days", "thirty  days") == ("", " ")
+
+    def test_shared_characters_never_consumed_twice(self):
+        """Prefix and suffix both grow, bounded by the shorter side."""
+        assert self._split("\t \t", "\t\t") == (" ", "")
+
+    def test_mixed_whitespace_and_words_is_left_alone(self):
+        """A span that is not whitespace-only keeps whole-span replacement."""
+        assert self._split("  x  ", " x ") == ("  x  ", " x ")
+
+    def test_word_replacement_unaffected(self):
+        """Regression canary: character trimming must never reach word spans."""
+        assert self._split("30 days", "60 days") == ("30", "60")
+        assert self._split("net", "gross") == ("net", "gross")
+
+
+class TestWhitespaceReplaceRevisions:
+    """End-to-end: the whitespace-only trim reaches the written revisions."""
+
+    def test_single_to_double_space_writes_only_an_insertion(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        ref = find_ref(doc, "quick brown fox")
+        doc.replace("quick brown", "quick  brown", paragraph=ref)
+
+        kinds = [r.type for r in doc.list_revisions()]
+        assert kinds == ["insertion"], kinds
+        assert doc.get_visible_text().splitlines()[1] == "The quick  brown fox jumps over the lazy dog."
+        doc.close()
+
+    def test_double_to_single_space_writes_only_a_deletion(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        ref = find_ref(doc, "quick brown fox")
+        doc.replace("quick brown", "quick  brown", paragraph=ref)
+        doc.accept_all()
+
+        ref = find_ref(doc, "quick  brown fox")
+        doc.replace("quick  brown", "quick brown", paragraph=ref)
+        kinds = [r.type for r in doc.list_revisions()]
+        assert kinds == ["deletion"], kinds
+        assert doc.get_visible_text().splitlines()[1] == "The quick brown fox jumps over the lazy dog."
+        doc.close()
+
+    def test_word_replace_still_writes_both_halves(self, clean_workspace):
+        """The canary at the revision level: words stay a deletion+insertion."""
+        doc = Document.open(clean_workspace)
+        ref = find_ref(doc, "quick brown fox")
+        doc.replace("quick", "swift", paragraph=ref)
+
+        assert sorted(r.type for r in doc.list_revisions()) == ["deletion", "insertion"]
+        doc.close()
+
+    def test_whitespace_deletion_is_preserved_for_reject(self, clean_workspace):
+        """The deleted whitespace must survive a round-trip through a conforming
+        consumer, or rejecting the fix would silently restore the WRONG spacing.
+
+        A whitespace-only ``w:delText`` without ``xml:space="preserve"`` gets its
+        content trimmed away by Word, and ``_restore_deletion`` copies that
+        element's attributes onto the ``w:t`` it rebuilds — so both halves of the
+        undo path need the attribute.
+        """
+        doc = Document.open(clean_workspace)
+        ref = find_ref(doc, "quick brown fox")
+        doc.replace("quick brown", "quick  brown", paragraph=ref)
+        doc.accept_all()
+
+        ref = find_ref(doc, "quick  brown fox")
+        result = doc.replace("quick  brown", "quick brown", paragraph=ref)
+        deleted = doc._document_editor.dom.getElementsByTagName("w:delText")
+        assert [d.firstChild.data for d in deleted] == [" "]
+        assert deleted[0].getAttribute("xml:space") == "preserve"
+
+        assert result.group_id is not None  # a real edit, so a real group to reject
+        doc.reject_group(result.group_id)
+        restored = [t for t in doc._document_editor.dom.getElementsByTagName("w:t") if t.firstChild.data == " "]
+        assert restored, "the deleted space should be back as a w:t"
+        assert all(t.getAttribute("xml:space") == "preserve" for t in restored)
+        assert doc.get_visible_text().splitlines()[1] == "The quick  brown fox jumps over the lazy dog."
+        doc.close()
+
+    def test_deleted_edge_whitespace_carries_preserve(self, clean_workspace):
+        """Same rule for any deletion whose text has a whitespace edge, not just
+        the whitespace-only ones the trim newly produces."""
+        doc = Document.open(clean_workspace)
+        ref = find_ref(doc, "quick brown fox")
+        doc.delete("brown ", paragraph=ref)
+
+        deleted = doc._document_editor.dom.getElementsByTagName("w:delText")
+        assert [d.firstChild.data for d in deleted] == ["brown "]
+        assert deleted[0].getAttribute("xml:space") == "preserve"
+        doc.close()
+
+
+class TestSearchResultAsEditTarget:
+    """A SearchResult can stand in for (text, paragraph, occurrence) on every
+    edit method — the find→edit double-typing papercut (ISSUES.md #52).
+    """
+
+    def test_replace_matches_the_explicit_spelling(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        match = match_for(doc, "quick")
+        result = doc.replace(match, "swift")
+
+        assert result == match_for(doc, "swift").paragraph_ref
+        assert doc.get_visible_text().splitlines()[1] == "The swift brown fox jumps over the lazy dog."
+        doc.close()
+
+    def test_delete_from_a_match(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        doc.delete(match_for(doc, "brown "))
+
+        assert doc.get_visible_text().splitlines()[1] == "The quick fox jumps over the lazy dog."
+        doc.close()
+
+    def test_insert_after_and_before_from_a_match(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        doc.insert_after(match_for(doc, "lazy dog"), " (allegedly)")
+        doc.insert_before(match_for(doc, "The quick"), "Note: ")
+
+        # The anchor is "lazy dog", so the insertion lands before the period.
+        assert doc.get_visible_text().splitlines()[1] == (
+            "Note: The quick brown fox jumps over the lazy dog (allegedly)."
+        )
+        doc.close()
+
+    def test_occurrence_is_carried_from_the_match(self, clean_workspace):
+        """The 2nd "he" in P2 ("tHE lazy") is edited with no occurrence bookkeeping."""
+        doc = Document.open(clean_workspace)
+        second = [m for m in doc.find_all("he") if m.paragraph_index == 2][1]
+        assert second.paragraph_occurrence == 1
+
+        doc.replace(second, "HE")
+        assert doc.get_visible_text().splitlines()[1] == "The quick brown fox jumps over tHE lazy dog."
+        doc.close()
+
+    def test_equivalent_to_spelling_the_fields_out(self, clean_workspace, temp_dir):
+        """Same edit, two spellings, byte-identical document XML."""
+        second_copy = temp_dir / "second.docx"
+        shutil.copy(clean_workspace, second_copy)
+
+        doc = Document.open(clean_workspace)
+        match = match_for(doc, "sample document")
+        doc.replace(match, "example document")
+        via_object = doc.get_markup_text()
+        doc.close()
+
+        other = Document.open(second_copy)
+        m2 = match_for(other, "sample document")
+        other.replace(
+            m2.text,
+            "example document",
+            paragraph=m2.paragraph_ref,
+            occurrence=m2.paragraph_occurrence,
+        )
+        via_fields = other.get_markup_text()
+        other.close()
+
+        assert via_object == via_fields
+
+    def test_stale_match_raises_hash_mismatch(self, clean_workspace):
+        """A SearchResult is a ref like any other: it goes stale when edited."""
+        doc = Document.open(clean_workspace)
+        match = match_for(doc, "quick")
+        doc.replace("brown", "red", paragraph=match.paragraph_ref)
+
+        with pytest.raises(HashMismatchError):
+            doc.replace(match, "swift")
+        doc.close()
+
+    def test_paragraph_and_occurrence_are_refused_with_a_match(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        match = match_for(doc, "quick")
+
+        extras: list[dict[str, Any]] = [{"paragraph": match.paragraph_ref}, {"occurrence": 0}, {"occurrence": 3}]
+        for kwargs in extras:
+            with pytest.raises(ValueError, match="already pins the paragraph"):
+                doc.replace(match, "swift", **kwargs)
+        with pytest.raises(ValueError, match="drop paragraph= and occurrence="):
+            doc.replace(match, "swift", paragraph=match.paragraph_ref, occurrence=0)
+        assert doc.list_revisions() == []
+        doc.close()
+
+    def test_every_method_refuses_the_double_spelling(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        match = match_for(doc, "quick")
+        calls = [
+            lambda: doc.replace(match, "x", occurrence=0),
+            lambda: doc.delete(match, occurrence=0),
+            lambda: doc.insert_after(match, "x", occurrence=0),
+            lambda: doc.insert_before(match, "x", occurrence=0),
+            lambda: doc.add_comment(match, "note", occurrence=0),
+        ]
+        for call in calls:
+            with pytest.raises(ValueError, match="already pins the paragraph"):
+                call()
+        doc.close()
+
+    def test_plain_text_still_requires_a_paragraph(self, clean_workspace):
+        """The doc-wide RevisionManager branch stays unreachable, and the error
+        teaches the SearchResult form."""
+        doc = Document.open(clean_workspace)
+        with pytest.raises(ValueError, match="must be a paragraph ref string"):
+            doc.replace("quick", "swift")
+        with pytest.raises(ValueError, match="or pass a SearchResult as 'find'"):
+            doc.replace("quick", "swift")
+        with pytest.raises(ValueError, match="or pass a SearchResult as 'text'"):
+            doc.delete("quick")
+        with pytest.raises(ValueError, match="or pass a SearchResult as 'anchor'"):
+            doc.insert_after("quick", "x")
+        assert doc.list_revisions() == []
+        doc.close()
+
+    def test_find_text_returning_none_is_not_a_silent_edit(self, clean_workspace):
+        """Passing an unchecked find_text() result through is a clear error."""
+        doc = Document.open(clean_workspace)
+        assert doc.find_text("no such text") is None
+        with pytest.raises(ValueError, match="must be a paragraph ref string"):
+            doc.replace(doc.find_text("no such text"), "x")  # type: ignore[arg-type]
+        doc.close()

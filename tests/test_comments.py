@@ -1,6 +1,9 @@
 """Tests for comment functionality."""
 
+from typing import Any
+
 import pytest
+from conftest import match_for
 
 from docx_editor import (
     CommentError,
@@ -1335,5 +1338,80 @@ class TestCommentCrossBoundaryAnchor:
                 doc.add_comment("nonexistent", "x", paragraph=ref, occurrence=1)
             # total_occurrences must NOT be set (the 'if total > 0' fall-through path)
             assert exc_info.value.total_occurrences is None
+        finally:
+            doc.close()
+
+
+class TestAddCommentSearchResultAnchor:
+    """``add_comment`` accepts a SearchResult as its anchor, which pins the
+    paragraph and occurrence for it (ISSUES.md #52).
+    """
+
+    def test_comment_anchored_from_a_match(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            match = match_for(doc, "brown fox")
+            comment_id = doc.add_comment(match, "from a search")
+
+            comment = doc.list_comments()[0]
+            assert comment.id == comment_id
+            assert comment.text == "from a search"
+        finally:
+            doc.close()
+
+    def test_matches_the_explicit_spelling(self, clean_workspace):
+        """Same markers as passing text/paragraph/occurrence by hand."""
+        doc = Document.open(clean_workspace)
+        try:
+            match = match_for(doc, "lazy dog")
+            by_object = doc.add_comment(match, "note A")
+            by_fields = doc.add_comment(
+                match.text,
+                "note B",
+                paragraph=match.paragraph_ref,
+                occurrence=match.paragraph_occurrence,
+            )
+
+            starts = doc._document_editor.dom.getElementsByTagName("w:commentRangeStart")
+            ids = [s.getAttribute("w:id") for s in starts]
+            assert str(by_object) in ids and str(by_fields) in ids
+        finally:
+            doc.close()
+
+    def test_second_occurrence_is_targeted_without_bookkeeping(self, clean_workspace):
+        """The 2nd "he" in P2 gets the comment, not the 1st."""
+        doc = Document.open(clean_workspace)
+        try:
+            second = [m for m in doc.find_all("he") if m.paragraph_index == 2][1]
+            assert second.paragraph_occurrence == 1
+            doc.add_comment(second, "second only")
+
+            # Everything before the marker must already carry the sentence up to
+            # the SECOND "he" — anchoring to the first would cut after "T".
+            para = _find_paragraph_with_text(doc, "quick brown fox")
+            before_marker = para.toxml().split("<w:commentRangeStart")[0]
+            assert "jumps over t" in before_marker
+            assert "he lazy dog" not in before_marker
+            assert len(doc.list_comments()) == 1
+        finally:
+            doc.close()
+
+    def test_paragraph_or_occurrence_with_a_match_is_refused(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            match = match_for(doc, "brown fox")
+            extras: list[dict[str, Any]] = [{"paragraph": match.paragraph_ref}, {"occurrence": 0}]
+            for kwargs in extras:
+                with pytest.raises(ValueError, match="already pins the paragraph"):
+                    doc.add_comment(match, "x", **kwargs)
+            assert doc.list_comments() == []
+        finally:
+            doc.close()
+
+    def test_plain_text_still_searches_document_wide(self, clean_workspace):
+        """paragraph=None keeps its meaning for the string form."""
+        doc = Document.open(clean_workspace)
+        try:
+            assert isinstance(doc.add_comment("brown fox", "unscoped"), int)
         finally:
             doc.close()

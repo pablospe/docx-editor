@@ -36,6 +36,40 @@ doc = Document.open("contract.docx")
 doc = Document.open("contract.docx", author="Legal Team")
 ```
 
+#### `Document.discard_workspace(path, *, workspace_dir=None)`
+
+Delete a document's workspace so the next `open()` starts clean — the recovery
+call for a **crashed or killed script**. That session's workspace stays behind
+flagged as holding unsaved changes, so every later `open()` of the document
+raises [`WorkspaceSyncError`](#workspacesyncerror) (or
+[`WorkspaceLockedError`](#workspacelockederror) if its advisory lock is still on
+disk) until the workspace is dealt with. One call resets that state, instead of
+passing `force_recreate=True` on every open or deleting the cache directory by
+hand.
+
+**This discards whatever unsaved edits the workspace holds** — the same
+destruction as `open(force_recreate=True)`, without opening. To rescue them
+first, save the orphaned workspace elsewhere (see
+[`WorkspaceSyncError`](#workspacesyncerror)). The advisory lock sidecar goes with
+the workspace, **including a lock held by a live session**, so make sure that
+process is really gone: two sessions sharing one workspace silently overwrite
+each other's saves.
+
+**Parameters:**
+
+- `path` (str | Path): The .docx whose workspace should be deleted. Need not exist — a workspace outlives its source, so this still cleans up after a moved or deleted document.
+- `workspace_dir` (str | Path, optional): Base directory override, matching `open()`'s argument. Must be the same value the workspace was created with, or a different workspace is targeted (and nothing is found).
+
+**Returns:** `True` if a workspace was deleted, `False` if there was none — so it is safe to call unconditionally.
+
+**Example:**
+
+```python
+# Idempotent reset before a fresh run:
+Document.discard_workspace("contract.docx")
+doc = Document.open("contract.docx")
+```
+
 #### Workspace location
 
 When you open a document, its unpacked OOXML contents are stored in a workspace directory. By default this lives under the platform user cache, in a subfolder `docx-editor/<hash>` where `<hash>` is derived from the document's absolute path:
@@ -108,7 +142,7 @@ List paragraphs with hash-anchored references. Refs are **1-based global** index
 **Parameters:**
 
 - `max_chars` (int): Maximum preview length (must be `>= 0`). Use `0` for refs only (e.g. `P1#a7b2`), with no preview or `| ` separator.
-- `start` (int): 1-based index of the first paragraph to return (default 1). A `start` beyond the last paragraph yields an empty list.
+- `start` (int): 1-based index of the first paragraph to return (default 1). A `start` beyond the last paragraph is a valid request with an empty answer — it yields `[]` and does **not** raise, exactly like `lst[500:]` on a shorter list, so a loop-until-empty walk terminates cleanly. (`start=0` or negative *does* raise `ValueError`: those are invalid inputs, not empty ranges.) To know where the end is up front, use `paragraph_count()` or follow the truncation notice's `start=` hint.
 - `limit` (int | None): Maximum number of paragraphs to return (default 200), or `None` for all paragraphs from `start` onward.
 
 **Returns:** List of strings in the form `P{index}#{hash}| preview text`, or bare `P{index}#{hash}` (no `| ` separator) when `max_chars=0` — plus one trailing `... N more paragraphs; use start=… or limit=None` notice when the window did not reach the end of the document.
@@ -122,25 +156,28 @@ refs = [e for e in page1 if not e.startswith("...")]  # drop the notice line
 everything = doc.list_paragraphs(limit=None)  # uncapped, never a notice
 ```
 
-`list_paragraphs_structured()` (same `start`/`limit` semantics, returns typed `ParagraphInfo` records with full untruncated text) shares the 200-record default cap but appends **no notice** — every entry stays a `ParagraphInfo`. Detect truncation by checking whether the last record's `index` is still below `paragraph_count()` (robust for any `start`), or pass `limit=None`.
+`list_paragraphs_structured()` (same `start`/`limit` semantics, returns typed [`ParagraphInfo`](#paragraphinfo) records with full untruncated text plus `style`/`outline_level`/`in_table`) shares the 200-record default cap but appends **no notice** — every entry stays a `ParagraphInfo`. Detect truncation by checking whether the last record's `index` is still below `paragraph_count()` (robust for any `start`), or pass `limit=None`.
 
 #### `get_paragraph(index)`
 
-Return one paragraph as a structured `ParagraphInfo` record — the single-item counterpart to `list_paragraphs_structured()`. The returned record is identical to the one that method would emit for the same paragraph, without building a list.
+Return one paragraph as a structured [`ParagraphInfo`](#paragraphinfo) record — the single-item counterpart to `list_paragraphs_structured()`. The returned record is identical to the one that method would emit for the same paragraph, without building a list.
 
 **Parameters:**
 
 - `index` (int): 1-based paragraph index (`P1` is `index=1`). Must be in `1 .. paragraph_count()`.
 
-**Returns:** `ParagraphInfo` (index, hash-anchored ref, full untruncated text) for the paragraph at `index`.
+**Returns:** `ParagraphInfo` (index, hash-anchored ref, full untruncated text, `style`, `outline_level`, `in_table`) for the paragraph at `index`.
 
 **Raises:** [`ParagraphIndexError`](#paragraphindexerror) if `index` is out of range (`< 1` or greater than `paragraph_count()`).
+
+**Performance:** fixed-size output, but **O(document)** work — every call walks all `<w:p>` elements to reach one. (`word/styles.xml` is parsed once per open `Document`, not per call.) Fine for a one-off lookup; for many paragraphs call `list_paragraphs_structured(limit=None)` once and index that list instead of looping over this. The same applies to `context()`.
 
 **Example:**
 
 ```python
 info = doc.get_paragraph(1)
 print(info.ref, info.text)  # "P1#a7b2" "Full paragraph text..."
+print(info.style, info.outline_level, info.in_table)  # "Heading1" 0 False
 ```
 
 #### `context(ref, window=2)`
@@ -152,9 +189,11 @@ Return the paragraphs surrounding `ref`, in document order — the "show me the 
 - `ref` (str): Paragraph reference (e.g. `P3#a7b2`) from `list_paragraphs()`, `find_text()`/`find_all()`, or an edit result.
 - `window` (int): Paragraphs to include on *each side* of the referenced one (default 2, so up to 5 records). Must be `>= 0`; `0` returns just the referenced paragraph.
 
-**Returns:** List of `ParagraphInfo` records (index, ref, full text) — identical to what `list_paragraphs_structured()` would emit for the same span.
+**Returns:** List of [`ParagraphInfo`](#paragraphinfo) records — identical to what `list_paragraphs_structured()` would emit for the same span, structural fields included.
 
 **Raises:** `ValueError` if `ref` is malformed or `window < 0`; [`ParagraphIndexError`](#paragraphindexerror) / [`HashMismatchError`](#hashmismatcherror) for an out-of-range or stale `ref`.
+
+**Performance:** O(document) despite the fixed-size output — see `get_paragraph()` above.
 
 **Example:**
 
@@ -255,11 +294,8 @@ match = doc.find_text("Aim: To")
 if match:
     if match.spans_revision:
         print("Text spans a tracked-revision boundary")
-    # The ref + in-paragraph occurrence pin the exact match for a follow-up edit
-    doc.replace(
-        "Aim: To", "Goal: To",
-        paragraph=match.paragraph_ref, occurrence=match.paragraph_occurrence,
-    )
+    # Pass the match itself: it pins the text, the paragraph and the occurrence
+    doc.replace(match, "Goal: To")
 ```
 
 #### `find_all(text, paragraph=None)`
@@ -283,11 +319,7 @@ what a follow-up edit needs.
 # Edit every match in one atomic batch. reversed() puts same-paragraph ops in
 # the required descending occurrence order, so this is safe however the
 # matches are distributed:
-ops = [
-    EditOperation.replace(r.text, "60 days",
-                          paragraph=r.paragraph_ref, occurrence=r.paragraph_occurrence)
-    for r in reversed(doc.find_all("30 days"))
-]
+ops = [EditOperation.replace(r, "60 days") for r in reversed(doc.find_all("30 days"))]
 doc.batch_edit(ops)
 ```
 
@@ -317,17 +349,17 @@ if doc.count_matches("Section 5") > 1:
     print("Use paragraph refs and occurrence to target the intended match")
 ```
 
-#### `replace(find, replace_with, *, paragraph, occurrence=None)`
+#### `replace(find, replace_with, *, paragraph=None, occurrence=None)`
 
 Replace text with tracked changes. When the target sits inside another author's pending insertion, that insertion is preserved: the matched text gets a nested `<w:del>` under your authorship and the replacement lands in your own sibling `<w:ins>` (Word's behavior), instead of silently rewriting the other author's proposal.
 
-Words shared by `find` and `replace_with` at either end are trimmed first, so only the changed words become revisions — a replace that only adds or only removes words is written as a pure insertion or deletion. The replacement insertion carries the formatting (`rPr`) that covers the most characters of the replaced span (runs sharing identical formatting tally together), ties breaking to the earliest-seen formatting. **Accepting** a replace that straddled mixed formatting therefore leaves the replacement uniformly in that one majority format, while each deletion run keeps its own original formatting — so a **reject** restores the pre-edit mix. When `replace_with` equals the found text, the call is a **no-op**: no revisions are created and the returned `EditResult` equals the input `paragraph` ref with `group_id=None` and `revision_ids=()` — that triple is how callers detect the no-op.
+Words shared by `find` and `replace_with` at either end are trimmed first, so only the changed words become revisions — a replace that only adds or only removes words is written as a pure insertion or deletion. When the trimmed spans are **whitespace only** on both sides, trimming continues character by character, so a spacing fix (`"clause  2"` → `"clause 2"`) becomes a pure deletion rather than an invisible deletion/insertion pair. Word spans are never trimmed character-wise: `"30 days"` → `"60 days"` stays a whole-word replacement. The replacement insertion carries the formatting (`rPr`) that covers the most characters of the replaced span (runs sharing identical formatting tally together), ties breaking to the earliest-seen formatting. **Accepting** a replace that straddled mixed formatting therefore leaves the replacement uniformly in that one majority format, while each deletion run keeps its own original formatting — so a **reject** restores the pre-edit mix. When `replace_with` equals the found text, the call is a **no-op**: no revisions are created and the returned `EditResult` equals the input `paragraph` ref with `group_id=None` and `revision_ids=()` — that triple is how callers detect the no-op.
 
 **Parameters:**
 
-- `find` (str): Text to find and replace
+- `find` (str | [`SearchResult`](#searchresult)): Text to find and replace, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it)
 - `replace_with` (str): Replacement text
-- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `find` is a `SearchResult`.
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`)
@@ -337,16 +369,18 @@ Words shared by `find` and `replace_with` at either end are trimmed first, so on
 ```python
 ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
 doc.replace("net", "gross", paragraph=ref)
+if match := doc.find_text("Manager"):
+    doc.replace(match, "Director")          # straight from a search
 ```
 
-#### `delete(text, *, paragraph, occurrence=None)`
+#### `delete(text, *, paragraph=None, occurrence=None)`
 
 Mark text as deleted with tracked changes. Deleting text inside another author's pending insertion nests a `<w:del>` under your authorship inside their `<w:ins>`, preserving their proposal; only your own pending insertions are edited in place.
 
 **Parameters:**
 
-- `text` (str): Text to mark as deleted
-- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+- `text` (str | [`SearchResult`](#searchresult)): Text to mark as deleted, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it)
+- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `text` is a `SearchResult`.
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`)
@@ -355,17 +389,19 @@ Mark text as deleted with tracked changes. Deleting text inside another author's
 
 ```python
 ref = doc.delete("obsolete clause", paragraph="P5#d4e5")
+if match := doc.find_text("obsolete clause"):
+    doc.delete(match)                       # same edit, from a search
 ```
 
-#### `insert_after(anchor, text, *, paragraph, occurrence=None)`
+#### `insert_after(anchor, text, *, paragraph=None, occurrence=None)`
 
 Insert text after anchor with tracked changes. An anchor inside another author's pending insertion produces your own sibling `<w:ins>` (splitting theirs when the anchor falls mid-content) rather than splicing your words into their proposal.
 
 **Parameters:**
 
-- `anchor` (str): Text to find as insertion point
+- `anchor` (str | [`SearchResult`](#searchresult)): Text to find as insertion point, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it)
 - `text` (str): Text to insert after the anchor
-- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `anchor` is a `SearchResult`.
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`)
@@ -374,17 +410,19 @@ Insert text after anchor with tracked changes. An anchor inside another author's
 
 ```python
 ref = doc.insert_after("Section 5", " (as amended)", paragraph="P3#b2c4")
+if match := doc.find_text("Section 5"):
+    doc.insert_after(match, " (as amended)")
 ```
 
-#### `insert_before(anchor, text, *, paragraph, occurrence=None)`
+#### `insert_before(anchor, text, *, paragraph=None, occurrence=None)`
 
 Insert text before anchor with tracked changes. Foreign pending insertions are treated the same as in `insert_after()`.
 
 **Parameters:**
 
-- `anchor` (str): Text to find as insertion point
+- `anchor` (str | [`SearchResult`](#searchresult)): Text to find as insertion point, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it)
 - `text` (str): Text to insert before the anchor
-- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `anchor` is a `SearchResult`.
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`)
@@ -393,7 +431,11 @@ Insert text before anchor with tracked changes. Foreign pending insertions are t
 
 ```python
 ref = doc.insert_before("Section 6", "New clause: ", paragraph="P4#a7b2")
+if match := doc.find_text("Section 6"):
+    doc.insert_before(match, "New clause: ")
 ```
+
+> **Passing a `SearchResult`** to `replace`/`delete`/`insert_after`/`insert_before`/`add_comment` (or an `EditOperation` constructor) is exactly equivalent to spelling out its `text`, `paragraph_ref` and `paragraph_occurrence`. Supplying `paragraph=` or `occurrence=` *as well* raises `ValueError` rather than picking a winner, and a match whose paragraph was edited in between raises [`HashMismatchError`](#hashmismatcherror) like any other stale ref.
 
 > **Newlines split paragraphs.** A `\n` in any content text (`replace`'s
 > `replace_with`, `insert_after`/`insert_before`'s `text`, `rewrite_paragraph`'s
@@ -523,7 +565,7 @@ smart-quote splits, `w:ins` wrappers) are found.
 
 **Parameters:**
 
-- `anchor_text` (str): Text to attach the comment to
+- `anchor_text` (str | [`SearchResult`](#searchresult)): Text to attach the comment to, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it)
 - `comment` (str): The comment content
 - `paragraph` (str, optional): Paragraph reference (e.g. `P3#a7b2`) to scope the search. `None` searches the whole document. Defaults to None.
 - `occurrence` (int | None): Which occurrence to anchor to, 0-based (0 = first), counted within `paragraph` when given and document-wide otherwise. Omitted → the anchor must be unique in the search scope, else [`AmbiguousTextError`](#ambiguoustexterror).
@@ -535,6 +577,7 @@ smart-quote splits, `w:ins` wrappers) are found.
 ```python
 cid = doc.add_comment("Section 5", "Please review this section")
 doc.add_comment("term", "Note on the 2nd 'term'", paragraph="P3#a7b2", occurrence=1)
+doc.add_comment(doc.find_all("term")[1], "Same 2nd 'term', from the search")
 ```
 
 #### `reply_to_comment(comment_id, reply)`
@@ -981,34 +1024,38 @@ from docx_editor import EditOperation
 
 ### Constructors
 
-#### `EditOperation.replace(find, replace_with, *, paragraph, occurrence=None)`
+#### `EditOperation.replace(find, replace_with, *, paragraph=None, occurrence=None)`
 
-- `find` (str): Text to find and replace. Must be non-empty.
+- `find` (str | [`SearchResult`](#searchresult)): Text to find and replace. Must be non-empty.
 - `replace_with` (str): Replacement text. Empty string is allowed (replacing
   with nothing is a valid tracked deletion).
 
-#### `EditOperation.delete(text, *, paragraph, occurrence=None)`
+#### `EditOperation.delete(text, *, paragraph=None, occurrence=None)`
 
-- `text` (str): Text to mark as deleted. Must be non-empty.
+- `text` (str | [`SearchResult`](#searchresult)): Text to mark as deleted. Must be non-empty.
 
-#### `EditOperation.insert_after(anchor, text, *, paragraph, occurrence=None)`
+#### `EditOperation.insert_after(anchor, text, *, paragraph=None, occurrence=None)`
 
-#### `EditOperation.insert_before(anchor, text, *, paragraph, occurrence=None)`
+#### `EditOperation.insert_before(anchor, text, *, paragraph=None, occurrence=None)`
 
-- `anchor` (str): Text to find as insertion point. Must be non-empty.
+- `anchor` (str | [`SearchResult`](#searchresult)): Text to find as insertion point. Must be non-empty.
 - `text` (str): Text to insert.
 
 All constructors also take:
 
-- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
+- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless the search target is a `SearchResult`, which supplies it.
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph at apply time; if it matches more than once, the batch fails with a [`BatchOperationError`](#batchoperationerror) wrapping an [`AmbiguousTextError`](#ambiguoustexterror). Must be >= 0 when given.
 
-**Raises:** `ValueError` at construction time if the paragraph ref is malformed,
-`occurrence` is negative, a search-target argument (`find`, delete `text`,
-`anchor`) is empty, or a payload argument (`replace_with`, insert `text`) is
-`None` — payloads may be empty strings, search targets may not. Each
-signature mirrors the corresponding `Document` method 1:1, so
+**Raises:** `ValueError` at construction time if the paragraph ref is missing or
+malformed, `occurrence` is negative, a search-target argument (`find`, delete
+`text`, `anchor`) is empty, a payload argument (`replace_with`, insert `text`)
+is `None` — payloads may be empty strings, search targets may not — or the
+search target is a `SearchResult` and `paragraph`/`occurrence` was given too.
+Each signature mirrors the corresponding `Document` method 1:1, so
 `doc.replace(...)` translates mechanically to `EditOperation.replace(...)`.
+
+The dataclass fields stay plain strings whichever form you use, so an operation
+built from a match is indistinguishable from a hand-written one.
 
 ### Example
 
@@ -1018,6 +1065,9 @@ new_refs = doc.batch_edit([
     EditOperation.delete("obsolete clause", paragraph="P5#d4e5"),
     EditOperation.insert_after("Section 5", " (as amended)", paragraph="P7#b1c2"),
 ])
+
+# Or straight from a search — no refs or occurrences to carry:
+doc.batch_edit([EditOperation.replace(m, "60 days") for m in reversed(doc.find_all("30 days"))])
 ```
 
 ---
@@ -1081,6 +1131,16 @@ from docx_editor import EditValidationResult
 | `paragraph` | str or None | The operation's paragraph ref (`None` if it was missing) |
 | `valid` | bool | True if the operation would apply cleanly |
 | `error` | str or None | Human-readable reason when not valid |
+| `current_ref` | str or None | Ref for the paragraph's **current** content — set only when the row failed on a stale hash |
+
+`current_ref` is the recovery field for the one failure a caller can fix
+mechanically. When an operation carries `"P7#a7b2"` but the paragraph now
+hashes to `c4d8`, the row reports `current_ref="P7#c4d8"` — rebuild the
+operation with it instead of parsing the hash out of `error`. It is `None` for
+every other outcome: valid rows, malformed refs, out-of-range indexes, missing
+or ambiguous target text, and elements that are not an `EditOperation`. So
+`if row.current_ref:` is also how you tell a stale hash apart from a target
+that no longer exists.
 
 ### Example
 
@@ -1097,6 +1157,15 @@ for r in results:
         print(f"op {r.index} on {r.paragraph}: {r.error}")
 if all(r.valid for r in results):
     new_refs = doc.batch_edit(ops)
+```
+
+Repair the stale-hash rows and retry, with no message parsing:
+
+```python
+for row in doc.batch_edit(ops, dry_run=True):
+    if row.current_ref:
+        ops[row.index] = EditOperation.replace("old", "new", paragraph=row.current_ref)
+new_refs = doc.batch_edit(ops)
 ```
 
 ---
@@ -1127,9 +1196,23 @@ document-wide offsets. Coordinate systems differ between search and edit:
 `find_text`'s `occurrence` counts matches document-wide (unless scoped with
 `paragraph=`), while edit methods count within one paragraph —
 `paragraph_occurrence` bridges the two, so always pass it alongside
-`paragraph_ref` when chaining into an edit. `paragraph_ref`
-is computed at search time and — like refs from `list_paragraphs()` — goes
-stale once that paragraph is edited.
+`paragraph_ref` when chaining into an edit — or skip the bookkeeping entirely
+and pass the `SearchResult` itself as the edit's target (see below).
+`paragraph_ref` is computed at search time and — like refs from
+`list_paragraphs()` — goes stale once that paragraph is edited.
+
+**A SearchResult can stand in for its own three fields.** Every
+text-targeting method — `replace`, `delete`, `insert_after`, `insert_before`,
+`add_comment`, and the `EditOperation` constructors — accepts a `SearchResult`
+where it expects the target text, and takes `paragraph` and `occurrence` from
+the match. Passing `paragraph=`/`occurrence=` *as well* raises `ValueError`
+(it would contradict the match), and a stale match raises
+[`HashMismatchError`](#hashmismatcherror) like any other stale ref.
+
+`find_text()` returns `None` when there is no match, and that `None` is **not**
+accepted as a target (a missing match must not become a silent no-op) — it
+raises `ValueError`. Check the result first, as the examples below do, rather
+than piping `find_text()` straight into an edit in code that must not crash.
 
 `repr()`/`str()` are compact one-liners —
 `SearchResult(P3#a7b2 occ=0 '30 days')`, with a trailing `spans_rev` marker
@@ -1143,10 +1226,71 @@ an attribute.
 ```python
 match = doc.find_text("30 days")
 if match:
+    doc.replace(match, "60 days")          # the match pins paragraph + occurrence
+
+    # Equivalent, spelled out:
     doc.replace(
-        "30 days", "60 days",
+        match.text, "60 days",
         paragraph=match.paragraph_ref, occurrence=match.paragraph_occurrence,
     )
+
+# Sweep every match in one atomic batch (reversed() keeps same-paragraph ops in
+# the required descending-occurrence order):
+from docx_editor import EditOperation
+
+doc.batch_edit([EditOperation.replace(m, "60 days") for m in reversed(doc.find_all("30 days"))])
+```
+
+---
+
+## ParagraphInfo
+
+The structured paragraph record returned by
+`Document.list_paragraphs_structured()`, `Document.get_paragraph()` and
+`Document.context()`. All three emit identical records for the same paragraph.
+
+```python
+from docx_editor import ParagraphInfo
+```
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `index` | int | 1-based paragraph index (`P1` is `index=1`) |
+| `ref` | str | Hash-anchored ref `P{index}#{hash}`, usable as any `paragraph=` argument |
+| `text` | str | Full visible text, never truncated |
+| `in_table` | bool | True when the paragraph sits inside a `<w:tc>` table cell |
+| `style` | str or None | Raw `w:pPr/w:pStyle/@w:val` style id (e.g. `"Heading1"`), None when unstyled |
+| `outline_level` | int or None | 0-based outline level (0 == Heading 1), None for body text |
+
+`in_table`, `style` and `outline_level` carry exactly the meanings
+[`ParagraphLocation`](#get_paragraph_locationref) defines for them — a direct
+`w:outlineLvl` wins over the style's level, `w:val="9"` means body text, and a
+`w:pPrChange` revision record is never read as current formatting. They are the
+*cheap* structural facts: list numbering, table coordinates, heading paths and
+section indexes still need `get_paragraph_location()` /
+`list_paragraph_locations()`.
+
+`in_table` also makes the paragraph-index divergence self-describing: table-cell
+paragraphs do get `P{i}` refs, and they are exactly the ones python-docx's
+`doc.paragraphs` skips.
+
+`str(info)` renders `"P{i}#{hash}| {text}"` — the same delimiter format as
+`list_paragraphs()`, always with the full text.
+
+### Example
+
+```python
+# Table of contents from one call — no list_paragraph_locations() needed:
+toc = [
+    (info.outline_level, info.text)
+    for info in doc.list_paragraphs_structured(limit=None)
+    if info.outline_level is not None
+]
+
+# Skip table-cell paragraphs while editing body prose:
+body = [info for info in doc.list_paragraphs_structured(limit=None) if not info.in_table]
 ```
 
 ---
@@ -1329,7 +1473,11 @@ from docx_editor.exceptions import WorkspaceExistsError
 
 Raised when the workspace is out of sync with the source document: the source changed on disk since the workspace was created, or the workspace holds unsaved changes from a previous session that the source never received. Structured fields: `workspace_path` and `source_path`.
 
-`Document.open(path, force_recreate=True)` recovers but discards the workspace's unsaved edits. To rescue them first, save the orphaned workspace to a new file (`Workspace` is not exported at the package root — use the deep import):
+`Document.open(path, force_recreate=True)` and
+[`Document.discard_workspace(path)`](#documentdiscard_workspacepath-workspace_dirnone)
+both recover but discard the workspace's unsaved edits. To rescue them first,
+save the orphaned workspace to a new file (`Workspace` is not exported at the
+package root — use the deep import):
 
 ```python
 from docx_editor.exceptions import WorkspaceSyncError
@@ -1341,6 +1489,10 @@ except WorkspaceSyncError:
     Workspace("contract.docx", create=False).save("rescued.docx")  # rescue unsaved edits
     doc = Document.open("contract.docx", force_recreate=True)
 ```
+
+After a crashed script, one `Document.discard_workspace("contract.docx")` is
+usually the better fix than carrying `force_recreate=True` on every subsequent
+open — it also clears a lock left behind by the dead process.
 
 ### `DocumentOpenError`
 

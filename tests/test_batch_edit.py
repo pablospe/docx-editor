@@ -3,9 +3,10 @@
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
-from conftest import count_dom_walks
+from conftest import count_dom_walks, match_for
 
 from docx_editor import (
     AmbiguousTextError,
@@ -471,6 +472,147 @@ class TestBatchEditDryRun:
         """Empty dry-run batch returns an empty list."""
         doc, _ = multi_para_doc
         assert doc.batch_edit([], dry_run=True) == []
+
+
+class TestDryRunCurrentRef:
+    """A stale-hash row carries ``current_ref``, so recovery needs no message
+    parsing (ISSUES.md #52).
+    """
+
+    @staticmethod
+    def _stale_row(doc):
+        """Edit P5, then dry-run an op that still carries P5's old ref."""
+        stale_ref = doc.list_paragraphs()[4].split("|")[0]
+        doc.replace("item 5", "CHANGED", paragraph=stale_ref)
+        ops = [EditOperation.replace("CHANGED", "EDIT_5", paragraph=stale_ref)]
+        return ops, doc.batch_edit(ops, dry_run=True)[0]
+
+    def test_stale_hash_row_reports_the_current_ref(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        _, row = self._stale_row(doc)
+
+        assert row.valid is False
+        assert row.current_ref == doc.list_paragraphs()[4].split("|")[0]
+        assert row.current_ref != row.paragraph  # the point: a different hash
+
+    def test_current_ref_is_the_hash_from_the_error_message(self, multi_para_doc):
+        """Structured field and prose agree — consumers can stop regexing."""
+        doc, _ = multi_para_doc
+        _, row = self._stale_row(doc)
+
+        assert row.current_ref is not None
+        assert row.current_ref.split("#")[1] in row.error
+
+    def test_retrying_with_current_ref_validates_and_applies(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        ops, row = self._stale_row(doc)
+
+        repaired = [EditOperation.replace("CHANGED", "EDIT_5", paragraph=row.current_ref)]
+        assert all(r.valid for r in doc.batch_edit(repaired, dry_run=True))
+        doc.batch_edit(repaired)
+        assert "EDIT_5" in doc.get_visible_text()
+
+    def test_valid_rows_have_no_current_ref(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        ref = doc.list_paragraphs()[2].split("|")[0]
+        rows = doc.batch_edit([EditOperation.replace("item 3", "x", paragraph=ref)], dry_run=True)
+
+        assert rows[0].valid is True
+        assert rows[0].current_ref is None
+
+    def test_other_failures_have_no_current_ref(self, multi_para_doc):
+        """Only a stale hash is mechanically fixable; nothing else pretends to be."""
+        doc, _ = multi_para_doc
+        refs = doc.list_paragraphs()
+        count = doc.paragraph_count()
+        ops = [
+            EditOperation.replace("NONEXISTENT", "x", paragraph=refs[0].split("|")[0]),  # missing text
+            EditOperation.replace("committee", "x", paragraph=refs[1].split("|")[0]),  # ambiguous (appears twice)
+            EditOperation(action="replace", find="a", replace_with="b", paragraph="P9999#0000"),  # bad index
+            EditOperation(action="replace", find="a", replace_with="b", paragraph="not-a-ref"),  # malformed
+            "not an EditOperation",
+        ]
+        rows = doc.batch_edit(ops, dry_run=True)
+
+        assert count == doc.paragraph_count()
+        assert [r.valid for r in rows] == [False] * 5
+        assert [r.current_ref for r in rows] == [None] * 5
+
+
+class TestEditOperationSearchResultTarget:
+    """EditOperation constructors accept a SearchResult, so a find_all() sweep
+    becomes a batch with no ref/occurrence bookkeeping (ISSUES.md #52).
+    """
+
+    def test_replace_from_a_match_matches_the_explicit_spelling(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        match = match_for(doc, "item 3")
+
+        assert EditOperation.replace(match, "ITEM_THREE") == EditOperation.replace(
+            match.text,
+            "ITEM_THREE",
+            paragraph=match.paragraph_ref,
+            occurrence=match.paragraph_occurrence,
+        )
+
+    def test_every_constructor_accepts_a_match(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        match = match_for(doc, "item 4")
+
+        built = [
+            EditOperation.replace(match, "x"),
+            EditOperation.delete(match),
+            EditOperation.insert_after(match, " after"),
+            EditOperation.insert_before(match, "before "),
+        ]
+        assert [op.action for op in built] == ["replace", "delete", "insert_after", "insert_before"]
+        for op in built:
+            assert op.paragraph == match.paragraph_ref
+            assert op.occurrence == match.paragraph_occurrence
+        assert built[0].find == built[1].text == built[2].anchor == built[3].anchor == match.text
+
+    def test_find_all_sweep_applies_as_one_batch(self, multi_para_doc):
+        """The papercut end to end: search results straight into batch_edit.
+
+        reversed() keeps same-paragraph ops in descending occurrence order, as
+        the batch contract requires.
+        """
+        doc, _ = multi_para_doc
+        matches = doc.find_all("item 7")
+        assert matches
+
+        results = doc.batch_edit([EditOperation.replace(m, "SEVEN") for m in reversed(matches)])
+
+        assert len(results) == len(matches)
+        assert "item 7" not in doc.get_visible_text()
+        assert "SEVEN" in doc.get_visible_text()
+
+    def test_paragraph_or_occurrence_with_a_match_is_refused(self, multi_para_doc):
+        doc, _ = multi_para_doc
+        match = match_for(doc, "item 3")
+
+        # dict[str, Any]: the point is that ANY of these extra kwargs is refused.
+        extras: list[dict[str, Any]] = [{"paragraph": match.paragraph_ref}, {"occurrence": 0}]
+        for kwargs in extras:
+            with pytest.raises(ValueError, match="already pins the paragraph"):
+                EditOperation.replace(match, "x", **kwargs)
+            with pytest.raises(ValueError, match="already pins the paragraph"):
+                EditOperation.delete(match, **kwargs)
+            with pytest.raises(ValueError, match="already pins the paragraph"):
+                EditOperation.insert_after(match, "x", **kwargs)
+            with pytest.raises(ValueError, match="already pins the paragraph"):
+                EditOperation.insert_before(match, "x", **kwargs)
+
+    def test_missing_paragraph_teaches_the_search_result_form(self):
+        """The long-standing message is kept; the hint is appended to it."""
+        with pytest.raises(ValueError, match="Invalid paragraph reference None"):
+            EditOperation.replace("a", "b")
+        with pytest.raises(ValueError, match="or pass a SearchResult as 'find'"):
+            EditOperation.replace("a", "b")
+        with pytest.raises(ValueError, match="or pass a SearchResult as 'text'"):
+            EditOperation.delete("a")
+        with pytest.raises(ValueError, match="or pass a SearchResult as 'anchor'"):
+            EditOperation.insert_before("a", "x")
 
     def test_not_found_error_includes_preview(self, multi_para_doc):
         """A not-found error carries the paragraph preview for easier debugging."""
@@ -1053,11 +1195,11 @@ class TestEditOperationConstructors:
     def test_none_paragraph_ref_rejected(self):
         """paragraph=None gets the field-specific ValueError, not a raw regex TypeError."""
         with pytest.raises(ValueError, match="Invalid paragraph reference None"):
-            EditOperation.replace("a", "b", paragraph=None)  # type: ignore[arg-type]
+            EditOperation.replace("a", "b", paragraph=None)
 
     def test_delete_none_paragraph_ref_rejected(self):
         with pytest.raises(ValueError, match="Invalid paragraph reference None"):
-            EditOperation.delete("x", paragraph=None)  # type: ignore[arg-type]
+            EditOperation.delete("x", paragraph=None)
 
     def test_non_string_paragraph_ref_names_the_type(self):
         with pytest.raises(ValueError, match="expected a string like 'P3#a7b2', got int"):

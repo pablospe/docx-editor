@@ -950,6 +950,74 @@ class TestDirtyWorkspace:
         ws2.close()
 
 
+class TestDiscardWorkspace:
+    """``Document.discard_workspace()`` — the crashed-script reset that used to
+    need a deep ``Workspace`` import or a hand-deleted cache dir (ISSUES.md #60).
+    """
+
+    def test_returns_true_then_false(self, temp_docx):
+        Document.open(temp_docx).close(cleanup=False)
+
+        assert Document.discard_workspace(temp_docx) is True
+        assert Document.discard_workspace(temp_docx) is False  # idempotent
+
+    def test_no_workspace_at_all_is_not_an_error(self, temp_docx):
+        """Safe to call unconditionally at the top of a script."""
+        assert Document.discard_workspace(temp_docx) is False
+
+    def test_unblocks_open_after_a_crashed_session(self, temp_docx, temp_dir):
+        """The friction being removed: a session that saved elsewhere and never
+        closed makes every later open() raise until the workspace is dealt with."""
+        doc = Document.open(temp_docx)
+        ref = find_ref(doc, "fox")
+        doc.replace("fox", "cat", paragraph=ref)
+        doc.save(temp_dir / "elsewhere.docx")
+        doc.close(cleanup=False)  # stands in for a crash: workspace left dirty
+
+        with pytest.raises(WorkspaceSyncError):
+            Document.open(temp_docx)
+
+        assert Document.discard_workspace(temp_docx) is True
+        reopened = Document.open(temp_docx)  # no force_recreate needed
+        try:
+            assert "fox" in reopened.get_visible_text()  # fresh from the source
+        finally:
+            reopened.close()
+
+    def test_clears_a_leftover_lock(self, temp_docx):
+        """A lock from a wedged session must not keep the document unopenable."""
+        doc = Document.open(temp_docx)
+        lock_path = doc.workspace_path.with_name(doc.workspace_path.name + ".lock")
+        assert lock_path.exists()
+
+        with pytest.raises(WorkspaceLockedError):
+            Document.open(temp_docx)
+
+        assert Document.discard_workspace(temp_docx) is True
+        assert not lock_path.exists()
+        assert not doc.workspace_path.exists()
+
+        replacement = Document.open(temp_docx)
+        replacement.close()
+
+    def test_honours_workspace_dir(self, temp_docx, temp_dir):
+        """Targets the same workspace ``open(workspace_dir=...)`` would."""
+        override = temp_dir / "ws_override"
+        Document.open(temp_docx, workspace_dir=override).close(cleanup=False)
+
+        # The default location holds nothing, so a bare call finds nothing.
+        assert Document.discard_workspace(temp_docx) is False
+        assert Document.discard_workspace(temp_docx, workspace_dir=override) is True
+        assert Document.discard_workspace(temp_docx, workspace_dir=override) is False
+
+    def test_source_need_not_exist(self, temp_docx):
+        """A workspace outlives its source, so cleanup after a deleted file works."""
+        Document.open(temp_docx).close(cleanup=False)
+        temp_docx.unlink()
+
+        assert Document.discard_workspace(temp_docx) is True
+
+
 class TestWorkspaceLock:
     """Advisory per-workspace lock against concurrent opens (issue #24)."""
 

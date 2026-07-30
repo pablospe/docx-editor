@@ -70,6 +70,13 @@ class EditOperation:
     construction time with the same rules ``batch_edit`` applies, so mistakes
     surface immediately instead of at apply time. The raw
     ``EditOperation(action=..., ...)`` form remains supported.
+
+    Each typed constructor also accepts a
+    :class:`~docx_editor.track_changes.SearchResult` in place of its target
+    text, which fills in ``paragraph`` and ``occurrence`` from the match —
+    ``[EditOperation.replace(m, "60 days") for m in doc.find_all("30 days")]``
+    needs no ref or occurrence bookkeeping. The dataclass fields stay plain
+    strings either way.
     """
 
     action: Literal["replace", "delete", "insert_after", "insert_before"]
@@ -81,30 +88,58 @@ class EditOperation:
     occurrence: int | None = None  # None = target must be unique in the paragraph
 
     @staticmethod
-    def _validate_common(constructor: str, paragraph: str, occurrence: int | None) -> None:
-        """Construction-time checks shared by all typed constructors."""
+    def _validate_common(constructor: str, paragraph: str | None, occurrence: int | None, arg: str) -> str:
+        """Construction-time checks shared by all typed constructors.
+
+        Returns the validated ref, so callers can hand a narrowed ``str`` to the
+        dataclass field (``paragraph`` is Optional in the signatures only to
+        allow the SearchResult form).
+        """
+        if paragraph is None:
+            # Mirrors ParagraphRef.parse's non-string wording (which handles every
+            # other bad ref below) so the None case reads identically, plus the
+            # hint that a SearchResult would have supplied the ref.
+            raise ValueError(
+                f"Invalid paragraph reference None: expected a string like 'P3#a7b2', got NoneType — "
+                f"{_paragraph_hint(arg)}"
+            )
         ParagraphRef.parse(paragraph)
         _require_valid_occurrence(occurrence, f"EditOperation.{constructor}(): ")
+        return paragraph
 
     @classmethod
-    def replace(cls, find: str, replace_with: str, *, paragraph: str, occurrence: int | None = None) -> "EditOperation":
+    def replace(
+        cls,
+        find: "str | SearchResult",
+        replace_with: str,
+        *,
+        paragraph: str | None = None,
+        occurrence: int | None = None,
+    ) -> "EditOperation":
         """Build a validated replace operation (mirrors ``Document.replace``).
 
         Args:
-            find: Text to find and replace (must be non-empty)
+            find: Text to find and replace (must be non-empty), or a
+                :class:`SearchResult` from find_text()/find_all() — which also
+                supplies ``paragraph`` and ``occurrence``, so pass neither.
             replace_with: Replacement text (empty string allowed — replacing
                 with nothing is a valid tracked deletion)
-            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1").
+                Required unless ``find`` is a SearchResult.
             occurrence: Which occurrence within the paragraph (0 = first).
                 Omitted → ``find`` must be unique in the paragraph, else the
                 batch fails with a wrapped AmbiguousTextError at apply time.
 
         Raises:
-            ValueError: If the paragraph ref is malformed, ``occurrence`` is
-                not a non-negative integer, ``find`` is not a non-empty
-                string, or ``replace_with`` is not a string.
+            ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
+                is not a non-negative integer, ``find`` is not a non-empty
+                string, ``replace_with`` is not a string, or ``find`` is a
+                SearchResult and ``paragraph``/``occurrence`` was given too.
         """
-        cls._validate_common("replace", paragraph, occurrence)
+        find, paragraph, occurrence = _resolve_search_target(
+            find, paragraph, occurrence, ctx="EditOperation.replace(): ", arg="'find'"
+        )
+        paragraph = cls._validate_common("replace", paragraph, occurrence, "'find'")
         if not isinstance(find, str) or not find:
             raise ValueError(
                 f"EditOperation.replace(): 'find' must be a non-empty string — the text to search for, got {find!r}"
@@ -125,22 +160,31 @@ class EditOperation:
         )
 
     @classmethod
-    def delete(cls, text: str, *, paragraph: str, occurrence: int | None = None) -> "EditOperation":
+    def delete(
+        cls, text: "str | SearchResult", *, paragraph: str | None = None, occurrence: int | None = None
+    ) -> "EditOperation":
         """Build a validated delete operation (mirrors ``Document.delete``).
 
         Args:
-            text: Text to mark as deleted (must be non-empty)
-            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            text: Text to mark as deleted (must be non-empty), or a
+                :class:`SearchResult` from find_text()/find_all() — which also
+                supplies ``paragraph`` and ``occurrence``, so pass neither.
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1").
+                Required unless ``text`` is a SearchResult.
             occurrence: Which occurrence within the paragraph (0 = first).
                 Omitted → ``text`` must be unique in the paragraph, else the
                 batch fails with a wrapped AmbiguousTextError at apply time.
 
         Raises:
-            ValueError: If the paragraph ref is malformed, ``occurrence`` is
-                not a non-negative integer, or ``text`` is not a non-empty
-                string.
+            ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
+                is not a non-negative integer, ``text`` is not a non-empty
+                string, or ``text`` is a SearchResult and
+                ``paragraph``/``occurrence`` was given too.
         """
-        cls._validate_common("delete", paragraph, occurrence)
+        text, paragraph, occurrence = _resolve_search_target(
+            text, paragraph, occurrence, ctx="EditOperation.delete(): ", arg="'text'"
+        )
+        paragraph = cls._validate_common("delete", paragraph, occurrence, "'text'")
         if not isinstance(text, str) or not text:
             raise ValueError(
                 f"EditOperation.delete(): 'text' must be a non-empty string — the text to mark as deleted, got {text!r}"
@@ -152,12 +196,15 @@ class EditOperation:
     def _insert(
         cls,
         action: Literal["insert_after", "insert_before"],
-        anchor: str,
+        anchor: "str | SearchResult",
         text: str,
-        paragraph: str,
+        paragraph: str | None,
         occurrence: int | None,
     ) -> "EditOperation":
-        cls._validate_common(action, paragraph, occurrence)
+        anchor, paragraph, occurrence = _resolve_search_target(
+            anchor, paragraph, occurrence, ctx=f"EditOperation.{action}(): ", arg="'anchor'"
+        )
+        paragraph = cls._validate_common(action, paragraph, occurrence, "'anchor'")
         if not isinstance(anchor, str) or not anchor:
             raise ValueError(
                 f"EditOperation.{action}(): 'anchor' must be a non-empty string — the text to insert near, "
@@ -172,44 +219,80 @@ class EditOperation:
         return cls(action=action, paragraph=paragraph, anchor=anchor, text=text, occurrence=occurrence)
 
     @classmethod
-    def insert_after(cls, anchor: str, text: str, *, paragraph: str, occurrence: int | None = None) -> "EditOperation":
+    def insert_after(
+        cls,
+        anchor: "str | SearchResult",
+        text: str,
+        *,
+        paragraph: str | None = None,
+        occurrence: int | None = None,
+    ) -> "EditOperation":
         """Build a validated insert_after operation (mirrors ``Document.insert_after``).
 
         Args:
-            anchor: Text to find as insertion point (must be non-empty)
+            anchor: Text to find as insertion point (must be non-empty), or a
+                :class:`SearchResult` from find_text()/find_all() — which also
+                supplies ``paragraph`` and ``occurrence``, so pass neither.
             text: Text to insert after the anchor
-            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1").
+                Required unless ``anchor`` is a SearchResult.
             occurrence: Which occurrence of anchor within the paragraph
                 (0 = first). Omitted → ``anchor`` must be unique in the
                 paragraph, else the batch fails with a wrapped
                 AmbiguousTextError at apply time.
 
         Raises:
-            ValueError: If the paragraph ref is malformed, ``occurrence`` is
-                not a non-negative integer, ``anchor`` is not a non-empty
-                string, or ``text`` is not a string.
+            ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
+                is not a non-negative integer, ``anchor`` is not a non-empty
+                string, ``text`` is not a string, or ``anchor`` is a
+                SearchResult and ``paragraph``/``occurrence`` was given too.
         """
         return cls._insert("insert_after", anchor, text, paragraph, occurrence)
 
     @classmethod
-    def insert_before(cls, anchor: str, text: str, *, paragraph: str, occurrence: int | None = None) -> "EditOperation":
+    def insert_before(
+        cls,
+        anchor: "str | SearchResult",
+        text: str,
+        *,
+        paragraph: str | None = None,
+        occurrence: int | None = None,
+    ) -> "EditOperation":
         """Build a validated insert_before operation (mirrors ``Document.insert_before``).
 
         Args:
-            anchor: Text to find as insertion point (must be non-empty)
+            anchor: Text to find as insertion point (must be non-empty), or a
+                :class:`SearchResult` from find_text()/find_all() — which also
+                supplies ``paragraph`` and ``occurrence``, so pass neither.
             text: Text to insert before the anchor
-            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1").
+                Required unless ``anchor`` is a SearchResult.
             occurrence: Which occurrence of anchor within the paragraph
                 (0 = first). Omitted → ``anchor`` must be unique in the
                 paragraph, else the batch fails with a wrapped
                 AmbiguousTextError at apply time.
 
         Raises:
-            ValueError: If the paragraph ref is malformed, ``occurrence`` is
-                not a non-negative integer, ``anchor`` is not a non-empty
-                string, or ``text`` is not a string.
+            ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
+                is not a non-negative integer, ``anchor`` is not a non-empty
+                string, ``text`` is not a string, or ``anchor`` is a
+                SearchResult and ``paragraph``/``occurrence`` was given too.
         """
         return cls._insert("insert_before", anchor, text, paragraph, occurrence)
+
+
+@dataclass(frozen=True)
+class _ValidationOutcome:
+    """Internal result of validating one operation: why it failed, and the ref
+    that would fix it when the failure was a stale hash.
+
+    Named rather than a bare 2-tuple because both fields are ``str | None`` —
+    positional unpacking would be one transposition away from reporting the
+    recovery ref as the error message.
+    """
+
+    error: str | None  # None when the operation would apply cleanly
+    current_ref: str | None = None  # set only for stale-hash failures
 
 
 def _not_an_edit_operation_message(op: object) -> str:
@@ -223,12 +306,22 @@ def _not_an_edit_operation_message(op: object) -> str:
 
 @dataclass
 class EditValidationResult:
-    """Outcome of validating one EditOperation in a dry-run batch."""
+    """Outcome of validating one EditOperation in a dry-run batch.
+
+    ``current_ref`` is the recovery field for the one failure a caller can fix
+    mechanically: a stale hash. It holds the ref that targets the same paragraph
+    at its *current* content (e.g. ``"P7#c4d8"`` when the operation carried
+    ``"P7#a7b2"``), so a retry is ``EditOperation.replace(..., paragraph=
+    row.current_ref)`` — no parsing the hash out of ``error``'s prose. It is
+    ``None`` for every other outcome: valid rows, malformed refs, out-of-range
+    indexes, missing or ambiguous target text, and non-EditOperation elements.
+    """
 
     index: int  # 0-based position in the input operations list
     paragraph: str | None  # the operation's paragraph ref (None if it was missing)
     valid: bool  # True if the op would apply cleanly
     error: str | None = None  # human-readable reason when not valid
+    current_ref: str | None = None  # ref for the paragraph's current content, stale-hash rows only
 
 
 class EditResult(str):
@@ -333,6 +426,71 @@ class SearchResult:
         text = self.text if len(self.text) <= 60 else self.text[:57] + "..."
         spans = " spans_rev" if self.spans_revision else ""
         return f"SearchResult({self.paragraph_ref} occ={self.paragraph_occurrence} {text!r}{spans})"
+
+
+def _resolve_search_target(
+    target: "str | SearchResult",
+    paragraph: str | None,
+    occurrence: int | None,
+    *,
+    ctx: str,
+    arg: str,
+) -> tuple[str, str | None, int | None]:
+    """Normalize a text-or-SearchResult edit target into ``(text, paragraph, occurrence)``.
+
+    A plain string passes through untouched, so every existing call site keeps
+    its exact semantics. A :class:`SearchResult` supplies all three values —
+    its ``text``, its ``paragraph_ref`` and its ``paragraph_occurrence`` —
+    which is what makes ``doc.replace(match, "60 days")`` mean exactly what
+    spelling those three fields out by hand means.
+
+    Passing a SearchResult *and* ``paragraph=``/``occurrence=`` is a
+    contradiction rather than a merge (which of the two paragraphs wins?), so
+    it raises instead of silently preferring one.
+
+    Args:
+        target: Text to locate, or a SearchResult that already located it.
+        paragraph: The call's ``paragraph=`` argument (None when omitted).
+        occurrence: The call's ``occurrence=`` argument (None when omitted).
+        ctx: Message prefix naming the caller, e.g. ``"replace(): "``.
+        arg: Display name of the target parameter, e.g. ``"'find'"``.
+
+    Returns:
+        ``(text, paragraph, occurrence)``, for the caller to validate exactly
+        as it validates hand-written arguments.
+
+    Raises:
+        ValueError: If ``target`` is a SearchResult and ``paragraph`` or
+            ``occurrence`` was given too.
+    """
+    if not isinstance(target, SearchResult):
+        return target, paragraph, occurrence
+    redundant = [
+        name
+        for name, given in (("paragraph=", paragraph is not None), ("occurrence=", occurrence is not None))
+        if given
+    ]
+    if redundant:
+        raise ValueError(
+            f"{ctx}{arg} is a SearchResult, which already pins the paragraph ({target.paragraph_ref!r}) "
+            f"and the occurrence ({target.paragraph_occurrence}) — drop {' and '.join(redundant)}"
+        )
+    return target.text, target.paragraph_ref, target.paragraph_occurrence
+
+
+def _paragraph_hint(arg: str) -> str:
+    """Trailing hint shared by the "paragraph ref is missing" messages.
+
+    ``paragraph`` is optional in the *signatures* only because a SearchResult
+    target supplies it (see :func:`_resolve_search_target`); an edit still has to
+    know which paragraph it targets. Document's methods and EditOperation's
+    constructors keep their own long-standing message prefixes (both are pinned
+    by tests) and share this recovery hint, so the advice cannot drift.
+    """
+    return (
+        f"pass a ref from list_paragraphs()/find_text(), or pass a SearchResult as {arg} "
+        f"(it carries both the paragraph and the occurrence)"
+    )
 
 
 @dataclass(frozen=True)
@@ -1278,7 +1436,10 @@ class RevisionManager:
         Returns:
             One EditValidationResult per operation, in input order. An element
             that is not an EditOperation at all comes back as an invalid
-            result (``paragraph=None``), never as an exception.
+            result (``paragraph=None``), never as an exception. Rows that failed
+            on a stale hash also carry ``current_ref`` — the ref for that
+            paragraph's current content — so the caller can retry without
+            parsing the message.
         """
         if not operations:
             return []
@@ -1292,19 +1453,20 @@ class RevisionManager:
                     EditValidationResult(index=i, paragraph=None, valid=False, error=_not_an_edit_operation_message(op))
                 )
                 continue
-            error = self._validate_single(op, paragraphs)
+            outcome = self._validate_single(op, paragraphs)
             results.append(
                 EditValidationResult(
                     index=i,
                     paragraph=op.paragraph,
-                    valid=error is None,
-                    error=error,
+                    valid=outcome.error is None,
+                    error=outcome.error,
+                    current_ref=outcome.current_ref,
                 )
             )
         return results
 
-    def _validate_single(self, op: EditOperation, paragraphs: list[Element] | None = None) -> str | None:
-        """Return an error message if ``op`` would fail, or None if it is valid.
+    def _validate_single(self, op: EditOperation, paragraphs: list[Element] | None = None) -> "_ValidationOutcome":
+        """Return why ``op`` would fail, or an all-None outcome if it is valid.
 
         Reuses ``_resolve_paragraph``, ``_resolve_action_target``, and
         ``_locate_in_paragraph`` — the same helpers ``_apply_single_edit`` uses —
@@ -1314,17 +1476,22 @@ class RevisionManager:
         (see validate_batch); None fetches fresh.
         """
         if not op.paragraph:
-            return "paragraph reference is required for batch mode"
+            return _ValidationOutcome("paragraph reference is required for batch mode")
 
         try:
             ref = ParagraphRef.parse(op.paragraph)
         except ValueError as e:
-            return str(e)
+            return _ValidationOutcome(str(e))
 
         try:
             p = self._resolve_paragraph(ref, paragraphs)
-        except (ParagraphIndexError, HashMismatchError) as e:
-            return str(e)
+        except HashMismatchError as e:
+            # The one mechanically fixable failure: hand back the ref that
+            # targets this paragraph's current content (EditValidationResult
+            # .current_ref) so callers never regex the hash out of the prose.
+            return _ValidationOutcome(str(e), f"P{e.paragraph_index}#{e.actual_hash}")
+        except ParagraphIndexError as e:
+            return _ValidationOutcome(str(e))
 
         # Resolve required args + the text this op must locate via the same
         # helper _apply_single_edit uses (which also rejects a negative
@@ -1333,14 +1500,14 @@ class RevisionManager:
         try:
             target = self._resolve_action_target(op)
         except ValueError as e:
-            return str(e)
+            return _ValidationOutcome(str(e))
 
         try:
             self._locate_in_paragraph(p, op.paragraph, target, op.occurrence)
         except (ValueError, DocxEditError) as e:
-            return str(e)
+            return _ValidationOutcome(str(e))
 
-        return None
+        return _ValidationOutcome(None)
 
     def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> list[int | None]:
         """Rewrite multiple paragraphs with upfront hash validation.
@@ -3722,6 +3889,15 @@ def _trim_replace_affixes(find: str, replace_with: str) -> tuple[int, int]:
     remainder after the prefix, so a token shared at both ends is never
     consumed twice.
 
+    One exception is character-granular: when what remains on *both* sides after
+    the word-level trim is nothing but whitespace, the shared characters of that
+    whitespace are trimmed too. A single-to-double space edit then becomes a pure
+    one-space insertion instead of a ``del " "`` + ``ins "  "`` pair that renders
+    as an invisible, unreviewable redline (ISSUES.md #60). The gate keeps this
+    away from word redlines, where character trimming would be actively harmful:
+    ``"30 days"`` → ``"60 days"`` must stay one whole-word replacement, not
+    ``del "3"`` + ``ins "6"``.
+
     Returns:
         ``(prefix_len, suffix_len)`` in characters.
     """
@@ -3737,7 +3913,25 @@ def _trim_replace_affixes(find: str, replace_with: str) -> tuple[int, int]:
 
     prefix_len = sum(len(tok) for tok in f_toks[:i])
     suffix_len = sum(len(tok) for tok in f_toks[len(f_toks) - j :])
+
+    f_rest = find[prefix_len : len(find) - suffix_len]
+    r_rest = replace_with[prefix_len : len(replace_with) - suffix_len]
+    if f_rest and r_rest and not f_rest.strip() and not r_rest.strip():
+        prefix_len += _common_prefix_len(f_rest, r_rest)
+        # Re-slice: the prefix just grew, and the shared characters it consumed
+        # must not be counted again from the other end.
+        f_rest = find[prefix_len : len(find) - suffix_len]
+        r_rest = replace_with[prefix_len : len(replace_with) - suffix_len]
+        suffix_len += _common_prefix_len(f_rest[::-1], r_rest[::-1])
     return prefix_len, suffix_len
+
+
+def _common_prefix_len(a: str, b: str) -> int:
+    """Number of leading characters ``a`` and ``b`` share."""
+    n = 0
+    while n < len(a) and n < len(b) and a[n] == b[n]:
+        n += 1
+    return n
 
 
 def _set_xml_space_preserve(wt_elem) -> None:

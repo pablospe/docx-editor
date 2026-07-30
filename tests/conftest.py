@@ -18,6 +18,19 @@ def find_ref(doc, text):
     raise ValueError(f"Paragraph containing '{text}' not found")
 
 
+def match_for(doc, text, **kwargs):
+    """``find_text`` narrowed to a definite match.
+
+    ``find_text`` returns ``SearchResult | None``, which the edit methods refuse
+    (a None target must not become a silent no-op). Tests that know the text is
+    present use this so the Optional is handled once, here, instead of asserting
+    in every case.
+    """
+    match = doc.find_text(text, **kwargs)
+    assert match is not None, f"no match for {text!r}"
+    return match
+
+
 def replace_docx_parts(src: Path, dest: Path, parts: dict[str, str | None]) -> None:
     """Copy ``src`` to ``dest``, swapping each archive part named in ``parts``.
 

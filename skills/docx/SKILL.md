@@ -77,7 +77,9 @@ Use **python-docx** to explore document structure before editing. This is useful
 > `doc.paragraphs` lists body-level paragraphs only (table cells excluded);
 > docx_editor `P{i}` refs number every paragraph including table cells — the
 > numberings diverge at the first table (a 3000-paragraph doc can have 3027
-> `P` refs), so `P{i}` ≠ `paragraphs[i-1]`.
+> `P` refs), so `P{i}` ≠ `paragraphs[i-1]`. Each `ParagraphInfo` says which
+> side of that divergence it is on: `info.in_table` is `True` exactly for the
+> paragraphs python-docx skips.
 
 ```python
 from docx import Document
@@ -267,22 +269,29 @@ for p in doc.list_paragraphs():
 #         P3#b2c4| Section 3. Terms and conditions...
 
 # Find text (returns SearchResult or None, works across element boundaries).
-# Chain into an edit with paragraph=match.paragraph_ref plus
-# occurrence=match.paragraph_occurrence (edits count occurrences per paragraph).
 match = doc.find_text("30 days")
 # Optionally scope to one paragraph — occurrence then counts within it:
 match = doc.find_text("30 days", paragraph="P2#f3c1")
+
+# Chain straight into an edit: pass the SearchResult itself as the target and it
+# supplies the text, the paragraph AND the occurrence. Do NOT also pass
+# paragraph=/occurrence= with it (that raises — it would contradict the match):
+doc.replace(match, "60 days")
+# Every text-targeting method takes one: replace, delete, insert_after,
+# insert_before, add_comment, and the EditOperation constructors. The explicit
+# spelling stays valid — it is the SAME single edit the line above just made,
+# not a follow-up (re-running it would raise HashMismatchError on the now-stale
+# match):
+#   doc.replace(match.text, "60 days", paragraph=match.paragraph_ref,
+#               occurrence=match.paragraph_occurrence)
 
 # Just need the count? doc.count_matches("30 days") returns the document-wide
 # occurrence total (no paragraph scope) without building SearchResults.
 
 # Enumerate EVERY match in one call (returns list[SearchResult], [] if none).
-# Each result plugs straight into a follow-up edit — no occurrence math needed.
 # Edit them all in one atomic batch; reversed() puts same-paragraph ops in the
 # required DESCENDING occurrence order, safe however the matches are spread:
-ops = [EditOperation.replace(r.text, "60 days", paragraph=r.paragraph_ref,
-                             occurrence=r.paragraph_occurrence)
-       for r in reversed(doc.find_all("30 days"))]
+ops = [EditOperation.replace(r, "60 days") for r in reversed(doc.find_all("30 days"))]
 doc.batch_edit(ops)
 # Optionally scope to one paragraph: doc.find_all("term", paragraph="P2#f3c1")
 # One-at-a-time doc.replace() per result also works when every paragraph has
@@ -298,14 +307,32 @@ doc.batch_edit(ops)
 
 # Show the paragraphs AROUND a match ("what's the surrounding section?").
 # window=2 (default) returns up to 5 ParagraphInfo records, clamped at the
-# document edges; each prints as "P{i}#{hash}| full text":
+# document edges; each prints as "P{i}#{hash}| full text". Note the re-find:
+# the edits above made the earlier `match` stale, and a stale ref raises
+# HashMismatchError wherever it is used — search again after editing.
+match = doc.find_text("60 days")
 for info in doc.context(match.paragraph_ref, window=2):
     print(info)
 
 # Fetch ONE paragraph by number — single-item counterpart to
 # list_paragraphs_structured(). 1-based (P1 is index=1), returns ParagraphInfo
-# with full untruncated text; ParagraphIndexError when out of range:
+# with full untruncated text; ParagraphIndexError when out of range.
+# Both get_paragraph() and context() are O(document) despite their fixed-size
+# output (they walk every w:p). Fine per lookup; for many paragraphs call
+# list_paragraphs_structured(limit=None) ONCE and index that list instead:
 info = doc.get_paragraph(match.paragraph_index)
+
+# Every ParagraphInfo also carries the paragraph's cheap structural facts:
+print(info.style)          # raw w:pStyle id, e.g. "Heading1" (None = unstyled)
+print(info.outline_level)  # 0-based; 0 == Heading 1; None == body text
+print(info.in_table)       # True = the paragraph lives in a table cell
+# So a table of contents needs ONE call, no list_paragraph_locations():
+toc = [(i.outline_level, i.text) for i in doc.list_paragraphs_structured(limit=None)
+       if i.outline_level is not None]
+# in_table also makes the P-index divergence self-describing: table-cell
+# paragraphs DO get P{i} refs (python-docx's doc.paragraphs skips them).
+# Table coordinates, list numbering, heading paths and section indexes still
+# need get_paragraph_location()/list_paragraph_locations() below.
 
 # Get all visible text (inserted text included, deleted text excluded)
 visible = doc.get_visible_text()
@@ -355,6 +382,10 @@ doc.delete("unnecessary clause", paragraph="P5#d4e5")
 doc.insert_after("Section 3.", " Additional terms apply.", paragraph="P3#b2c4")
 doc.insert_before("Section 3.", "See also: ", paragraph="P3#b2c4")
 
+# A whitespace-only fix is written as the minimal revision — a pure insertion
+# here, a pure deletion the other way round, never an invisible del+ins pair:
+doc.replace("clause  2", "clause 2", paragraph="P5#d4e5")
+
 # To accept/reject a specific edit as a unit, use its revision group:
 result = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
 doc.reject_group(result.group_id)   # undo the whole edit (del + ins together)
@@ -393,8 +424,7 @@ d.save("report.docx")
 from docx_editor import Document
 doc = Document.open("report.docx", author="Reviewer")
 for r in reversed(doc.find_all("thirty days")):
-    doc.replace(r.text, "sixty days", paragraph=r.paragraph_ref,
-                occurrence=r.paragraph_occurrence)
+    doc.replace(r, "sixty days")                     # the match pins ref+occurrence
 
 locs = dict(doc.list_paragraph_locations())          # snapshot AFTER the edits
 report = {}
@@ -747,7 +777,9 @@ everything = doc.list_paragraphs(limit=None)         # uncapped, never a notice
 refs_only = doc.list_paragraphs(max_chars=0, limit=None)  # every "P1#a7b2", no preview, no notice
 ```
 
-(`list_paragraphs_structured()` has the same 200-record default cap but appends **no notice** — every entry stays a typed `ParagraphInfo`. Detect truncation by checking whether the last record's `index` is still below `paragraph_count()` (robust for any `start`), or pass `limit=None`.)
+(`list_paragraphs_structured()` has the same 200-record default cap but appends **no notice** — every entry stays a typed `ParagraphInfo` carrying `index`, `ref`, full `text`, plus `style`/`outline_level`/`in_table`. Detect truncation by checking whether the last record's `index` is still below `paragraph_count()` (robust for any `start`), or pass `limit=None`.)
+
+**Reaching the end of the pagination:** a `start` past the last paragraph is a valid request with an empty answer — both listing methods return `[]`, exactly like `lst[500:]` on a 300-item list, and **do not raise**. So `while page := doc.list_paragraphs(start=s, limit=200)` terminates cleanly. (`start=0` or negative *does* raise `ValueError`: those are invalid inputs, not empty ranges.) To know where the end is rather than discovering it, use `paragraph_count()` up front or follow the truncation notice's `start=` hint.
 
 The `paragraph` argument is **required** for all edit methods. If the paragraph content has changed since you called `list_paragraphs()`, a `HashMismatchError` is raised — preventing edits to the wrong location.
 
@@ -780,7 +812,7 @@ with Document.open("file.docx", author=author) as doc:
     doc.save()
 ```
 
-Build operations with the typed constructors (`EditOperation.replace/.delete/.insert_after/.insert_before` — same signatures as the `Document` methods). They validate arguments immediately and raise `ValueError` with a field-specific message, instead of failing later at apply time.
+Build operations with the typed constructors (`EditOperation.replace/.delete/.insert_after/.insert_before` — same signatures as the `Document` methods, including the SearchResult form: `EditOperation.replace(match, "60 days")`). They validate arguments immediately and raise `ValueError` with a field-specific message, instead of failing later at apply time.
 
 **Single-exception contract:** whatever goes wrong with an operation — stale
 hash, malformed ref, missing text, ambiguous target — `batch_edit` (and
@@ -790,8 +822,8 @@ typed exception. The batch is atomic: nothing is applied on failure.
 
 **Pre-flight with `dry_run=True`** — validates every operation without applying
 anything and returns `list[EditValidationResult]` (fields: `index`, `paragraph`,
-`valid`, `error`), one per operation in input order. The document is left
-unchanged (`ops` is the `EditOperation` list built above):
+`valid`, `error`, `current_ref`), one per operation in input order. The document
+is left unchanged (`ops` is the `EditOperation` list built above):
 
 ```python
 results = doc.batch_edit(ops, dry_run=True)
@@ -801,6 +833,20 @@ else:
     for r in results:
         if not r.valid:
             print(f"op {r.index} on {r.paragraph}: {r.error}")
+```
+
+`current_ref` is the recovery field for the one failure you can fix
+mechanically: a **stale hash**. It holds the ref for that paragraph's *current*
+content, so rebuild the operation with it — never regex the hash out of `error`.
+It is `None` on every other row (valid ones included), which is also how you
+tell a stale hash apart from a missing target:
+
+```python
+for r in doc.batch_edit(ops, dry_run=True):
+    if r.current_ref:                                  # stale hash → retry
+        ops[r.index] = EditOperation.replace("30 days", "60 days", paragraph=r.current_ref)
+    elif not r.valid:                                  # text/ref problem → re-search
+        print(f"op {r.index} needs attention: {r.error}")
 ```
 
 Each operation is validated independently against the current document —
@@ -874,8 +920,8 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `DocumentClosedError`  | `path`                                                                                  | The `Document` was used after `close()`. Reopen with `Document.open(e.path)`; edits not saved before the `close()` were discarded with the workspace. |
 | `DocumentNotFoundError`| `path`                                                                                  | The file doesn't exist at `path` — fix the path (typo, wrong cwd) before retrying. |
 | `InvalidDocumentError` | `path`                                                                                  | The file at `path` is not a valid .docx — wrong suffix, a directory, empty/truncated/not a ZIP, missing word/document.xml, or malformed XML. Not an in-loop retry: the message names which check failed; fix or re-export the input file. |
-| `WorkspaceSyncError`   | `workspace_path`, `source_path`                                                         | Workspace and source disagree (unsaved edits from a previous session, or the source changed on disk). **Do not retry blindly** — `force_recreate=True` (open) / `force=True` (save) DISCARDS one side; to rescue the workspace's edits first, save them elsewhere: `Workspace(source, create=False).save("rescued.docx")`. |
-| `WorkspaceLockedError` | `pid`, `lock_path`                                                                      | A live session already holds this document's workspace — another process, or an unclosed `Document` in THIS one. Close it (or stop that process) and retry; `Document.open(path, force_recreate=True)` takes the workspace over but DISCARDS the holder's unsaved edits. Locks left by dead processes are reclaimed automatically and never raise. |
+| `WorkspaceSyncError`   | `workspace_path`, `source_path`                                                         | Workspace and source disagree (unsaved edits from a previous session, or the source changed on disk). **Do not retry blindly** — `force_recreate=True` (open) / `force=True` (save) / `Document.discard_workspace(path)` DISCARDS one side; to rescue the workspace's edits first, save them elsewhere: `Workspace(source, create=False).save("rescued.docx")`. After a crashed script, `Document.discard_workspace(path)` once beats `force_recreate=True` on every open. |
+| `WorkspaceLockedError` | `pid`, `lock_path`                                                                      | A live session already holds this document's workspace — another process, or an unclosed `Document` in THIS one. Close it (or stop that process) and retry; `Document.open(path, force_recreate=True)` or `Document.discard_workspace(path)` takes the workspace over but DISCARDS the holder's unsaved edits — confirm the holder is gone first. Locks left by dead processes are reclaimed automatically and never raise. |
 | `DocumentOpenError`    | `path`, `owner_file`                                                                    | **Do not retry blindly.** The destination is open in Word. Stop and tell the user to close it. Only pass `force=True` if the user confirms the `~$` lock is stale (crashed session). |
 
 ```python
@@ -898,8 +944,7 @@ except TextNotFoundError as e:
 except AmbiguousTextError as e:
     # Target matched e.total_occurrences times — enumerate and pick
     r = doc.find_all("stale text", paragraph=e.paragraph_ref)[0]
-    doc.replace("stale text", "new text", paragraph=r.paragraph_ref,
-                occurrence=r.paragraph_occurrence)
+    doc.replace(r, "new text")  # the picked match pins ref + occurrence
 except ParagraphIndexError as e:
     # Clamp to a valid 1-indexed paragraph number (guard the empty-doc case)
     if e.total_paragraphs == 0:
@@ -1071,7 +1116,7 @@ Rules:
 
 - **Always `docx-session stop` when the editing task is done** — don't leave kernels running.
 - Exit code 1 means the code raised: the traceback is on stderr, the session survives — fix the call and continue (introspect with `docx-session exec "import inspect; print(inspect.signature(doc.replace))"` when unsure).
-- Exit code 2 means timeout — the kernel is alive and your code is still running. Exit code 3 means no session is running.
+- Exit code 2 means timeout, in one of two flavours the stderr line names (and `eval`'s JSON envelope reports as `"started"`): **your code ran too long** (`started: true` — "kernel still running"; raise `--timeout` or make the code faster), or **it never left the queue** (`started: false` — "still queued … never started"; the kernel is busy with an *earlier* command, and nothing of yours executed, so re-sending later is safe). Exit code 3 means no session is running.
 - Exit code 4 means the kernel died mid-exec or is unreachable: its state (open documents, variables) is lost. Recover with `docx-session stop` then `start`, and re-open your documents.
 - `eval` output: library dataclasses (SearchResult, ParagraphInfo, ParagraphLocation, Revision, Comment) arrive as real JSON objects (`"serialized": true`, datetimes as ISO strings, tuples as lists) — access fields directly, never string-parse a repr. `"serialized": false` means the value wasn't JSON-serializable and `value` holds its `repr` string. On exit 1 the envelope carries `"error": {"type", "message", <structured recovery fields — e.g. actual_hash, total_occurrences>}` plus a compact, machine-path-stripped `traceback` (library frames appear as relative `docx_editor/...` paths and the eval line as `<docx-session eval>`; only absolute machine paths are stripped) (`"error"` is null for the rare raise that bypasses the kernel-side capture, e.g. SystemExit — fall back to `traceback`). On exit 4 the envelope has `"status": "dead"`; on exit 3 (no session) there is no envelope at all.
 - `eval` of an edit call returns the `EditResult` as a plain JSON *string* (it is a `str` subclass, so its value is just the new ref) — `group_id`/`revision_ids` are lost in transit. Keep the result in a kernel-side variable and eval a dict projection when you need them: `docx-session exec "r = doc.replace(...)"` then `docx-session eval "{'ref': str(r), 'group_id': r.group_id}"`.
@@ -1080,11 +1125,11 @@ Rules:
 - **Never one `exec` per edit.** Each `docx-session` call is a fresh CLI round-trip (~250 ms of subprocess + IPC overhead) that dwarfs the edit itself — 50 edits sent as 50 `exec` calls take ~12 s, the same 50 batched into one `exec` is a single round-trip (~0.3 s: the ~250 ms overhead plus the in-kernel loop), ~40x less overhead. Loop inside a single `exec`, or use `batch_edit`.
 - **Project fields kernel-side for large reads.** `eval` serializes the whole value to JSON (~150 chars per `SearchResult`), so a big `find_all` returns tens of KB of context. Return only the fields you need — e.g. `docx-session eval "[(r.paragraph_ref, r.paragraph_occurrence) for r in doc.find_all('30 days')]"` — instead of the full objects (same idea as the `EditResult` projection above).
 - Use absolute paths inside `exec` — the kernel's cwd is whatever `start` captured.
-- A `exec` sent while the kernel is still busy **queues** behind the running one; `--timeout` covers the whole wait. A timeout does not cancel the running code.
+- A `exec` sent while the kernel is still busy **queues** behind the running one; `--timeout` covers the whole wait. A timeout does not cancel the running code. Tell the two timeouts apart with `started` / the stderr line (see exit code 2 above) before deciding whether re-sending is safe.
 - The session is non-interactive: `input()` (and anything reading stdin) raises `StdinNotImplementedError` rather than hanging.
 - `doc.save()` raises `WorkspaceSyncError` if the file changed on disk while the session held it open (e.g. the user edited it in Word). Ask the user before retrying with `doc.save(force=True)` — force overwrites their changes.
-- A session that saved to a different path (or whose save failed) and never called `doc.close()` leaves the workspace flagged as holding unsaved changes; the next `Document.open()` of the same source raises `WorkspaceSyncError` instead of silently carrying those edits over. `Document.open(path, force_recreate=True)` recovers but **discards** those edits — to rescue them first, save the orphaned workspace to a new file: `from docx_editor.workspace import Workspace; Workspace("contract.docx", create=False).save("rescued.docx")` (deep import — `Workspace` is not exported at package root), then reopen the source with `force_recreate=True`.
-- `Document.open()` raises `WorkspaceLockedError` if a live session (another process, or an unclosed `Document` in this one) already holds the document's workspace. Close the other session, or use `Document.open(path, force_recreate=True)` to take the workspace over, discarding its unsaved edits. Stale locks from dead processes are reclaimed automatically.
+- A session that saved to a different path (or whose save failed) and never called `doc.close()` leaves the workspace flagged as holding unsaved changes; the next `Document.open()` of the same source raises `WorkspaceSyncError` instead of silently carrying those edits over. Two recoveries, both **discarding** those edits: `Document.open(path, force_recreate=True)` (per-open) or `Document.discard_workspace(path)` (once, then open normally — the fix for a crashed script, since it also clears a leftover lock and returns `False` when there was nothing to delete, so it is safe to call unconditionally). To rescue the edits first, save the orphaned workspace to a new file: `from docx_editor.workspace import Workspace; Workspace("contract.docx", create=False).save("rescued.docx")` (deep import — `Workspace` is not exported at package root), then discard.
+- `Document.open()` raises `WorkspaceLockedError` if a live session (another process, or an unclosed `Document` in this one) already holds the document's workspace. Close the other session, or use `Document.open(path, force_recreate=True)` / `Document.discard_workspace(path)` to take the workspace over, discarding its unsaved edits — make sure the holder is really gone first. Stale locks from dead processes are reclaimed automatically.
 - Concurrent sessions via `--session-file` must edit *different* documents — a second session opening the same document raises `WorkspaceLockedError` (see "Editing in parallel" below).
 - For a single edit, a one-off script is still fine — session mode pays off with repeated operations.
 

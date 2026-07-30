@@ -74,6 +74,14 @@ Use the `P{index}#{hash}` part as the `paragraph=` argument. Edit methods return
 
 When the search text appears more than once in the target paragraph, pass `occurrence=` (0-based, so `occurrence=1` is the second match) to `replace()`, `delete()`, `insert_after()`, `insert_before()`, and `add_comment()`. Omitting it requires a unique match — otherwise the call raises `AmbiguousTextError`.
 
+Better still, let a search do that bookkeeping: those five methods (and the `EditOperation` constructors) accept a `SearchResult` in place of the target text, taking the paragraph and occurrence from the match.
+
+```python
+with Document.open("contract.docx") as doc:
+    match = doc.find_text("30 days")          # or find_all(...)[1] for the 2nd
+    doc.replace(match, "60 days")             # no paragraph=, no occurrence=
+```
+
 ## Track Changes
 
 ### Replace Text

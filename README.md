@@ -133,7 +133,9 @@ with Document.open("reviewed.docx", author="Editor") as doc:
     if match and match.spans_revision:
         print("Text spans a revision boundary")
 
-    # Replace works even across revision boundaries
+    # Replace works even across revision boundaries. Instead of a ref, you can
+    # pass the match itself — it carries the text, paragraph and occurrence:
+    #     doc.replace(match, "Goal: To")
     doc.replace("Aim: To", "Goal: To", paragraph="P1#a7b2")
 
     doc.save()

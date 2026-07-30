@@ -21,6 +21,9 @@ Covers:
     closes); the body-level ``w:sectPr`` defines the final section
   * stale refs raise ``HashMismatchError``; out-of-range refs raise
     ``ParagraphIndexError``
+  * ``ParagraphInfo`` carries the same ``style``/``outline_level``/``in_table``
+    facts (``list_paragraphs_structured``, ``get_paragraph``, ``context``), and
+    never disagrees with ``get_paragraph_location`` about them
 
 The fixture is built by swapping ``word/document.xml`` inside a copy of
 ``simple.docx`` (already in ``tests/test_data``) so we don't need to commit
@@ -37,6 +40,7 @@ from docx_editor import (
     HashMismatchError,
     ListItem,
     ParagraphIndexError,
+    ParagraphInfo,
     ParagraphLocation,
     TableCell,
 )
@@ -1429,3 +1433,122 @@ class TestListParagraphLocationsSectionInfo:
             for ref, loc in entries:
                 assert loc == doc.get_paragraph_location(ref)
             assert [loc.section for _, loc in entries] == [1, 1, 2, 2, 2, 3]
+
+
+class TestParagraphInfoStructuralFields:
+    """``ParagraphInfo`` mirrors ``ParagraphLocation``'s cheap structural facts —
+    ``style``, ``outline_level``, ``in_table`` — so TOC building and table-cell
+    awareness need no ``list_paragraph_locations()`` call (ISSUES.md #52).
+
+    Uses the same ``styled_docx`` fixture as the location tests, so both
+    producers are pinned against one document whose semantics are already
+    documented above.
+    """
+
+    @staticmethod
+    def _by_text(doc: Document) -> dict[str, ParagraphInfo]:
+        return {info.text: info for info in doc.list_paragraphs_structured(limit=None)}
+
+    def test_heading_styles_and_outline_levels(self, styled_docx):
+        with Document.open(styled_docx) as doc:
+            infos = self._by_text(doc)
+
+            assert (infos["Chapter one"].style, infos["Chapter one"].outline_level) == ("Heading1", 0)
+            assert (infos["Termination"].style, infos["Termination"].outline_level) == ("Heading2", 1)
+
+    def test_plain_body_paragraph_has_neither(self, styled_docx):
+        with Document.open(styled_docx) as doc:
+            info = self._by_text(doc)["Preamble text"]
+            assert info.style is None
+            assert info.outline_level is None
+            assert info.in_table is False
+
+    def test_direct_outline_level_without_a_style(self, styled_docx):
+        with Document.open(styled_docx) as doc:
+            info = self._by_text(doc)["Direct outline"]
+            assert info.style is None
+            assert info.outline_level == 3
+
+    def test_style_defined_level_resolves_through_styles_xml(self, styled_docx):
+        """Heading1/Heading2 carry no direct w:outlineLvl — the level comes from
+        word/styles.xml, so this pins that the style map is actually wired in."""
+        with Document.open(styled_docx) as doc:
+            assert self._by_text(doc)["Chapter two"].outline_level == 0
+
+    def test_unknown_style_is_kept_raw_with_no_level(self, styled_docx):
+        with Document.open(styled_docx) as doc:
+            info = self._by_text(doc)["Unknown style"]
+            assert info.style == "NoSuchStyle"
+            assert info.outline_level is None
+
+    def test_body_text_marker_reports_no_level(self, styled_docx):
+        """TOCHeading is basedOn Heading1 but sets w:val="9" (no outline)."""
+        with Document.open(styled_docx) as doc:
+            info = self._by_text(doc)["Toc heading"]
+            assert info.style == "TOCHeading"
+            assert info.outline_level is None
+
+    def test_pprchange_decoy_is_ignored(self, styled_docx):
+        """A style/level that only exists inside a w:pPrChange revision record
+        must not be read as current formatting."""
+        with Document.open(styled_docx) as doc:
+            info = self._by_text(doc)["Decoy paragraph"]
+            assert info.style is None
+            assert info.outline_level is None
+
+    def test_table_cell_paragraph_reports_in_table(self, styled_docx):
+        with Document.open(styled_docx) as doc:
+            infos = self._by_text(doc)
+            assert infos["Cell under h2"].in_table is True
+            assert infos["Body under h2"].in_table is False
+
+    def test_toc_from_one_call(self, styled_docx):
+        """The consumer recipe the fields exist for."""
+        with Document.open(styled_docx) as doc:
+            toc = [
+                (info.outline_level, info.text)
+                for info in doc.list_paragraphs_structured(limit=None)
+                if info.outline_level is not None
+            ]
+            assert toc == [(0, "Chapter one"), (1, "Termination"), (3, "Direct outline"), (0, "Chapter two")]
+
+    def test_get_paragraph_agrees_with_the_listing(self, styled_docx):
+        """Both producers must emit identical records, fields included."""
+        with Document.open(styled_docx) as doc:
+            listed = doc.list_paragraphs_structured(limit=None)
+            assert [doc.get_paragraph(info.index) for info in listed] == listed
+
+    def test_context_records_carry_the_fields(self, styled_docx):
+        with Document.open(styled_docx) as doc:
+            ref = _ref_for_text(doc, "Body under h2")
+            window = doc.context(ref, window=2)
+
+            by_text = {info.text: info for info in window}
+            assert by_text["Termination"].outline_level == 1
+            assert by_text["Cell under h2"].in_table is True
+
+    def test_fields_agree_with_get_paragraph_location(self, styled_docx):
+        """One semantics, two carriers: never let the pair drift."""
+        with Document.open(styled_docx) as doc:
+            for info in doc.list_paragraphs_structured(limit=None):
+                loc = doc.get_paragraph_location(info.ref)
+                assert (info.style, info.outline_level, info.in_table) == (
+                    loc.style,
+                    loc.outline_level,
+                    loc.in_table,
+                )
+
+    def test_document_without_styles_part_degrades(self, simple_docx, tmp_path):
+        """No word/styles.xml: direct levels still resolve, style-defined ones
+        become None, and nothing raises."""
+        dest = tmp_path / "nostyles.docx"
+        replace_docx_parts(
+            simple_docx,
+            dest,
+            {"word/document.xml": _build_styled_document_xml(), "word/styles.xml": None},
+        )
+        with Document.open(dest) as doc:
+            infos = self._by_text(doc)
+            assert infos["Chapter one"].style == "Heading1"
+            assert infos["Chapter one"].outline_level is None  # no styles.xml to resolve it
+            assert infos["Direct outline"].outline_level == 3  # direct w:outlineLvl still wins

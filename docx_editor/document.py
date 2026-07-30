@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Literal, overload
 from xml.dom.minidom import Element
 
+import defusedxml.minidom
+
 from .comments import Comment, CommentManager
 from .exceptions import DocumentClosedError, HashMismatchError, ParagraphIndexError
 from .track_changes import (
@@ -21,6 +23,8 @@ from .track_changes import (
     RevisionManager,
     SearchResult,
     _ancestor_paragraph,
+    _paragraph_hint,
+    _resolve_search_target,
 )
 from .workspace import Workspace
 from .xml_editor import (
@@ -29,7 +33,7 @@ from .xml_editor import (
     ParagraphInfo,
     ParagraphLocation,
     ParagraphRef,
-    XMLEditor,
+    _build_paragraph_info,
     _build_style_numbering_map,
     _build_style_outline_map,
     _build_table_index,
@@ -45,12 +49,21 @@ from .xml_editor import (
 _DEFAULT_LIST_LIMIT = 200
 
 
-def _require_ref_string(paragraph: str) -> None:
-    """Reject non-string paragraph refs before they can silently select the
-    RevisionManager's document-wide search branch (its ``paragraph=None``
-    mode is intentional at that layer, not at this one)."""
+def _require_ref_string(paragraph: str | None, arg: str | None = None) -> str:
+    """Reject a missing or non-string paragraph ref before it can silently select
+    the RevisionManager's document-wide search branch (its ``paragraph=None``
+    mode is intentional at that layer, not at this one).
+
+    ``paragraph`` is Optional in the edit methods' signatures only so a
+    SearchResult target can supply it; those callers pass ``arg`` (the name of
+    their target parameter) to get the "or pass a SearchResult as …" hint.
+    Callers whose ref is genuinely required and positional (split_paragraph)
+    omit it. Returns the ref, narrowed to ``str`` for the call that follows.
+    """
     if not isinstance(paragraph, str):
-        raise ValueError(f"'paragraph' must be a paragraph ref string like 'P3#a7b2', got {type(paragraph).__name__}")
+        message = f"'paragraph' must be a paragraph ref string like 'P3#a7b2', got {type(paragraph).__name__}"
+        raise ValueError(message if arg is None else f"{message} — {_paragraph_hint(arg)}")
+    return paragraph
 
 
 class Document:
@@ -91,6 +104,8 @@ class Document:
         """
         self._workspace = workspace
         self._closed = False
+        # Lazily parsed word/styles.xml maps (see _style_maps).
+        self._style_maps_cache: tuple[dict[str, int], dict[str, ListItem]] | None = None
 
         # Create the document editor. Every post-open workspace write goes
         # through an editor (or the comment manager's template copies), so
@@ -191,6 +206,53 @@ class Document:
 
         workspace = Workspace(path, author=author, create=True, workspace_dir=workspace_dir)
         return cls(workspace)
+
+    @classmethod
+    def discard_workspace(cls, path: str | Path, *, workspace_dir: str | Path | None = None) -> bool:
+        """Delete a document's workspace so the next :meth:`open` starts clean.
+
+        The recovery tool for a crashed or killed script: that session's
+        workspace stays behind flagged as holding unsaved changes, and every
+        later ``open()`` of the same document raises
+        :class:`~docx_editor.exceptions.WorkspaceSyncError` (or
+        :class:`~docx_editor.exceptions.WorkspaceLockedError` if its advisory
+        lock is still on disk) until the workspace is dealt with. One call here
+        resets that state, instead of passing ``force_recreate=True`` on every
+        open from then on or deleting the cache directory by hand.
+
+        **This discards whatever unsaved edits the workspace holds** — same
+        destruction as ``open(force_recreate=True)``, just without opening. To
+        rescue those edits first, save the orphaned workspace elsewhere and
+        inspect it::
+
+            from docx_editor.workspace import Workspace
+            Workspace("contract.docx", create=False).save("rescued.docx")
+            Document.discard_workspace("contract.docx")
+
+        The workspace's advisory lock sidecar goes with it, including a lock
+        held by a live session — so a wedged process cannot keep the document
+        unopenable. Make sure that process is really gone first: two sessions
+        sharing one workspace silently overwrite each other's saves.
+
+        Args:
+            path: Path to the .docx file whose workspace should be deleted. Not
+                required to exist — a workspace outlives its source, so this
+                still cleans up after a moved or deleted document.
+            workspace_dir: Base directory override, matching :meth:`open`'s
+                argument. Must be the same value the workspace was created
+                with, or a different workspace is targeted (and nothing is
+                found).
+
+        Returns:
+            True if a workspace was deleted, False if there was none — so this
+            is safe to call unconditionally at the start of a script.
+
+        Example:
+            # Idempotent reset before a fresh run:
+            Document.discard_workspace("contract.docx")
+            doc = Document.open("contract.docx")
+        """
+        return Workspace.delete(path, workspace_dir=workspace_dir)
 
     @property
     def author(self) -> str:
@@ -548,14 +610,20 @@ class Document:
     ) -> list[ParagraphInfo]:
         """List paragraphs as structured :class:`ParagraphInfo` records.
 
-        Like :meth:`list_paragraphs`, but returns named records (index, ref,
-        full text) instead of pipe-delimited preview strings. The ``text``
-        field is always the full, untruncated paragraph text — there is no
-        ``max_chars`` parameter. ``str(info)`` uses the same
-        ``"P{i}#{hash}| {text}"`` delimiter format as :meth:`list_paragraphs`,
-        but always with the full text (it matches :meth:`list_paragraphs`
-        output only when that call's ``max_chars`` is large enough to avoid
-        truncation).
+        Like :meth:`list_paragraphs`, but returns named records instead of
+        pipe-delimited preview strings. The ``text`` field is always the full,
+        untruncated paragraph text — there is no ``max_chars`` parameter.
+        ``str(info)`` uses the same ``"P{i}#{hash}| {text}"`` delimiter format
+        as :meth:`list_paragraphs`, but always with the full text (it matches
+        :meth:`list_paragraphs` output only when that call's ``max_chars`` is
+        large enough to avoid truncation).
+
+        Each record also carries the paragraph's cheap structural facts —
+        ``in_table``, ``style`` and ``outline_level`` (see
+        :class:`ParagraphInfo`) — so building a table of contents or skipping
+        table-cell paragraphs needs no second pass:
+        :meth:`list_paragraph_locations` is only necessary for table
+        coordinates, list numbering, heading paths and section indexes.
 
         Refs are **1-based global** indexes (P1, P2, …) and stay correct
         across slices, with the same ``start``/``limit`` semantics as
@@ -591,21 +659,30 @@ class Document:
             if infos and infos[-1].index < doc.paragraph_count():
                 ...  # truncated — continue from start=infos[-1].index + 1
             everything = doc.list_paragraphs_structured(limit=None)
+
+            # Table of contents, one pass, no locations call:
+            toc = [(i.outline_level, i.text) for i in everything if i.outline_level is not None]
         """
         self._ensure_open()
-        result = []
-        for i, p in self._iter_paragraph_slice(start, limit):
-            h = compute_paragraph_hash(p)
-            text = build_text_map(p).text
-            result.append(ParagraphInfo(index=i, ref=f"P{i}#{h}", text=text))
-        return result
+        # One styles.xml parse for the whole slice resolves style-defined outline
+        # levels; the per-paragraph work stays a single text map (ISSUES.md #52).
+        style_outlines, _ = self._style_maps()
+        return [_build_paragraph_info(p, i, style_outlines) for i, p in self._iter_paragraph_slice(start, limit)]
 
     def get_paragraph(self, index: int) -> ParagraphInfo:
         """Return one paragraph as a structured :class:`ParagraphInfo` record.
 
         Single-item counterpart to :meth:`list_paragraphs_structured`. The
-        returned record (index, hash-anchored ref, full untruncated text) is
-        identical to the one that method would emit for the same paragraph.
+        returned record — index, hash-anchored ref, full untruncated text, plus
+        ``in_table``/``style``/``outline_level`` — is identical to the one that
+        method would emit for the same paragraph.
+
+        Note:
+            Fixed-size output, but O(document) work: every call walks all
+            ``<w:p>`` elements to reach one. (``word/styles.xml`` is parsed once
+            per open Document, not per call.) Fine for a one-off lookup; for
+            many paragraphs call ``list_paragraphs_structured(limit=None)`` once
+            and index the result instead of looping over this.
 
         Args:
             index: 1-based paragraph index (P1 is ``index=1``). Must be in
@@ -626,9 +703,8 @@ class Document:
         paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
         if index < 1 or index > len(paragraphs):
             raise ParagraphIndexError(index, len(paragraphs))
-        p = paragraphs[index - 1]
-        h = compute_paragraph_hash(p)
-        return ParagraphInfo(index=index, ref=f"P{index}#{h}", text=build_text_map(p).text)
+        style_outlines, _ = self._style_maps()
+        return _build_paragraph_info(paragraphs[index - 1], index, style_outlines)
 
     def context(self, ref: str, window: int = 2) -> list[ParagraphInfo]:
         """Return the paragraphs surrounding ``ref``, in document order.
@@ -639,6 +715,13 @@ class Document:
         :class:`~docx_editor.track_changes.SearchResult`'s ``paragraph_ref``
         straight in. The records are identical to what
         :meth:`list_paragraphs_structured` would emit for the same indexes.
+
+        Note:
+            Fixed-size output, but O(document) work: resolving the ref walks all
+            ``<w:p>`` elements, twice over (hash check, then the slice). Fine per
+            match; to annotate many matches, call
+            ``list_paragraphs_structured(limit=None)`` once and slice around
+            each ``paragraph_index`` instead.
 
         Args:
             ref: Paragraph reference (e.g., "P3#a7b2") from
@@ -711,15 +794,34 @@ class Document:
     def _style_maps(self) -> tuple[dict[str, int], dict[str, ListItem]]:
         """Outline-level and numbering maps defined by paragraph styles.
 
-        One ``word/styles.xml`` parse serves both maps. Parsed per call
-        (no caching, matching the per-call table rescan philosophy); a
-        document without a styles part degrades to ``({}, {})``.
+        One ``word/styles.xml`` parse serves both maps, memoized for the life of
+        this Document: nothing in this library ever writes ``styles.xml`` (it is
+        read-only workspace content), so the maps cannot go stale within a
+        session. The parse is expensive enough to matter — ~340 ms on a
+        3300-paragraph document — which is what makes memoizing it necessary now
+        that :meth:`get_paragraph` needs it too (ISSUES.md #52); the location
+        APIs get the same win for free. A document without a styles part
+        degrades to ``({}, {})``.
+
+        Table indexes, heading paths and section indexes are deliberately *not*
+        cached: those derive from ``document.xml``, which edits do change.
+
+        The parse deliberately skips :class:`XMLEditor`'s line-tracking parser
+        (halving the cost on a large styles part): the map builders read style
+        ids and attributes only, and nothing ever edits ``styles.xml``, so
+        ``parse_position`` metadata would go unused.
         """
-        styles_path = self._workspace.word_path / "styles.xml"
-        if not styles_path.exists():
-            return {}, {}
-        styles_dom = XMLEditor(styles_path).dom
-        return _build_style_outline_map(styles_dom), _build_style_numbering_map(styles_dom)
+        if self._style_maps_cache is None:
+            styles_path = self._workspace.word_path / "styles.xml"
+            if not styles_path.exists():
+                self._style_maps_cache = ({}, {})
+            else:
+                styles_dom = defusedxml.minidom.parse(str(styles_path))
+                self._style_maps_cache = (
+                    _build_style_outline_map(styles_dom),
+                    _build_style_numbering_map(styles_dom),
+                )
+        return self._style_maps_cache
 
     def get_paragraph_location(self, ref: str) -> ParagraphLocation:
         """Return the structural location of the paragraph identified by ``ref``.
@@ -934,7 +1036,14 @@ class Document:
         self._ensure_open()
         return self._revision_manager.get_markup_text()
 
-    def replace(self, find: str, replace_with: str, *, paragraph: str, occurrence: int | None = None) -> EditResult:
+    def replace(
+        self,
+        find: str | SearchResult,
+        replace_with: str,
+        *,
+        paragraph: str | None = None,
+        occurrence: int | None = None,
+    ) -> EditResult:
         """Replace text with tracked changes.
 
         Creates a tracked deletion of the old text and insertion of the new
@@ -952,9 +1061,14 @@ class Document:
         that triple is how callers detect the no-op.
 
         Args:
-            find: Text to find and replace
+            find: Text to find and replace, or a
+                :class:`~docx_editor.track_changes.SearchResult` from
+                :meth:`find_text`/:meth:`find_all`. A SearchResult already
+                carries the matched text, its paragraph and its occurrence, so
+                pass neither ``paragraph`` nor ``occurrence`` with one.
             replace_with: Replacement text
-            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            paragraph: Paragraph reference from list_paragraphs() (e.g.,
+                "P2#f3c1"). Required unless ``find`` is a SearchResult.
             occurrence: Which occurrence within the paragraph (0 = first,
                 1 = second, etc.). Omitted → ``find`` must be unique in the
                 paragraph, else AmbiguousTextError (use find_all() to
@@ -968,29 +1082,46 @@ class Document:
 
         Raises:
             ValueError: If ``find`` is not a non-empty string,
-                ``replace_with`` is not a string, ``paragraph`` is not a ref
-                string, or ``occurrence`` is negative or not an integer.
+                ``replace_with`` is not a string, ``paragraph`` is missing or
+                not a ref string, ``occurrence`` is negative or not an integer,
+                or ``find`` is a SearchResult and ``paragraph``/``occurrence``
+                was given too.
             TextNotFoundError: If ``find`` is absent or ``occurrence`` is out
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
                 matches more than once in the paragraph.
-            HashMismatchError: If the paragraph hash is stale.
+            HashMismatchError: If the paragraph hash is stale — including a
+                SearchResult whose paragraph was edited after the search.
 
         Example:
             new_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
             doc.replace("other text", "new text", paragraph=new_ref)
+
+            # Straight from a search — no ref or occurrence bookkeeping:
+            match = doc.find_text("30 days")
+            doc.replace(match, "60 days")
         """
         self._ensure_open()
-        _require_ref_string(paragraph)
+        find, paragraph, occurrence = _resolve_search_target(
+            find, paragraph, occurrence, ctx="replace(): ", arg="'find'"
+        )
+        paragraph = _require_ref_string(paragraph, "'find'")
         change_id = self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
         return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
-    def delete(self, text: str, *, paragraph: str, occurrence: int | None = None) -> EditResult:
+    def delete(
+        self, text: str | SearchResult, *, paragraph: str | None = None, occurrence: int | None = None
+    ) -> EditResult:
         """Mark text as deleted with tracked changes.
 
         Args:
-            text: Text to mark as deleted
-            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            text: Text to mark as deleted, or a
+                :class:`~docx_editor.track_changes.SearchResult` from
+                :meth:`find_text`/:meth:`find_all` — which supplies the text,
+                the paragraph and the occurrence, so pass neither
+                ``paragraph`` nor ``occurrence`` with one.
+            paragraph: Paragraph reference from list_paragraphs() (e.g.,
+                "P2#f3c1"). Required unless ``text`` is a SearchResult.
             occurrence: Which occurrence within the paragraph (0 = first,
                 1 = second, etc.). Omitted → ``text`` must be unique in the
                 paragraph, else AmbiguousTextError.
@@ -1002,7 +1133,9 @@ class Document:
 
         Raises:
             ValueError: If ``text`` is not a non-empty string, ``paragraph``
-                is not a ref string, or ``occurrence`` is negative or not an integer.
+                is missing or not a ref string, ``occurrence`` is negative or
+                not an integer, or ``text`` is a SearchResult and
+                ``paragraph``/``occurrence`` was given too.
             TextNotFoundError: If ``text`` is absent or ``occurrence`` is out
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
@@ -1011,19 +1144,35 @@ class Document:
 
         Example:
             new_ref = doc.delete("obsolete clause", paragraph="P2#f3c1")
+            doc.delete(doc.find_text("obsolete clause"))  # same edit, from a search
         """
         self._ensure_open()
-        _require_ref_string(paragraph)
+        text, paragraph, occurrence = _resolve_search_target(
+            text, paragraph, occurrence, ctx="delete(): ", arg="'text'"
+        )
+        paragraph = _require_ref_string(paragraph, "'text'")
         change_id = self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
         return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
-    def insert_after(self, anchor: str, text: str, *, paragraph: str, occurrence: int | None = None) -> EditResult:
+    def insert_after(
+        self,
+        anchor: str | SearchResult,
+        text: str,
+        *,
+        paragraph: str | None = None,
+        occurrence: int | None = None,
+    ) -> EditResult:
         """Insert text after anchor with tracked changes.
 
         Args:
-            anchor: Text to find as insertion point
+            anchor: Text to find as insertion point, or a
+                :class:`~docx_editor.track_changes.SearchResult` from
+                :meth:`find_text`/:meth:`find_all` — which supplies the anchor
+                text, its paragraph and its occurrence, so pass neither
+                ``paragraph`` nor ``occurrence`` with one.
             text: Text to insert after the anchor
-            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            paragraph: Paragraph reference from list_paragraphs() (e.g.,
+                "P2#f3c1"). Required unless ``anchor`` is a SearchResult.
             occurrence: Which occurrence of anchor within the paragraph
                 (0 = first). Omitted → ``anchor`` must be unique in the
                 paragraph, else AmbiguousTextError.
@@ -1035,8 +1184,9 @@ class Document:
 
         Raises:
             ValueError: If ``anchor`` is not a non-empty string, ``text`` is
-                not a string, ``paragraph`` is not a ref string, or
-                ``occurrence`` is negative or not an integer.
+                not a string, ``paragraph`` is missing or not a ref string,
+                ``occurrence`` is negative or not an integer, or ``anchor`` is
+                a SearchResult and ``paragraph``/``occurrence`` was given too.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
@@ -1045,19 +1195,35 @@ class Document:
 
         Example:
             new_ref = doc.insert_after("Section 5", " (as amended)", paragraph="P2#f3c1")
+            doc.insert_after(doc.find_text("Section 5"), " (as amended)")
         """
         self._ensure_open()
-        _require_ref_string(paragraph)
+        anchor, paragraph, occurrence = _resolve_search_target(
+            anchor, paragraph, occurrence, ctx="insert_after(): ", arg="'anchor'"
+        )
+        paragraph = _require_ref_string(paragraph, "'anchor'")
         change_id = self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
         return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
-    def insert_before(self, anchor: str, text: str, *, paragraph: str, occurrence: int | None = None) -> EditResult:
+    def insert_before(
+        self,
+        anchor: str | SearchResult,
+        text: str,
+        *,
+        paragraph: str | None = None,
+        occurrence: int | None = None,
+    ) -> EditResult:
         """Insert text before anchor with tracked changes.
 
         Args:
-            anchor: Text to find as insertion point
+            anchor: Text to find as insertion point, or a
+                :class:`~docx_editor.track_changes.SearchResult` from
+                :meth:`find_text`/:meth:`find_all` — which supplies the anchor
+                text, its paragraph and its occurrence, so pass neither
+                ``paragraph`` nor ``occurrence`` with one.
             text: Text to insert before the anchor
-            paragraph: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
+            paragraph: Paragraph reference from list_paragraphs() (e.g.,
+                "P2#f3c1"). Required unless ``anchor`` is a SearchResult.
             occurrence: Which occurrence of anchor within the paragraph
                 (0 = first). Omitted → ``anchor`` must be unique in the
                 paragraph, else AmbiguousTextError.
@@ -1069,8 +1235,9 @@ class Document:
 
         Raises:
             ValueError: If ``anchor`` is not a non-empty string, ``text`` is
-                not a string, ``paragraph`` is not a ref string, or
-                ``occurrence`` is negative or not an integer.
+                not a string, ``paragraph`` is missing or not a ref string,
+                ``occurrence`` is negative or not an integer, or ``anchor`` is
+                a SearchResult and ``paragraph``/``occurrence`` was given too.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
@@ -1079,9 +1246,13 @@ class Document:
 
         Example:
             new_ref = doc.insert_before("Section 6", "New clause: ", paragraph="P2#f3c1")
+            doc.insert_before(doc.find_text("Section 6"), "New clause: ")
         """
         self._ensure_open()
-        _require_ref_string(paragraph)
+        anchor, paragraph, occurrence = _resolve_search_target(
+            anchor, paragraph, occurrence, ctx="insert_before(): ", arg="'anchor'"
+        )
+        paragraph = _require_ref_string(paragraph, "'anchor'")
         change_id = self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
         return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
 
@@ -1157,7 +1328,10 @@ class Document:
             with updated hashes), in input order. Each operation gets its own
             revision group — accept one op and reject another via
             accept_group()/reject_group().
-            When dry_run is True: list of EditValidationResult, one per operation.
+            When dry_run is True: list of EditValidationResult, one per
+            operation. A row that failed on a stale hash carries
+            ``current_ref``, the ref for that paragraph's current content —
+            rebuild the operation with it instead of parsing ``error``.
 
         Raises:
             ValueError: If ``operations`` is not a list at all (e.g. None or
@@ -1183,6 +1357,13 @@ class Document:
             results = doc.batch_edit(ops, dry_run=True)
             if all(r.valid for r in results):
                 doc.batch_edit(ops)
+
+            # Repair the stale-hash rows and retry, no message parsing:
+            for row in results:
+                if row.current_ref:
+                    ops[row.index] = EditOperation.replace(
+                        "old", "new", paragraph=row.current_ref
+                    )
         """
         self._ensure_open()
         if not isinstance(operations, list):
@@ -1293,7 +1474,7 @@ class Document:
 
     def add_comment(
         self,
-        anchor_text: str,
+        anchor_text: str | SearchResult,
         comment: str,
         *,
         paragraph: str | None = None,
@@ -1307,7 +1488,11 @@ class Document:
         splits, ``w:ins`` wrappers) are found.
 
         Args:
-            anchor_text: Text to attach the comment to.
+            anchor_text: Text to attach the comment to, or a
+                :class:`~docx_editor.track_changes.SearchResult` from
+                :meth:`find_text`/:meth:`find_all` — which supplies the anchor
+                text, its paragraph and its occurrence, so pass neither
+                ``paragraph`` nor ``occurrence`` with one.
             comment: The comment content.
             paragraph: Optional paragraph reference (e.g., ``"P3#a7b2"``) to
                 scope the search. ``None`` searches the whole document.
@@ -1326,13 +1511,21 @@ class Document:
             HashMismatchError: If ``paragraph``'s hash is stale.
             CommentError: If ``anchor_text`` is not a non-empty string, or
                 ``comment`` is not a string.
-            ValueError: If ``occurrence`` is negative or not an integer.
+            ValueError: If ``occurrence`` is negative or not an integer, or
+                ``anchor_text`` is a SearchResult and
+                ``paragraph``/``occurrence`` was given too.
 
         Example:
             doc.add_comment("Section 5", "Please review this section")
             doc.add_comment("foo", "Note", paragraph="P3#a7b2", occurrence=1)
+
+            # Comment exactly the match a search found (2nd "foo", say):
+            doc.add_comment(doc.find_all("foo")[1], "Note")
         """
         self._ensure_open()
+        anchor_text, paragraph, occurrence = _resolve_search_target(
+            anchor_text, paragraph, occurrence, ctx="add_comment(): ", arg="'anchor_text'"
+        )
         return self._comment_manager.add_comment(anchor_text, comment, paragraph=paragraph, occurrence=occurrence)
 
     def reply_to_comment(self, comment_id: int, reply: str) -> int:

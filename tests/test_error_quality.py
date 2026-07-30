@@ -581,10 +581,10 @@ class TestNonStringParagraphRefRejected:
         doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
         try:
             calls = [
-                lambda: doc.replace("needle", "x", paragraph=None),  # type: ignore[arg-type]
-                lambda: doc.delete("needle", paragraph=None),  # type: ignore[arg-type]
-                lambda: doc.insert_after("needle", "x", paragraph=None),  # type: ignore[arg-type]
-                lambda: doc.insert_before("needle", "x", paragraph=None),  # type: ignore[arg-type]
+                lambda: doc.replace("needle", "x", paragraph=None),
+                lambda: doc.delete("needle", paragraph=None),
+                lambda: doc.insert_after("needle", "x", paragraph=None),
+                lambda: doc.insert_before("needle", "x", paragraph=None),
             ]
             for call in calls:
                 with pytest.raises(ValueError, match="'paragraph' must be a paragraph ref string"):
@@ -624,7 +624,7 @@ class TestNonIntOccurrenceRejected:
         with pytest.raises(
             ValueError, match=r"EditOperation\.delete\(\): occurrence must be a non-negative integer, got True"
         ):
-            EditOperation.delete("a", paragraph="P2#f3c1", occurrence=True)  # type: ignore[arg-type]
+            EditOperation.delete("a", paragraph="P2#f3c1", occurrence=True)
 
     def test_batch_wraps_str_occurrence_not_raw_typeerror(self, doc_path):
         doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])

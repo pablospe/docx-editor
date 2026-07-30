@@ -105,6 +105,61 @@ def test_exec_timeout(tmp_path):
     try:
         res = exec_code("import time; time.sleep(30)", connection_file=conn, timeout=2.0)
         assert res.status == "timeout"
+        assert res.started is True  # our own code ran and overran
+    finally:
+        stop_session(conn)
+
+
+def test_exec_ok_reports_started(session_conn):
+    assert exec_code("1 + 1", connection_file=session_conn).started is True
+
+
+def test_exec_error_reports_started(session_conn):
+    """An exception still means the code executed."""
+    assert exec_code("1 / 0", connection_file=session_conn).started is True
+
+
+def test_exec_timeout_while_queued_reports_not_started(tmp_path):
+    """A timeout waiting in the QUEUE is distinguishable from a timeout of your
+    own running code (ISSUES.md #52): nothing of ours executed.
+
+    Own kernel, occupied by a fire-and-forget sleep sent on a separate client,
+    so our request cannot leave the queue before the clock runs out.
+    """
+    from docx_editor.session import _client
+
+    conn = tmp_path / "kernel.json"
+    start_session(conn)
+    hog = _client(conn)
+    try:
+        hog.execute("import time; time.sleep(30)")  # never waited on
+        time.sleep(1.0)  # let the kernel pick it up and go busy
+
+        res = exec_code("1 + 1", connection_file=conn, timeout=2.0)
+        assert res.status == "timeout"
+        assert res.started is False  # never left the queue
+        assert res.result is None
+    finally:
+        hog.stop_channels()
+        stop_session(conn)
+
+
+def test_cli_distinguishes_the_two_timeouts(tmp_path, capsys):
+    """Each timeout flavour gets its own stderr advice; exit code stays 2."""
+    from docx_editor.session import EXIT_TIMEOUT
+
+    conn = tmp_path / "kernel.json"
+    start_session(conn)
+    try:
+        code = main(["exec", "import time; time.sleep(30)", "--session-file", str(conn), "--timeout", "2"])
+        assert code == EXIT_TIMEOUT
+        assert "kernel still running" in capsys.readouterr().err
+
+        code = main(["exec", "1 + 1", "--session-file", str(conn), "--timeout", "2"])
+        assert code == EXIT_TIMEOUT
+        err = capsys.readouterr().err
+        assert "still queued" in err
+        assert "never started" in err
     finally:
         stop_session(conn)
 

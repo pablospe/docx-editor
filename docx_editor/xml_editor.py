@@ -216,18 +216,70 @@ class ParagraphRef:
 
 @dataclass(frozen=True)
 class ParagraphInfo:
-    """Structured record for a paragraph: 1-based index, hash-anchored ref, and full visible text.
+    """Structured record for a paragraph: 1-based index, hash-anchored ref, full
+    visible text, and the paragraph's cheap structural facts.
 
     ``str(info)`` uses the same ``"P{i}#{hash}| {text}"`` delimiter format as
-    :meth:`Document.list_paragraphs`, always with the full, untruncated text.
+    :meth:`Document.list_paragraphs`, always with the full, untruncated text
+    (the structural fields are not part of that rendering).
+
+    ``in_table``, ``style`` and ``outline_level`` carry exactly the meanings
+    :class:`ParagraphLocation` defines for them — that class stays the single
+    source of the semantics:
+
+    - ``in_table``: True iff the paragraph lives inside a ``<w:tc>`` cell. It
+      answers "is this a table cell?" without coordinates; use
+      :meth:`Document.get_paragraph_location` when you need table/row/column.
+      It is also what makes the paragraph-index-vs-python-docx divergence
+      self-describing: table-cell paragraphs count towards ``P{i}`` indexes.
+    - ``style``: the raw ``w:pPr/w:pStyle/@w:val`` style id (e.g.
+      ``"Heading1"``), None when the paragraph carries no explicit style.
+    - ``outline_level``: 0-based outline level (0 == Heading 1), resolving a
+      direct ``w:outlineLvl`` first and the paragraph style's level otherwise;
+      None means body text. Together with ``text`` this is enough to build a
+      table of contents from one ``list_paragraphs_structured`` call.
+
+    List membership, table coordinates, heading paths and section indexes are
+    deliberately *not* here — they need whole-document context or extra parses;
+    :meth:`Document.get_paragraph_location` /
+    :meth:`Document.list_paragraph_locations` remain their home.
     """
 
     index: int  # 1-based paragraph index
     ref: str  # "P{index}#{hash}"
     text: str  # full visible text, untruncated
+    in_table: bool = False  # True when the paragraph sits inside a <w:tc> cell
+    style: str | None = None  # raw w:pStyle/@w:val, None when unstyled
+    outline_level: int | None = None  # 0-based (0 == Heading 1), None = body text
 
     def __str__(self) -> str:
         return f"{self.ref}| {self.text}"
+
+
+def _build_paragraph_info(paragraph, index: int, style_outlines: dict[str, int] | None = None) -> ParagraphInfo:
+    """Build the :class:`ParagraphInfo` record for one ``<w:p>`` element.
+
+    Single source of the record for every producer
+    (:meth:`Document.list_paragraphs_structured`, :meth:`Document.get_paragraph`
+    and, through the former, :meth:`Document.context`), so their output cannot
+    drift. One text map serves both the hash and the text.
+
+    ``style_outlines`` is the optional ``{style_id: outline_level}`` map from
+    :func:`_build_style_outline_map`, needed only to resolve style-defined
+    outline levels; ``None`` behaves like ``{}`` (direct ``w:outlineLvl`` still
+    resolves), which is also the graceful degradation for a document with no
+    ``word/styles.xml`` part.
+    """
+    text_map = build_text_map(paragraph)
+    style = _extract_style(paragraph)
+    return ParagraphInfo(
+        index=index,
+        ref=f"P{index}#{compute_text_hash(text_map.text)}",
+        text=text_map.text,
+        in_table=_innermost_ancestor(paragraph, "w:tc") is not None,
+        style=style,
+        outline_level=_extract_outline_level(paragraph, style, style_outlines or {}),
+    )
 
 
 def compute_text_hash(text: str) -> str:
@@ -1540,8 +1592,13 @@ class DocxXMLEditor(XMLEditor):
                 self._ensure_w16cex_namespace()
                 elem.setAttribute("w16cex:dateUtc", timestamp)
 
-        def add_xml_space_to_t(elem) -> None:
-            # Add xml:space="preserve" to w:t if text has leading/trailing whitespace.
+        def add_xml_space_to_text_elem(elem) -> None:
+            # Add xml:space="preserve" to w:t/w:delText if the text has
+            # leading/trailing whitespace. w:delText needs it for the same
+            # reason w:t does: without it a conforming consumer trims the
+            # edges, so rejecting a deletion of " " would restore nothing —
+            # and _restore_deletion copies these attributes onto the w:t it
+            # rebuilds, which is where that loss would land.
             text = get_text_node_data(elem)
             if text and (text[0].isspace() or text[-1].isspace()):
                 if not elem.hasAttribute("xml:space"):
@@ -1556,8 +1613,8 @@ class DocxXMLEditor(XMLEditor):
                 add_rsid_to_p(node)
             elif node.tagName == "w:r":
                 add_rsid_to_r(node)
-            elif node.tagName == "w:t":
-                add_xml_space_to_t(node)
+            elif node.tagName in ("w:t", "w:delText"):
+                add_xml_space_to_text_elem(node)
             elif node.tagName in ("w:ins", "w:del"):
                 add_tracked_change_attrs(node)
             elif node.tagName == "w:comment":
@@ -1570,8 +1627,9 @@ class DocxXMLEditor(XMLEditor):
                 add_rsid_to_p(elem)
             for elem in node.getElementsByTagName("w:r"):
                 add_rsid_to_r(elem)
-            for elem in node.getElementsByTagName("w:t"):
-                add_xml_space_to_t(elem)
+            for tag in ("w:t", "w:delText"):
+                for elem in node.getElementsByTagName(tag):
+                    add_xml_space_to_text_elem(elem)
             for tag in ("w:ins", "w:del"):
                 for elem in node.getElementsByTagName(tag):
                     add_tracked_change_attrs(elem)
