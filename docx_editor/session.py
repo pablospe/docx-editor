@@ -612,6 +612,13 @@ def eval_code(expr: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
             started=res.started,
         )
     if res.result is None:
+        if not res.started:
+            # Not a transport fault: the kernel discarded the request without
+            # running it (see ExecResult.started), so there is no reply to decode.
+            raise SessionError(
+                "The kernel discarded this request without running it — it was queued behind a command "
+                "that raised. Nothing was evaluated; re-send it."
+            )
         raise SessionError("eval transport failed: kernel returned no result for the eval wrapper")
     try:
         payload = json.loads(ast.literal_eval(res.result))

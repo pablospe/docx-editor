@@ -212,6 +212,29 @@ def test_cli_warns_when_the_kernel_discards_the_request(tmp_path, capsys):
         stop_session(conn)
 
 
+def test_eval_names_the_discard_instead_of_blaming_the_transport(tmp_path, capsys):
+    """A discarded eval has no reply to decode — but that is not a transport
+    fault, and saying so sends the caller debugging the wrong thing."""
+    from docx_editor.session import EXIT_ERROR, _client
+
+    conn = tmp_path / "kernel.json"
+    start_session(conn)
+    hog = _client(conn)
+    try:
+        hog.execute("import time; time.sleep(3); raise RuntimeError('boom')")
+        time.sleep(0.5)
+
+        code = main(["eval", "1 + 1", "--session-file", str(conn), "--timeout", "30"])
+        captured = capsys.readouterr()
+        assert code == EXIT_ERROR
+        assert "discarded this request" in captured.err
+        assert "transport failed" not in captured.err
+        assert captured.out == ""  # no envelope: nothing was evaluated
+    finally:
+        hog.stop_channels()
+        stop_session(conn)
+
+
 def test_exec_docx_editing_workflow(session_conn, temp_docx):
     """End-to-end: a document stays open across separate exec calls."""
     r1 = exec_code(
@@ -301,10 +324,18 @@ class TestEval:
         assert "docx-session start" in captured.err
 
     def test_eval_transport_no_result_raises(self, tmp_path, monkeypatch):
-        """A kernel reply with no execute_result is a transport bug, not a user error."""
+        """A kernel reply with no execute_result is a transport bug, not a user error.
+
+        ``started=True`` is what makes it one: the wrapper ran and still produced
+        nothing. The same shape with ``started=False`` means the kernel discarded
+        the request, which gets its own message (see
+        test_eval_names_the_discard_instead_of_blaming_the_transport).
+        """
         from docx_editor import session as session_mod
 
-        monkeypatch.setattr(session_mod, "exec_code", lambda *a, **k: ExecResult(status="ok", result=None))
+        monkeypatch.setattr(
+            session_mod, "exec_code", lambda *a, **k: ExecResult(status="ok", result=None, started=True)
+        )
         with pytest.raises(SessionError, match="returned no result"):
             eval_code("1 + 1", connection_file=tmp_path / "unused.json")
 

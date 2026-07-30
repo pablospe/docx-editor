@@ -83,8 +83,8 @@ with Document.open("contract.docx") as doc:
 ```
 
 Check the result first: `find_text()` returns `None` when there is no match, and
-passing that `None` as a target raises `ValueError` rather than quietly doing
-nothing.
+passing that `None` as a target raises `ValueError` (`CommentError` from
+`add_comment`) rather than quietly doing nothing.
 
 ## Track Changes
 
