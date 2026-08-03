@@ -1437,7 +1437,8 @@ class RevisionManager:
         Returns:
             The rewrite's revision group id, or None when no revisions were
             created (old text already equals ``new_text``, or every change
-            was absorbed into this author's own pending insertions).
+            was absorbed into this author's own pending insertions —
+            amending one of those is undone by rejecting *its* group).
 
         Raises:
             ValueError: If ``new_text`` is not a string
@@ -1862,7 +1863,11 @@ class RevisionManager:
 
         Returns:
             The change ID of the insertion (or of the deletion when the
-            replace degenerates to a pure deletion; -1 for a no-op)
+            replace degenerates to a pure deletion). -1 whenever no new
+            revision is written: a no-op, or a replace landing wholly inside
+            your own pending insertion — that amends the insertion in place
+            (whole-insertion and partial matches alike), so undoing it means
+            rejecting the group of the insertion it amended.
 
         Raises:
             ValueError: If ``find`` is not a non-empty string, ``replace_with``
@@ -2066,43 +2071,13 @@ class RevisionManager:
 
         # Site D: all positions inside <w:ins> — dispatch on insertion ownership
         if all(p.is_inside_ins for p in match.positions):
-            first_node = match.positions[0].node
-            ins_elem = self._find_ancestor(first_node, "w:ins")
             ins_groups = self._group_positions_by_ins(match.positions)
 
             if all(g_ins is None or self._owns_ins(g_ins) for g_ins, _ in ins_groups):
-                # All our own — edit in place (historical behavior)
-                # Save parent/next sibling before removal may detach ins_elem
-                ins_parent = ins_elem.parentNode if ins_elem else None
-                ins_next = ins_elem.nextSibling if ins_elem else None
-
-                self._remove_from_insertion(match.positions)
-
-                ins_rPr = self._majority_rPr(parts)
-                new_run_xml = f"<w:r>{ins_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r>"
-
-                if ins_elem and ins_elem.parentNode:
-                    # ins_elem still in DOM — insert replacement inside it
-                    first_child = ins_elem.firstChild
-                    if first_child:
-                        self.editor.insert_before(first_child, new_run_xml)
-                    else:  # pragma: no cover - removing all content deletes the ins outright
-                        self.editor.append_to(ins_elem, new_run_xml)
-                elif ins_parent:  # pragma: no branch - an ins removed from the DOM had a parent
-                    # ins_elem was fully removed — wrap replacement in a new <w:ins>
-                    ins_wrapper_xml = f"<w:ins>{new_run_xml}</w:ins>"
-                    if ins_next:
-                        new_nodes = self.editor.insert_before(ins_next, ins_wrapper_xml)
-                    else:
-                        new_nodes = self.editor.append_to(ins_parent, ins_wrapper_xml)
-                    # The wrapper is a new revision holding this operation's
-                    # replacement text — return its id so the caller's
-                    # EditResult reaches the group that contains it.
-                    for node in new_nodes:
-                        if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
-                            return int(node.getAttribute("w:id"))
-                # Reached by the splice-in-place branch: no new revision.
-                return -1
+                # All our own — splice the replacement in at the match position
+                return self._replace_within_own_ins(
+                    parts, [g_ins for g_ins, _ in ins_groups if g_ins is not None], replace_with
+                )
 
             # Foreign insertion(s) involved — preserve them: nest our deletion
             # inside, then place our replacement <w:ins> right after it,
@@ -2199,6 +2174,73 @@ class RevisionManager:
             if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
                 return int(node.getAttribute("w:id"))
 
+        return -1
+
+    def _replace_within_own_ins(
+        self,
+        parts: list[tuple[Element, str, str, str, str, int]],
+        ins_elems: list[Element],
+        replace_with: str,
+    ) -> int:
+        """Splice ``replace_with`` into our own pending insertion, in place.
+
+        Text we inserted ourselves was never in the original document, so
+        replacing it writes no <w:del>/<w:ins> pair: the matched characters
+        are physically removed and a plain run carrying the replacement takes
+        their place *at the match position* inside the same <w:ins>.
+
+        Each affected run is rebuilt where it stands rather than relocated to
+        the insertion's start (the historical behavior — it reordered every
+        match that did not begin at the insertion's first character), so text
+        surviving on either side of the match — and any sibling w:t, w:tab,
+        w:br … in the same run — keeps its document order. An insertion left
+        with no content is removed.
+
+        Returns -1: editing our own pending text creates no new revision.
+        """
+        ins_rPr = self._majority_rPr(parts)
+        replacement_xml = f"<w:r>{ins_rPr}<w:t>{_escape_xml(replace_with)}</w:t></w:r>"
+        last_nid = parts[-1][5]
+
+        run_parts: OrderedDict[int, list] = OrderedDict()
+        for part in parts:
+            run_parts.setdefault(id(part[0]), []).append(part)
+
+        for rparts in run_parts.values():
+            run = rparts[0][0]
+            rPr_xml = rparts[0][1]
+            node_to_part = {nid: (before, after) for _run, _rp_xml, before, _matched, after, nid in rparts}
+
+            # Keyword-only defaults bind this iteration's state (B023)
+            def render_wt(wt, *, node_to_part=node_to_part, run_rPr=rPr_xml) -> list[str]:
+                if id(wt) not in node_to_part:
+                    # Unmatched sibling — preserve
+                    return render_plain_wt(wt, run_rPr)
+                before, after = node_to_part[id(wt)]
+                fragments: list[str] = []
+                if before:
+                    fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(before)}</w:t></w:r>")
+                # The matched text itself is dropped; the replacement takes
+                # the place of the match's last node.
+                if id(wt) == last_nid:
+                    fragments.append(replacement_xml)
+                if after:
+                    fragments.append(f"<w:r>{run_rPr}<w:t>{_escape_xml(after)}</w:t></w:r>")
+                return fragments
+
+            # Emit the run's children in document order (w:tab/w:br/w:drawing/…
+            # preserved in place), then swap it for the rebuilt fragments
+            new_xml = "".join(rebuild_run_fragments(run, rPr_xml, render_wt))
+            if new_xml:
+                self.editor.insert_before(run, new_xml)
+            if run.parentNode:  # pragma: no branch - a matched run is always attached
+                run.parentNode.removeChild(run)
+
+        # An insertion whose whole content was matched keeps nothing but the
+        # replacement; one that did not receive the replacement is now empty.
+        for ins_elem in ins_elems:
+            if ins_elem.parentNode and not any(child.nodeType == child.ELEMENT_NODE for child in ins_elem.childNodes):
+                ins_elem.parentNode.removeChild(ins_elem)
         return -1
 
     def _replace_mixed_state(self, match: TextMapMatch, replace_with: str) -> int:

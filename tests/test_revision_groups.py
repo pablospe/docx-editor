@@ -689,23 +689,53 @@ class TestForeignInsGrouping:
 class TestOwnInsertionSplits:
     """Physical edits inside our own pending insertions keep groups truthful."""
 
-    def test_replace_consuming_whole_own_insertion_reports_new_group(self, doc):
+    def test_replace_consuming_whole_own_insertion_amends_it_in_place(self, doc):
+        """Rewriting our own pending insertion amends it — no new revision.
+
+        Whole-insertion and partial matches behave identically: the text is
+        spliced into the existing <w:ins>, which keeps its id and its group.
+        """
         ref = find_ref(doc, "quick brown fox")
+        original = _paragraph_text(doc, 1)
         first = doc.insert_after("fox", " ZE9", paragraph=ref)
 
         # No token shared with " ZE9" (not even the space), so affix trimming
         # cannot narrow the match — the whole insertion is consumed.
         result = doc.replace(" ZE9", "QX7", paragraph=first)
 
-        # The old insertion is fully consumed and the replacement re-wrapped
-        # in a fresh <w:ins> — a revision this operation created, so its
-        # group must be reachable from the result (not a phantom group).
-        assert result.group_id is not None
-        assert result.group_id != first.group_id
+        # No revision was created, so the result carries no group — the same
+        # signal a no-op replace gives.
+        assert result.group_id is None
+        assert result.revision_ids == ()
+
+        # The insertion the amendment landed in is still the only revision,
+        # still owned by the group that created it.
         revisions = doc.list_revisions()
         assert len(revisions) == 1
-        assert revisions[0].group_id == result.group_id
-        assert revisions[0].id in result.revision_ids
+        assert revisions[0].text == "QX7"
+        assert revisions[0].group_id == first.group_id
+        assert revisions[0].id in first.revision_ids
+
+        # Pending view: the amended text sits where the insertion always was.
+        amended = original.replace("fox", "foxQX7", 1)
+        assert _paragraph_text(doc, 1) == amended
+
+        # Accepted view: accepting the origin group keeps the amended text.
+        assert doc.accept_group(first.group_id) == 1
+        assert _paragraph_text(doc, 1) == amended
+
+    def test_rejecting_origin_group_undoes_the_amendment(self, doc):
+        """Undoing an amendment means rejecting the insertion it amended."""
+        ref = find_ref(doc, "quick brown fox")
+        original = _paragraph_text(doc, 1)
+        first = doc.insert_after("fox", " ZE9", paragraph=ref)
+        doc.replace(" ZE9", "QX7", paragraph=first)
+
+        assert doc.reject_group(first.group_id) == 1
+
+        # Rejected view: nothing of the insertion survives, amendment included.
+        assert _paragraph_text(doc, 1) == original
+        assert doc.list_revisions() == []
 
     def test_middle_delete_adopts_split_tail_into_origin_group(self, doc):
         ref = find_ref(doc, "quick brown fox")

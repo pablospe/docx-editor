@@ -323,6 +323,8 @@ Replace text with tracked changes. When the target sits inside another author's 
 
 Words shared by `find` and `replace_with` at either end are trimmed first, so only the changed words become revisions — a replace that only adds or only removes words is written as a pure insertion or deletion. The replacement insertion carries the formatting (`rPr`) that covers the most characters of the replaced span (runs sharing identical formatting tally together), ties breaking to the earliest-seen formatting. **Accepting** a replace that straddled mixed formatting therefore leaves the replacement uniformly in that one majority format, while each deletion run keeps its own original formatting — so a **reject** restores the pre-edit mix. When `replace_with` equals the found text, the call is a **no-op**: no revisions are created and the returned `EditResult` equals the input `paragraph` ref with `group_id=None` and `revision_ids=()` — that triple is how callers detect the no-op.
 
+A replace landing wholly inside **your own** pending insertion **amends** that insertion instead of tracking a change against it: the text is spliced in at the match position, whether the match covers part of the insertion or all of it. Your own unsaved text was never in the document, so there is nothing to counter-propose — no revision is created, and the `EditResult` comes back with `group_id=None` and `revision_ids=()` (with an updated ref). To undo an amendment, reject the group of the insertion it amended.
+
 **Parameters:**
 
 - `find` (str): Text to find and replace
@@ -442,7 +444,7 @@ resolve them as a unit with [`accept_group()`](#accept_groupgroup_id) /
 - `ref` (str): Paragraph reference from `list_paragraphs()`
 - `new_text` (str): Desired paragraph text
 
-**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`; `group_id` is `None` when `new_text` equals the current text, or when every change landed inside your own pending insertions and was merged in place)
+**Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`; `group_id` is `None` when `new_text` equals the current text, or when every change landed inside your own pending insertions and amended them in place — undo those by rejecting the group of the amended insertion)
 
 **Example:**
 
