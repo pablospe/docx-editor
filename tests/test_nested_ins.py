@@ -21,6 +21,9 @@ NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 # Opening tag of an insertion authored by _make_manager's own author.
 OWN_INS = '<w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
 
+# A run-level drawing whose text box holds "MID".
+_BOXED_MID = "<w:drawing><w:txbxContent><w:p><w:r><w:t>MID</w:t></w:r></w:p></w:txbxContent></w:drawing>"
+
 
 @pytest.fixture
 def temp_xml(tmp_path):
@@ -488,16 +491,32 @@ class TestOwnInsReplaceAnchoring:
         assert ins_elems[0].getAttribute("w:author") == "Test Author"
         assert ins_elems[0].getAttribute("w:date") == "2024-01-01T00:00:00Z"
 
-    def test_replace_reaching_into_a_textbox_keeps_the_replacement(self, temp_xml):
+    def test_replace_ending_in_a_textbox_keeps_the_replacement(self, temp_xml):
         """A match ending inside a run's drawing still gets its replacement.
 
-        The run holding the text box is itself matched, so rebuilding it
-        re-serializes the drawing. Rebuilt outermost-first, that copy is
-        stale and the nested run's edit — the replacement with it — is
-        dropped with the detached subtree.
+        The replacement belongs to the boxed run — the match's last node is
+        in there. The run holding the box is matched too, and rebuilding it
+        re-serializes the drawing, so rebuilt outermost-first that copy is
+        stale and the boxed run's whole edit — replacement included — is
+        dropped with the detached subtree, leaving the match untouched.
         """
-        boxed = "<w:drawing><w:txbxContent><w:p><w:r><w:t>MID</w:t></w:r></w:p></w:txbxContent></w:drawing>"
-        xml_path = temp_xml(f"<w:p>{OWN_INS}<w:r><w:t>ab</w:t>{boxed}<w:t>cd</w:t></w:r></w:ins></w:p>")
+        xml_path = temp_xml(f"<w:p>{OWN_INS}<w:r><w:t>ab</w:t>{_BOXED_MID}<w:t>cd</w:t></w:r></w:ins></w:p>")
+        manager = _make_manager(xml_path)
+
+        manager.replace_text("bMI", "Z")
+
+        _assert_no_nested_ins(manager)
+        assert _get_text_content(manager) == "aZDcd"
+        assert len(manager.editor.dom.getElementsByTagName("w:drawing")) == 1
+
+    def test_replace_spanning_a_textbox_deletes_the_boxed_text(self, temp_xml):
+        """A match crossing a drawing removes the boxed characters it covers.
+
+        Here the match ends in the outer run, so the replacement was never
+        at risk — what the outermost-first rebuild lost was the *deletion*
+        inside the box, leaving "MID" behind next to the replacement.
+        """
+        xml_path = temp_xml(f"<w:p>{OWN_INS}<w:r><w:t>ab</w:t>{_BOXED_MID}<w:t>cd</w:t></w:r></w:ins></w:p>")
         manager = _make_manager(xml_path)
 
         manager.replace_text("bMIDc", "Z")
@@ -505,8 +524,7 @@ class TestOwnInsReplaceAnchoring:
         _assert_no_nested_ins(manager)
         assert _get_text_content(manager) == "aZd"
         # The box itself survives the rebuild, exactly once.
-        drawings = manager.editor.dom.getElementsByTagName("w:drawing")
-        assert len(drawings) == 1
+        assert len(manager.editor.dom.getElementsByTagName("w:drawing")) == 1
 
     def test_consumed_own_ins_keeps_foreign_nested_del(self, temp_xml):
         """An emptied insertion still holding a foreign w:del survives.
