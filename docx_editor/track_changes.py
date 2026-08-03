@@ -243,11 +243,12 @@ class EditResult(str):
 
     - ``group_id``: id of the revision group holding every revision this
       operation created, usable with ``accept_group``/``reject_group``.
-      None when the operation created no new revisions — e.g. text spliced
+      None when the operation created no new revisions — e.g. text amended
       into one of your own pending insertions (physically merged, so it is
-      inseparable from the earlier operation at the XML level), a rewrite
-      that found no differences, or a rewrite whose changes all landed
-      inside your own pending insertions. Group ids are per-open-Document
+      inseparable from the earlier operation at the XML level: undo it by
+      rejecting the group of the insertion it amended), a rewrite that
+      found no differences, or a rewrite whose changes all landed inside
+      your own pending insertions. Group ids are per-open-Document
       and renumbered on each open — after close()/reopen the same revisions
       belong to a freshly inferred group with a new id, so never carry a
       group_id across sessions (see ``Document.accept_group``).
@@ -526,6 +527,16 @@ def _has_ancestor(node, ancestor) -> bool:
             return True
         current = current.parentNode
     return False
+
+
+def _node_depth(node) -> int:
+    """Number of ancestors above ``node``, root included."""
+    depth = 0
+    current = node.parentNode
+    while current is not None:
+        depth += 1
+        current = current.parentNode
+    return depth
 
 
 def _first_child_element(parent, tag: str) -> Element | None:
@@ -976,7 +987,15 @@ class RevisionManager:
         self._changeset_sources = snapshot.changeset_sources
 
     def group_id_of(self, revision_id: int) -> int | None:
-        """Group id of a revision (recorded or inferred), or None if ungrouped."""
+        """Group id of a revision (recorded or inferred), or None if ungrouped.
+
+        A negative id is the "no revision was written" sentinel the edit
+        methods return (a no-op, or an amendment to our own pending
+        insertion), never a lookup key — resolving it must not collide with
+        a document that happens to carry a negative ``w:id``.
+        """
+        if revision_id < 0:
+            return None
         return self._revision_groups.get(revision_id)
 
     def group_revisions(self, group_id: int) -> tuple[int, ...]:
@@ -2206,7 +2225,12 @@ class RevisionManager:
         for part in parts:
             run_parts.setdefault(id(part[0]), []).append(part)
 
-        for rparts in run_parts.values():
+        # Deepest run first: a run nested in another matched run's w:drawing
+        # must be rebuilt while still attached, or its ancestor re-serializes a
+        # stale copy of the drawing and the edit inside it — the replacement
+        # included — is dropped with the detached subtree. sorted() is stable,
+        # so runs at the same depth keep document order.
+        for rparts in sorted(run_parts.values(), key=lambda rp: -_node_depth(rp[0][0])):
             run = rparts[0][0]
             rPr_xml = rparts[0][1]
             node_to_part = {nid: (before, after) for _run, _rp_xml, before, _matched, after, nid in rparts}

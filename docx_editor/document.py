@@ -956,7 +956,10 @@ class Document:
         counter-proposed, whether the match covers part of the insertion or
         all of it. No revision is created, so the result carries
         ``group_id=None`` and ``revision_ids=()`` (with an updated ref) — to
-        undo the amendment, reject the group of the insertion it amended.
+        undo the amendment, reject the group of the insertion it amended:
+        the one holding the end of the match, which keeps its id and its
+        group. A match spanning two of your own adjacent insertions
+        consolidates into that one, dropping any insertion consumed whole.
 
         Args:
             find: Text to find and replace

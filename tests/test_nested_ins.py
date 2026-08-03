@@ -4,7 +4,9 @@ These tests verify that operations inside the current author's *own* w:ins
 elements edit the insertion in place: no nested w:ins (invalid OOXML) and no
 w:del inside our own w:ins (our own pending text is simply rewritten, not
 counter-proposed). Edits inside *another* author's w:ins legitimately nest a
-w:del — that behavior is covered by test_foreign_ins_edits.py.
+w:del — that behavior is covered by test_foreign_ins_edits.py. One fixture
+here starts out multi-author (a foreign w:del already nested in our own
+w:ins) to pin that amending around it leaves their deletion intact.
 """
 
 from pathlib import Path
@@ -49,8 +51,8 @@ def _make_manager(xml_path: Path) -> RevisionManager:
 def _assert_no_nested_ins(manager: RevisionManager) -> None:
     """Assert no w:ins or w:del is nested inside another w:ins.
 
-    All fixtures here are authored by the manager's own author ("Test
-    Author"), so in-place editing must never nest anything: no w:ins in
+    The fixtures this helper guards are authored by the manager's own author
+    ("Test Author"), so in-place editing must never nest anything: no w:ins in
     w:ins (invalid OOXML), and no w:del in our *own* w:ins (nested w:del is
     reserved for edits inside a foreign author's insertion).
 
@@ -334,7 +336,7 @@ class TestOwnInsReplaceAnchoring:
     Replacing text inside our own pending insertion splices the new text in
     place. The splice used to be pinned to the insertion's first child, so
     any match not starting at the insertion's very first character came out
-    reordered -- "Hello world" became "earthHello " (ISSUES.md #39). These
+    reordered — "Hello world" became "earthHello " (ISSUES.md #39). These
     tests assert exact visible text, which the older order-insensitive
     ``in`` assertions above never did.
     """
@@ -485,6 +487,26 @@ class TestOwnInsReplaceAnchoring:
         assert ins_elems[0].getAttribute("w:id") == "1"
         assert ins_elems[0].getAttribute("w:author") == "Test Author"
         assert ins_elems[0].getAttribute("w:date") == "2024-01-01T00:00:00Z"
+
+    def test_replace_reaching_into_a_textbox_keeps_the_replacement(self, temp_xml):
+        """A match ending inside a run's drawing still gets its replacement.
+
+        The run holding the text box is itself matched, so rebuilding it
+        re-serializes the drawing. Rebuilt outermost-first, that copy is
+        stale and the nested run's edit — the replacement with it — is
+        dropped with the detached subtree.
+        """
+        boxed = "<w:drawing><w:txbxContent><w:p><w:r><w:t>MID</w:t></w:r></w:p></w:txbxContent></w:drawing>"
+        xml_path = temp_xml(f"<w:p>{OWN_INS}<w:r><w:t>ab</w:t>{boxed}<w:t>cd</w:t></w:r></w:ins></w:p>")
+        manager = _make_manager(xml_path)
+
+        manager.replace_text("bMIDc", "Z")
+
+        _assert_no_nested_ins(manager)
+        assert _get_text_content(manager) == "aZd"
+        # The box itself survives the rebuild, exactly once.
+        drawings = manager.editor.dom.getElementsByTagName("w:drawing")
+        assert len(drawings) == 1
 
     def test_consumed_own_ins_keeps_foreign_nested_del(self, temp_xml):
         """An emptied insertion still holding a foreign w:del survives.

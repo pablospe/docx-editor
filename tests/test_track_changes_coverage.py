@@ -102,19 +102,18 @@ class TestBuildCrossBoundaryPartsSkipsOrphan:
 
 
 class TestReplaceSameContextAllInsideIns:
-    """Lines 385, 406-407: _replace_same_context when all positions inside w:ins,
-    and ins_elem has no firstChild after removal."""
+    """_replace_same_context when every position sits inside our own w:ins."""
 
     def test_replace_across_runs_all_inside_ins_no_remaining(self, temp_xml):
-        # Two runs inside w:ins, replace spanning both fully -> empties ins, appends
+        # Two runs inside w:ins, the match spanning both entirely -> the
+        # insertion is amended in place, keeping nothing but the replacement.
         xml_path = temp_xml(
             '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>AB</w:t></w:r><w:r><w:t>CD</w:t></w:r></w:ins></w:p>"
         )
         mgr = _make_manager(xml_path)
         mgr.replace_text("ABCD", "NEW")
-        text = _get_text_content(mgr)
-        assert "NEW" in text
+        assert _get_text_content(mgr) == "NEW"
 
 
 class TestReplaceMixedStateNoDelFound:
@@ -321,21 +320,6 @@ class TestDeleteMixedState:
         assert "lo" not in text
         assert "world" not in text
         assert "Hel" in text
-
-
-class TestReplaceSameContextInsAppendNoFirstChild:
-    """Lines 405-407: _replace_same_context appends when ins_elem has no firstChild."""
-
-    def test_replace_all_inside_ins_removes_then_appends(self, temp_xml):
-        # Two runs both inside ins, replace entire content.
-        xml_path = temp_xml(
-            '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
-            "<w:r><w:t>X</w:t></w:r><w:r><w:t>Y</w:t></w:r></w:ins></w:p>"
-        )
-        mgr = _make_manager(xml_path)
-        mgr.replace_text("XY", "NEW")
-        text = _get_text_content(mgr)
-        assert "NEW" in text
 
 
 class TestSplitInsAfterChildDescendant:
