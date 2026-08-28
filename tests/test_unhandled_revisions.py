@@ -34,6 +34,7 @@ from docx_editor import (
 )
 from docx_editor.track_changes import (
     ALL_REVISION_TAGS,
+    CHANGE_RECORD_TAGS,
     HANDLED_REVISION_TAGS,
     UNHANDLED_REVISION_TAGS,
     count_revision_elements,
@@ -149,6 +150,15 @@ MARK_INSIDE_CHANGE_RECORD = _document(
     "</w:tcPr><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr>"
     "</w:tbl>"
     "<w:p><w:r><w:t>After the table</w:t></w:r></w:p>"
+)
+
+# A historical w:del recorded inside a paragraph-mark w:rPrChange. The recorded
+# type is CT_ParaRPrOriginal, which opens with EG_ParaRPrTrackChanges, so this
+# is schema-legal. The w:del describes the paragraph mark's *previous* state.
+HANDLED_MARK_INSIDE_CHANGE_RECORD = _document(
+    "<w:p><w:pPr><w:rPr>"
+    f'<w:rPrChange w:id="90" {_ANN}><w:rPr><w:del w:id="91" {_ANN}/></w:rPr></w:rPrChange>'
+    "</w:rPr></w:pPr><w:r><w:t>Paragraph</w:t></w:r></w:p>"
 )
 
 # w:ins/w:del as *structural* markers: a deleted paragraph mark and a pair of
@@ -497,6 +507,28 @@ class TestListUnhandledRevisions:
         assert result.unhandled_types == {"w:tcPrChange": 1}
         assert [r.tag for r in rows] == ["w:tcPrChange"]
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="ISSUES.md #68: list_revisions/accept_all still walk every w:ins/w:del, "
+        "including ones recorded inside a change record. Flip to passing when #68 "
+        "routes the handled path through skip_change_records too.",
+    )
+    def test_handled_path_still_adjudicates_marks_inside_change_records(self, make_docx):
+        """Known gap the honesty floor does NOT close (pre-existing).
+
+        The unhandled path skips a change record's recorded subtree; the
+        handled path does not. So a historical w:del inside a w:rPrChange is
+        listed as live and accept_all() resolves it — destroying the recorded
+        previous state and over-claiming the count by one.
+        """
+        path = make_docx(HANDLED_MARK_INSIDE_CHANGE_RECORD, "handled_in_record")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UnhandledRevisionWarning)
+            with _open(path) as doc:
+                assert doc.list_revisions() == []
+                result = doc.accept_all()
+        assert result == 0
+
     def test_census_still_counts_marks_inside_change_records(self):
         """The census is a raw inventory, so it deliberately differs."""
         import defusedxml.minidom
@@ -530,7 +562,7 @@ class TestListUnhandledRevisions:
 
 
 class TestRevisionCensus:
-    def test_counts_every_tag_family(self, make_docx):
+    def test_counts_every_tag_family(self):
         import defusedxml.minidom
 
         census = count_revision_elements(defusedxml.minidom.parseString(TABLE_REVISIONS))
@@ -590,6 +622,21 @@ def test_every_unhandled_tag_has_a_fixture():
     """Adding a tag to UNHANDLED_REVISION_TAGS without a fixture fails here."""
     covered = {tag for xml in ALL_FIXTURES.values() for tag in UNHANDLED_REVISION_TAGS if f"<{tag} " in xml}
     assert covered == set(UNHANDLED_REVISION_TAGS)
+
+
+def test_change_record_tags_stay_inside_the_unhandled_set():
+    """CHANGE_RECORD_TAGS repeats the property-change family — pin the overlap.
+
+    A property-change type added to UNHANDLED_REVISION_TAGS but not here would
+    silently stop skip_change_records from skipping its recorded subtree.
+    """
+    assert set(CHANGE_RECORD_TAGS) <= set(UNHANDLED_REVISION_TAGS)
+    # w:numberingChange records its previous value in an attribute, not a
+    # subtree, so it is deliberately not a change record.
+    assert "w:numberingChange" not in CHANGE_RECORD_TAGS
+    assert set(CHANGE_RECORD_TAGS) == {t for t in UNHANDLED_REVISION_TAGS if t.endswith("Change")} - {
+        "w:numberingChange"
+    }
 
 
 def test_tag_constants_are_disjoint_and_complete():

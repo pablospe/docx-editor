@@ -648,15 +648,28 @@ UNHANDLED_REVISION_TAGS: tuple[str, ...] = (
 ALL_REVISION_TAGS: tuple[str, ...] = HANDLED_REVISION_TAGS + UNHANDLED_REVISION_TAGS
 
 # The property-change family: each of these records the element's *previous*
-# properties as its child subtree, so everything inside one describes the past,
-# not a pending revision. Only w:tcPrChange's record can actually contain
-# revision marks — its recorded w:tcPr is CT_TcPrInner, which unlike the other
-# recorded types (CT_PPrBase, CT_RPrOriginal, CT_SectPrBase, CT_TblPrBase,
-# CT_TblPrExBase, CT_TrPrBase, CT_TblGridBase) still allows w:cellIns/w:cellDel/
-# w:cellMerge — but the rule is stated for the whole family because "a change
-# record describes state that is already gone" is what makes them historical.
+# properties as its child subtree, so everything inside one describes state
+# that is already gone, not a pending revision.
+#
+# Three of the recorded types can legally hold revision marks:
+#   - w:tcPrChange's w:tcPr is CT_TcPrInner -> w:cellIns/w:cellDel/w:cellMerge
+#   - a paragraph-mark w:rPrChange's w:rPr is CT_ParaRPrOriginal, which opens
+#     with EG_ParaRPrTrackChanges -> w:ins/w:del/w:moveFrom/w:moveTo
+#   - w:pPrChange's w:pPr is CT_PPrBase -> w:numPr -> w:ins/w:numberingChange
+# The rest (CT_SectPrBase, CT_TblPrBase, CT_TblPrExBase, CT_TrPrBase,
+# CT_TblGridBase, and CT_RPrOriginal for a run-level w:rPrChange) cannot. The
+# rule is stated for the whole family anyway, because "a change record
+# describes the past" is what makes any of them historical.
+#
 # w:numberingChange is deliberately absent: it carries its previous value in a
 # w:original attribute and has no recorded subtree to skip.
+#
+# NOTE: only the unhandled/pending path uses this. list_revisions() and
+# accept_all()/reject_all() still walk every w:ins/w:del, so a historical
+# w:del recorded inside a change record is listed and resolved like a live
+# one — pre-existing behavior, pinned as a known gap by
+# tests/test_unhandled_revisions.py::test_handled_path_still_adjudicates_
+# marks_inside_change_records and left to ISSUES.md #68.
 CHANGE_RECORD_TAGS: tuple[str, ...] = (
     "w:pPrChange",
     "w:rPrChange",
@@ -724,8 +737,10 @@ class RevisionCensus:
             readable inventory.
         ins_del_contexts: parent tag name -> number of ``w:ins``/``w:del``
             elements directly under it. ``w:ins`` and ``w:del`` are also
-            *structural* markers: under ``w:rPr`` (inside ``w:pPr``) they mark
-            an inserted/deleted paragraph mark, and under ``w:trPr`` an
+            *structural* markers: under ``w:rPr`` they usually mark an
+            inserted/deleted paragraph mark (``w:pPr/w:rPr``), though the same
+            parent tag also covers a change record's recorded
+            ``w:rPrChange/w:rPr``; under ``w:trPr`` they mark an
             inserted/deleted table row. Those cases resolve approximately today
             (see ``RevisionManager.accept_all``), so the context breakdown is
             the evidence for whether they occur in real documents (ISSUES.md
@@ -756,7 +771,7 @@ def count_revision_elements(root) -> RevisionCensus:
         by_tag[tag] = by_tag.get(tag, 0) + 1
         if tag in HANDLED_REVISION_TAGS:
             parent = elem.parentNode
-            parent_tag = getattr(parent, "tagName", "(root)") if parent is not None else "(root)"
+            parent_tag = getattr(parent, "tagName", "(root)")
             contexts[parent_tag] = contexts.get(parent_tag, 0) + 1
     return RevisionCensus(by_tag=by_tag, ins_del_contexts=contexts)
 
@@ -3896,7 +3911,7 @@ class RevisionManager:
         first.
         """
         element_index: dict[str, list[Element]] = {}
-        for tag in ("w:ins", "w:del"):
+        for tag in HANDLED_REVISION_TAGS:
             for elem in self.editor.dom.getElementsByTagName(tag):
                 element_index.setdefault(elem.getAttribute("w:id"), []).append(elem)
         return element_index
@@ -4206,9 +4221,15 @@ class RevisionManager:
             List of UnhandledRevision in document order — see
             :class:`UnhandledRevision`.
         """
+        elems = self._unhandled_elements(author)
+        if not elems:
+            # The common case on an ins/del-only document. Building the
+            # location context walks the whole DOM, and SKILL.md tells callers
+            # to check this routinely, so do not pay for it to return [].
+            return []
         ctx = _RevisionLocationContext(self.editor.dom)
         rows: list[UnhandledRevision] = []
-        for elem in self._unhandled_elements(author):
+        for elem in elems:
             raw_id = elem.getAttribute("w:id")
             try:
                 elem_id = int(raw_id) if raw_id else None
@@ -4245,13 +4266,16 @@ class RevisionManager:
         if unhandled_types:
             total = sum(unhandled_types.values())
             listing = ", ".join(f"{tag} x{n}" for tag, n in sorted(unhandled_types.items()))
+            scope = f" (author={author!r})" if author is not None else ""
             warnings.warn(
-                f"{verb} resolved {count} revision(s) but left {total} unresolved: {listing}. "
+                f"{verb}{scope} resolved {count} revision(s) but left {total} unresolved: {listing}. "
                 f"This library resolves w:ins/w:del only; inspect the rest with "
                 f"list_unhandled_revisions() before reporting the document as fully adjudicated.",
                 UnhandledRevisionWarning,
                 # 4 frames out of warnings.warn: _resolve_all_reporting ->
                 # RevisionManager.accept_all -> Document.accept_all -> caller.
+                # Tuned for the supported Document path; calling RevisionManager
+                # directly makes the chain one frame shorter.
                 stacklevel=4,
             )
         return ResolveResult(count, unhandled_types)

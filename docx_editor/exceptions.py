@@ -385,9 +385,10 @@ class UnhandledRevisionWarning(UserWarning):
 
     Emitted by ``accept_all``/``reject_all`` when the document still holds
     revision elements outside the ``w:ins``/``w:del`` pair those verbs walk —
-    format changes (``w:pPrChange``, ``w:rPrChange``, ...), content moves
-    (``w:moveFrom``/``w:moveTo``), table-structure revisions (``w:cellIns``,
-    ``w:trPrChange``, ...) and the custom-XML range marks. Without it a
+    format changes (``w:pPrChange``, ``w:rPrChange``, ``w:trPrChange``, ...),
+    content moves (``w:moveFrom``/``w:moveTo``), table-structure revisions
+    (``w:cellIns``, ``w:cellDel``, ``w:cellMerge``) and the custom-XML range
+    marks. Without it a
     ``accept_all()`` returning 0 on a format-only redline reads as "there was
     nothing to accept" rather than "nothing here could be accepted".
 
@@ -397,5 +398,3 @@ class UnhandledRevisionWarning(UserWarning):
 
         warnings.filterwarnings("ignore", category=UnhandledRevisionWarning)
     """
-
-    pass

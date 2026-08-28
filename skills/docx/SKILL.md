@@ -587,6 +587,7 @@ doc.reject_changeset(results[0].changeset_id)   # undo the whole call, or:
 # revisions processed and behaves as that int in comparisons, arithmetic and
 # f-strings; it also carries what could NOT be processed.
 result = doc.accept_all()
+doc.reject_all()
 
 # ALWAYS check this before telling a human "all changes accepted", and check
 # the result of THIS call — .unhandled describes the call it came from.
@@ -603,7 +604,6 @@ if result.unhandled:
 
 # Accept/reject only specific author's revisions. On a filtered call
 # .unhandled counts only that author's marks.
-doc.reject_all()
 doc.accept_all(author="Reviewer")
 doc.reject_all(author="OtherUser")
 

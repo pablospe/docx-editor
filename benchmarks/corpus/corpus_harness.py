@@ -174,6 +174,10 @@ def print_census(results: list[dict]) -> None:
     for r in results:
         census = r.get("census")
         if not census:
+            # No census key at all: the file's subprocess crashed or timed out
+            # (see run_all). An uncounted file is not a file with no revisions,
+            # which is the distinction this whole block exists to keep.
+            errors.append(f"{r['file']}: census not run (harness stage did not complete)")
             continue
         if "error" in census:
             errors.append(f"{r['file']}: {census['error']}")
@@ -209,7 +213,7 @@ def print_census(results: list[dict]) -> None:
         print("\nw:ins/w:del by parent element (structural markers vs content revisions):")
         for parent, n in sorted(contexts.items(), key=lambda kv: (-kv[1], kv[0])):
             note = {
-                "w:rPr": "  <- paragraph-mark ins/del (rPr inside pPr)",
+                "w:rPr": "  <- paragraph-mark ins/del, or a change record's rPr",
                 "w:trPr": "  <- table-row ins/del",
             }.get(parent, "")
             print(f"  {parent:<28}{n:>8}{note}")

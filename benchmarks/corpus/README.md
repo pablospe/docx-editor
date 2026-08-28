@@ -64,7 +64,7 @@ tag                               elements  files  producers
 
 w:ins/w:del by parent element (structural markers vs content revisions):
   w:p                               16
-  w:rPr                              1  <- paragraph-mark ins/del (rPr inside pPr)
+  w:rPr                              1  <- paragraph-mark ins/del, or a change record's rPr
 
 1 XML part(s) across 1 file(s) could not be censused:
   - poi_ExternalEntityInText.docx [word/document.xml]: EntitiesForbidden: ...
@@ -85,8 +85,10 @@ Read as evidence for ISSUES.md #68:
   producers, so hand-authored XML for those types lives in
   `tests/test_unhandled_revisions.py` instead.
 - **The structural `w:ins`/`w:del` cases are rare but present**: one
-  paragraph-mark marker (`w:pPr/w:rPr/w:ins`, in `locore_cell-sdt-redline.docx`)
-  against 16 ordinary content revisions, and no `w:trPr` row markers at all.
+  paragraph-mark marker (`w:pPr/w:rPr/w:ins`, in `locore_cell-sdt-redline.docx`
+  — checked individually, since a change record's recorded `w:rPrChange/w:rPr`
+  would share the `w:rPr` row) against 16 ordinary content revisions, and no
+  `w:trPr` row markers at all.
   These resolve *approximately* today — the marker is dropped without merging
   the paragraph or removing the row — which is why the context breakdown is
   tracked separately from the unhandled count.
