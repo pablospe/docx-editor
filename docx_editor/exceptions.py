@@ -141,6 +141,32 @@ class DocumentOpenError(DocxEditError):
         super().__init__(message)
 
 
+class DocumentProtectedError(DocxEditError):
+    """Raised when opening a document whose editing protection is enforced.
+
+    Word's *Restrict Editing* writes ``<w:documentProtection>`` into
+    ``word/settings.xml``. When its enforcement is on and the mode locks the
+    body text — ``readOnly``, ``forms`` or ``comments`` — the author asked for
+    the content not to be edited, so ``Document.open()`` refuses rather than
+    producing a file Word will reopen with the same lock over unexpected edits.
+    Unprotect the document in Word, or pass ``allow_protected=True`` to open it
+    anyway.
+
+    The ``trackedChanges`` mode never raises: it enforces exactly what this
+    library already does.
+
+    Attributes:
+        path: The document that is protected, or None if unknown.
+        mode: The raw ``w:edit`` value that triggered the guard
+            (``"readOnly"``, ``"forms"`` or ``"comments"``), or None if unknown.
+    """
+
+    def __init__(self, message: str, *, path: Path | None = None, mode: str | None = None):
+        self.path = path
+        self.mode = mode
+        super().__init__(message)
+
+
 class DocumentClosedError(DocxEditError):
     """Raised when an operation is attempted on a closed Document.
 

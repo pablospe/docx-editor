@@ -10,7 +10,7 @@ from docx_editor import Document
 
 ### Opening Documents
 
-#### `Document.open(path, author=None, force_recreate=False, workspace_dir=None)`
+#### `Document.open(path, author=None, force_recreate=False, workspace_dir=None, *, allow_protected=False)`
 
 Open a Word document for editing.
 
@@ -20,6 +20,7 @@ Open a Word document for editing.
 - `author` (str, optional): Author name for tracked changes. Defaults to system username.
 - `force_recreate` (bool): If True, delete any existing workspace (stale or in-sync) before opening — whatever XML it holds is discarded — and re-unpack from the current source. Use this to recover from `WorkspaceSyncError`. Defaults to False.
 - `workspace_dir` (str | Path, optional): Base directory for the workspace. Overrides the `DOCX_EDITOR_WORKSPACE_DIR` environment variable and the platform cache default (see [Workspace location](#workspace-location)). A relative path resolves against the document's directory, so `workspace_dir=".docx"` keeps the workspace next to the file. Defaults to None.
+- `allow_protected` (bool): If True, open a document whose editing protection is enforced (Word's *Restrict Editing*) instead of raising [`DocumentProtectedError`](#documentprotectederror). The protection itself is left in place, so the saved document reaches Word still restricted. Defaults to False.
 
 **Returns:** Document instance ready for editing
 
@@ -28,6 +29,7 @@ Open a Word document for editing.
 - `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created, or if a leftover workspace holds unsaved changes from a previous session — any session that made edits without a final successful `save()` back to the source (it saved to a different path, its save failed, or it closed with `close(cleanup=False)`). Pass `force_recreate=True` to discard the workspace and re-unpack from the current source. The workspace is never deleted silently. The error message includes the workspace path.
 - `WorkspaceLockedError`: If a live session — another process, or an unclosed `Document` in this one — already holds the document's workspace. Close the other session, or pass `force_recreate=True` to take the workspace over and discard its unsaved edits. Locks left by dead processes are reclaimed silently.
 - `WorkspaceError`: If the workspace directory cannot be created (e.g. the base is not writable), the home directory backing the default cache cannot be determined, or an existing workspace was unpacked from a different document. The message names the override to set.
+- `DocumentProtectedError`: If the document enforces an editing protection that locks its body text — `readOnly`, `forms` or `comments`. Carries `path` and `mode`. Unprotect it in Word, or pass `allow_protected=True`. A document enforcing `trackedChanges` opens normally: that mode asks for exactly what this library does.
 
 **Example:**
 
@@ -895,7 +897,7 @@ count = doc.reject_all(author="OtherUser")
 
 ### Save and Close Methods
 
-#### `save(path=None, validate=False, force=False)`
+#### `save(path=None, validate=False, force=False, *, track_changes=None)`
 
 Save the document.
 
@@ -904,8 +906,11 @@ Save the document.
 - `path` (str | Path, optional): Output path. Defaults to original source path.
 - `validate` (bool): If True, validate with LibreOffice before saving. Defaults to False.
 - `force` (bool): If True, skip save-time safety checks. By default `save()` refuses to overwrite the source if it changed on disk since it was opened (raising [`WorkspaceSyncError`](#workspacesyncerror)), or to write a destination that appears open in Word — a `~$` owner file exists next to it (raising [`DocumentOpenError`](#documentopenerror)). Pass `force=True` only for a confirmed-stale lock left by a crashed session. Defaults to False.
+- `track_changes` (bool, optional): Whether to turn Word's track-changes switch (`<w:trackChanges/>` in `word/settings.xml`) on in the saved file. `None` (the default) writes it exactly when the document carries a revision this session authored; `True` writes it either way; `False` leaves `settings.xml` alone. See below.
 
 **Returns:** Path to the saved document (Path)
+
+**The track-changes switch.** A saved redline shows up in Word whether or not the switch is on, but the switch is what keeps the *recipient's* own typing tracked — without it the next round of edits arrives untracked and the two rounds can no longer be told apart. So a save that leaves a revision authored by this session also writes `<w:trackChanges/>`. A document opened and not redlined (or one whose revisions were accepted) is saved untouched; `track_changes=False` opts out entirely and never removes a flag the document already had. A document that turns tracking *off* explicitly (`<w:trackChanges w:val="false"/>`) is respected rather than overridden: the element is left as it is and the save emits a `UserWarning` saying the recipient's edits will not be tracked. `track_changes=True` overrides that setting.
 
 After saving to a different path (or a save that fails), the workspace is flagged as holding unsaved changes; a later `Document.open()` of the source raises `WorkspaceSyncError` until the workspace is saved back to the source or discarded — with `force_recreate=True` on the next open, or once with [`Document.discard_workspace(path)`](#documentdiscard_workspacepath-workspace_dirnone). See [`WorkspaceSyncError`](#workspacesyncerror) below.
 
@@ -1516,6 +1521,23 @@ try:
     doc.save()
 except DocumentOpenError as e:
     print(f"Close {e.path} in Word first (lock: {e.owner_file})")
+```
+
+### `DocumentProtectedError`
+
+Raised by `Document.open()` when the document's editing protection is enforced and its mode locks the body text. Word's *Restrict Editing* writes `<w:documentProtection>` into `word/settings.xml`; `readOnly`, `forms` and `comments` all mean the author asked for the content not to be edited, so opening refuses rather than producing a file Word reopens with the same lock over unexpected edits. A protection configured but switched off (`w:enforcement="0"`) never raises, and neither does the `trackedChanges` mode — it enforces exactly what this library already does. The exception carries `path` (the document) and `mode` (the raw `w:edit` value) attributes.
+
+Recovery: unprotect the document in Word (Review > Restrict Editing > Stop Protection), or open it anyway with `allow_protected=True`, which leaves the protection in the saved file.
+
+```python
+from docx_editor import Document
+from docx_editor.exceptions import DocumentProtectedError
+
+try:
+    doc = Document.open("contract.docx")
+except DocumentProtectedError as e:
+    print(f"{e.path} is protected ({e.mode})")
+    doc = Document.open(e.path, allow_protected=True)
 ```
 
 ### `WorkspaceLockedError`

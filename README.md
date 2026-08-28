@@ -23,10 +23,30 @@ Pure Python library for Word document track changes and comments, without requir
 - **Cross-Boundary Editing**: Find and replace text spanning multiple XML elements and revision boundaries
 - **Mixed-State Editing**: Atomic decomposition for text spanning `<w:ins>`/`<w:del>` boundaries
 - **Comments**: Add, reply, resolve, and delete comments
+- **Word's Tracking Switch**: Saving a redline turns Track Changes on in `settings.xml`, so the recipient's own edits stay tracked too; documents protected with Word's *Restrict Editing* are refused at open rather than silently edited
 - **Revision Management**: List, accept, and reject tracked changes at three granularities — individual revisions, groups (one logical edit), and changesets (one whole `batch_edit`/`batch_rewrite` call); `EditResult` and `Revision` objects carry `group_id` and `changeset_id`
 - **Session Mode**: Optional persistent kernel (`docx-session start/exec/eval/status/stop`) keeps documents open across many small commands — ideal for AI agents (`pip install "docx-editor[session]"`)
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **No Dependencies**: Only requires `defusedxml` for secure XML parsing
+
+## Scope
+
+This library redlines and reviews existing Word documents; it deliberately does
+not try to be a Word automation suite. Redaction is a permanent refusal — a tool
+built to preserve history cannot honestly promise removal, and a redaction that
+leaves the text recoverable in the file is worse than none. Also out of scope:
+creating documents and editing structure (tables, images, styles, sections, TOCs,
+fields, content controls, mail merge — use
+[python-docx](https://python-docx.readthedocs.io/), and
+[pandoc](https://pandoc.org/) for format conversion); regex find/replace, which
+matches over text this library deliberately keeps anchored to runs and revisions;
+and diffing two arbitrary documents, whose domain-correct version is
+`list_revisions()` plus `get_visible_text()`/`get_original_text()` and
+`rewrite_paragraph()`'s own word-level diff. Schema validators are not on the
+roadmap either: the contract that matters is "opens in Word with zero repair
+prompts", which a round-trip corpus tests honestly and a validator does not. Text
+inside shapes and text boxes is excluded rather than half-editable, and container
+parts (headers, footers, footnotes, endnotes) wait for a real demand.
 
 ## Installation
 

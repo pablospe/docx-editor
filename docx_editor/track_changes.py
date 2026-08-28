@@ -3430,6 +3430,26 @@ class RevisionManager:
         else:
             self.editor.append_to(paragraph, ins_xml)
 
+    def has_own_revisions(self) -> bool:
+        """Whether the document currently holds a revision authored by us.
+
+        Counts *pending* revisions only — accepting or rejecting one removes
+        it from the DOM, so a document we edited and then fully accepted
+        answers False, which is the honest answer: it carries no redline.
+        Ownership is the same test the rest of this class uses, ``w:author``
+        equal to the editor's author, so a foreign redline by someone whose
+        author string happens to match ours reads as ours.
+
+        Returns:
+            True on the first ``w:ins``/``w:del`` we authored, False if there
+            is none.
+        """
+        for tag in ("w:ins", "w:del"):
+            for elem in self.editor.dom.getElementsByTagName(tag):
+                if elem.getAttribute("w:author") == self.editor.author:
+                    return True
+        return False
+
     def list_revisions(
         self,
         author: str | None = None,
