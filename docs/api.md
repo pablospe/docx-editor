@@ -653,7 +653,12 @@ doc.delete_comment(0)
 
 #### `list_revisions(author=None, paragraph=None)`
 
-List all tracked changes in the document.
+List the document's tracked insertions and deletions.
+
+Insertions and deletions only. Every other revision type in the OOXML schema —
+format changes, moves, table-structure revisions — is listed by
+[`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone) instead,
+because none of it can be passed to `accept_revision()`.
 
 **Parameters:**
 
@@ -862,35 +867,96 @@ doc.reject_changeset(results[0].changeset_id)  # undo the whole batch
 
 #### `accept_all(author=None)`
 
-Accept all revisions.
+Accept all insertions and deletions.
+
+Resolves `w:ins`/`w:del` only. Every other revision type is left pending and
+reported on the result rather than silently ignored — see
+[`ResolveResult`](#resolveresult) for the counting rule and
+[`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone) for what is
+in that set.
+
+Only `word/document.xml` is inspected; headers, footers and footnotes are the
+container-parts epic (ISSUES.md #30).
 
 **Parameters:**
 
 - `author` (str, optional): If provided, only accept revisions by this author
 
-**Returns:** Number of revisions accepted (int)
+**Returns:** [`ResolveResult`](#resolveresult) — an `int` whose value is the
+number of revisions accepted, carrying `.unhandled` and `.unhandled_types`.
+
+**Warns:** [`UnhandledRevisionWarning`](#unhandledrevisionwarning) if
+`.unhandled` is nonzero.
 
 **Example:**
 
 ```python
-count = doc.accept_all()
-print(f"Accepted {count} revisions")
+result = doc.accept_all()
+print(f"Accepted {result} revisions")
+if result.unhandled:
+    print(f"Still pending: {result.unhandled_types}")
+    # -> Still pending: {'w:moveFrom': 8, 'w:moveTo': 8, ...}
 ```
 
 #### `reject_all(author=None)`
 
-Reject all revisions.
+Reject all insertions and deletions.
+
+Resolves `w:ins`/`w:del` only; every other revision type is left pending and
+reported exactly as in `accept_all()`.
 
 **Parameters:**
 
 - `author` (str, optional): If provided, only reject revisions by this author
 
-**Returns:** Number of revisions rejected (int)
+**Returns:** [`ResolveResult`](#resolveresult) — an `int` whose value is the
+number of revisions rejected, carrying `.unhandled` and `.unhandled_types`.
+
+**Warns:** [`UnhandledRevisionWarning`](#unhandledrevisionwarning) if
+`.unhandled` is nonzero.
 
 **Example:**
 
 ```python
 count = doc.reject_all(author="OtherUser")
+```
+
+#### `list_unhandled_revisions(author=None)`
+
+List the revision types this library does not accept or reject.
+
+The complement of `list_revisions()`: everything in the OOXML revision schema
+except insertions and deletions — property changes (`w:pPrChange`,
+`w:rPrChange`, `w:sectPrChange`, the table `*PrChange` family), content moves
+(`w:moveFrom`/`w:moveTo` and their range marks), table-structure revisions
+(`w:cellIns`, `w:cellDel`, `w:cellMerge`), `w:numberingChange` and the
+custom-XML range marks. These survive open/edit/save unchanged and are left
+pending by `accept_all()`/`reject_all()`.
+
+Call this before telling a human "all changes accepted": on a format-only
+redline `accept_all()` returns 0 because there was nothing it *could* accept,
+not because there was nothing to do.
+
+Rows are [`UnhandledRevision`](#unhandledrevision), deliberately not `Revision`
+objects — they carry nothing `accept_revision()` could act on.
+
+Only `word/document.xml` is inspected (ISSUES.md #30).
+
+**Parameters:**
+
+- `author` (str, optional): If provided, filter by author name. Marks with no
+  `w:author` attribute read as `"Unknown"`, so they are excluded from every
+  filtered call and included in an unfiltered one.
+
+**Returns:** List of `UnhandledRevision` in document order
+
+**Example:**
+
+```python
+result = doc.accept_all()
+if result.unhandled:
+    for row in doc.list_unhandled_revisions():
+        print(f"still pending: {row.tag} by {row.author} @{row.paragraph_ref}")
 ```
 
 ### Save and Close Methods
@@ -1112,6 +1178,76 @@ print(split.refs)           # ("P2#…", "P3#…")
 
 doc.replace("net", "gross", paragraph=result)  # usable as a plain ref
 doc.reject_group(result.group_id)              # undo the first edit entirely
+```
+
+---
+
+## ResolveResult
+
+The result of `accept_all()` / `reject_all()`: the number of revisions resolved,
+plus what could not be.
+
+Subclasses `int`, and the int value *is* the resolved count — so
+`count = doc.accept_all()` keeps working unchanged in comparisons, arithmetic,
+f-strings and `json.dumps`.
+
+```python
+from docx_editor import ResolveResult
+```
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| *(the int value)* | int | Number of `w:ins`/`w:del` revisions resolved |
+| `unhandled` | int | How many revision elements this library never resolves are still in the document. `0` on an ordinary insertions-and-deletions redline. |
+| `unhandled_types` | dict[str, int] | Tag → count for those elements, e.g. `{"w:rPrChange": 3, "w:moveTo": 1}`. Empty when `unhandled` is 0. |
+
+Both are counted **after** resolution, which is the honest measure of the claim
+being made ("everything is resolved"): a foreign mark inside a rejected
+insertion's subtree is removed with it, so it correctly does not appear. It is
+not a census of what the document held on entry.
+
+### Example
+
+```python
+result = doc.accept_all()
+print(result)             # "2" — str/format stay the plain int
+print(result + 1)         # 3
+print(result.unhandled)   # 20
+print(result.unhandled_types)
+# {'w:moveFrom': 8, 'w:moveFromRangeStart': 1, 'w:moveFromRangeEnd': 1,
+#  'w:moveTo': 8, 'w:moveToRangeStart': 1, 'w:moveToRangeEnd': 1}
+```
+
+---
+
+## UnhandledRevision
+
+One revision element this library does not accept or reject, as returned by
+[`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone).
+
+```python
+from docx_editor import UnhandledRevision
+```
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `tag` | str | The element's tag, e.g. `"w:pPrChange"` |
+| `id` | int or None | The element's `w:id`, or None when it carries none or a non-numeric one. Unlike `Revision`, an id-less mark is still listed — nothing here is targeted by id. |
+| `author` | str | `w:author`, or `"Unknown"` when the attribute is absent — matching `Revision`. `w:tblGridChange` and the range `*End` marks carry only `w:id` in the schema, so they always read as `"Unknown"`. |
+| `date` | datetime or None | Parsed `w:date`, or None when absent or unparseable |
+| `paragraph_ref` | str or None | Hash-anchored ref of the containing `<w:p>`, or None when the mark sits outside any paragraph (e.g. a `w:tblPrChange` in a table's properties, or a `w:sectPrChange` in a section break) |
+
+### Example
+
+```python
+for row in doc.list_unhandled_revisions():
+    print(row)
+# UnhandledRevision(moveFrom 0 @P1#6c81 by László Németh)
+# UnhandledRevision(pPrChange 0 @P3#026f by Kelemen Gábor 2)
 ```
 
 ---
@@ -1529,4 +1665,25 @@ try:
     doc = Document.open("contract.docx")
 except WorkspaceLockedError as e:
     print(f"Held by pid {e.pid}")
+```
+
+## Warnings
+
+### `UnhandledRevisionWarning`
+
+Emitted by `accept_all()` / `reject_all()` when the document still holds
+revision elements outside the `w:ins`/`w:del` pair those verbs walk — format
+changes, content moves, table-structure revisions, custom-XML range marks.
+Without it, `accept_all()` returning 0 on a format-only redline reads as "there
+was nothing to accept" rather than "nothing here could be accepted".
+
+Inspect what remains with
+[`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone), or read
+the counts off the returned [`ResolveResult`](#resolveresult).
+
+```python
+import warnings
+from docx_editor import UnhandledRevisionWarning
+
+warnings.filterwarnings("ignore", category=UnhandledRevisionWarning)
 ```

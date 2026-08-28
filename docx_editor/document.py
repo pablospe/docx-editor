@@ -19,9 +19,11 @@ from .track_changes import (
     EditOperation,
     EditResult,
     EditValidationResult,
+    ResolveResult,
     Revision,
     RevisionManager,
     SearchResult,
+    UnhandledRevision,
     _ancestor_paragraph,
     _paragraph_hint,
     _resolve_search_target,
@@ -1621,7 +1623,12 @@ class Document:
     # ==================== Revision Management API ====================
 
     def list_revisions(self, author: str | None = None, paragraph: str | None = None) -> list[Revision]:
-        """List all tracked changes in the document.
+        """List the document's tracked insertions and deletions.
+
+        Insertions and deletions only. Every other revision type in the OOXML
+        schema — format changes, moves, table-structure revisions — is listed
+        by ``list_unhandled_revisions()`` instead, because none of it can be
+        passed to ``accept_revision()``.
 
         Args:
             author: If provided, filter by author name
@@ -1834,30 +1841,100 @@ class Document:
         self._ensure_open()
         return self._revision_manager.reject_changeset(changeset_id)
 
-    def accept_all(self, author: str | None = None) -> int:
-        """Accept all revisions.
+    def list_unhandled_revisions(self, author: str | None = None) -> list[UnhandledRevision]:
+        """List the revision types this library does not accept or reject.
+
+        The complement of ``list_revisions()``: everything in the OOXML
+        revision schema except insertions and deletions — property changes
+        (``w:pPrChange``, ``w:rPrChange``, ``w:sectPrChange``, the table
+        ``*PrChange`` family), content moves (``w:moveFrom``/``w:moveTo`` and
+        their range marks), table-structure revisions (``w:cellIns``,
+        ``w:cellDel``, ``w:cellMerge``), ``w:numberingChange`` and the
+        custom-XML range marks. These survive open/edit/save unchanged and are
+        left pending by ``accept_all()``/``reject_all()``.
+
+        Call this before telling a human "all changes accepted": on a
+        format-only redline ``accept_all()`` returns 0 because there was
+        nothing it *could* accept, not because there was nothing to do.
+
+        These rows are deliberately not ``Revision`` objects — they carry
+        nothing ``accept_revision()`` could act on, so they are not
+        interchangeable with ``list_revisions()`` output.
+
+        Only ``word/document.xml`` is inspected; headers, footers and
+        footnotes are the container-parts epic (ISSUES.md #30).
+
+        Args:
+            author: If provided, filter by author name. Marks with no
+                ``w:author`` attribute read as ``"Unknown"``, so they are
+                excluded from every filtered call and included in an
+                unfiltered one.
+
+        Returns:
+            List of UnhandledRevision in document order, each with ``tag``,
+            ``id`` (None when the mark carries no numeric ``w:id``),
+            ``author``, ``date`` and ``paragraph_ref`` (None outside any
+            paragraph).
+
+        Example:
+            result = doc.accept_all()
+            if result.unhandled:
+                for row in doc.list_unhandled_revisions():
+                    print(f"still pending: {row.tag} by {row.author}")
+        """
+        self._ensure_open()
+        return self._revision_manager.list_unhandled_revisions(author=author)
+
+    def accept_all(self, author: str | None = None) -> ResolveResult:
+        """Accept all insertions and deletions.
+
+        Resolves ``w:ins``/``w:del`` only. Every other revision type is left
+        pending and reported on the result rather than silently ignored — see
+        ``list_unhandled_revisions()`` for the full list and
+        :class:`ResolveResult` for the counting rule.
+
+        Only ``word/document.xml`` is inspected; headers, footers and
+        footnotes are the container-parts epic (ISSUES.md #30).
 
         Args:
             author: If provided, only accept revisions by this author
 
         Returns:
-            Number of revisions accepted
+            :class:`ResolveResult` — an ``int`` whose value is the number of
+            revisions accepted (so existing ``count = doc.accept_all()`` code
+            is unaffected), carrying ``.unhandled`` (how many revision
+            elements this library never resolves are still in the document,
+            counted after resolution) and ``.unhandled_types`` (tag -> count).
+
+        Warns:
+            UnhandledRevisionWarning: If ``.unhandled`` is nonzero — the point
+                at which "everything is accepted" would be a false claim.
 
         Example:
-            count = doc.accept_all()
-            print(f"Accepted {count} revisions")
+            result = doc.accept_all()
+            print(f"Accepted {result} revisions")
+            if result.unhandled:
+                print(f"Still pending: {result.unhandled_types}")
         """
         self._ensure_open()
         return self._revision_manager.accept_all(author=author)
 
-    def reject_all(self, author: str | None = None) -> int:
-        """Reject all revisions.
+    def reject_all(self, author: str | None = None) -> ResolveResult:
+        """Reject all insertions and deletions.
+
+        Resolves ``w:ins``/``w:del`` only; every other revision type is left
+        pending and reported exactly as in ``accept_all()``.
 
         Args:
             author: If provided, only reject revisions by this author
 
         Returns:
-            Number of revisions rejected
+            :class:`ResolveResult` — an ``int`` whose value is the number of
+            revisions rejected, carrying ``.unhandled`` and
+            ``.unhandled_types``.
+
+        Warns:
+            UnhandledRevisionWarning: If ``.unhandled`` is nonzero.
 
         Example:
             count = doc.reject_all(author="OtherUser")
