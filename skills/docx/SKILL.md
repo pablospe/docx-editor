@@ -499,7 +499,8 @@ import os
 author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("reviewed.docx", author=author)
 
-# List all tracked revisions (returns list[Revision] objects)
+# List the document's tracked insertions and deletions (list[Revision]).
+# Other revision types are not listed here — see list_unhandled_revisions().
 revisions = doc.list_revisions()
 for r in revisions:
     print(f"ID: {r.id}, Type: {r.type}, Author: {r.author}, Text: {r.text}")
@@ -582,17 +583,13 @@ doc.reject_changeset(results[0].changeset_id)   # undo the whole call, or:
 # stored in the document XML and survive save()/close()/reopen — resolving
 # by revision id in a later session is always safe.
 
-# Accept or reject all insertions and deletions. The return value is the
-# count of revisions processed (a plain int in every expression), and it also
-# carries what could NOT be processed.
+# Accept or reject all insertions and deletions. The return value counts the
+# revisions processed and behaves as that int in comparisons, arithmetic and
+# f-strings; it also carries what could NOT be processed.
 result = doc.accept_all()
-doc.reject_all()
 
-# Accept/reject only specific author's revisions
-doc.accept_all(author="Reviewer")
-doc.reject_all(author="OtherUser")
-
-# ALWAYS check this before telling a human "all changes accepted".
+# ALWAYS check this before telling a human "all changes accepted", and check
+# the result of THIS call — .unhandled describes the call it came from.
 # accept_all/reject_all resolve w:ins/w:del only. A Word redline whose
 # revisions are format changes (w:pPrChange, w:rPrChange) or drag-and-drop
 # moves (w:moveFrom/w:moveTo) returns 0 — not because there was nothing to
@@ -603,6 +600,12 @@ if result.unhandled:
         print(f"still pending: {row.tag} by {row.author} @{row.paragraph_ref}")
     # Report these to the human as STILL PENDING — the document is not fully
     # adjudicated. An UnhandledRevisionWarning is also emitted.
+
+# Accept/reject only specific author's revisions. On a filtered call
+# .unhandled counts only that author's marks.
+doc.reject_all()
+doc.accept_all(author="Reviewer")
+doc.reject_all(author="OtherUser")
 
 doc.save()
 doc.close()

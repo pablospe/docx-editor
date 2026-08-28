@@ -66,7 +66,7 @@ w:ins/w:del by parent element (structural markers vs content revisions):
   w:p                               16
   w:rPr                              1  <- paragraph-mark ins/del (rPr inside pPr)
 
-1 file(s) could not be censused:
+1 XML part(s) across 1 file(s) could not be censused:
   - poi_ExternalEntityInText.docx [word/document.xml]: EntitiesForbidden: ...
 ```
 

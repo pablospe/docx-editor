@@ -1866,9 +1866,9 @@ class Document:
 
         Args:
             author: If provided, filter by author name. Marks with no
-                ``w:author`` attribute read as ``"Unknown"``, so they are
-                excluded from every filtered call and included in an
-                unfiltered one.
+                ``w:author`` attribute read as ``"Unknown"``, so they match
+                only ``author="Unknown"``, are excluded from every other
+                filtered call, and are included in an unfiltered one.
 
         Returns:
             List of UnhandledRevision in document order, each with ``tag``,
@@ -1937,7 +1937,9 @@ class Document:
             UnhandledRevisionWarning: If ``.unhandled`` is nonzero.
 
         Example:
-            count = doc.reject_all(author="OtherUser")
+            result = doc.reject_all(author="OtherUser")
+            if result.unhandled:
+                print(f"Still pending: {result.unhandled_types}")
         """
         self._ensure_open()
         return self._revision_manager.reject_all(author=author)

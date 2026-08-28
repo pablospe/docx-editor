@@ -214,9 +214,12 @@ def print_census(results: list[dict]) -> None:
             }.get(parent, "")
             print(f"  {parent:<28}{n:>8}{note}")
     if errors:
-        print(f"\n{len(errors)} file(s) could not be censused:")
+        n_files = len({e.split(" [", 1)[0].rstrip(":") for e in errors})
+        print(f"\n{len(errors)} XML part(s) across {n_files} file(s) could not be censused:")
         for e in errors[:6]:
             print(f"  - {e}")
+        if len(errors) > 6:
+            print(f"  ... and {len(errors) - 6} more")
 
 
 def run_census_only(only: str | None) -> int:
@@ -230,7 +233,10 @@ def run_census_only(only: str | None) -> int:
     if only:
         files = [f for f in files if only in f.name]
     if not files:
-        print(f"no corpus files in {FILES_DIR} — run build_corpus.py first", file=sys.stderr)
+        if only:
+            print(f"no corpus files match --only {only!r}", file=sys.stderr)
+        else:
+            print(f"no corpus files in {FILES_DIR} — run build_corpus.py first", file=sys.stderr)
         return 1
     results = [
         {"file": f.name, "census": census_file(f), "provenance": manifest.get(f.name, {}), "stages": {}} for f in files

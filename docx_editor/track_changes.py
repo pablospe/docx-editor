@@ -612,15 +612,15 @@ class Revision:
 HANDLED_REVISION_TAGS: tuple[str, ...] = ("w:ins", "w:del")
 
 UNHANDLED_REVISION_TAGS: tuple[str, ...] = (
-    # Content moves (§17.13.5.22-.31): the move pair plus its range marks.
+    # Content moves: the move pair plus its range marks.
     "w:moveFrom",
     "w:moveFromRangeStart",
     "w:moveFromRangeEnd",
     "w:moveTo",
     "w:moveToRangeStart",
     "w:moveToRangeEnd",
-    # Property changes (§17.13.5.29-.38): the previous formatting, recorded
-    # alongside the element whose properties changed.
+    # Property changes: the previous formatting, recorded alongside the
+    # element whose properties changed.
     "w:pPrChange",
     "w:rPrChange",
     "w:sectPrChange",
@@ -629,12 +629,12 @@ UNHANDLED_REVISION_TAGS: tuple[str, ...] = (
     "w:trPrChange",
     "w:tcPrChange",
     "w:tblGridChange",
-    # Table-structure revisions (§17.13.5.1-.3) and numbering (§17.13.5.24).
+    # Table-structure revisions and numbering.
     "w:cellIns",
     "w:cellDel",
     "w:cellMerge",
     "w:numberingChange",
-    # Custom-XML range marks (§17.13.5.4-.11).
+    # Custom-XML range marks.
     "w:customXmlInsRangeStart",
     "w:customXmlInsRangeEnd",
     "w:customXmlDelRangeStart",
@@ -647,8 +647,29 @@ UNHANDLED_REVISION_TAGS: tuple[str, ...] = (
 
 ALL_REVISION_TAGS: tuple[str, ...] = HANDLED_REVISION_TAGS + UNHANDLED_REVISION_TAGS
 
+# The property-change family: each of these records the element's *previous*
+# properties as its child subtree, so everything inside one describes the past,
+# not a pending revision. Only w:tcPrChange's record can actually contain
+# revision marks — its recorded w:tcPr is CT_TcPrInner, which unlike the other
+# recorded types (CT_PPrBase, CT_RPrOriginal, CT_SectPrBase, CT_TblPrBase,
+# CT_TblPrExBase, CT_TrPrBase, CT_TblGridBase) still allows w:cellIns/w:cellDel/
+# w:cellMerge — but the rule is stated for the whole family because "a change
+# record describes state that is already gone" is what makes them historical.
+# w:numberingChange is deliberately absent: it carries its previous value in a
+# w:original attribute and has no recorded subtree to skip.
+CHANGE_RECORD_TAGS: tuple[str, ...] = (
+    "w:pPrChange",
+    "w:rPrChange",
+    "w:sectPrChange",
+    "w:tblPrChange",
+    "w:tblPrExChange",
+    "w:trPrChange",
+    "w:tcPrChange",
+    "w:tblGridChange",
+)
 
-def iter_revision_elements(root, tags: Iterable[str]) -> Iterator[Element]:
+
+def iter_revision_elements(root, tags: Iterable[str], *, skip_change_records: bool = False) -> Iterator[Element]:
     """Yield every element under ``root`` whose tag is in ``tags``, document order.
 
     One recursive pre-order traversal for the whole tag set, rather than one
@@ -656,12 +677,22 @@ def iter_revision_elements(root, tags: Iterable[str]) -> Iterator[Element]:
     would cost 30 full-document walks, which the ISSUES.md #56/#62 walk-count
     pin (``tests/test_revision_groups.py``) exists to prevent.
 
-    No subtree is skipped, so a mark nested inside another revision — a
-    ``w:ins`` inside the history record of a ``w:pPrChange``, a ``w:del``
-    inside a foreign ``w:ins`` — is yielded after its host, exactly as
-    ``_revision_elements`` does for the handled pair.
+    By default no subtree is skipped, so a mark nested inside another revision
+    — a ``w:del`` inside a foreign ``w:ins`` — is yielded after its host,
+    exactly as ``_revision_elements`` does for the handled pair.
+
+    Args:
+        root: any DOM node; its descendants are searched, not itself.
+        tags: the tag names to yield.
+        skip_change_records: when True, a ``CHANGE_RECORD_TAGS`` element is
+            still yielded but its subtree is not descended into. That subtree
+            is the *recorded previous state*, so a ``w:cellIns`` sitting in a
+            ``w:tcPrChange``'s recorded ``w:tcPr`` is a historical marker, not
+            a second pending revision. Callers reporting what is still pending
+            want True; a raw inventory of what the XML contains wants False.
     """
     tag_set = frozenset(tags)
+    change_records = frozenset(CHANGE_RECORD_TAGS) if skip_change_records else frozenset()
 
     def walk(node) -> Iterator[Element]:
         for child in node.childNodes:
@@ -669,6 +700,8 @@ def iter_revision_elements(root, tags: Iterable[str]) -> Iterator[Element]:
                 continue
             if child.tagName in tag_set:
                 yield child
+            if child.tagName in change_records:
+                continue
             yield from walk(child)
 
     yield from walk(root)
@@ -679,7 +712,10 @@ class RevisionCensus:
     """Counts of revision-bearing elements in one XML part, by tag.
 
     Produced by :func:`count_revision_elements`. Purely descriptive — it says
-    what a document contains, not what any operation did with it.
+    what a document contains, not what any operation did with it. A raw
+    inventory, so unlike the pending-revision count on
+    :class:`ResolveResult` it *does* include marks recorded inside a change
+    record (a ``w:cellIns`` in a ``w:tcPrChange``'s historical ``w:tcPr``).
 
     Attributes:
         by_tag: tag name -> number of elements, for every tag in
@@ -806,6 +842,22 @@ class ResolveResult(int):
     # would fall through to __repr__ and print "ResolveResult(2)" where every
     # existing caller expects "2".
     __str__ = int.__repr__
+
+
+def _parse_w_date(elem) -> datetime | None:
+    """Parse an element's ``w:date``, or None when absent or unparseable.
+
+    Word writes UTC as a trailing ``Z``, which ``fromisoformat`` only accepts
+    from 3.11; the replacement keeps the 3.10 floor working. A nonconforming
+    producer's unparseable stamp reads as None rather than failing the listing.
+    """
+    date_str = elem.getAttribute("w:date")
+    if not date_str:
+        return None
+    try:
+        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _ancestor_paragraph(elem) -> Element | None:
@@ -3772,12 +3824,7 @@ class RevisionManager:
             return None
 
         author = elem.getAttribute("w:author") or "Unknown"
-        date_str = elem.getAttribute("w:date")
-
-        try:
-            date = datetime.fromisoformat(date_str.replace("Z", "+00:00")) if date_str else None
-        except ValueError:
-            date = None
+        date = _parse_w_date(elem)
 
         # Extract text content
         if rev_type == "insertion":
@@ -4121,13 +4168,18 @@ class RevisionManager:
                 return count
 
     def _unhandled_elements(self, author: str | None = None) -> list[Element]:
-        """Live elements whose tag is in ``UNHANDLED_REVISION_TAGS``, document order.
+        """Pending elements whose tag is in ``UNHANDLED_REVISION_TAGS``, document order.
+
+        Pending, not merely present: the recorded subtree of a change record is
+        skipped (``skip_change_records``), so a ``w:cellIns`` inside a
+        ``w:tcPrChange``'s historical ``w:tcPr`` is not counted as a second
+        revision alongside the change itself.
 
         Author filtering follows ``list_revisions``: a missing ``w:author``
-        reads as ``"Unknown"``, so an unattributed mark is included in an
-        unfiltered scan and excluded from every filtered one.
+        reads as ``"Unknown"``, so an unattributed mark is matched only by
+        ``author="Unknown"`` and excluded from every other filtered scan.
         """
-        elems = list(iter_revision_elements(self.editor.dom, UNHANDLED_REVISION_TAGS))
+        elems = list(iter_revision_elements(self.editor.dom, UNHANDLED_REVISION_TAGS, skip_change_records=True))
         if author is None:
             return elems
         return [e for e in elems if (e.getAttribute("w:author") or "Unknown") == author]
@@ -4147,7 +4199,8 @@ class RevisionManager:
 
         Args:
             author: If provided, filter by author name. Marks with no
-                ``w:author`` read as ``"Unknown"``.
+                ``w:author`` read as ``"Unknown"``, so they match only
+                ``author="Unknown"``.
 
         Returns:
             List of UnhandledRevision in document order — see
@@ -4161,18 +4214,13 @@ class RevisionManager:
                 elem_id = int(raw_id) if raw_id else None
             except ValueError:
                 elem_id = None
-            date_str = elem.getAttribute("w:date")
-            try:
-                date = datetime.fromisoformat(date_str.replace("Z", "+00:00")) if date_str else None
-            except ValueError:
-                date = None
             paragraph = _ancestor_paragraph(elem)
             rows.append(
                 UnhandledRevision(
                     tag=elem.tagName,
                     id=elem_id,
                     author=elem.getAttribute("w:author") or "Unknown",
-                    date=date,
+                    date=_parse_w_date(elem),
                     paragraph_ref=ctx.paragraph_ref(paragraph) if paragraph is not None else None,
                 )
             )
@@ -4231,7 +4279,8 @@ class RevisionManager:
         paragraph mark (``w:pPr/w:rPr/w:del``) should merge the paragraph with
         its successor, and ``w:trPr`` row markers should add or drop the table
         row — today only the marker is removed. Also ISSUES.md #68; a document's
-        exposure is visible via ``count_revision_elements`` (``ins_del_contexts``).
+        exposure is visible via
+        ``docx_editor.track_changes.count_revision_elements`` (``ins_del_contexts``).
 
         Args:
             author: If provided, only accept revisions by this author

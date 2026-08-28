@@ -918,7 +918,9 @@ number of revisions rejected, carrying `.unhandled` and `.unhandled_types`.
 **Example:**
 
 ```python
-count = doc.reject_all(author="OtherUser")
+result = doc.reject_all(author="OtherUser")
+if result.unhandled:
+    print(f"Still pending: {result.unhandled_types}")
 ```
 
 #### `list_unhandled_revisions(author=None)`
@@ -945,8 +947,9 @@ Only `word/document.xml` is inspected (ISSUES.md #30).
 **Parameters:**
 
 - `author` (str, optional): If provided, filter by author name. Marks with no
-  `w:author` attribute read as `"Unknown"`, so they are excluded from every
-  filtered call and included in an unfiltered one.
+  `w:author` attribute read as `"Unknown"`, so they match only
+  `author="Unknown"`, are excluded from every other filtered call, and are
+  included in an unfiltered one.
 
 **Returns:** List of `UnhandledRevision` in document order
 
@@ -1188,8 +1191,9 @@ The result of `accept_all()` / `reject_all()`: the number of revisions resolved,
 plus what could not be.
 
 Subclasses `int`, and the int value *is* the resolved count — so
-`count = doc.accept_all()` keeps working unchanged in comparisons, arithmetic,
-f-strings and `json.dumps`.
+`count = doc.accept_all()` keeps working in comparisons, arithmetic, f-strings
+and `json.dumps`. `isinstance(result, int)` is True; the concrete type is
+`ResolveResult`, so an exact-type check (`type(result) is int`) is not.
 
 ```python
 from docx_editor import ResolveResult
@@ -1200,13 +1204,17 @@ from docx_editor import ResolveResult
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | *(the int value)* | int | Number of `w:ins`/`w:del` revisions resolved |
-| `unhandled` | int | How many revision elements this library never resolves are still in the document. `0` on an ordinary insertions-and-deletions redline. |
+| `unhandled` | int | How many revision elements this library never resolves are still in the document. On an `author=`-filtered call this counts only that author's marks, matching the scope of the claim being made. `0` on an ordinary insertions-and-deletions redline. |
 | `unhandled_types` | dict[str, int] | Tag → count for those elements, e.g. `{"w:rPrChange": 3, "w:moveTo": 1}`. Empty when `unhandled` is 0. |
 
 Both are counted **after** resolution, which is the honest measure of the claim
 being made ("everything is resolved"): a foreign mark inside a rejected
 insertion's subtree is removed with it, so it correctly does not appear. It is
 not a census of what the document held on entry.
+
+They count what is still *pending*, so a mark recorded inside a change record —
+a `w:cellIns` in a `w:tcPrChange`'s historical `w:tcPr` — is not counted a
+second time alongside the change itself.
 
 ### Example
 

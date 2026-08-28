@@ -1,4 +1,4 @@
-"""Custom exceptions for docx_editor library."""
+"""Custom exceptions and warnings for docx_editor library."""
 
 from pathlib import Path
 

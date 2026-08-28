@@ -137,6 +137,20 @@ FOREIGN_INSIDE_INSERTION = _document(
     "</w:p>"
 )
 
+# A cell marker recorded *inside* a w:tcPrChange's historical w:tcPr. The
+# recorded type is CT_TcPrInner, which — alone among the recorded property
+# types — still allows w:cellIns/w:cellDel/w:cellMerge. It describes state that
+# is already gone, so it must not be counted as a second pending revision.
+MARK_INSIDE_CHANGE_RECORD = _document(
+    "<w:tbl>"
+    '<w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>'
+    "<w:tr><w:tc><w:tcPr>"
+    f'<w:tcPrChange w:id="80" {_ANN}><w:tcPr><w:cellIns w:id="81" {_ANN}/></w:tcPr></w:tcPrChange>'
+    "</w:tcPr><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr>"
+    "</w:tbl>"
+    "<w:p><w:r><w:t>After the table</w:t></w:r></w:p>"
+)
+
 # w:ins/w:del as *structural* markers: a deleted paragraph mark and a pair of
 # table-row markers. These are handled tags, so they never enter .unhandled —
 # the census's ins_del_contexts is what makes them visible (ISSUES.md #68).
@@ -164,6 +178,7 @@ ALL_FIXTURES = {
     "mixed": MIXED,
     "structural_ins_del": STRUCTURAL_INS_DEL,
     "foreign_inside_insertion": FOREIGN_INSIDE_INSERTION,
+    "mark_inside_change_record": MARK_INSIDE_CHANGE_RECORD,
 }
 
 
@@ -463,6 +478,31 @@ class TestListUnhandledRevisions:
                 ann = doc.accept_all(author="Ann")
         assert bob.unhandled_types == {"w:cellMerge": 1}
         assert ann.unhandled == 6  # everything Ann authored; tblGridChange has no author
+
+    def test_mark_recorded_inside_a_change_record_is_not_a_second_revision(self, make_docx):
+        """One w:tcPrChange is one pending revision, not two.
+
+        Its recorded w:tcPr is CT_TcPrInner, so it may legally hold a
+        w:cellIns. That marker describes the cell's *previous* state, so
+        counting it would overstate the number the honesty floor asks callers
+        to trust before reporting a document as fully adjudicated.
+        """
+        path = make_docx(MARK_INSIDE_CHANGE_RECORD, "change_record")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UnhandledRevisionWarning)
+            with _open(path) as doc:
+                result = doc.accept_all()
+                rows = doc.list_unhandled_revisions()
+
+        assert result.unhandled_types == {"w:tcPrChange": 1}
+        assert [r.tag for r in rows] == ["w:tcPrChange"]
+
+    def test_census_still_counts_marks_inside_change_records(self):
+        """The census is a raw inventory, so it deliberately differs."""
+        import defusedxml.minidom
+
+        census = count_revision_elements(defusedxml.minidom.parseString(MARK_INSIDE_CHANGE_RECORD))
+        assert census.by_tag == {"w:tcPrChange": 1, "w:cellIns": 1}
 
     def test_clean_document_has_no_unhandled_rows(self, temp_docx):
         with _open(temp_docx) as doc:
