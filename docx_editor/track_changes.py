@@ -23,7 +23,7 @@ from .exceptions import (
     TextNotFoundError,
 )
 from .xml_editor import (
-    TEXTBOX_CONTENT,
+    _TEXTBOX_CONTENT,
     DocxXMLEditor,
     ParagraphRef,
     TextMap,
@@ -526,8 +526,12 @@ class Revision:
       containing paragraph, or None when the revision sits in no *addressable*
       paragraph — outside any ``<w:p>`` (e.g. ``<w:trPr>`` row markers), or
       inside a drawing's text box, whose paragraphs are excluded from the ref
-      index space (see ``body_paragraphs``). The revision is still listed and
-      still accepts/rejects by id; only its location is unavailable.
+      index space (see ``body_paragraphs``). Such a revision is still listed,
+      and ``accept_all``/``reject_all`` still resolve it — but Word writes
+      every box twice, so it is listed once per copy and a single
+      ``accept_revision``/``accept_group`` resolves only the copy it lands
+      on, leaving the twins out of step. Resolve box revisions with the
+      whole-document forms.
     - ``occurrence``: 0-based occurrence index of ``text`` within the
       containing paragraph, counted in the view where the revision's text
       lives — the accepted (visible) view for insertions, the original
@@ -541,7 +545,11 @@ class Revision:
     - ``nested_under``: id of the nearest enclosing revision (e.g. a foreign
       deletion inside another author's pending insertion), else None.
     - ``contains_ids``: ids of revisions nested inside this one, in document
-      order.
+      order. Both nesting fields report *structural* containment and so,
+      unlike ``text``, still cross into a text box: a host insertion
+      wrapping a run that carries a box lists the box's own revisions here,
+      and they name it in ``nested_under``. Accepting the host does not
+      resolve them — accepting an insertion unwraps only that element.
     - ``group_id``: id of the revision group this revision belongs to (all
       revisions from one logical edit share it — see
       ``Document.accept_group``). Edits made through the open Document
@@ -688,7 +696,7 @@ def _insertion_text_nodes(elem) -> list:
         for child in node.childNodes:
             if child.nodeType != child.ELEMENT_NODE:
                 continue
-            if child.tagName == TEXTBOX_CONTENT:
+            if child.tagName == _TEXTBOX_CONTENT:
                 continue
             if child.tagName in ("w:t", "w:delText"):
                 nodes.append(child)
@@ -1433,15 +1441,13 @@ class RevisionManager:
         else:
             raise ValueError(f"Unknown action: {op.action}")
 
-    def _apply_single_edit(self, op: EditOperation, paragraphs: list[Element] | None = None) -> int:
+    def _apply_single_edit(self, op: EditOperation, paragraphs: list[Element]) -> int:
         """Apply a single edit operation. Paragraph hash was already validated.
 
-        ``paragraphs`` is the batch's shared <w:p> snapshot (see batch_edit);
-        None fetches fresh.
+        ``paragraphs`` is the batch's shared body-paragraph snapshot (see
+        batch_edit).
         """
         ref = ParagraphRef.parse(op.paragraph)
-        if paragraphs is None:
-            paragraphs = body_paragraphs(self.editor.dom)
         p = paragraphs[ref.index - 1]
 
         target = self._resolve_action_target(op)
@@ -3520,7 +3526,11 @@ class RevisionManager:
         names are not escaped and tabs/breaks are not rendered. Text inside a
         drawing's text box does not appear at all — box content is excluded
         from every text view and from paragraph enumeration (same as
-        get_text()); see :func:`~docx_editor.xml_editor.body_paragraphs`.
+        get_visible_text()); see
+        :func:`~docx_editor.xml_editor.body_paragraphs`. A revision whose only
+        content is unrendered therefore shows as an empty pair of brackets
+        (``[ins#11:R][/ins]`` for an insertion carrying nothing but a box) —
+        the marker says a revision is there, not that it inserted nothing.
         """
 
         def render(node) -> str:
@@ -3535,7 +3545,7 @@ class RevisionManager:
                     parts.append(f"[{kind}#{rev_id}:{rev_author}]{render(child)}[/{kind}]")
                 elif child.tagName in ("w:t", "w:delText"):
                     parts.append(get_text_node_data(child))
-                elif child.tagName == TEXTBOX_CONTENT:
+                elif child.tagName == _TEXTBOX_CONTENT:
                     continue  # box content belongs to the box, not this paragraph
                 else:
                     parts.append(render(child))

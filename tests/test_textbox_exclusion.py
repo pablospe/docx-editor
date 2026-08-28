@@ -329,6 +329,24 @@ class TestRevisionsInsideABox:
         finally:
             doc.close()
 
+    def test_accept_revision_resolves_only_the_copy_it_lands_on(self, boxed_revision_docx):
+        """Pins the documented limitation: use accept_all for box revisions.
+
+        Word writes every box twice, so one logical insertion is two w:ins
+        elements. Resolving one by id leaves the other pending — the twins go
+        out of step, which is the same desynchronization that makes box
+        paragraphs unaddressable in the first place.
+        """
+        doc = Document.open(boxed_revision_docx)
+        try:
+            assert doc.accept_revision(90) is True
+            assert [r.id for r in doc.list_revisions()] == [91]
+            doc.save()
+        finally:
+            doc.close()
+
+        assert saved_document_xml(boxed_revision_docx).count("<w:ins ") == 1
+
     def test_accept_all_still_resolves_it(self, boxed_revision_docx):
         doc = Document.open(boxed_revision_docx)
         try:
@@ -376,6 +394,81 @@ class TestHostRevisionsIgnoreBoxText:
             assert revision.text == "gone too"
         finally:
             doc.close()
+
+
+class TestTableIndexSpace:
+    """Tables inside a box share the paragraphs' fate: they are not counted.
+
+    Otherwise the paragraph index space would close while the table index
+    space stayed open, and ``TableCell.index`` would name tables no ref can
+    reach (ISSUES.md #65).
+    """
+
+    @pytest.fixture
+    def boxed_table_docx(self, simple_docx, temp_dir) -> Path:
+        """A body table preceded by a table living inside a text box."""
+        boxed_table = "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>BOXCELL</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+        body = (
+            f"<w:p><w:r><w:t>Host</w:t>{word_box(boxed_table)}</w:r></w:p>"
+            "<w:tbl><w:tr><w:tc>"
+            "<w:p><w:r><w:t>Real cell</w:t></w:r></w:p>"
+            "</w:tc></w:tr></w:tbl>"
+        )
+        return make_docx(simple_docx, temp_dir / "boxed_table.docx", body)
+
+    def test_the_only_addressable_table_is_index_one(self, boxed_table_docx):
+        doc = Document.open(boxed_table_docx)
+        try:
+            assert doc.paragraph_count() == 2
+            location = doc.get_paragraph_location(doc.list_paragraphs()[1].split("|")[0])
+            assert location.table is not None
+            assert location.table.index == 1
+        finally:
+            doc.close()
+
+    def test_batch_and_per_call_index_agree(self, boxed_table_docx):
+        """list_paragraph_locations() precomputes the map; the per-ref path
+        rescans. Both must skip the boxed table or they disagree."""
+        doc = Document.open(boxed_table_docx)
+        try:
+            batch = [loc for _, loc in doc.list_paragraph_locations()]
+            per_call = [doc.get_paragraph_location(doc.get_paragraph(i).ref) for i in (1, 2)]
+            assert [loc.table for loc in batch] == [loc.table for loc in per_call]
+        finally:
+            doc.close()
+
+
+class TestHasTextboxContent:
+    """The one signal that an all-text-box document is not simply empty."""
+
+    def test_true_when_a_box_is_present(self, box_doc):
+        assert box_doc.has_textbox_content is True
+
+    def test_false_for_a_plain_document(self, simple_docx, temp_dir):
+        docx = make_docx(simple_docx, temp_dir / "plain.docx", "<w:p><w:r><w:t>Plain</w:t></w:r></w:p>")
+        doc = Document.open(docx)
+        try:
+            assert doc.has_textbox_content is False
+        finally:
+            doc.close()
+
+    def test_distinguishes_an_all_box_document_from_an_empty_one(self, simple_docx, temp_dir):
+        """Both read as empty text; only the flag tells them apart."""
+        boxed = make_docx(
+            simple_docx,
+            temp_dir / "poster.docx",
+            f"<w:p><w:r>{word_box('<w:p><w:r><w:t>ACME REPORT</w:t></w:r></w:p>')}</w:r></w:p>",
+        )
+        empty = make_docx(simple_docx, temp_dir / "empty.docx", "<w:p/>")
+        poster = Document.open(boxed)
+        blank = Document.open(empty)
+        try:
+            assert poster.get_visible_text() == blank.get_visible_text() == ""
+            assert poster.has_textbox_content is True
+            assert blank.has_textbox_content is False
+        finally:
+            poster.close()
+            blank.close()
 
 
 class TestBoxPlacementVariants:

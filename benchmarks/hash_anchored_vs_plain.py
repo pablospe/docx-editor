@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from docx_editor import Document, HashMismatchError
-from docx_editor.xml_editor import build_text_map
+from docx_editor.xml_editor import body_paragraphs, build_text_map
 
 TEST_DATA = Path(__file__).parent.parent / "tests" / "test_data" / "simple.docx"
 
@@ -171,8 +171,9 @@ def benchmark_accuracy():
     n_paras = len(paragraphs)
     print(f"  Paragraphs: {n_paras}")
 
-    # Count 'committee' occurrences per paragraph
-    all_paras = doc._document_editor.dom.getElementsByTagName("w:p")
+    # Count 'committee' occurrences per paragraph. Body paragraphs only, so
+    # this list stays index-aligned with list_paragraphs() above.
+    all_paras = body_paragraphs(doc._document_editor.dom)
     committee_per_para = []
     for p in all_paras:
         tm = build_text_map(p)

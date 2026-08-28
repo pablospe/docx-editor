@@ -402,15 +402,14 @@ class Document:
         self._ensure_open()
         return self._revision_manager.count_matches(text)
 
-    def _compute_new_ref(self, old_ref: str, paragraphs: list[Element] | None = None) -> str:
+    def _compute_new_ref(self, old_ref: str, paragraphs: list[Element]) -> str:
         """Compute a fresh paragraph reference after mutation.
 
-        ``paragraphs`` is an optional pre-fetched <w:p> list so batch callers
-        pay for one full-DOM walk per batch; None fetches fresh.
+        ``paragraphs`` is the caller's body-paragraph snapshot (see
+        :func:`~docx_editor.xml_editor.body_paragraphs`), so a batch pays for
+        one full-DOM walk rather than one per result.
         """
         ref = ParagraphRef.parse(old_ref)
-        if paragraphs is None:
-            paragraphs = body_paragraphs(self._document_editor.dom)
         p = paragraphs[ref.index - 1]
         new_hash = compute_paragraph_hash(p)
         return f"P{ref.index}#{new_hash}"
@@ -498,11 +497,34 @@ class Document:
         Cheap bounds check for pagination — avoids building the full
         :meth:`list_paragraphs` result just to learn the count.
 
+        Paragraphs inside a drawing's text box are not counted — text boxes
+        are excluded from the ref index space entirely, so no ref addresses
+        one (see :func:`~docx_editor.xml_editor.body_paragraphs`).
+
         Returns:
             Total number of paragraphs (the highest valid 1-based ref index).
         """
         self._ensure_open()
         return len(body_paragraphs(self._document_editor.dom))
+
+    @property
+    def has_textbox_content(self) -> bool:
+        """Whether the document holds any text-box content this API excludes.
+
+        Text boxes are not an editing surface: their paragraphs are absent
+        from every listing, their text from every view, search and hash (see
+        :func:`~docx_editor.xml_editor.body_paragraphs`). That makes an
+        all-text-box document — a poster, a flyer, a certificate — read as
+        empty, which is indistinguishable from a genuinely empty document
+        without this flag.
+
+        True means some text the file carries is deliberately not reachable
+        from here; extract it with LibreOffice
+        (``soffice --headless --convert-to txt:Text file.docx``) rather than
+        reporting the document as empty.
+        """
+        self._ensure_open()
+        return bool(self._document_editor.dom.getElementsByTagName("w:txbxContent"))
 
     def list_paragraphs(
         self, max_chars: int = 80, *, start: int = 1, limit: int | None = _DEFAULT_LIST_LIMIT
@@ -979,7 +1001,11 @@ class Document:
         """Get the visible text of the document.
 
         Returns flattened text with paragraphs separated by newlines.
-        Inserted text is included, deleted text is excluded.
+        Inserted text is included, deleted text is excluded. Text inside a
+        drawing's text box is excluded too — it belongs to the box, not to
+        any addressable paragraph. A document whose content lives entirely in
+        text boxes therefore returns ``""``; :attr:`has_textbox_content`
+        tells the two cases apart.
 
         Returns:
             The visible text content
@@ -1001,6 +1027,8 @@ class Document:
 
         For intra-paragraph revisions this equals what get_visible_text()
         would return after reject_all(), without modifying the document.
+        Text inside a drawing's text box is excluded, exactly as in
+        get_visible_text().
         Read-only: paragraph references, hashes, and all editing operations
         keep working on the accepted (visible) view.
 

@@ -107,6 +107,11 @@ def _require_valid_occurrence(occurrence: int | None, label: str = "", allow_non
 # paragraph split, not a rejected literal.
 _REJECTED_CONTROL_CHARS = frozenset(chr(c) for c in range(0x20) if c != 0x0A) | {"\x7f"}
 
+# The wrapper Word puts around a text box's own paragraphs, inside a drawing.
+# Everything under it is outside the document's addressable surface — see
+# :func:`body_paragraphs`.
+_TEXTBOX_CONTENT = "w:txbxContent"
+
 
 def _reject_control_chars(value: str, *, field: str, ctx: str = "", allow_newline: bool = False) -> None:
     """Reject control characters that would corrupt the document text.
@@ -480,24 +485,37 @@ def _logical_col_in_row(tr, target_tc) -> int:
     raise ValueError("target_tc not found in tr")  # pragma: no cover
 
 
+def _body_tables(dom) -> list:
+    """The document's addressable ``<w:tbl>`` elements, in depth-first order.
+
+    Excludes tables inside a drawing's ``w:txbxContent`` for the same reason
+    :func:`body_paragraphs` excludes its paragraphs: no ref reaches them, so
+    counting them would make ``TableCell.index`` name tables no caller can
+    address and leave gaps in the sequence a listing walks through.
+    """
+    return [tbl for tbl in dom.getElementsByTagName("w:tbl") if not _is_inside_element(tbl, _TEXTBOX_CONTENT)]
+
+
 def _doc_wide_table_index(dom, target_tbl) -> int:
-    """1-based depth-first index of ``target_tbl`` among all ``<w:tbl>``."""
-    for i, tbl in enumerate(dom.getElementsByTagName("w:tbl"), start=1):
+    """1-based depth-first index of ``target_tbl`` among the body's ``<w:tbl>``."""
+    for i, tbl in enumerate(_body_tables(dom), start=1):
         if tbl is target_tbl:
             return i
     raise ValueError("target_tbl not found in document")  # pragma: no cover
 
 
 def _build_table_index(dom) -> dict:
-    """Map every ``<w:tbl>`` element to its 1-based depth-first index.
+    """Map every body ``<w:tbl>`` element to its 1-based depth-first index.
 
     One ``getElementsByTagName("w:tbl")`` walk produces the same indices
     ``_doc_wide_table_index`` would return per call, so callers processing
-    many paragraphs avoid rescanning the whole document for each one.
+    many paragraphs avoid rescanning the whole document for each one. Both go
+    through :func:`_body_tables`, so the batch map and the per-call fallback
+    at :func:`_compute_paragraph_location` cannot disagree.
 
     minidom Elements are identity-hashable, so the node itself is the key.
     """
-    return {tbl: i for i, tbl in enumerate(dom.getElementsByTagName("w:tbl"), start=1)}
+    return {tbl: i for i, tbl in enumerate(_body_tables(dom), start=1)}
 
 
 def _table_depth(tbl) -> int:
@@ -822,10 +840,6 @@ def _compute_paragraph_location(
     )
 
 
-# The wrapper Word puts around a text box's own paragraphs, inside a drawing.
-TEXTBOX_CONTENT = "w:txbxContent"
-
-
 def _is_inside_element(node, tag_name: str) -> bool:
     """Check if a node is inside an element with the given tag."""
     parent = node.parentNode
@@ -839,14 +853,17 @@ def _is_inside_element(node, tag_name: str) -> bool:
 def _inside_textbox(node, stop_at) -> bool:
     """True if ``node`` sits inside a ``w:txbxContent`` *below* ``stop_at``.
 
-    Bounded on purpose: the walk stops at ``stop_at`` (exclusive), so mapping a
-    text box's own paragraph directly still sees its text — an unbounded check
-    would report True for every ``w:t`` of such a paragraph and empty its map,
-    which ``list_revisions`` still needs for revisions living inside a box.
+    Bounded on purpose: the walk stops at ``stop_at`` (exclusive), so a node
+    is only "in a box" relative to the element being examined. That is what
+    lets ``_parse_revision`` bound its walk by the revision element — a
+    ``w:del`` living *inside* a box still reports its own text, while a host
+    ``w:del`` wrapping a run that carries a box does not report the box's.
+    Mapping a box's own paragraph directly likewise still yields its text; an
+    unbounded check would empty that map.
     """
     parent = node.parentNode
     while parent is not None and parent is not stop_at:
-        if parent.nodeType == parent.ELEMENT_NODE and parent.tagName == TEXTBOX_CONTENT:
+        if parent.nodeType == parent.ELEMENT_NODE and parent.tagName == _TEXTBOX_CONTENT:
             return True
         parent = parent.parentNode
     return False
@@ -867,7 +884,7 @@ def body_paragraphs(dom) -> list[Element]:
     monkeypatches that method, and the constant-full-DOM-walk guarantees
     (ISSUES.md #51/#56/#57) are only observable through it.
     """
-    return [p for p in dom.getElementsByTagName("w:p") if not _is_inside_element(p, TEXTBOX_CONTENT)]
+    return [p for p in dom.getElementsByTagName("w:p") if not _is_inside_element(p, _TEXTBOX_CONTENT)]
 
 
 def get_text_node_data(elem) -> str:
@@ -960,7 +977,10 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
     Both views exclude text-box content: a ``w:t`` under a descendant
     ``w:txbxContent`` belongs to the box, not to the host paragraph (see
     :func:`body_paragraphs`). The exclusion is bounded by ``paragraph``, so
-    mapping a box's own paragraph directly still yields that paragraph's text.
+    mapping a box's own paragraph directly still yields that paragraph's text
+    — no production path does (every caller maps a :func:`body_paragraphs`
+    element), but the bound keeps the helper's meaning local rather than
+    global.
 
     Records the source node and offset for each character position.
     """
@@ -1002,7 +1022,7 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
                 continue
             if child.tagName in ("w:ins", "w:moveTo"):
                 continue
-            if child.tagName == TEXTBOX_CONTENT:
+            if child.tagName == _TEXTBOX_CONTENT:
                 continue
             if child.tagName in ("w:t", "w:delText"):
                 node_text = get_text_node_data(child)

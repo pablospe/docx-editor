@@ -125,7 +125,7 @@ print(doc.workspace_path)  # Path("/home/you/.cache/docx-editor/0bebafb463a87cfa
 
 Return the total number of paragraphs in the document. A cheap bounds check for pagination — avoids building the full `list_paragraphs()` result just to learn the count.
 
-Paragraphs inside a drawing's text box (`w:txbxContent`) are not counted — text boxes are excluded from the ref index space entirely, so no ref ever addresses one.
+Paragraphs inside a drawing's text box (`w:txbxContent`) are not counted — text boxes are excluded from the ref index space entirely, so no ref ever addresses one. A document whose content lives only in text boxes therefore counts 1 (or 0); check [`has_textbox_content`](#has_textbox_content) before reporting it as empty.
 
 **Returns:** Total number of paragraphs (the highest valid 1-based ref index).
 
@@ -135,9 +135,24 @@ Paragraphs inside a drawing's text box (`w:txbxContent`) are not counted — tex
 count = doc.paragraph_count()
 ```
 
+#### `has_textbox_content`
+
+Property. Whether the document holds any text-box content (`w:txbxContent`) that this API excludes.
+
+Text boxes are not an editing surface: their paragraphs are absent from every listing, their text from every view, search and hash. That makes an all-text-box document — a poster, a flyer, a certificate — read as empty, which is indistinguishable from a genuinely empty document without this flag. `True` means some text the file carries is deliberately not reachable from here; extract it with LibreOffice (`soffice --headless --convert-to txt:Text file.docx`) rather than reporting the document as empty.
+
+**Returns:** `True` if any text box is present (bool)
+
+**Example:**
+
+```python
+if not doc.get_visible_text() and doc.has_textbox_content:
+    print("Text lives in text boxes — not editable through refs")
+```
+
 #### `list_paragraphs(max_chars=80, *, start=1, limit=200)`
 
-List paragraphs with hash-anchored references. Refs are **1-based global** indexes (`P1`, `P2`, …) and stay correct across pages — a slice starting at paragraph 51 emits `P51#…`, not `P1#…`.
+List paragraphs with hash-anchored references. Refs are **1-based global** indexes (`P1`, `P2`, …) and stay correct across pages — a slice starting at paragraph 51 emits `P51#…`, not `P1#…`. Text-box content is excluded, as it is from [`paragraph_count()`](#paragraph_count).
 
 **Changed in 0.6.1:** a bare call now returns at most 200 paragraphs (previously all of them). Whenever paragraphs remain beyond the returned window — default or explicit `limit` — the last list entry is a **truncation notice** instead of a paragraph, e.g. `"... 50 more paragraphs; use start=201 or limit=None"`. Notice lines always start with `...` and never match the `P{index}#{hash}` ref shape; filter them with `entry.startswith("...")` when consuming entries as refs. Pass `limit=None` for the full, notice-free listing.
 
@@ -234,7 +249,7 @@ print(f"section {loc.section}")
 
 #### `list_paragraph_locations()`
 
-Batch counterpart to `get_paragraph_location()`: pair every paragraph with its structural location in one pass, precomputing table indexes, style outline levels, style numbering, heading paths, and section indexes once instead of rescanning the document per ref.
+Batch counterpart to `get_paragraph_location()`: pair every paragraph with its structural location in one pass, precomputing table indexes, style outline levels, style numbering, heading paths, and section indexes once instead of rescanning the document per ref. Text-box content is excluded, as it is from [`paragraph_count()`](#paragraph_count).
 
 **Returns:** List of `(ref, ParagraphLocation)` tuples in document order, where `ref` is the same `P{index}#{hash}` token emitted by `list_paragraphs()`. Each location carries the same table, list, style, outline-level, heading-path, and section info as `get_paragraph_location()`.
 
@@ -277,7 +292,7 @@ text = doc.get_original_text()
 
 #### `find_text(text, occurrence=0, paragraph=None)`
 
-Find text in the document, including text spanning XML element boundaries.
+Find text in the document, including text spanning XML element boundaries. Text-box content is excluded, as it is from [`paragraph_count()`](#paragraph_count).
 
 **Parameters:**
 
@@ -304,7 +319,7 @@ if match:
 
 Find every match of `text`, in document order. One call replaces the N+1
 `find_text` probes needed to enumerate N hits, and each result carries exactly
-what a follow-up edit needs.
+what a follow-up edit needs. Text-box content is excluded, as it is from [`paragraph_count()`](#paragraph_count).
 
 **Parameters:**
 
@@ -336,7 +351,7 @@ themselves, e.g. `"aa"` in `"aaaa"`.)
 
 #### `count_matches(text)`
 
-Count visible text matches across the document.
+Count visible text matches across the document. Text-box content is excluded, as it is from [`paragraph_count()`](#paragraph_count).
 
 **Parameters:**
 
@@ -565,7 +580,7 @@ new_refs = doc.batch_rewrite([
 Add a comment anchored to specific text. Anchors are located with the same
 visible-text search used by `count_matches()` and the tracked-change edit
 methods, so anchors that span `w:t` run boundaries (formatting changes,
-smart-quote splits, `w:ins` wrappers) are found.
+smart-quote splits, `w:ins` wrappers) are found. Text-box content is excluded, as it is from [`paragraph_count()`](#paragraph_count).
 
 **Parameters:**
 
@@ -995,10 +1010,10 @@ from docx_editor import Revision
 | `author` | str | The revision author |
 | `date` | datetime or None | When the revision was made |
 | `text` | str | The inserted or deleted text |
-| `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits in no addressable paragraph — outside any `<w:p>` (e.g. a `<w:trPr>` row marker), or inside a drawing's text box (still listed, still accepts/rejects by id) |
+| `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits in no addressable paragraph — outside any `<w:p>` (e.g. a `<w:trPr>` row marker), or inside a drawing's text box — still listed, but Word writes every box twice, so it is listed once per copy and only `accept_all()`/`reject_all()` resolve both; a single `accept_revision()`/`accept_group()` leaves the twins out of step |
 | `occurrence` | int or None | 0-based occurrence index of `text` within the containing paragraph, counted in the view where the revision's text lives (the visible view for insertions, the original pre-revision view for deletions). For insertions it plugs directly into the `occurrence=` parameter of the anchor APIs; None whenever targeting-by-text does not apply (empty text, a host insertion partly consumed by a nested deletion, a nested deletion, or a None `paragraph_ref`) |
 | `nested_under` | int or None | id of the nearest enclosing revision (e.g. a foreign deletion inside another author's pending insertion), else None |
-| `contains_ids` | tuple[int, ...] | ids of the revisions nested inside this one, in document order (empty tuple when none) |
+| `contains_ids` | tuple[int, ...] | ids of the revisions nested inside this one, in document order (empty tuple when none). Both nesting fields report *structural* containment and so, unlike `text`, still cross into a text box — accepting a host insertion does not resolve the box's own revisions |
 | `group_id` | int or None | Revision group this revision belongs to (see [`accept_group()`](#accept_groupgroup_id)): recorded for this session's edits, inferred by reconstruction for revisions already in the file; None only for ungroupable revisions (missing author/date, outside any paragraph, duplicated id, or a mid-session split half of a foreign insertion) |
 | `group_source` | str or None | Provenance of `group_id`: `"recorded"` (created through this open Document) or `"inferred"` (reconstructed at parse time from same-paragraph contiguity + identical author and date); None iff `group_id` is None |
 | `changeset_id` | int or None | Changeset (one whole call) this revision's group belongs to (see [`accept_changeset()`](#accept_changesetchangeset_id) / [`reject_changeset()`](#reject_changesetchangeset_id)) — the `(author, date)` class over groups; None iff `group_id` is None |
