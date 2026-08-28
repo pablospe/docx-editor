@@ -40,6 +40,7 @@ from .xml_editor import (
     _compute_heading_paths,
     _compute_paragraph_location,
     _compute_section_indexes,
+    body_paragraphs,
     build_text_map,
     compute_paragraph_hash,
 )
@@ -409,7 +410,7 @@ class Document:
         """
         ref = ParagraphRef.parse(old_ref)
         if paragraphs is None:
-            paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+            paragraphs = body_paragraphs(self._document_editor.dom)
         p = paragraphs[ref.index - 1]
         new_hash = compute_paragraph_hash(p)
         return f"P{ref.index}#{new_hash}"
@@ -425,7 +426,7 @@ class Document:
         revision_ids = self._revision_manager.group_revisions(group_id) if group_id is not None else ()
         changeset_id = self._revision_manager.changeset_id_of(group_id) if group_id is not None else None
         if paragraphs is None:
-            paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+            paragraphs = body_paragraphs(self._document_editor.dom)
         refs = self._resulting_refs(old_ref, group_id, paragraphs, element_index)
         return EditResult(
             refs[0],
@@ -501,7 +502,7 @@ class Document:
             Total number of paragraphs (the highest valid 1-based ref index).
         """
         self._ensure_open()
-        return len(self._document_editor.dom.getElementsByTagName("w:p"))
+        return len(body_paragraphs(self._document_editor.dom))
 
     def list_paragraphs(
         self, max_chars: int = 80, *, start: int = 1, limit: int | None = _DEFAULT_LIST_LIMIT
@@ -600,7 +601,7 @@ class Document:
                 raise ValueError(f"'limit' must be an integer or None, got {limit!r}")
             if limit < 0:
                 raise ValueError(f"limit must be >= 0, got {limit}")
-        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        paragraphs = body_paragraphs(self._document_editor.dom)
         begin = start - 1
         end = begin + limit if limit is not None else None
         return enumerate(paragraphs[begin:end], start=begin + 1)
@@ -700,7 +701,7 @@ class Document:
             print(info.ref, info.text)
         """
         self._ensure_open()
-        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        paragraphs = body_paragraphs(self._document_editor.dom)
         if index < 1 or index > len(paragraphs):
             raise ParagraphIndexError(index, len(paragraphs))
         style_outlines, _ = self._style_maps()
@@ -778,7 +779,7 @@ class Document:
                 paragraph content.
         """
         parsed = ParagraphRef.parse(ref)
-        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        paragraphs = body_paragraphs(self._document_editor.dom)
         if parsed.index < 1 or parsed.index > len(paragraphs):
             raise ParagraphIndexError(parsed.index, len(paragraphs))
         p = paragraphs[parsed.index - 1]
@@ -955,7 +956,7 @@ class Document:
         dom = self._document_editor.dom
         table_index = _build_table_index(dom)
         style_outlines, style_numbering = self._style_maps()
-        paragraphs = dom.getElementsByTagName("w:p")
+        paragraphs = body_paragraphs(dom)
         heading_paths = _compute_heading_paths(paragraphs, style_outlines)
         section_indexes = _compute_section_indexes(paragraphs)
         result = []
@@ -984,7 +985,7 @@ class Document:
             The visible text content
         """
         self._ensure_open()
-        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        paragraphs = body_paragraphs(self._document_editor.dom)
         parts = []
         for p in paragraphs:
             tm = build_text_map(p)
@@ -1007,7 +1008,7 @@ class Document:
             The original text content
         """
         self._ensure_open()
-        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        paragraphs = body_paragraphs(self._document_editor.dom)
         parts = []
         for p in paragraphs:
             tm = build_text_map(p, view="original")
@@ -1025,9 +1026,9 @@ class Document:
 
         A verification view for humans and agents (e.g. checking redlines
         without accepting them), not a parseable format: author names are
-        not escaped, tabs/breaks are not rendered, and text inside a
-        drawing's text box appears both inline in the host paragraph's line
-        and again as its own line (same as get_text()).
+        not escaped and tabs/breaks are not rendered. Text inside a
+        drawing's text box does not appear at all — box content is excluded
+        from every text view and from paragraph enumeration.
 
         Returns:
             The marked-up text content
@@ -1395,7 +1396,7 @@ class Document:
         mgr = self._revision_manager
         group_ids = [mgr.group_id_of(change_id) for change_id in change_ids]
         any_split = any(gid is not None and mgr.split_count(gid) for gid in group_ids)
-        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        paragraphs = body_paragraphs(self._document_editor.dom)
         element_index = mgr._revision_element_index() if any_split else None
         return [
             self._edit_result(op.paragraph, gid, paragraphs, element_index)
@@ -1478,7 +1479,7 @@ class Document:
         # identity so a shifted later rewrite never reports a stale index.
         mgr = self._revision_manager
         any_split = any(gid is not None and mgr.split_count(gid) for gid in group_ids)
-        paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
+        paragraphs = body_paragraphs(self._document_editor.dom)
         element_index = mgr._revision_element_index() if any_split else None
         return [
             self._edit_result(ref, group_id, paragraphs, element_index)
@@ -1637,9 +1638,12 @@ class Document:
             ``occurrence=`` parameter of replace()/delete()/add_comment();
             for deletions it counts in the original, pre-revision text and
             must not be passed to those APIs; None when the text is not
-            locatable, e.g. nested revisions), plus ``nested_under`` and
-            ``contains_ids`` describing revision nesting (e.g. a foreign
-            deletion inside another author's pending insertion), and
+            locatable, e.g. nested revisions, or when ``paragraph_ref`` is
+            itself None — a revision inside a drawing's text box lists and
+            accepts by id, but has no addressable location), plus
+            ``nested_under`` and ``contains_ids`` describing revision
+            nesting (e.g. a foreign deletion inside another author's
+            pending insertion), and
             ``group_id``/``group_source`` linking revisions from the same
             logical edit — recorded for this session's edits, inferred by
             parse-time reconstruction for revisions already in the file

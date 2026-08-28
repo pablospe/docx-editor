@@ -125,6 +125,8 @@ print(doc.workspace_path)  # Path("/home/you/.cache/docx-editor/0bebafb463a87cfa
 
 Return the total number of paragraphs in the document. A cheap bounds check for pagination — avoids building the full `list_paragraphs()` result just to learn the count.
 
+Paragraphs inside a drawing's text box (`w:txbxContent`) are not counted — text boxes are excluded from the ref index space entirely, so no ref ever addresses one.
+
 **Returns:** Total number of paragraphs (the highest valid 1-based ref index).
 
 **Example:**
@@ -251,7 +253,7 @@ for ref, loc in doc.list_paragraph_locations():
 
 #### `get_visible_text()`
 
-Get flattened visible document text. Inserted text is included and deleted text is excluded.
+Get flattened visible document text. Inserted text is included and deleted text is excluded. Text inside a drawing's text box is excluded too — it belongs to the box, not to any addressable paragraph.
 
 **Returns:** Visible text with paragraphs separated by newlines (str)
 
@@ -263,7 +265,7 @@ text = doc.get_visible_text()
 
 #### `get_original_text()`
 
-Get flattened original (pre-revision) document text. Deleted text is included and inserted text is excluded — the inverse of `get_visible_text()`. For intra-paragraph revisions this equals what `get_visible_text()` would return after `reject_all()`, without modifying the document (paragraph-level revisions such as inserted paragraph marks only affect line boundaries). Read-only: paragraph references and editing operations keep working on the visible view.
+Get flattened original (pre-revision) document text. Deleted text is included and inserted text is excluded — the inverse of `get_visible_text()`. For intra-paragraph revisions this equals what `get_visible_text()` would return after `reject_all()`, without modifying the document (paragraph-level revisions such as inserted paragraph marks only affect line boundaries). Text inside a drawing's text box is excluded, exactly as in `get_visible_text()`. Read-only: paragraph references and editing operations keep working on the visible view.
 
 **Returns:** Original text with paragraphs separated by newlines (str)
 
@@ -993,8 +995,8 @@ from docx_editor import Revision
 | `author` | str | The revision author |
 | `date` | datetime or None | When the revision was made |
 | `text` | str | The inserted or deleted text |
-| `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits outside any `<w:p>` (e.g. a `<w:trPr>` row marker) |
-| `occurrence` | int or None | 0-based occurrence index of `text` within the containing paragraph, counted in the view where the revision's text lives (the visible view for insertions, the original pre-revision view for deletions). For insertions it plugs directly into the `occurrence=` parameter of the anchor APIs; None whenever targeting-by-text does not apply (empty text, a host insertion partly consumed by a nested deletion, or a nested deletion) |
+| `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits in no addressable paragraph — outside any `<w:p>` (e.g. a `<w:trPr>` row marker), or inside a drawing's text box (still listed, still accepts/rejects by id) |
+| `occurrence` | int or None | 0-based occurrence index of `text` within the containing paragraph, counted in the view where the revision's text lives (the visible view for insertions, the original pre-revision view for deletions). For insertions it plugs directly into the `occurrence=` parameter of the anchor APIs; None whenever targeting-by-text does not apply (empty text, a host insertion partly consumed by a nested deletion, a nested deletion, or a None `paragraph_ref`) |
 | `nested_under` | int or None | id of the nearest enclosing revision (e.g. a foreign deletion inside another author's pending insertion), else None |
 | `contains_ids` | tuple[int, ...] | ids of the revisions nested inside this one, in document order (empty tuple when none) |
 | `group_id` | int or None | Revision group this revision belongs to (see [`accept_group()`](#accept_groupgroup_id)): recorded for this session's edits, inferred by reconstruction for revisions already in the file; None only for ungroupable revisions (missing author/date, outside any paragraph, duplicated id, or a mid-session split half of a foreign insertion) |

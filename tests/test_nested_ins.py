@@ -13,8 +13,9 @@ from pathlib import Path
 
 import pytest
 
+from docx_editor.exceptions import TextNotFoundError
 from docx_editor.track_changes import RevisionManager
-from docx_editor.xml_editor import DocxXMLEditor
+from docx_editor.xml_editor import DocxXMLEditor, build_text_map
 
 NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 
@@ -491,40 +492,56 @@ class TestOwnInsReplaceAnchoring:
         assert ins_elems[0].getAttribute("w:author") == "Test Author"
         assert ins_elems[0].getAttribute("w:date") == "2024-01-01T00:00:00Z"
 
-    def test_replace_ending_in_a_textbox_keeps_the_replacement(self, temp_xml):
-        """A match ending inside a run's drawing still gets its replacement.
+    def test_boxed_text_is_not_part_of_the_host_paragraph(self, temp_xml):
+        """The host paragraph's text runs straight past the drawing.
 
-        The replacement belongs to the boxed run — the match's last node is
-        in there. The run holding the box is matched too, and rebuilding it
-        re-serializes the drawing, so rebuilt outermost-first that copy is
-        stale and the boxed run's whole edit — replacement included — is
-        dropped with the detached subtree, leaving the match untouched.
+        Text-box content is excluded from every text map (ISSUES.md #65), so
+        the host reads "abcd" — the boxed "MID" is not between "ab" and "cd".
         """
         xml_path = temp_xml(f"<w:p>{OWN_INS}<w:r><w:t>ab</w:t>{_BOXED_MID}<w:t>cd</w:t></w:r></w:ins></w:p>")
         manager = _make_manager(xml_path)
 
-        manager.replace_text("bMI", "Z")
+        paragraph = manager.editor.dom.getElementsByTagName("w:p")[0]
+        assert build_text_map(paragraph).text == "abcd"
 
-        _assert_no_nested_ins(manager)
-        assert _get_text_content(manager) == "aZDcd"
-        assert len(manager.editor.dom.getElementsByTagName("w:drawing")) == 1
+    @pytest.mark.parametrize("target", ["bMI", "bMIDc", "MID"])
+    def test_a_match_through_the_box_no_longer_exists(self, temp_xml, target):
+        """Searches that used to cross into the drawing now find nothing.
 
-    def test_replace_spanning_a_textbox_deletes_the_boxed_text(self, temp_xml):
-        """A match crossing a drawing removes the boxed characters it covers.
+        These spans only ever existed because the boxed characters leaked into
+        the host's map; with the box excluded there is no such text to edit,
+        and the drawing is left untouched.
+        """
+        xml_path = temp_xml(f"<w:p>{OWN_INS}<w:r><w:t>ab</w:t>{_BOXED_MID}<w:t>cd</w:t></w:r></w:ins></w:p>")
+        manager = _make_manager(xml_path)
+        before = manager.editor.dom.getElementsByTagName("w:drawing")[0].toxml()
 
-        Here the match ends in the outer run, so the replacement was never
-        at risk — what the outermost-first rebuild lost was the *deletion*
-        inside the box, leaving "MID" behind next to the replacement.
+        with pytest.raises(TextNotFoundError):
+            manager.replace_text(target, "Z")
+
+        drawings = manager.editor.dom.getElementsByTagName("w:drawing")
+        assert len(drawings) == 1
+        assert drawings[0].toxml() == before
+
+    def test_replace_beside_the_box_carries_it_through(self, temp_xml):
+        """An edit in the host paragraph does not disturb the box's content.
+
+        Rebuilding the run re-serializes the drawing, so the rsid pass stamps
+        identifiers onto its elements; the boxed *text* still survives exactly
+        once and never leaks into the host paragraph.
         """
         xml_path = temp_xml(f"<w:p>{OWN_INS}<w:r><w:t>ab</w:t>{_BOXED_MID}<w:t>cd</w:t></w:r></w:ins></w:p>")
         manager = _make_manager(xml_path)
 
-        manager.replace_text("bMIDc", "Z")
+        manager.replace_text("bc", "Z")
 
         _assert_no_nested_ins(manager)
-        assert _get_text_content(manager) == "aZd"
-        # The box itself survives the rebuild, exactly once.
-        assert len(manager.editor.dom.getElementsByTagName("w:drawing")) == 1
+        paragraph = manager.editor.dom.getElementsByTagName("w:p")[0]
+        assert build_text_map(paragraph).text == "aZd"
+        drawings = manager.editor.dom.getElementsByTagName("w:drawing")
+        assert len(drawings) == 1
+        assert drawings[0].toxml().count("<w:t>MID</w:t>") == 1
+        assert paragraph.toxml().count("MID") == 1
 
     def test_consumed_own_ins_keeps_foreign_nested_del(self, temp_xml):
         """An emptied insertion still holding a foreign w:del survives.

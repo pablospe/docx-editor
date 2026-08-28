@@ -1,0 +1,449 @@
+"""Text-box content is excluded from the document's addressable surface.
+
+Word stores one text box twice — once under ``mc:Choice`` (``wps:txbx``) and
+once under ``mc:Fallback`` (``v:textbox``) — so before this exclusion a single
+box leaked its text four times: twice inline in the host paragraph's text map
+and twice more as paragraphs of its own. Those extra paragraphs were
+addressable, which made each copy independently editable and let one edit
+desynchronize the two twins.
+
+Text boxes are therefore not an editing surface at all: their paragraphs are
+absent from ``paragraph_count``/``list_paragraphs``/``find_all``, their text is
+absent from every text view and from paragraph hashes, and their content is
+carried through the save unchanged (ISSUES.md #65).
+"""
+
+import re
+import zipfile
+from pathlib import Path
+
+import pytest
+from conftest import replace_document_xml
+
+from docx_editor import Document, TextNotFoundError
+
+# Namespaces a Word-shaped text box needs. simple.docx declares all of these on
+# its own <w:document>; a swapped-in body has to redeclare them.
+BOX_NS = " ".join([
+    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"',
+    'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"',
+    'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"',
+    'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"',
+    'xmlns:v="urn:schemas-microsoft-com:vml"',
+])
+
+
+def word_box(inner: str = "<w:p><w:r><w:t>BOXED</w:t></w:r></w:p>", fallback_inner: str | None = None) -> str:
+    """A Word-shaped text box: the ``mc:Choice``/``mc:Fallback`` pair.
+
+    Both twins hold the same text, which is exactly why the box is not
+    addressable — an edit through a ref could only ever reach one of them.
+    ``fallback_inner`` overrides the fallback copy's content, for fixtures whose
+    twins must carry distinct ``w:id`` attributes.
+    """
+    return (
+        "<mc:AlternateContent>"
+        '<mc:Choice Requires="wps"><w:drawing><wp:anchor><wps:wsp><wps:txbx>'
+        f"<w:txbxContent>{inner}</w:txbxContent>"
+        "</wps:txbx></wps:wsp></wp:anchor></w:drawing></mc:Choice>"
+        "<mc:Fallback><w:pict><v:shape><v:textbox>"
+        f"<w:txbxContent>{fallback_inner if fallback_inner is not None else inner}</w:txbxContent>"
+        "</v:textbox></v:shape></w:pict></mc:Fallback>"
+        "</mc:AlternateContent>"
+    )
+
+
+def make_docx(simple_docx: Path, dest: Path, body: str) -> Path:
+    """simple.docx with its body replaced by ``body`` (a ``<w:body>`` fragment)."""
+    replace_document_xml(simple_docx, dest, f"<w:document {BOX_NS}><w:body>{body}</w:body></w:document>")
+    return dest
+
+
+HOST_BODY = (
+    f"<w:p><w:r><w:t>Host before </w:t>{word_box()}<w:t> host after</w:t></w:r></w:p>"
+    "<w:p><w:r><w:t>Second body paragraph</w:t></w:r></w:p>"
+)
+
+HOST_TEXT = "Host before  host after"
+
+
+@pytest.fixture
+def box_docx(simple_docx, temp_dir) -> Path:
+    """Two body paragraphs; the first anchors one Word-shaped text box."""
+    return make_docx(simple_docx, temp_dir / "textbox.docx", HOST_BODY)
+
+
+@pytest.fixture
+def box_doc(box_docx):
+    doc = Document.open(box_docx)
+    yield doc
+    doc.close()
+
+
+def saved_document_xml(path: Path) -> str:
+    return zipfile.ZipFile(path).read("word/document.xml").decode()
+
+
+def txbx_contents(xml: str) -> list[str]:
+    """Every ``w:txbxContent`` subtree in ``xml``, verbatim."""
+    return re.findall(r"<w:txbxContent>.*?</w:txbxContent>", xml, flags=re.DOTALL)
+
+
+class TestHostParagraphText:
+    """The host paragraph's text stops at the box."""
+
+    def test_host_text_excludes_both_box_copies(self, box_doc):
+        assert box_doc.list_paragraphs()[0].split("| ", 1)[1] == HOST_TEXT
+
+    def test_paragraph_count_ignores_box_paragraphs(self, box_doc):
+        assert box_doc.paragraph_count() == 2
+
+    def test_list_paragraphs_has_no_box_row(self, box_doc):
+        entries = box_doc.list_paragraphs()
+        assert len(entries) == 2
+        assert not any("BOXED" in entry for entry in entries)
+
+    def test_visible_text_has_no_box_text(self, box_doc):
+        assert box_doc.get_visible_text() == f"{HOST_TEXT}\nSecond body paragraph"
+
+    def test_original_text_has_no_box_text(self, box_doc):
+        assert box_doc.get_original_text() == f"{HOST_TEXT}\nSecond body paragraph"
+
+    def test_markup_text_has_no_box_text(self, box_doc):
+        assert box_doc.get_markup_text() == f"{HOST_TEXT}\nSecond body paragraph"
+
+    def test_get_paragraph_matches_the_listing(self, box_doc):
+        assert box_doc.get_paragraph(1).text == HOST_TEXT
+        assert box_doc.get_paragraph(2).text == "Second body paragraph"
+
+
+class TestSearchSkipsBoxes:
+    """Box text is not findable — there is no ref that could act on a match."""
+
+    def test_find_all_returns_nothing(self, box_doc):
+        assert box_doc.find_all("BOXED") == []
+
+    def test_count_matches_is_zero(self, box_doc):
+        assert box_doc.count_matches("BOXED") == 0
+
+    def test_find_text_returns_none(self, box_doc):
+        assert box_doc.find_text("BOXED") is None
+
+    def test_body_text_is_still_found(self, box_doc):
+        match = box_doc.find_text("host after")
+        assert match is not None
+        assert match.paragraph_index == 1
+
+
+class TestHostHashIsBoxIndependent:
+    """The host paragraph hashes its own text, so the box cannot shift it."""
+
+    def test_hash_equals_the_same_paragraph_without_the_drawing(self, simple_docx, temp_dir):
+        stripped = "<w:p><w:r><w:t>Host before </w:t><w:t> host after</w:t></w:r></w:p>"
+        with_box = make_docx(simple_docx, temp_dir / "with_box.docx", HOST_BODY)
+        without_box = make_docx(simple_docx, temp_dir / "without_box.docx", stripped)
+
+        boxed = Document.open(with_box)
+        plain = Document.open(without_box)
+        try:
+            assert boxed.list_paragraphs()[0] == plain.list_paragraphs()[0]
+        finally:
+            boxed.close()
+            plain.close()
+
+    def test_hash_survives_save_and_reopen(self, box_docx):
+        doc = Document.open(box_docx)
+        try:
+            before = doc.list_paragraphs()
+            doc.save()
+        finally:
+            doc.close()
+
+        reopened = Document.open(box_docx)
+        try:
+            assert reopened.list_paragraphs() == before
+        finally:
+            reopened.close()
+
+
+class TestBoxXmlIsCarriedThrough:
+    """Excluded means carried through, not dropped and not rewritten.
+
+    An edit to the host paragraph re-serializes the run that carries the box,
+    which lets the rsid-injection pass stamp ``w:rsidR``/``w14:paraId`` onto the
+    box's own elements — pre-existing behavior for any re-serialized subtree,
+    and symmetric across the twins. What must not change is the content: both
+    copies survive, holding the same text, still exactly two of them.
+    """
+
+    def test_replace_on_the_host_carries_both_copies_through(self, box_docx):
+        assert len(txbx_contents(saved_document_xml(box_docx))) == 2
+
+        doc = Document.open(box_docx)
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            doc.replace("Host before", "HOST BEFORE", paragraph=ref)
+            doc.save()
+        finally:
+            doc.close()
+
+        after_xml = saved_document_xml(box_docx)
+        after = txbx_contents(after_xml)
+        assert len(after) == 2
+        # Neither copy lost its text, and neither gained the host's edit.
+        assert all(copy.count("<w:t>BOXED</w:t>") == 1 for copy in after)
+        assert all("HOST BEFORE" not in copy for copy in after)
+        assert after_xml.count("BOXED") == 2
+        assert "HOST BEFORE" in after_xml
+
+    def test_the_box_is_not_re_enumerated_after_the_edit(self, box_docx):
+        doc = Document.open(box_docx)
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            doc.replace("Host before", "HOST BEFORE", paragraph=ref)
+            assert doc.paragraph_count() == 2
+            assert doc.get_visible_text() == "HOST BEFORE  host after\nSecond body paragraph"
+            assert doc.find_all("BOXED") == []
+        finally:
+            doc.close()
+
+    def test_rewrite_carries_the_box_through(self, box_docx):
+        """The diff path edits the host's text map only.
+
+        ``rewrite_paragraph`` applies difflib hunks in reverse over the whole
+        paragraph — the widest text-map consumer there is — so a box that
+        leaked back into the map would be diffed against and rewritten.
+        """
+        doc = Document.open(box_docx)
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            doc.rewrite_paragraph(ref, "Host first  host later")
+            assert doc.get_visible_text() == "Host first  host later\nSecond body paragraph"
+            doc.save()
+        finally:
+            doc.close()
+
+        after = txbx_contents(saved_document_xml(box_docx))
+        assert len(after) == 2
+        assert all(copy.count("<w:t>BOXED</w:t>") == 1 for copy in after)
+
+    def test_split_carries_the_box_through(self, box_docx):
+        """Splitting the host moves nodes; the box must move once, intact."""
+        doc = Document.open(box_docx)
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            doc.split_paragraph(ref, before="host after")
+            assert doc.paragraph_count() == 3
+            assert doc.find_all("BOXED") == []
+            doc.save()
+        finally:
+            doc.close()
+
+        after = txbx_contents(saved_document_xml(box_docx))
+        assert len(after) == 2
+        assert all(copy.count("<w:t>BOXED</w:t>") == 1 for copy in after)
+
+
+class TestCommentAnchorsSkipBoxes:
+    """Comment anchoring shares the exclusion — both its scoped and its
+    document-wide lookup enumerate the same body paragraphs."""
+
+    def test_box_text_is_not_an_anchor(self, box_doc):
+        with pytest.raises(TextNotFoundError):
+            box_doc.add_comment("BOXED", "should not anchor")
+
+    def test_box_text_is_not_an_anchor_in_the_host_paragraph(self, box_doc):
+        ref = box_doc.list_paragraphs()[0].split("|")[0]
+        with pytest.raises(TextNotFoundError):
+            box_doc.add_comment("BOXED", "should not anchor", paragraph=ref)
+
+    def test_host_text_still_anchors(self, box_doc):
+        comment_id = box_doc.add_comment("host after", "a real anchor")
+        assert comment_id >= 0
+        assert [c.text for c in box_doc.list_comments()] == ["a real anchor"]
+
+
+class TestIndexSpacesAgree:
+    """Every enumeration must share one index space — a partial migration
+    would have index N mean different paragraphs in different methods."""
+
+    def test_count_listing_search_and_lookup_agree(self, box_doc):
+        count = box_doc.paragraph_count()
+        entries = box_doc.list_paragraphs(limit=None)
+        assert len(entries) == count
+
+        for i, entry in enumerate(entries, start=1):
+            ref = entry.split("|")[0]
+            info = box_doc.get_paragraph(i)
+            assert info.ref == ref
+            # The ref resolves without HashMismatchError, to this same text.
+            assert box_doc.find_all(info.text, paragraph=ref)[0].paragraph_index == i
+
+    def test_structured_listing_and_locations_agree(self, box_doc):
+        structured = box_doc.list_paragraphs_structured(limit=None)
+        locations = box_doc.list_paragraph_locations()
+        assert len(structured) == len(locations) == box_doc.paragraph_count()
+        assert [info.ref for info in structured] == [ref for ref, _ in locations]
+
+
+class TestRevisionsInsideABox:
+    """A revision inside a box still lists and still resolves by id — only its
+    location is unavailable, because its paragraph is not addressable."""
+
+    @pytest.fixture
+    def boxed_revision_docx(self, simple_docx, temp_dir) -> Path:
+        def boxed_ins(rev_id: int) -> str:
+            return (
+                "<w:p>"
+                f'<w:ins w:id="{rev_id}" w:author="Reviewer" w:date="2024-01-01T00:00:00Z">'
+                "<w:r><w:t>BOXADD</w:t></w:r></w:ins>"
+                "</w:p>"
+            )
+
+        body = (
+            f"<w:p><w:r><w:t>Host </w:t>{word_box(boxed_ins(90), boxed_ins(91))}<w:t> tail</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>Second body paragraph</w:t></w:r></w:p>"
+        )
+        return make_docx(simple_docx, temp_dir / "boxed_revision.docx", body)
+
+    def test_listed_without_a_location(self, boxed_revision_docx):
+        doc = Document.open(boxed_revision_docx)
+        try:
+            revisions = [r for r in doc.list_revisions() if r.id in (90, 91)]
+            assert len(revisions) == 2  # mc:Choice + mc:Fallback copies
+            for rev in revisions:
+                assert rev.type == "insertion"
+                assert rev.text == "BOXADD"
+                assert rev.paragraph_ref is None
+                # Half a location is worse than none: an occurrence with no
+                # ref cannot be passed to any edit method.
+                assert rev.occurrence is None
+        finally:
+            doc.close()
+
+    def test_the_host_paragraph_is_unaffected(self, boxed_revision_docx):
+        doc = Document.open(boxed_revision_docx)
+        try:
+            assert doc.paragraph_count() == 2
+            assert doc.get_visible_text() == "Host  tail\nSecond body paragraph"
+        finally:
+            doc.close()
+
+    def test_accept_all_still_resolves_it(self, boxed_revision_docx):
+        doc = Document.open(boxed_revision_docx)
+        try:
+            assert doc.accept_all() == 2
+            doc.save()
+        finally:
+            doc.close()
+
+        xml = saved_document_xml(boxed_revision_docx)
+        assert "<w:ins " not in xml
+        assert xml.count("BOXADD") == 2
+
+
+class TestHostRevisionsIgnoreBoxText:
+    """A w:ins/w:del wrapping a run that carries a box reports the text it
+    changed, not the box's content."""
+
+    def test_insertion_text_stops_at_the_box(self, simple_docx, temp_dir):
+        body = (
+            "<w:p>"
+            '<w:ins w:id="7" w:author="Reviewer" w:date="2024-01-01T00:00:00Z">'
+            f"<w:r><w:t>added </w:t>{word_box()}<w:t>tail</w:t></w:r></w:ins>"
+            "</w:p>"
+        )
+        docx = make_docx(simple_docx, temp_dir / "ins_around_box.docx", body)
+        doc = Document.open(docx)
+        try:
+            (revision,) = [r for r in doc.list_revisions() if r.id == 7]
+            assert revision.text == "added tail"
+            assert revision.paragraph_ref is not None
+        finally:
+            doc.close()
+
+    def test_deletion_text_stops_at_the_box(self, simple_docx, temp_dir):
+        body = (
+            "<w:p>"
+            '<w:del w:id="8" w:author="Reviewer" w:date="2024-01-01T00:00:00Z">'
+            f"<w:r><w:delText>gone </w:delText>{word_box()}<w:delText>too</w:delText></w:r></w:del>"
+            "</w:p>"
+        )
+        docx = make_docx(simple_docx, temp_dir / "del_around_box.docx", body)
+        doc = Document.open(docx)
+        try:
+            (revision,) = [r for r in doc.list_revisions() if r.id == 8]
+            assert revision.text == "gone too"
+        finally:
+            doc.close()
+
+
+class TestBoxPlacementVariants:
+    """The exclusion is about ``w:txbxContent``, not about where the box sits."""
+
+    def test_box_in_a_table_cell_keeps_the_cell_paragraph(self, simple_docx, temp_dir):
+        body = (
+            "<w:tbl><w:tr><w:tc>"
+            f"<w:p><w:r><w:t>Cell </w:t>{word_box()}<w:t>text</w:t></w:r></w:p>"
+            "</w:tc></w:tr></w:tbl>"
+            "<w:p><w:r><w:t>After table</w:t></w:r></w:p>"
+        )
+        docx = make_docx(simple_docx, temp_dir / "box_in_cell.docx", body)
+        doc = Document.open(docx)
+        try:
+            assert doc.paragraph_count() == 2
+            assert doc.get_visible_text() == "Cell text\nAfter table"
+            assert doc.get_paragraph(1).in_table is True
+        finally:
+            doc.close()
+
+    def test_box_inside_an_insertion_is_still_excluded(self, simple_docx, temp_dir):
+        body = (
+            "<w:p>"
+            '<w:ins w:id="11" w:author="Reviewer" w:date="2024-01-01T00:00:00Z">'
+            f"<w:r><w:t>ins </w:t>{word_box()}</w:r></w:ins>"
+            "<w:r><w:t>plain</w:t></w:r></w:p>"
+        )
+        docx = make_docx(simple_docx, temp_dir / "box_in_ins.docx", body)
+        doc = Document.open(docx)
+        try:
+            assert doc.paragraph_count() == 1
+            assert doc.get_visible_text() == "ins plain"
+            assert doc.find_all("BOXED") == []
+        finally:
+            doc.close()
+
+    def test_box_only_paragraph_stays_enumerated_with_empty_text(self, simple_docx, temp_dir):
+        body = f"<w:p><w:r>{word_box()}</w:r></w:p><w:p><w:r><w:t>After</w:t></w:r></w:p>"
+        docx = make_docx(simple_docx, temp_dir / "box_only.docx", body)
+        doc = Document.open(docx)
+        try:
+            assert doc.paragraph_count() == 2
+            assert doc.get_paragraph(1).text == ""
+            assert doc.get_visible_text() == "\nAfter"
+        finally:
+            doc.close()
+
+    def test_nested_boxes_are_all_excluded(self, simple_docx, temp_dir):
+        inner_box = word_box("<w:p><w:r><w:t>INNER</w:t></w:r></w:p>")
+        outer = word_box(f"<w:p><w:r><w:t>OUTER</w:t>{inner_box}</w:r></w:p>")
+        body = f"<w:p><w:r><w:t>Host</w:t>{outer}</w:r></w:p>"
+        docx = make_docx(simple_docx, temp_dir / "nested_boxes.docx", body)
+        doc = Document.open(docx)
+        try:
+            assert doc.paragraph_count() == 1
+            assert doc.get_visible_text() == "Host"
+            assert doc.find_all("INNER") == []
+            assert doc.find_all("OUTER") == []
+        finally:
+            doc.close()
+
+    def test_empty_box_changes_nothing(self, simple_docx, temp_dir):
+        body = f"<w:p><w:r><w:t>Host</w:t>{word_box('')}</w:r></w:p>"
+        docx = make_docx(simple_docx, temp_dir / "empty_box.docx", body)
+        doc = Document.open(docx)
+        try:
+            assert doc.paragraph_count() == 1
+            assert doc.get_visible_text() == "Host"
+        finally:
+            doc.close()

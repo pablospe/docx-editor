@@ -26,6 +26,7 @@ from .xml_editor import (
     _generate_hex_id,
     _reject_control_chars,
     _require_valid_occurrence,
+    body_paragraphs,
     build_text_map,
     compute_paragraph_hash,
     count_in_text_map,
@@ -213,7 +214,7 @@ class CommentManager:
 
         if paragraph is not None:
             ref = ParagraphRef.parse(paragraph)
-            paragraphs = self.document_editor.dom.getElementsByTagName("w:p")
+            paragraphs = body_paragraphs(self.document_editor.dom)
             if ref.index < 1 or ref.index > len(paragraphs):
                 raise ParagraphIndexError(ref.index, len(paragraphs))
             p = paragraphs[ref.index - 1]
@@ -256,7 +257,7 @@ class CommentManager:
         # out-of-range errors need.
         current = 0
         found: tuple[Element, TextMapMatch] | None = None
-        for p in self.document_editor.dom.getElementsByTagName("w:p"):
+        for p in body_paragraphs(self.document_editor.dom):
             text_map = build_text_map(p)
             local = 0
             while True:

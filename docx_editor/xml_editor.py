@@ -822,6 +822,10 @@ def _compute_paragraph_location(
     )
 
 
+# The wrapper Word puts around a text box's own paragraphs, inside a drawing.
+TEXTBOX_CONTENT = "w:txbxContent"
+
+
 def _is_inside_element(node, tag_name: str) -> bool:
     """Check if a node is inside an element with the given tag."""
     parent = node.parentNode
@@ -830,6 +834,40 @@ def _is_inside_element(node, tag_name: str) -> bool:
             return True
         parent = parent.parentNode
     return False
+
+
+def _inside_textbox(node, stop_at) -> bool:
+    """True if ``node`` sits inside a ``w:txbxContent`` *below* ``stop_at``.
+
+    Bounded on purpose: the walk stops at ``stop_at`` (exclusive), so mapping a
+    text box's own paragraph directly still sees its text — an unbounded check
+    would report True for every ``w:t`` of such a paragraph and empty its map,
+    which ``list_revisions`` still needs for revisions living inside a box.
+    """
+    parent = node.parentNode
+    while parent is not None and parent is not stop_at:
+        if parent.nodeType == parent.ELEMENT_NODE and parent.tagName == TEXTBOX_CONTENT:
+            return True
+        parent = parent.parentNode
+    return False
+
+
+def body_paragraphs(dom) -> list[Element]:
+    """The document's genuine body paragraphs, in document order.
+
+    Every ``w:p`` except those inside a drawing's ``w:txbxContent``. Word
+    stores a text box twice — once under ``mc:Choice`` (``wps:txbx``) and once
+    under ``mc:Fallback`` (``v:textbox``) — so its paragraphs are not
+    addressable content: enumerating them would list the same text twice and
+    make each copy independently editable, desynchronizing the two twins. They
+    are excluded from the ref index space entirely.
+
+    Deliberately filters the result of a single ``Document.getElementsByTagName``
+    walk rather than recursing by hand: the ``count_dom_walks`` instrumentation
+    monkeypatches that method, and the constant-full-DOM-walk guarantees
+    (ISSUES.md #51/#56/#57) are only observable through it.
+    """
+    return [p for p in dom.getElementsByTagName("w:p") if not _is_inside_element(p, TEXTBOX_CONTENT)]
 
 
 def get_text_node_data(elem) -> str:
@@ -919,6 +957,11 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
       are excluded, <w:delText> is included, and text inside <w:del> or
       <w:moveFrom> is flagged with is_inside_del=True.
 
+    Both views exclude text-box content: a ``w:t`` under a descendant
+    ``w:txbxContent`` belongs to the box, not to the host paragraph (see
+    :func:`body_paragraphs`). The exclusion is bounded by ``paragraph``, so
+    mapping a box's own paragraph directly still yields that paragraph's text.
+
     Records the source node and offset for each character position.
     """
     if view not in ("accepted", "original"):
@@ -931,6 +974,10 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
         for node in paragraph.getElementsByTagName("w:t"):
             # Skip w:t inside w:del (deleted text uses w:delText, but be safe)
             if _is_inside_element(node, "w:del"):
+                continue
+
+            # Text inside a nested text box belongs to the box, not the host.
+            if _inside_textbox(node, paragraph):
                 continue
 
             inside_ins = _is_inside_element(node, "w:ins")
@@ -954,6 +1001,8 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
             if child.nodeType != child.ELEMENT_NODE:
                 continue
             if child.tagName in ("w:ins", "w:moveTo"):
+                continue
+            if child.tagName == TEXTBOX_CONTENT:
                 continue
             if child.tagName in ("w:t", "w:delText"):
                 node_text = get_text_node_data(child)

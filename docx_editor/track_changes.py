@@ -23,14 +23,17 @@ from .exceptions import (
     TextNotFoundError,
 )
 from .xml_editor import (
+    TEXTBOX_CONTENT,
     DocxXMLEditor,
     ParagraphRef,
     TextMap,
     TextMapMatch,
     TextPosition,
     _escape_xml,
+    _inside_textbox,
     _reject_control_chars,
     _require_valid_occurrence,
+    body_paragraphs,
     build_text_map,
     compute_paragraph_hash,
     compute_text_hash,
@@ -520,8 +523,11 @@ class Revision:
     Location and nesting fields are populated by ``list_revisions``:
 
     - ``paragraph_ref``: hash-anchored reference (``"P{i}#{hash}"``) of the
-      containing paragraph, or None when the revision sits outside any
-      ``<w:p>`` (e.g. ``<w:trPr>`` row markers).
+      containing paragraph, or None when the revision sits in no *addressable*
+      paragraph — outside any ``<w:p>`` (e.g. ``<w:trPr>`` row markers), or
+      inside a drawing's text box, whose paragraphs are excluded from the ref
+      index space (see ``body_paragraphs``). The revision is still listed and
+      still accepts/rejects by id; only its location is unavailable.
     - ``occurrence``: 0-based occurrence index of ``text`` within the
       containing paragraph, counted in the view where the revision's text
       lives — the accepted (visible) view for insertions, the original
@@ -529,8 +535,9 @@ class Revision:
       into the ``occurrence=`` parameter of replace()/delete()/
       add_comment(). None whenever targeting-by-text does not apply: empty
       text, a host insertion whose original text no longer matches its
-      visible span (a nested deletion consumed part of it), or a nested
-      deletion (its text never existed in the original document).
+      visible span (a nested deletion consumed part of it), a nested
+      deletion (its text never existed in the original document), or a
+      None ``paragraph_ref`` (an occurrence with no ref cannot be acted on).
     - ``nested_under``: id of the nearest enclosing revision (e.g. a foreign
       deletion inside another author's pending insertion), else None.
     - ``contains_ids``: ids of revisions nested inside this one, in document
@@ -670,12 +677,18 @@ def _insertion_text_nodes(elem) -> list:
     Including <w:delText> means a host insertion whose content was later
     deleted by a nested <w:del> still reports the full text it originally
     inserted (plain <w:delText> never appears under <w:ins> otherwise).
+
+    Text inside a drawing's text box is skipped: an insertion wrapping a run
+    that carries a box reports the text it inserted, not the box's content,
+    which is excluded from every text view (see ``body_paragraphs``).
     """
     nodes: list = []
 
     def walk(node) -> None:
         for child in node.childNodes:
             if child.nodeType != child.ELEMENT_NODE:
+                continue
+            if child.tagName == TEXTBOX_CONTENT:
                 continue
             if child.tagName in ("w:t", "w:delText"):
                 nodes.append(child)
@@ -784,7 +797,7 @@ class _RevisionLocationContext:
     """Per-``list_revisions``-call cache of paragraph indexes, refs, and text maps."""
 
     def __init__(self, dom):
-        self._p_index = {id(p): i for i, p in enumerate(dom.getElementsByTagName("w:p"), start=1)}
+        self._p_index = {id(p): i for i, p in enumerate(body_paragraphs(dom), start=1)}
         self._refs: dict[int, str] = {}
         self._maps: dict[tuple[int, str], TextMap] = {}
 
@@ -1235,7 +1248,7 @@ class RevisionManager:
             HashMismatchError: If the hash doesn't match current content
         """
         if paragraphs is None:
-            paragraphs = self.editor.dom.getElementsByTagName("w:p")
+            paragraphs = body_paragraphs(self.editor.dom)
         if ref.index < 1 or ref.index > len(paragraphs):
             raise ParagraphIndexError(ref.index, len(paragraphs))
         p = paragraphs[ref.index - 1]
@@ -1330,7 +1343,7 @@ class RevisionManager:
         # so no pending index shifts. minidom returns a plain non-live list.
         # After a rollback the DOM is replaced, but the exception propagates
         # immediately and this list is never used again.
-        paragraphs = self.editor.dom.getElementsByTagName("w:p")
+        paragraphs = body_paragraphs(self.editor.dom)
 
         # Parse and validate all refs upfront
         parsed: list[tuple[int, ParagraphRef, EditOperation]] = []
@@ -1428,7 +1441,7 @@ class RevisionManager:
         """
         ref = ParagraphRef.parse(op.paragraph)
         if paragraphs is None:
-            paragraphs = self.editor.dom.getElementsByTagName("w:p")
+            paragraphs = body_paragraphs(self.editor.dom)
         p = paragraphs[ref.index - 1]
 
         target = self._resolve_action_target(op)
@@ -1475,7 +1488,7 @@ class RevisionManager:
             return []
         # One <w:p> walk for the whole dry run — validation is read-only, so
         # the snapshot is trivially stable (same sharing as batch_edit).
-        paragraphs = self.editor.dom.getElementsByTagName("w:p")
+        paragraphs = body_paragraphs(self.editor.dom)
         results = []
         for i, op in enumerate(operations):
             if not isinstance(op, EditOperation):
@@ -1566,7 +1579,7 @@ class RevisionManager:
         # being rewritten. Because application runs in descending index order
         # (see the loop below), every insertion lands after the paragraphs
         # still to be processed, so no pending ref's snapshot index shifts.
-        paragraphs = self.editor.dom.getElementsByTagName("w:p")
+        paragraphs = body_paragraphs(self.editor.dom)
 
         # Parse and validate all refs upfront
         parsed: list[tuple[int, ParagraphRef, str]] = []
@@ -1886,7 +1899,7 @@ class RevisionManager:
             Number of occurrences found
         """
         count = 0
-        for paragraph in self.editor.dom.getElementsByTagName("w:p"):
+        for paragraph in body_paragraphs(self.editor.dom):
             count += count_in_text_map(build_text_map(paragraph), text)
         return count
 
@@ -1932,7 +1945,7 @@ class RevisionManager:
             A _LocatedMatch, or None if not found.
         """
         current_occurrence = 0
-        for idx, paragraph in enumerate(self.editor.dom.getElementsByTagName("w:p"), start=1):
+        for idx, paragraph in enumerate(body_paragraphs(self.editor.dom), start=1):
             text_map = build_text_map(paragraph)
             local_occ = 0
             while True:
@@ -2026,7 +2039,7 @@ class RevisionManager:
             ref = ParagraphRef.parse(paragraph)
             paragraphs = [(ref.index, self._resolve_paragraph(ref))]
         else:
-            paragraphs = list(enumerate(self.editor.dom.getElementsByTagName("w:p"), start=1))
+            paragraphs = list(enumerate(body_paragraphs(self.editor.dom), start=1))
 
         results: list[SearchResult] = []
         for idx, p in paragraphs:
@@ -3504,9 +3517,10 @@ class RevisionManager:
         nesting included (e.g. ``[ins#1:A]kept [del#9:B]gone[/del][/ins]``).
 
         A human/agent verification view, not a parseable format: author
-        names are not escaped, tabs/breaks are not rendered, and text inside
-        a drawing's text box appears both inline in the host paragraph's
-        line and again as its own line (same as get_text()).
+        names are not escaped and tabs/breaks are not rendered. Text inside a
+        drawing's text box does not appear at all — box content is excluded
+        from every text view and from paragraph enumeration (same as
+        get_text()); see :func:`~docx_editor.xml_editor.body_paragraphs`.
         """
 
         def render(node) -> str:
@@ -3521,11 +3535,13 @@ class RevisionManager:
                     parts.append(f"[{kind}#{rev_id}:{rev_author}]{render(child)}[/{kind}]")
                 elif child.tagName in ("w:t", "w:delText"):
                     parts.append(get_text_node_data(child))
+                elif child.tagName == TEXTBOX_CONTENT:
+                    continue  # box content belongs to the box, not this paragraph
                 else:
                     parts.append(render(child))
             return "".join(parts)
 
-        return "\n".join(render(p) for p in self.editor.dom.getElementsByTagName("w:p"))
+        return "\n".join(render(p) for p in body_paragraphs(self.editor.dom))
 
     def _parse_revision(
         self,
@@ -3564,12 +3580,16 @@ class RevisionManager:
         if rev_type == "insertion":
             text_elems = _insertion_text_nodes(elem)
         else:
-            text_elems = elem.getElementsByTagName("w:delText")
+            # Box content is excluded the same way the insertion walk excludes
+            # it: a w:del wrapping a run that carries a drawing reports the
+            # body text it deleted, not the box's. Bounded by ``elem``, so a
+            # w:del living *inside* a box still reports its own text.
+            text_elems = [t for t in elem.getElementsByTagName("w:delText") if not _inside_textbox(t, elem)]
             if not text_elems:
                 # Deliberate interop fallback: nonconforming producers may
                 # leave plain w:t inside w:del. Fires only when the w:del has
                 # no w:delText at all; mixed content reads only w:delText.
-                text_elems = elem.getElementsByTagName("w:t")
+                text_elems = [t for t in elem.getElementsByTagName("w:t") if not _inside_textbox(t, elem)]
 
         text = "".join(self._get_node_text(t_elem) for t_elem in text_elems)
 
@@ -3579,7 +3599,10 @@ class RevisionManager:
             paragraph = _ancestor_paragraph(elem)
             if paragraph is not None:
                 paragraph_ref = ctx.paragraph_ref(paragraph)
-                if text:
+                if text and paragraph_ref is not None:
+                    # An occurrence with no ref cannot be acted on (the
+                    # paragraph is not addressable — e.g. it lives inside a
+                    # text box), so half a location is worse than none.
                     # Insertions live in the visible text; deletions in the
                     # original (pre-revision) text.
                     view: Literal["accepted", "original"] = "accepted" if rev_type == "insertion" else "original"

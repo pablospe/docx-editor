@@ -220,6 +220,60 @@ class TestBuildTextMapOriginalView:
         assert all(pos.is_inside_del for pos in tm.positions[6:10])
 
 
+class TestBuildTextMapTextBox:
+    """A drawing's ``w:txbxContent`` belongs to the box, not the host
+    paragraph — in both views (ISSUES.md #65)."""
+
+    BOXED = (
+        "<w:p><w:r><w:t>Host </w:t>"
+        "<w:drawing><w:txbxContent><w:p><w:r><w:t>BOXED</w:t></w:r></w:p></w:txbxContent></w:drawing>"
+        "<w:t>tail</w:t></w:r></w:p>"
+    )
+
+    def test_accepted_view_excludes_box_text(self):
+        p = _parse_paragraph(self.BOXED)
+        assert build_text_map(p).text == "Host tail"
+
+    def test_original_view_excludes_box_text(self):
+        p = _parse_paragraph(self.BOXED)
+        assert build_text_map(p, view="original").text == "Host tail"
+
+    def test_box_paragraph_mapped_directly_keeps_its_own_text(self):
+        """The exclusion is bounded by the paragraph being mapped.
+
+        An unbounded "inside a w:txbxContent" test would empty this map, which
+        ``list_revisions`` still needs for revisions living inside a box.
+        """
+        host = _parse_paragraph(self.BOXED)
+        boxed = host.getElementsByTagName("w:txbxContent")[0].getElementsByTagName("w:p")[0]
+        assert build_text_map(boxed).text == "BOXED"
+        assert build_text_map(boxed, view="original").text == "BOXED"
+
+    def test_box_deletion_excluded_from_the_host_original_view(self):
+        """A w:del *inside* the box is not the host paragraph's deletion."""
+        p = _parse_paragraph(
+            "<w:p><w:r><w:t>Host</w:t>"
+            "<w:drawing><w:txbxContent><w:p>"
+            '<w:del w:id="1" w:author="Test" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:delText>GONE</w:delText></w:r></w:del>"
+            "</w:p></w:txbxContent></w:drawing></w:r></w:p>"
+        )
+        assert build_text_map(p).text == "Host"
+        assert build_text_map(p, view="original").text == "Host"
+
+    def test_nested_box_excluded_from_the_outer_box_paragraph(self):
+        """Mapping a box paragraph excludes a box nested inside *it*."""
+        p = _parse_paragraph(
+            "<w:p><w:r><w:t>Host</w:t>"
+            "<w:drawing><w:txbxContent><w:p><w:r><w:t>OUTER</w:t>"
+            "<w:drawing><w:txbxContent><w:p><w:r><w:t>INNER</w:t></w:r></w:p></w:txbxContent></w:drawing>"
+            "</w:r></w:p></w:txbxContent></w:drawing></w:r></w:p>"
+        )
+        outer = p.getElementsByTagName("w:txbxContent")[0].getElementsByTagName("w:p")[0]
+        assert build_text_map(outer).text == "OUTER"
+        assert build_text_map(outer, view="original").text == "OUTER"
+
+
 class TestTextMapFind:
     """Tests for TextMap.find() method."""
 

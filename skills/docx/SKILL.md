@@ -633,8 +633,8 @@ print(doc.get_markup_text())
 ```
 
 A human/agent verification view, not a parseable format (author names are not
-escaped; tabs/breaks are not rendered; text inside a drawing's text box
-appears both inline and again as its own line, same as `get_text()`).
+escaped; tabs/breaks are not rendered; text inside a drawing's text box does
+not appear at all, same as `get_text()` — see Limitations).
 
 ### Reviewing Someone Else's Redlines
 
@@ -1191,7 +1191,7 @@ If unsure, ask the user: "Should I use Opus (best), Sonnet (recommended) or Haik
 
 ### Limitations
 
-- **Text in shapes/text boxes**: May not be accessible via standard paragraph iteration
+- **Text in shapes/text boxes**: Excluded, deliberately — text boxes are not an editing surface. Text-box content (`w:txbxContent`) appears in no paragraph listing, no text view, no search and no paragraph hash, and no ref addresses it. Word stores every box twice (an `mc:Choice` copy and an `mc:Fallback` copy) and a correct edit must write both twins, so an addressable box paragraph would let one write update a single copy and desynchronize the pair. To read a box's text, convert with LibreOffice (`soffice --headless --convert-to txt:Text file.docx`) — pandoc drops text boxes entirely. A revision *inside* a box is still listed and still accepts or rejects by id, with `paragraph_ref`/`occurrence` left `None`.
 - **Charts**: Text inside charts is embedded in separate XML, not easily editable
 - **Concurrent editing**: Not supported — a second open of the same document raises `WorkspaceLockedError`; use sequential access
 - **Most edits**: Are in paragraphs and tables, which are well supported
