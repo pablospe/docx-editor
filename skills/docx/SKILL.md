@@ -925,7 +925,7 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `WorkspaceSyncError`   | `workspace_path`, `source_path`                                                         | Workspace and source disagree (unsaved edits from a previous session, or the source changed on disk). **Do not retry blindly** — `force_recreate=True` (open) / `force=True` (save) / `Document.discard_workspace(path)` DISCARDS one side; to rescue the workspace's edits first, save them elsewhere: `Workspace(source, create=False).save("rescued.docx")`. After a crashed script, `Document.discard_workspace(path)` once beats `force_recreate=True` on every open. |
 | `WorkspaceLockedError` | `pid`, `lock_path`                                                                      | A live session already holds this document's workspace — another process, or an unclosed `Document` in THIS one. Close it (or stop that process) and retry; `Document.open(path, force_recreate=True)` or `Document.discard_workspace(path)` takes the workspace over but DISCARDS the holder's unsaved edits — confirm the holder is gone first. Locks left by dead processes are reclaimed automatically and never raise. |
 | `DocumentOpenError`    | `path`, `owner_file`                                                                    | **Do not retry blindly.** The destination is open in Word. Stop and tell the user to close it. Only pass `force=True` if the user confirms the `~$` lock is stale (crashed session). |
-| `DocumentProtectedError` | `path`, `mode`                                                                        | The document enforces Word's *Restrict Editing* with a mode that locks the body text — `mode` is `readOnly`, `forms` or `comments`. **Not an in-loop retry:** the author asked for the content not to be edited, so tell the user, and only pass `Document.open(path, allow_protected=True)` if they confirm it (the protection stays in the saved file; with `mode="comments"`, `add_comment()` is what that mode permits). A document enforcing `trackedChanges`, or one whose protection is switched off, opens normally and never raises. |
+| `DocumentProtectedError` | `path`, `mode`                                                                        | The document enforces Word's *Restrict Editing* with a mode that locks the body text — `mode` is `readOnly`, `forms` or `comments`. **Not an in-loop retry:** the author asked for the content not to be edited, so tell the user, and only pass `Document.open(path, allow_protected=True)` if they confirm it (the protection stays in the saved file; with `mode="comments"`, `add_comment()` is what that mode permits). A document enforcing `trackedChanges`, or one whose protection is switched off, opens normally and never raises — and so does one using Word's *Password to modify* / *Always Open Read-Only* (`w:writeProtection`), which is a different element this guard does not read. |
 
 ```python
 from docx_editor import (
@@ -996,9 +996,11 @@ to save under a new path instead.
 Word's Track Changes switch on in the saved file (`<w:trackChanges/>` in
 `word/settings.xml`). Your redline is visible either way; the switch is what keeps
 the *recipient's* own typing tracked, so the next round of edits can still be told
-apart from yours. Nothing else is touched: a document you opened and did not
-redline — or one whose revisions you accepted — is saved with its settings as they
-were. Pass `doc.save(path, track_changes=False)` to opt out; it never removes a
+apart from yours. What counts is the document's state, not whether this session
+edited: your own pending redline reopened from an earlier session still turns the
+switch on, because it is still waiting for a reply. Nothing else is touched: a
+document holding no revision of yours — one you did not redline, or one whose
+revisions you accepted — is saved with its settings as they were. Pass `doc.save(path, track_changes=False)` to opt out; it never removes a
 switch the document already had. A document that turns tracking *off* explicitly
 (`<w:trackChanges w:val="false"/>`) is left exactly as its author configured it and
 the save emits a `UserWarning` saying the recipient's edits will not be tracked —

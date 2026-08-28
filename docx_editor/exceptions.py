@@ -153,7 +153,10 @@ class DocumentProtectedError(DocxEditError):
     anyway.
 
     The ``trackedChanges`` mode never raises: it enforces exactly what this
-    library already does.
+    library already does. Neither does ``w:writeProtection`` (Word's "Password
+    to modify" and "Always Open Read-Only"), which is a different element and
+    out of scope: it restricts saving over the original rather than editing the
+    body.
 
     Attributes:
         path: The document that is protected, or None if unknown.

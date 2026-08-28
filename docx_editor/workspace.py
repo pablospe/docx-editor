@@ -212,6 +212,9 @@ class Workspace:
         source_path: Path to the original .docx file
         workspace_path: Path to this document's workspace folder
         meta: Dictionary containing workspace metadata
+        created: True if this instance unpacked the workspace, False if it
+            adopted one already on disk. A failure path may only delete the
+            workspace when this is True.
     """
 
     # If you rename META_FILE, also update EXCLUDED_PATHS in ooxml/pack.py
@@ -303,6 +306,12 @@ class Workspace:
         self._lock_token = f"{os.getpid()}:{secrets.token_hex(8)}"
         self._lock_acquired = False
         self._lock_finalizer: weakref.finalize | None = None
+        # Whether this call unpacked the workspace, as opposed to adopting one
+        # that was already on disk. A caller cleaning up after a failure may
+        # only delete what it created — an adopted directory is the user's
+        # (kept deliberately by close(cleanup=False), say), and deleting it
+        # would break the "never deleted silently" promise in the open() docs.
+        self.created = False
         try:
             # The shared cache base must exist to hold the sidecar (same mkdir
             # _create_workspace performs; owner-only, see there).
@@ -609,6 +618,9 @@ class Workspace:
                 f"Set DOCX_EDITOR_WORKSPACE_DIR to a writable absolute path, "
                 f"or pass workspace_dir=."
             ) from exc
+        # Set once the directory is ours, before unpacking: a failure partway
+        # through unpack still leaves a workspace this call is responsible for.
+        self.created = True
 
         try:
             # Unpack document

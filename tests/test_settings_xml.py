@@ -24,6 +24,7 @@ import pytest
 from conftest import find_ref, replace_docx_parts
 
 from docx_editor import Document, DocumentProtectedError
+from docx_editor.workspace import Workspace
 
 NS = (
     'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
@@ -167,6 +168,19 @@ class TestTrackChangesFlag:
         assert names.index("w:proofState") + 1 == names.index("w:trackChanges")
         assert names.index("w:trackChanges") + 1 == names.index("w:defaultTabStop")
 
+    def test_flag_goes_first_when_nothing_precedes_it(self, temp_docx, temp_dir):
+        """With no anchor to land after, the flag goes before the first sibling.
+
+        w:defaultTabStop sorts *after* w:trackChanges in CT_Settings, so a part
+        holding only later elements has to be prepended to, not appended to.
+        """
+        source = with_settings(temp_docx, temp_dir / "later_only.docx", '<w:defaultTabStop w:val="720"/>')
+        out = edit_and_save(source, temp_dir / "out.docx")
+
+        root = saved_settings(out).documentElement
+        names = [c.tagName for c in root.childNodes if c.nodeType == c.ELEMENT_NODE]
+        assert names.index("w:trackChanges") < names.index("w:defaultTabStop")
+
     def test_missing_settings_part_still_saves(self, temp_docx, temp_dir):
         """A document with no settings.xml saves cleanly, just without a flag."""
         source = temp_dir / "no_settings.docx"
@@ -211,6 +225,75 @@ class TestTrackChangesFlag:
         doc.close()
 
         assert track_changes_elements(out) == []
+
+    def test_our_pending_revision_from_an_earlier_session_counts(self, temp_docx, temp_dir):
+        """A redline of ours reopened, not touched, and saved still flips the switch.
+
+        The predicate is the document's state, not a did-an-edit-run flag: our
+        redline is still pending, so it is still waiting for a reply and the
+        recipient's typing still has to be tracked.
+        """
+        source = temp_dir / "own_pending.docx"
+        with zipfile.ZipFile(temp_docx) as archive:
+            document_xml = archive.read("word/document.xml").decode("utf-8")
+        ours = (
+            f'<w:p><w:ins w:id="901" w:author="{AUTHOR_A}" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>Our earlier clause.</w:t></w:r></w:ins></w:p>"
+        )
+        replace_docx_parts(
+            temp_docx,
+            source,
+            {"word/document.xml": document_xml.replace("</w:body>", f"{ours}</w:body>")},
+        )
+
+        doc = Document.open(source, author=AUTHOR_A)
+        out = doc.save(temp_dir / "out.docx")
+        doc.close()
+
+        assert len(track_changes_elements(out)) == 1
+
+    def test_unreadable_val_does_not_read_as_on(self, temp_docx, temp_dir):
+        """A w:val outside ST_OnOff must not make track_changes=True a no-op."""
+        source = with_settings(temp_docx, temp_dir / "odd.docx", '<w:zoom/><w:trackChanges w:val="yes"/>')
+
+        doc = Document.open(source)
+        try:
+            out = doc.save(temp_dir / "out.docx", track_changes=True)
+        finally:
+            doc.close()
+
+        elements = track_changes_elements(out)
+        assert len(elements) == 1
+        assert not elements[0].getAttribute("w:val")
+
+    def test_unreadable_val_warns_under_the_default(self, temp_docx, temp_dir):
+        """Under the default it is left alone, and the warning quotes what it found."""
+        source = with_settings(temp_docx, temp_dir / "odd.docx", '<w:zoom/><w:trackChanges w:val="yes"/>')
+
+        doc = Document.open(source)
+        try:
+            doc.replace("quick", "slow", paragraph=find_ref(doc, "brown fox"))
+            with pytest.warns(UserWarning, match='w:val="yes"'):
+                out = doc.save(temp_dir / "out.docx")
+        finally:
+            doc.close()
+
+        assert track_changes_elements(out)[0].getAttribute("w:val") == "yes"
+
+    def test_explicit_true_warns_when_there_is_no_settings_part(self, temp_docx, temp_dir):
+        """An explicit request that cannot be honoured is said out loud."""
+        source = temp_dir / "no_settings.docx"
+        replace_docx_parts(temp_docx, source, {"word/settings.xml": None})
+
+        doc = Document.open(source)
+        try:
+            with pytest.warns(UserWarning, match="no word/settings.xml"):
+                out = doc.save(temp_dir / "out.docx", track_changes=True)
+        finally:
+            doc.close()
+
+        with zipfile.ZipFile(out) as archive:
+            assert "word/settings.xml" not in archive.namelist()
 
     def test_reopening_a_flagged_document_keeps_one_flag(self, temp_docx, temp_dir):
         """Round two of the same redline does not stack a second element."""
@@ -272,6 +355,48 @@ class TestDocumentProtection:
         doc = Document.open(source, allow_protected=True)
         doc.close()
 
+    def test_refused_open_keeps_a_workspace_it_did_not_create(self, temp_docx, temp_dir, isolated_workspace_base):
+        """Cleanup after a failed open may only delete what that open unpacked.
+
+        A workspace kept on purpose with close(cleanup=False) belongs to the
+        caller, so the next open's failure path must leave it alone — the
+        "never deleted silently" promise Document.open() makes.
+        """
+        source = self.protected(temp_docx, temp_dir, "readOnly")
+
+        kept = Document.open(source, allow_protected=True)
+        workspace_path = kept._workspace.workspace_path
+        kept.close(cleanup=False)
+        assert workspace_path.exists()
+
+        with pytest.raises(DocumentProtectedError):
+            Document.open(source)
+
+        assert workspace_path.exists(), "a refused open deleted a workspace it only adopted"
+
+        # The lock is still released either way, so the retry works.
+        doc = Document.open(source, allow_protected=True)
+        doc.close()
+
+    def test_cleanup_failure_does_not_mask_the_real_error(self, temp_docx, temp_dir, monkeypatch):
+        """A cleanup that fails must not replace the error the caller must act on.
+
+        close() releases the lock in a finally, so a failed rmtree (a scanner
+        holding a handle on Windows, say) leaves the document usable — losing
+        DocumentProtectedError behind an OSError would not.
+        """
+        source = self.protected(temp_docx, temp_dir, "readOnly")
+        real_close = Workspace.close
+
+        def exploding_close(self, cleanup=True):
+            real_close(self, cleanup=cleanup)  # still releases the lock
+            raise OSError("Directory not empty")
+
+        monkeypatch.setattr(Workspace, "close", exploding_close)
+
+        with pytest.raises(DocumentProtectedError):
+            Document.open(source)
+
     def test_tracked_changes_mode_never_raises(self, temp_docx, temp_dir):
         """Enforced trackedChanges asks for exactly what this library does."""
         source = self.protected(temp_docx, temp_dir, "trackedChanges")
@@ -294,6 +419,19 @@ class TestDocumentProtection:
 
         with pytest.raises(DocumentProtectedError):
             Document.open(source)
+
+    def test_unreadable_enforcement_fails_closed(self, temp_docx, temp_dir):
+        """A guard over locked content cannot read "unparseable" as "switched off"."""
+        source = self.protected(temp_docx, temp_dir, "readOnly", enforcement="yes")
+
+        with pytest.raises(DocumentProtectedError) as exc_info:
+            Document.open(source)
+
+        assert exc_info.value.mode == "readOnly"
+
+        # And the documented bypass still gets past it.
+        doc = Document.open(source, allow_protected=True)
+        doc.close()
 
     @pytest.mark.parametrize("enforcement", ["0", "false", "off", None])
     def test_unenforced_protection_opens_silently(self, temp_docx, temp_dir, enforcement):

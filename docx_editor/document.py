@@ -95,24 +95,29 @@ _SETTINGS_BEFORE_TRACK_CHANGES: tuple[str, ...] = (
 )
 
 
-def _on_off(value: str | None, *, default: bool) -> bool:
+def _on_off(value: str) -> bool | None:
     """Read an ST_OnOff attribute value (ECMA-376 Part 1 §17.17.4).
 
+    Returns None for anything outside the six spellings the schema allows.
+    "The attribute is not there" and "the attribute holds something we cannot
+    read" are different facts, and the two callers want opposite things from
+    the second one — the protection guard has to fail closed, the track-changes
+    read has to stop reporting an unreadable flag as already on — so neither
+    can be folded into a shared default here.
+
     Args:
-        value: The raw attribute value. minidom returns "" for an attribute
-            that is not there, so absent and empty are both the default —
-            which is what each caller's element means by "unset".
-        default: What an absent (or unrecognized) value means for this
-            attribute.
+        value: The raw attribute value, from an attribute that is present.
+
+    Returns:
+        True or False for a legal value, None for one this schema does not
+        define.
     """
-    if value is None or value == "":
-        return default
     normalized = value.strip().lower()
     if normalized in {"1", "true", "on"}:
         return True
     if normalized in {"0", "false", "off"}:
         return False
-    return default
+    return None
 
 
 def _local_name(tag: str) -> str:
@@ -316,13 +321,16 @@ class Document:
         try:
             return cls(workspace, allow_protected=allow_protected)
         except BaseException:
-            # The workspace is live from here on: it holds the advisory lock and
-            # (usually) a directory this call just created. A raise inside
-            # __init__ hands the caller no object to close(), so without this the
-            # document would be locked against its own retry — the same guard
-            # Workspace.__init__ keeps over its own failure path.
+            # The workspace is live from here on: it holds the advisory lock and,
+            # when this call unpacked it, a directory. A raise inside __init__
+            # hands the caller no object to close(), so without this the document
+            # would be locked against its own retry — the same guard
+            # Workspace.__init__ keeps over its own failure path. The lock goes
+            # either way; the directory only if we made it, since an adopted one
+            # is the caller's (see Workspace.created and unpack_document's own
+            # created_output_dir guard).
             try:
-                workspace.close(cleanup=True)
+                workspace.close(cleanup=workspace.created)
             except Exception:
                 # close() releases the lock in a finally, so a failed rmtree
                 # (a scanner still holding a handle on Windows, say) leaves a
@@ -2022,8 +2030,12 @@ class Document:
                 None (the default) writes it exactly when this document carries
                 a revision authored by us — so the human who keeps typing in
                 Word after our redline stays tracked, and the return leg is
-                still adjudicatable. A document we opened and did not redline,
-                or whose revisions we accepted, is saved untouched. True writes
+                still adjudicatable. The test is the document's state, not
+                whether this session edited: a pending redline of ours reopened
+                from an earlier session still counts, because it is still
+                waiting for a reply. A document holding no revision of ours —
+                one we did not redline, or whose revisions we accepted — is
+                saved untouched. True writes
                 the flag whether or not we redlined anything; False leaves
                 settings.xml alone, and never removes a flag the document
                 already had.
@@ -2196,7 +2208,16 @@ class Document:
         so nothing in the workspace is touched by a document we are about to
         refuse). Only an *enforced* protection counts: Word writes the element
         with ``w:enforcement="0"`` when the mode is configured but switched off,
-        and that document is editable in Word, so it is editable here.
+        and that document is editable in Word, so it is editable here. An
+        enforcement value outside ST_OnOff fails *closed* — a guard over locked
+        content cannot read "we could not parse the switch" as "the switch is
+        off" — and ``allow_protected=True`` is still the way past it.
+
+        Only ``w:documentProtection`` is read. ``w:writeProtection`` (Word's
+        "Password to modify" and "Always Open Read-Only") is a different
+        element and deliberately out of scope: it restricts saving over the
+        original rather than editing the body, which ``save()`` already
+        surfaces when it refuses to replace a read-only file.
 
         Takes the workspace explicitly because it runs before ``__init__``
         assigns ``self._workspace``.
@@ -2216,7 +2237,10 @@ class Document:
             return
 
         enforcement = _attr_node(protection, "enforcement")
-        if not _on_off(enforcement.value if enforcement is not None else None, default=False):
+        # No attribute at all is the schema default, which is off: a protection
+        # Word never switched on is not protection. A value we cannot read is a
+        # different matter — see the docstring, it fails closed.
+        if enforcement is None or _on_off(enforcement.value) is False:
             return
 
         edit = _attr_node(protection, "edit")
@@ -2273,7 +2297,17 @@ class Document:
         settings_path = self._workspace.word_path / "settings.xml"
         if not settings_path.exists():
             # Same tolerance as _update_settings: a document without the part
-            # keeps saving, it just gets no flag.
+            # keeps saving, it just gets no flag. Under the default that is the
+            # whole story, but a caller who asked for the flag in as many words
+            # is owed the news that it did not happen.
+            if track_changes is True:
+                warnings.warn(
+                    f"{self._workspace.source_path} has no word/settings.xml, so track changes "
+                    f"could not be turned on. The revisions saved here stay visible, but edits "
+                    f"the recipient makes in Word will not be tracked.",
+                    UserWarning,
+                    stacklevel=3,
+                )
             return
 
         editor = DocxXMLEditor(
@@ -2289,25 +2323,27 @@ class Document:
         existing = next((c for c in children if _local_name(c.tagName) == "trackChanges"), None)
 
         if existing is not None:
-            # Absent means on: a bare <w:trackChanges/> is how Word writes
-            # "tracking is on".
+            # No w:val means on: a bare <w:trackChanges/> is how Word writes
+            # "tracking is on". A w:val we cannot read is not on — reporting it
+            # as on would make an explicit track_changes=True a silent no-op.
             val = _attr_node(existing, "val")
-            if val is None or _on_off(val.value, default=True):
+            if val is None or _on_off(val.value) is True:
                 # Already on — nothing to write, and nothing to reserialize.
                 return
             if track_changes is None:
                 warnings.warn(
-                    f"{self._workspace.source_path} turns track changes off "
-                    f'(<w:trackChanges w:val="false"/> in settings.xml), so it is left as it is: '
-                    f"the revisions saved here stay visible, but edits the recipient makes in Word "
-                    f"will not be tracked. Save with track_changes=True to turn tracking on instead.",
+                    f"{self._workspace.source_path} does not have track changes on "
+                    f'(<w:trackChanges w:val="{val.value}"/> in settings.xml), so it is left as it '
+                    f"is: the revisions saved here stay visible, but edits the recipient makes in "
+                    f"Word will not be tracked. Save with track_changes=True to turn tracking on "
+                    f"instead.",
                     UserWarning,
                     stacklevel=3,
                 )
                 return
             # An explicit track_changes=True is the caller saying it in as many
-            # words, which outranks the document's setting. Dropping the
-            # attribute leaves Word's own canonical <w:trackChanges/>.
+            # words, which outranks whatever the document's w:val held. Dropping
+            # the attribute leaves Word's own canonical <w:trackChanges/>.
             existing.removeAttribute(val.name)
             editor.save()
             return
@@ -2322,8 +2358,10 @@ class Document:
         if anchor is not None:
             editor.insert_after(anchor, flag_xml)
         elif children:
+            # Nothing the schema puts before trackChanges is here, so every
+            # sibling belongs after it: go first, never last.
             editor.insert_before(children[0], flag_xml)
-        else:
+        else:  # pragma: no cover - _update_settings guarantees a w:rsids sibling by save time
             editor.append_to(root, flag_xml)
         editor.save()
 
