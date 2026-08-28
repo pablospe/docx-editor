@@ -1189,6 +1189,30 @@ class TestNestedForeignRevisions:
             </w:del>
         </w:ins>"""
 
+    def test_accept_all_stops_when_no_revision_can_be_resolved(self):
+        """The no-progress guard in _resolve_all: listed but unresolvable stops.
+
+        _resolve_all normally exits because list_revisions() comes back empty.
+        This pins its *other* exit — the guard that ends the loop when
+        revisions are still listed but none of them can be resolved. Without
+        that guard the loop spins forever on a non-shrinking listing, which is
+        the failure mode that grew a pytest process to 42 GB (ISSUES.md #56).
+        """
+        manager = _make_revision_manager(self.NESTED_DEL_INSIDE_INS)
+        calls = {"n": 0}
+
+        def never_resolves(rev_id: int, element_index: dict | None = None) -> bool:
+            calls["n"] += 1
+            assert calls["n"] <= 20, f"accept_all did not terminate ({calls['n']} calls)"
+            return False
+
+        manager.accept_revision = never_resolves  # type: ignore[method-assign]
+
+        assert manager.accept_all() == 0
+        # The revisions are still there — nothing was resolved, and the loop
+        # ended on the no-progress guard rather than on an empty listing.
+        assert len(manager.list_revisions()) == 2
+
     def test_accept_all_nested_del_inside_ins(self):
         """Test that accept_all resolves a w:del nested inside a w:ins completely."""
         manager = _make_revision_manager(self.NESTED_DEL_INSIDE_INS)
