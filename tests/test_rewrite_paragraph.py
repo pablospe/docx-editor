@@ -832,11 +832,11 @@ class TestBatchRewrite:
         real = mgr.rewrite_paragraph
         calls = {"n": 0}
 
-        def flaky(ref_str, new_text, paragraphs=None):
+        def flaky(ref_str, new_text, *, paragraphs=None):
             calls["n"] += 1
             if calls["n"] == 2:
                 raise ValueError("simulated mid-batch failure")
-            return real(ref_str, new_text, paragraphs)
+            return real(ref_str, new_text, paragraphs=paragraphs)
 
         monkeypatch.setattr(mgr, "rewrite_paragraph", flaky)
         with pytest.raises(BatchOperationError) as exc:

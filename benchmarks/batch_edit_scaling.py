@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark: batch_edit and batch_rewrite scaling with op count (#51, #56).
+"""Benchmark: batch_edit / batch_rewrite scaling (ISSUES.md #51, #56).
 
 Builds a ~600-paragraph document (multi-run paragraphs, ~400 chars each) and
 measures batch_edit at increasing operation counts, apply and dry_run. Before
@@ -157,7 +157,10 @@ def _timed_rewrite_batch(doc: Document, n_ops: int) -> float:
     refs = doc.list_paragraphs(limit=None)
     n_paras = len(refs)
     assert n_ops <= n_paras, f"at most {n_paras} ops supported (one rewrite per paragraph)"
-    rewrites = [(refs[(i * 397) % n_paras].split("|")[0], f"[REWRITTEN {i:04d}] {FILLER}") for i in range(n_ops)]
+    # Distinct targets by construction. batch_edit's coprime-stride trick is
+    # not reusable here: batch_rewrite rejects duplicate paragraphs, so a
+    # stride sharing a factor with n_paras would abort the benchmark.
+    rewrites = [(refs[i].split("|")[0], f"[REWRITTEN {i:04d}] {FILLER}") for i in range(n_ops)]
 
     start = time.perf_counter()
     group_ids = doc.batch_rewrite(rewrites)
@@ -167,7 +170,7 @@ def _timed_rewrite_batch(doc: Document, n_ops: int) -> float:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="batch_edit scaling benchmark")
+    parser = argparse.ArgumentParser(description="batch_edit / batch_rewrite scaling benchmark")
     parser.add_argument("--ops", type=int, default=None, help="extra op count to measure (e.g. 1000)")
     args = parser.parse_args()
     if args.ops is not None and args.ops < 1:
@@ -192,11 +195,13 @@ def main() -> None:
 
         # batch_rewrite: same shared-<w:p>-snapshot fix (#56), but each rewrite
         # must target a distinct paragraph, so op counts are capped at N_PARAGRAPHS.
-        rewrite_op_counts = [n for n in op_counts if n <= N_PARAGRAPHS]
-        skipped = [n for n in op_counts if n > N_PARAGRAPHS]
-        if skipped:
-            print(f"\nSkipping batch_rewrite for op counts > {N_PARAGRAPHS} (one rewrite per paragraph): {skipped}")
+        with Document.open(persist_path, force_recreate=True) as probe:
+            n_paras = len(probe.list_paragraphs(limit=None))
+        rewrite_op_counts = [n for n in op_counts if n <= n_paras]
+        skipped = [n for n in op_counts if n > n_paras]
         print()
+        if skipped:
+            print(f"Skipping batch_rewrite for op counts > {n_paras} (one rewrite per paragraph): {skipped}")
         print(f"{'ops':>5} | {'rewrite s':>9} {'ms/op':>7}")
         print("-" * 26)
         for n in rewrite_op_counts:

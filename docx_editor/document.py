@@ -419,7 +419,7 @@ class Document:
         old_ref: str,
         group_id: int | None,
         paragraphs: list[Element] | None = None,
-        element_index: dict[str, Element] | None = None,
+        element_index: dict[str, list[Element]] | None = None,
     ) -> EditResult:
         """Build an EditResult from a mutated paragraph's old ref, group, and changeset."""
         revision_ids = self._revision_manager.group_revisions(group_id) if group_id is not None else ()
@@ -440,7 +440,7 @@ class Document:
         old_ref: str,
         group_id: int | None,
         paragraphs: list[Element],
-        element_index: dict[str, Element] | None = None,
+        element_index: dict[str, list[Element]] | None = None,
     ) -> tuple[str, ...]:
         """Refs of every paragraph a group's revisions landed in, document order.
 
@@ -471,9 +471,8 @@ class Document:
         member_paras = [
             para
             for rev_id in mgr.group_revisions(group_id)
-            if (elem := element_index.get(str(rev_id))) is not None
-            and (para := _ancestor_paragraph(elem)) is not None
-            and id(para) in index_map
+            for elem in element_index.get(str(rev_id), ())
+            if (para := _ancestor_paragraph(elem)) is not None and id(para) in index_map
         ]
         # Both fallbacks below are defensive: a split group's revisions always
         # resolve to live, consecutive paragraphs, so member_paras is non-empty

@@ -367,10 +367,10 @@ class TestBatchGrouping:
 
         real_rewrite = RevisionManager.rewrite_paragraph
 
-        def flaky(self, ref_str, new_text, paragraphs=None):
+        def flaky(self, ref_str, new_text, *, paragraphs=None):
             if new_text == "BOOM":
                 raise DocxEditError("simulated apply failure")
-            return real_rewrite(self, ref_str, new_text, paragraphs)
+            return real_rewrite(self, ref_str, new_text, paragraphs=paragraphs)
 
         monkeypatch.setattr(RevisionManager, "rewrite_paragraph", flaky)
 

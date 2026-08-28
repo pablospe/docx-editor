@@ -1323,11 +1323,13 @@ class RevisionManager:
         if not operations:
             return []
 
-        # One full-DOM <w:p> walk shared by the whole batch. Safe because
-        # batch ops never add, remove, or replace <w:p> elements (they only
-        # rewrite runs inside a paragraph) and minidom returns a plain
-        # non-live list. After a rollback the DOM is replaced, but the
-        # exception propagates immediately and this list is never used again.
+        # One full-DOM <w:p> walk shared by the whole batch. Ops never remove
+        # or reorder <w:p> elements, and a tracked split only inserts directly
+        # after the paragraph being edited; descending-index application means
+        # such an insertion always lands after the ops still to be processed,
+        # so no pending index shifts. minidom returns a plain non-live list.
+        # After a rollback the DOM is replaced, but the exception propagates
+        # immediately and this list is never used again.
         paragraphs = self.editor.dom.getElementsByTagName("w:p")
 
         # Parse and validate all refs upfront
@@ -1558,10 +1560,12 @@ class RevisionManager:
         if not rewrites:
             return []
 
-        # One full-DOM <w:p> walk shared by the whole batch — same reasoning
-        # as batch_edit: rewrites never add, remove, or reorder <w:p>
-        # elements (a tracked split only shifts indices of paragraphs already
-        # processed, see the descending-order application loop below).
+        # One full-DOM <w:p> walk shared by the whole batch. Rewrites never
+        # remove or reorder <w:p> elements, and a tracked split (a "\n" in
+        # new_text) only *inserts* the new paragraph directly after the one
+        # being rewritten. Because application runs in descending index order
+        # (see the loop below), every insertion lands after the paragraphs
+        # still to be processed, so no pending ref's snapshot index shifts.
         paragraphs = self.editor.dom.getElementsByTagName("w:p")
 
         # Parse and validate all refs upfront
@@ -1608,7 +1612,7 @@ class RevisionManager:
                         # a no-op (reentrancy guard), so the whole call is one
                         # changeset with one group per rewrite.
                         group_ids[original_idx] = self.rewrite_paragraph(
-                            f"P{ref.index}#{ref.hash}", new_text, paragraphs
+                            f"P{ref.index}#{ref.hash}", new_text, paragraphs=paragraphs
                         )
                     except (ValueError, DocxEditError) as e:
                         raise BatchOperationError(original_idx, str(e), original=e) from e
@@ -1624,7 +1628,7 @@ class RevisionManager:
             self._restore_registry(registry_snapshot)
             raise
 
-    def rewrite_paragraph(self, ref_str: str, new_text: str, paragraphs: list[Element] | None = None) -> int | None:
+    def rewrite_paragraph(self, ref_str: str, new_text: str, *, paragraphs: list[Element] | None = None) -> int | None:
         """Rewrite a paragraph's text, generating fine-grained tracked changes.
 
         Diffs old vs new text at word level and applies minimal tracked changes
@@ -1636,9 +1640,10 @@ class RevisionManager:
         Args:
             ref_str: Paragraph reference string (e.g., "P3#a7b2")
             new_text: Desired new text for the paragraph
-            paragraphs: Optional pre-fetched ``<w:p>`` list (the #51 pattern);
-                threaded in by ``batch_rewrite`` so a batch shares one walk.
-                None fetches fresh — the default for standalone calls.
+            paragraphs: Optional pre-fetched ``<w:p>`` list, threaded in by
+                ``batch_rewrite`` so a whole batch shares one full-DOM walk
+                (ISSUES.md #51). None fetches fresh — the default for
+                standalone calls.
 
         Returns:
             The rewrite's revision group id, or None when no revisions were
@@ -1662,7 +1667,11 @@ class RevisionManager:
         return capture.group_id
 
     def _rewrite_paragraph_inner(self, ref_str: str, new_text: str, paragraphs: list[Element] | None = None) -> None:
-        """Diff-and-apply body of ``rewrite_paragraph`` (runs inside _grouped)."""
+        """Diff-and-apply body of ``rewrite_paragraph`` (runs inside _grouped).
+
+        ``paragraphs`` is the batch's shared <w:p> snapshot (see batch_rewrite);
+        None fetches fresh.
+        """
         ref = ParagraphRef.parse(ref_str)
         p = self._resolve_paragraph(ref, paragraphs)
         text_map = build_text_map(p)
@@ -3594,25 +3603,31 @@ class RevisionManager:
             changeset_source=self._changeset_sources.get(changeset_id) if changeset_id is not None else None,
         )
 
-    def _revision_element_index(self) -> dict[str, Element]:
-        """Map ``w:id`` -> its <w:ins>/<w:del> element, one full-DOM walk per tag.
+    def _revision_element_index(self) -> dict[str, list[Element]]:
+        """Map ``w:id`` -> its <w:ins>/<w:del> elements, one full-DOM walk per tag.
 
-        Built once per group/changeset resolution and threaded through
-        ``accept_revision``/``reject_revision`` so locating a member is an O(1)
+        Built once per resolution call and threaded through
+        ``accept_revision``/``reject_revision`` so locating a member is a dict
         lookup instead of a fresh full-document scan (ISSUES.md #57).
 
-        One element per id is exact for this path: a duplicate w:id never
-        becomes a group member — ``_reconstruct_groups`` bars every duplicated
-        id from every inferred group, and our own allocator keeps recorded ids
-        unique — so a member id always maps to a single element. The
-        w:ins-before-w:del insertion order only settles a tie-break group
-        members never hit (it mirrors the fresh scan, which checks insertions
-        first).
+        Each id maps to a *list* because Word does not guarantee unique w:id:
+        one reviewer's <w:ins> and another's <w:del> can share an id. Group and
+        changeset members never collide (``_reconstruct_groups`` bars every
+        duplicated id from every inferred group, and our own allocator keeps
+        recorded ids unique), so for those callers every list holds exactly one
+        element. Whole-document resolution (``_resolve_all``) is where the
+        duplicates live: keeping them all lets one index serve every same-id
+        element, so they resolve within a single pass instead of costing a
+        rebuilt index and a whole extra pass each.
+
+        Insertion order is w:ins before w:del within a tag, then document order
+        within each tag — mirroring the fresh scan, which checks insertions
+        first.
         """
-        element_index: dict[str, Element] = {}
+        element_index: dict[str, list[Element]] = {}
         for tag in ("w:ins", "w:del"):
             for elem in self.editor.dom.getElementsByTagName(tag):
-                element_index.setdefault(elem.getAttribute("w:id"), elem)
+                element_index.setdefault(elem.getAttribute("w:id"), []).append(elem)
         return element_index
 
     def _is_in_document(self, elem) -> bool:
@@ -3633,13 +3648,20 @@ class RevisionManager:
             node = node.parentNode
         return False
 
-    def _find_revision_element(self, revision_id: int, element_index: dict[str, Element] | None) -> Element | None:
+    def _find_revision_element(
+        self, revision_id: int, element_index: dict[str, list[Element]] | None
+    ) -> Element | None:
         """Locate the live <w:ins>/<w:del> element for ``revision_id``.
 
         ``element_index is None`` scans the document fresh (insertions before
         deletions), matching the historical lookup exactly. Otherwise the id is
-        resolved through the pre-built ``element_index`` and confirmed
-        still-attached via ``_is_in_document``.
+        resolved through the pre-built ``element_index``, returning the first
+        candidate still attached to the document.
+
+        Returning the *first still-attached* candidate (rather than a single
+        remembered element) is what lets duplicate ids resolve from one index:
+        once an element is detached its successor becomes the answer, so N
+        same-id revisions resolve in one pass rather than N.
         """
         if element_index is None:
             for ins_elem in self.editor.dom.getElementsByTagName("w:ins"):
@@ -3649,12 +3671,12 @@ class RevisionManager:
                 if del_elem.getAttribute("w:id") == str(revision_id):
                     return del_elem
             return None
-        elem = element_index.get(str(revision_id))
-        if elem is None or not self._is_in_document(elem):
-            return None
-        return elem
+        for elem in element_index.get(str(revision_id), ()):
+            if self._is_in_document(elem):
+                return elem
+        return None
 
-    def accept_revision(self, revision_id: int, element_index: dict[str, Element] | None = None) -> bool:
+    def accept_revision(self, revision_id: int, element_index: dict[str, list[Element]] | None = None) -> bool:
         """Accept a revision by ID.
 
         For insertions: removes the w:ins wrapper, keeping the content.
@@ -3665,7 +3687,7 @@ class RevisionManager:
             element_index: Optional pre-built w:id -> element map (see
                 ``_revision_element_index``) that lets group/changeset
                 resolution skip a full-DOM scan per member. ``None`` scans
-                fresh (standalone calls, accept_all/reject_all).
+                fresh (standalone calls); accept_all/reject_all pass one too.
 
         Returns:
             True if revision was accepted, False if not found
@@ -3681,7 +3703,7 @@ class RevisionManager:
             self._remove_element(elem)
         return True
 
-    def reject_revision(self, revision_id: int, element_index: dict[str, Element] | None = None) -> bool:
+    def reject_revision(self, revision_id: int, element_index: dict[str, list[Element]] | None = None) -> bool:
         """Reject a revision by ID.
 
         For insertions: removes the w:ins element and its content entirely.
@@ -3692,7 +3714,7 @@ class RevisionManager:
             element_index: Optional pre-built w:id -> element map (see
                 ``_revision_element_index``) that lets group/changeset
                 resolution skip a full-DOM scan per member. ``None`` scans
-                fresh (standalone calls, accept_all/reject_all).
+                fresh (standalone calls); accept_all/reject_all pass one too.
 
         Returns:
             True if revision was rejected, False if not found
@@ -3713,14 +3735,16 @@ class RevisionManager:
             self._restore_deletion(elem)
         return True
 
-    def _resolve_ids(self, members: Iterable[int], resolve: Callable[[int, dict[str, Element] | None], bool]) -> int:
+    def _resolve_ids(
+        self, members: Iterable[int], resolve: Callable[[int, dict[str, list[Element]] | None], bool]
+    ) -> int:
         """Apply ``resolve`` (accept/reject_revision) to every id in ``members``.
 
         Reverse-id, loop-until-no-progress pattern: nested members become
         resolvable once their host is processed, and members already resolved
-        individually are simply skipped. Shared by group resolution, changeset
-        resolution (a changeset passes the union of its groups' revisions),
-        and accept_all/reject_all (which pass every listed revision's id).
+        individually are simply skipped. Shared by group resolution and
+        changeset resolution (a changeset passes the union of its groups'
+        revisions).
 
         Members are a fixed set with unique ids (the allocator guarantees it),
         so the w:id -> element index is built once here and threaded through
@@ -3747,11 +3771,13 @@ class RevisionManager:
             if not progressed:
                 return count
 
-    def _resolve_group(self, group_id: int, resolve: Callable[[int, dict[str, Element] | None], bool]) -> int:
+    def _resolve_group(self, group_id: int, resolve: Callable[[int, dict[str, list[Element]] | None], bool]) -> int:
         """Apply ``resolve`` to every member revision of a group."""
         return self._resolve_ids(self.group_revisions(group_id), resolve)
 
-    def _resolve_changeset(self, changeset_id: int, resolve: Callable[[int, dict[str, Element] | None], bool]) -> int:
+    def _resolve_changeset(
+        self, changeset_id: int, resolve: Callable[[int, dict[str, list[Element]] | None], bool]
+    ) -> int:
         """Apply ``resolve`` to every revision across all groups of a changeset.
 
         A revision belongs to exactly one group, so the changeset's groups
@@ -3825,7 +3851,7 @@ class RevisionManager:
         """
         return self._resolve_changeset(changeset_id, self.reject_revision)
 
-    def _resolve_all(self, author: str | None, resolve: Callable[[int, dict[str, Element] | None], bool]) -> int:
+    def _resolve_all(self, author: str | None, resolve: Callable[[int, dict[str, list[Element]] | None], bool]) -> int:
         """Apply ``resolve`` to every listed revision, re-listing on each pass.
 
         The whole-document counterpart to ``_resolve_ids``. Two differences,
@@ -3835,22 +3861,27 @@ class RevisionManager:
         * **Re-listing each pass is what terminates the loop.** The listing
           shrinks as revisions are resolved, so an empty (or no-progress) pass
           ends it. ``_resolve_ids`` can instead lean on ``resolve`` returning
-          False, because its members are a fixed set of unique ids.
-        * **The element index is rebuilt each pass.** Word may reuse one w:id
-          across authors (A's w:ins and B's w:del both id=7); the index keeps
-          one element per id, so the second only becomes reachable once the
-          first is detached.
+          False, because its members are a fixed set of unique ids. Relying on
+          that here would not terminate: a whole-document listing can hand the
+          same id back repeatedly.
+        * **The index maps each id to every element carrying it.** Word may
+          reuse one w:id across authors (A's w:ins and B's w:del both id=7);
+          ``_find_revision_element`` returns the first still-attached
+          candidate, so same-id revisions resolve within one pass.
 
-        Each pass still threads one index through every ``resolve`` call, so a
-        revision costs an O(1) lookup rather than a fresh full-document scan
-        (ISSUES.md #56) — the per-pass cost is constant in revision count.
+        The index is built once for the whole call, not per pass: resolution
+        only ever detaches elements, so a single build stays a valid superset
+        and ``_is_in_document`` filters what is gone. Each revision then costs
+        a dict lookup instead of a fresh full-document scan (ISSUES.md #56).
+        Per pass this is a constant number of full-DOM walks — the work
+        itself is still linear in the number of revisions listed.
         """
         count = 0
+        element_index = self._revision_element_index()
         while True:
             revisions = self.list_revisions(author=author, with_location=False)
             if not revisions:
                 return count
-            element_index = self._revision_element_index()
             progressed = False
             for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
                 if resolve(rev.id, element_index):

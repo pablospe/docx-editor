@@ -15,7 +15,7 @@ import pytest
 pytest.importorskip("jupyter_client")
 pytest.importorskip("ipykernel")
 
-from conftest import _sweep_leaked_kernels  # noqa: E402
+from conftest import sweep_leaked_kernels  # noqa: E402
 
 from docx_editor.exceptions import SessionDeadError, SessionError  # noqa: E402
 from docx_editor.session import (  # noqa: E402
@@ -869,7 +869,7 @@ class TestKernelReaping:
             assert is_session_running(conn) is True, "expected an orphaned kernel to reproduce the leak"
 
             # Exactly what the session-scoped autouse fixture runs at teardown.
-            assert _sweep_leaked_kernels({conn}) == [conn]
+            assert sweep_leaked_kernels({conn}) == [conn]
             assert is_session_running(conn) is False
             assert conn.exists() is False
         finally:
@@ -879,12 +879,30 @@ class TestKernelReaping:
             if conn.exists():
                 stop_session(conn)
 
+    def test_fixture_records_kernels_started_in_process(self, tmp_path, reap_leaked_kernels):
+        """The recording half of the fixture actually captures a spawn.
+
+        ``test_kernel_orphaned_by_killed_owner_is_swept`` starts its kernel in a
+        *child* process, which the parent's ``Popen`` patch never observes, and
+        then calls the sweep by hand — so without this test nothing exercises
+        ``recording_init`` / ``_connection_file_from_argv``. If start_session's
+        argv shape ever changed (``-f=<path>``, or launching via a module that
+        binds ``from subprocess import Popen`` at import time), recording would
+        silently become a no-op and no test would fail.
+        """
+        conn = (tmp_path / "kernel.json").resolve()
+        start_session(conn)
+        try:
+            assert conn in reap_leaked_kernels
+        finally:
+            stop_session(conn)
+
     def test_sweep_ignores_already_stopped_sessions(self, tmp_path):
         """A kernel a test stopped itself is not re-swept (the common case)."""
         conn = tmp_path / "kernel.json"
         start_session(conn)
         assert stop_session(conn) is True
-        assert _sweep_leaked_kernels({conn}) == []
+        assert sweep_leaked_kernels({conn}) == []
 
     def test_sweep_ignores_paths_that_never_had_a_kernel(self, tmp_path):
-        assert _sweep_leaked_kernels({tmp_path / "never.json"}) == []
+        assert sweep_leaked_kernels({tmp_path / "never.json"}) == []

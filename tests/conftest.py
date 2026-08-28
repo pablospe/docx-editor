@@ -3,6 +3,7 @@
 import shutil
 import subprocess
 import tempfile
+import warnings
 import zipfile
 from pathlib import Path
 from xml.dom import minidom
@@ -95,30 +96,37 @@ def _connection_file_from_argv(args) -> Path | None:
     ``[python, "-m", "ipykernel_launcher", "-f", <connection file>]``, so the
     connection file can be recovered from the argv alone — no cooperation from
     the code under test required.
+
+    The path is resolved eagerly: cwd is correct now, but two tests chdir
+    (``test_workspace.py``, ``test_document.py``), so a relative path stored
+    here could resolve against a different directory at session teardown.
     """
     if isinstance(args, (str, bytes)):
         return None  # shell=True form; start_session never uses it.
-    try:
-        argv = [str(a) for a in args]
-    except TypeError:
-        return None
+    argv = [str(a) for a in args]
     if not any("ipykernel_launcher" in a for a in argv):
         return None
     try:
-        return Path(argv[argv.index("-f") + 1])
+        return Path(argv[argv.index("-f") + 1]).resolve()
     except (ValueError, IndexError):
         return None
 
 
-def _sweep_leaked_kernels(connection_files) -> list[Path]:
+def sweep_leaked_kernels(connection_files) -> list[Path]:
     """Stop every kernel in ``connection_files`` that is still answering.
 
     ``start_session`` detaches the kernel (``start_new_session=True`` on POSIX)
-    so it survives the process that spawned it. A test killed mid-flight — as
-    opposed to one that merely fails, which still unwinds through ``finally`` —
-    never runs its own teardown, leaving an orphaned kernel plus its connection
-    and pid files behind. This is what accumulated the long-lived orphans that
-    motivated ISSUES.md #62.
+    so it survives the process that spawned it. A test that fails, errors, or
+    simply forgets to call ``stop_session`` therefore leaves a live kernel plus
+    its connection and pid files behind; this sweep is the backstop.
+
+    Scope, stated precisely: this runs at pytest teardown, so it covers a run
+    that completes (however badly) and Ctrl-C, which unwinds finalizers. It
+    does *not* cover the pytest process itself being SIGKILLed or OOM-killed —
+    no in-process finalizer can. For that case the memory-capped
+    ``systemd-run --user --scope`` invocation in CLAUDE.md is the real
+    protection: the kernel stays inside the scope's cgroup, which systemd
+    tears down with the scope.
 
     ``stop_session`` can shut a kernel down from its connection file alone, so
     sweeping reduces to "stop whatever still answers". Kernels a test already
@@ -127,20 +135,24 @@ def _sweep_leaked_kernels(connection_files) -> list[Path]:
     Returns the paths actually swept, so this is directly assertable.
     """
     try:
-        from docx_editor.session import is_session_running, stop_session
+        from docx_editor.session import DEFAULT_CONNECTION_FILE, is_session_running, stop_session
     except ImportError:
         return []  # [session] extra absent — nothing could have been started.
 
     swept: list[Path] = []
     for conn in connection_files:
+        # Never touch the developer's own long-lived session.
+        if conn == DEFAULT_CONNECTION_FILE.resolve():
+            continue
         try:
             if is_session_running(conn, timeout=2.0):
                 stop_session(conn, timeout=5.0)
                 swept.append(conn)
-        except Exception:
-            # A cleanup sweep must never fail the run it is cleaning up after;
-            # a kernel we cannot reach is already as good as gone.
-            continue
+        except Exception as exc:
+            # A cleanup sweep must not fail the run it is cleaning up after,
+            # but a kernel we could not stop is a real leak — say so loudly
+            # rather than reporting a clean sweep.
+            warnings.warn(f"could not reap kernel at {conn}: {exc!r}", stacklevel=2)
     return swept
 
 
@@ -148,37 +160,49 @@ def _sweep_leaked_kernels(connection_files) -> list[Path]:
 def reap_leaked_kernels():
     """Reap any ipykernel this test session started but never stopped.
 
-    Wraps ``subprocess.Popen`` for the duration of the session, recording the
-    connection file of every ``ipykernel_launcher`` spawn, then sweeps them all
-    at session teardown. Patching ``Popen`` (rather than ``start_session``) is
-    what makes this reliable: the session tests do
-    ``from docx_editor.session import start_session``, binding the function
-    object at import time, so patching the module attribute afterwards would
-    miss those call sites entirely. ``session.py`` always reaches Popen through
-    the module (``subprocess.Popen(...)``), so the interception holds however
-    the kernel was launched — direct call or through the CLI's ``main()``.
+    Wraps ``subprocess.Popen.__init__`` for the duration of the session,
+    recording the connection file of every ``ipykernel_launcher`` spawn, then
+    sweeps them all at teardown (see ``sweep_leaked_kernels`` for exactly what
+    that does and does not cover).
+
+    Two deliberate choices:
+
+    * **Patch Popen, not start_session.** The session tests do
+      ``from docx_editor.session import start_session``, binding the function
+      object at import time, so patching the module attribute afterwards would
+      miss those call sites. ``session.py`` always reaches Popen through the
+      module, so this interception holds however the kernel was launched.
+    * **Patch ``__init__``, not the class.** Rebinding ``subprocess.Popen`` to
+      a function would break ``isinstance(x, subprocess.Popen)`` anywhere in
+      the dependency tree (``TypeError: isinstance() arg 2 must be a type``).
+      Patching the initialiser keeps the class object intact.
 
     Uses its own ``pytest.MonkeyPatch`` because the ``monkeypatch`` fixture is
     function-scoped and cannot be requested from a session-scoped fixture.
 
-    Yields the live set of recorded connection files (for introspection).
+    Yields the set of recorded connection files; ``test_session.py`` asserts
+    against it to prove the recording half actually works.
     """
     started: set[Path] = set()
-    real_popen = subprocess.Popen
+    real_init = subprocess.Popen.__init__
     mp = pytest.MonkeyPatch()
 
-    def recording_popen(args, *popen_args, **popen_kwargs):
+    def recording_init(self, args, *popen_args, **popen_kwargs):
+        # Materialise once: Popen accepts any iterable, and inspecting a bare
+        # iterator here would exhaust it before the real __init__ sees it.
+        if not isinstance(args, (str, bytes)):
+            args = list(args)
         conn = _connection_file_from_argv(args)
         if conn is not None:
             started.add(conn)
-        return real_popen(args, *popen_args, **popen_kwargs)
+        real_init(self, args, *popen_args, **popen_kwargs)
 
-    mp.setattr(subprocess, "Popen", recording_popen)
+    mp.setattr(subprocess.Popen, "__init__", recording_init)
     try:
         yield started
     finally:
         mp.undo()
-        _sweep_leaked_kernels(started)
+        sweep_leaked_kernels(started)
 
 
 @pytest.fixture

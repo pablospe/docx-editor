@@ -14,9 +14,9 @@ check: ## Run code quality tools.
 	@uv run ty check
 
 .PHONY: test
-test: ## Test the code with pytest
+test: ## Test the code with pytest (serial, niced, memory-capped — see CLAUDE.md)
 	@echo "🚀 Testing code: Running pytest"
-	@uv run python -m pytest tests -n auto --cov --cov-config=pyproject.toml --cov-report=xml
+	@systemd-run --user --scope -p MemoryMax=8G -- nice -n 10 uv run python -m pytest tests -q
 
 .PHONY: build
 build: clean-build ## Build wheel file

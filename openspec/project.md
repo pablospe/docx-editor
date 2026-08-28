@@ -47,7 +47,9 @@ docx_editor/
 - pytest with fixtures for test documents
 - 98% code coverage target
 - Test documents in `tests/fixtures/`
-- Run: `uv run pytest` or `uv run pytest -n auto` for parallel
+- Run: see the Quick Reference in `CLAUDE.md` — local runs must be serial,
+  niced and memory-capped. Never `-n` / `-n auto` locally (CI parallelises
+  separately in `.github/workflows/main.yml`).
 
 ### Git Workflow
 
