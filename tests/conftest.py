@@ -1,6 +1,7 @@
 """Pytest fixtures for docx_editor tests."""
 
 import shutil
+import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
@@ -85,6 +86,99 @@ def count_dom_walks(monkeypatch) -> list[str]:
 
     monkeypatch.setattr(minidom.Document, "getElementsByTagName", counting)
     return walks
+
+
+def _connection_file_from_argv(args) -> Path | None:
+    """Return the ``-f <path>`` of an ipykernel_launcher command line, else None.
+
+    ``start_session`` always spawns the kernel as
+    ``[python, "-m", "ipykernel_launcher", "-f", <connection file>]``, so the
+    connection file can be recovered from the argv alone — no cooperation from
+    the code under test required.
+    """
+    if isinstance(args, (str, bytes)):
+        return None  # shell=True form; start_session never uses it.
+    try:
+        argv = [str(a) for a in args]
+    except TypeError:
+        return None
+    if not any("ipykernel_launcher" in a for a in argv):
+        return None
+    try:
+        return Path(argv[argv.index("-f") + 1])
+    except (ValueError, IndexError):
+        return None
+
+
+def _sweep_leaked_kernels(connection_files) -> list[Path]:
+    """Stop every kernel in ``connection_files`` that is still answering.
+
+    ``start_session`` detaches the kernel (``start_new_session=True`` on POSIX)
+    so it survives the process that spawned it. A test killed mid-flight — as
+    opposed to one that merely fails, which still unwinds through ``finally`` —
+    never runs its own teardown, leaving an orphaned kernel plus its connection
+    and pid files behind. This is what accumulated the long-lived orphans that
+    motivated ISSUES.md #62.
+
+    ``stop_session`` can shut a kernel down from its connection file alone, so
+    sweeping reduces to "stop whatever still answers". Kernels a test already
+    stopped are skipped: their connection file is gone, so they do not answer.
+
+    Returns the paths actually swept, so this is directly assertable.
+    """
+    try:
+        from docx_editor.session import is_session_running, stop_session
+    except ImportError:
+        return []  # [session] extra absent — nothing could have been started.
+
+    swept: list[Path] = []
+    for conn in connection_files:
+        try:
+            if is_session_running(conn, timeout=2.0):
+                stop_session(conn, timeout=5.0)
+                swept.append(conn)
+        except Exception:
+            # A cleanup sweep must never fail the run it is cleaning up after;
+            # a kernel we cannot reach is already as good as gone.
+            continue
+    return swept
+
+
+@pytest.fixture(scope="session", autouse=True)
+def reap_leaked_kernels():
+    """Reap any ipykernel this test session started but never stopped.
+
+    Wraps ``subprocess.Popen`` for the duration of the session, recording the
+    connection file of every ``ipykernel_launcher`` spawn, then sweeps them all
+    at session teardown. Patching ``Popen`` (rather than ``start_session``) is
+    what makes this reliable: the session tests do
+    ``from docx_editor.session import start_session``, binding the function
+    object at import time, so patching the module attribute afterwards would
+    miss those call sites entirely. ``session.py`` always reaches Popen through
+    the module (``subprocess.Popen(...)``), so the interception holds however
+    the kernel was launched — direct call or through the CLI's ``main()``.
+
+    Uses its own ``pytest.MonkeyPatch`` because the ``monkeypatch`` fixture is
+    function-scoped and cannot be requested from a session-scoped fixture.
+
+    Yields the live set of recorded connection files (for introspection).
+    """
+    started: set[Path] = set()
+    real_popen = subprocess.Popen
+    mp = pytest.MonkeyPatch()
+
+    def recording_popen(args, *popen_args, **popen_kwargs):
+        conn = _connection_file_from_argv(args)
+        if conn is not None:
+            started.add(conn)
+        return real_popen(args, *popen_args, **popen_kwargs)
+
+    mp.setattr(subprocess, "Popen", recording_popen)
+    try:
+        yield started
+    finally:
+        mp.undo()
+        _sweep_leaked_kernels(started)
 
 
 @pytest.fixture

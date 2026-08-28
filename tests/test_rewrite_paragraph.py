@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from conftest import count_dom_walks
 
 from docx_editor import BatchOperationError, Document, HashMismatchError
 from docx_editor.track_changes import _tokenize_words
@@ -831,11 +832,11 @@ class TestBatchRewrite:
         real = mgr.rewrite_paragraph
         calls = {"n": 0}
 
-        def flaky(ref_str, new_text):
+        def flaky(ref_str, new_text, paragraphs=None):
             calls["n"] += 1
             if calls["n"] == 2:
                 raise ValueError("simulated mid-batch failure")
-            return real(ref_str, new_text)
+            return real(ref_str, new_text, paragraphs)
 
         monkeypatch.setattr(mgr, "rewrite_paragraph", flaky)
         with pytest.raises(BatchOperationError) as exc:
@@ -1130,3 +1131,41 @@ class TestRewriteInsertEdgeCases:
         finally:
             doc.close()
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestBatchRewriteFullDomWalks:
+    """Structural performance pin for ISSUES.md #56, mirroring
+    ``TestBatchEditFullDomWalks``: ``batch_rewrite`` shares one ``<w:p>``
+    snapshot across the whole batch, so the number of full-DOM
+    getElementsByTagName walks is a small constant rather than growing with the
+    rewrite count. Counts Document-level walks only (per-rewrite work is
+    paragraph-local, on Elements), so the test is exact and timing-free.
+
+    Before the fix each rewrite resolved its own paragraph twice — once in the
+    validation loop, once on apply — so walks grew as O(rewrites).
+    """
+
+    def test_walk_count_is_constant_in_rewrite_count(self, rewrite_doc, monkeypatch):
+        doc, _ = rewrite_doc
+
+        walks = count_dom_walks(monkeypatch)
+
+        refs = doc.list_paragraphs()
+        doc.batch_rewrite([(refs[0].split("|")[0], "First paragraph rewritten once.")])
+        small_batch = len(walks)
+
+        walks.clear()
+        refs = doc.list_paragraphs()
+        # Four rewrites spanning every non-empty paragraph in the fixture.
+        doc.batch_rewrite([
+            (refs[0].split("|")[0], "First paragraph rewritten again."),
+            (refs[1].split("|")[0], "Second paragraph rewritten."),
+            (refs[2].split("|")[0], "Third paragraph rewritten."),
+            (refs[4].split("|")[0], "Fifth paragraph rewritten."),
+        ])
+        large_batch = len(walks)
+
+        assert small_batch == large_batch
+        # list_paragraphs() (2 walks) plus batch_rewrite's own shared <w:p>
+        # snapshot (2 walks) — constant in rewrite count either way.
+        assert small_batch <= 4

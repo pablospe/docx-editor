@@ -1317,11 +1317,10 @@ class TestBatchEditFullDomWalks:
 
     def test_apply_walk_count_is_constant_in_op_count(self, multi_para_doc, monkeypatch):
         doc, _ = multi_para_doc
-        # Warm-up batch: absorbs the one-time change-id seed scan so the two
-        # counted batches are structurally identical.
-        refs = doc.list_paragraphs()
-        doc.batch_edit(self._replace_ops(refs, [9]))
-
+        # No warm-up batch needed: change-id seeding happens eagerly in
+        # DocxXMLEditor.__init__ (ISSUES.md #56), before the fixture even
+        # returns, so the very first batch is already structurally identical
+        # to every later one.
         walks = count_dom_walks(monkeypatch)
 
         refs = doc.list_paragraphs()
@@ -1338,6 +1337,9 @@ class TestBatchEditFullDomWalks:
         large_batch = len(walks)
 
         assert small_batch == large_batch
+        # Includes both the counted list_paragraphs() call (2 walks) and
+        # batch_edit's own shared <w:p> walk (2 walks): 4 total, constant in
+        # op count either way.
         assert small_batch <= 4
 
     def test_dry_run_walk_count_is_constant_in_op_count(self, multi_para_doc, monkeypatch):

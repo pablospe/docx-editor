@@ -367,10 +367,10 @@ class TestBatchGrouping:
 
         real_rewrite = RevisionManager.rewrite_paragraph
 
-        def flaky(self, ref_str, new_text):
+        def flaky(self, ref_str, new_text, paragraphs=None):
             if new_text == "BOOM":
                 raise DocxEditError("simulated apply failure")
-            return real_rewrite(self, ref_str, new_text)
+            return real_rewrite(self, ref_str, new_text, paragraphs)
 
         monkeypatch.setattr(RevisionManager, "rewrite_paragraph", flaky)
 
@@ -1626,6 +1626,31 @@ class TestAcceptPathIndex:
             assert getattr(doc, method)(result.group_id) == 2
             assert walks == ["w:ins", "w:del"]
             assert doc.list_revisions() == []
+
+    @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
+    def test_resolve_all_walk_count_is_constant_in_revision_count(self, temp_docx, monkeypatch, method):
+        """accept_all/reject_all must not scan the document once per revision.
+
+        Structural pin for ISSUES.md #56: _resolve_all threads one w:id ->
+        element index through every revision in a pass, so the full-DOM walk
+        count is a small constant rather than growing with the redline size.
+        """
+        counts = {}
+        for label, words in (("small", ["quick"]), ("large", ["quick", "brown", "lazy"])):
+            with Document.open(temp_docx, force_recreate=True) as doc:
+                ref = find_ref(doc, "quick brown fox")
+                doc.batch_edit([EditOperation.replace(w, w.upper(), paragraph=ref) for w in words])
+                n_revs = len(doc.list_revisions())
+                walks = count_dom_walks(monkeypatch)
+                assert getattr(doc, method)() == n_revs
+                counts[label] = (len(walks), n_revs)
+                monkeypatch.undo()
+                assert doc.list_revisions() == []
+
+        # The larger redline really is larger, but costs the same walks.
+        assert counts["large"][1] > counts["small"][1]
+        assert counts["small"][0] == counts["large"][0]
+        assert counts["small"][0] <= 8
 
     def test_reject_group_with_nested_member_counts_once(self, temp_xml):
         # Rejecting the host insertion removes its whole subtree; the nested

@@ -1042,7 +1042,7 @@ class TestAcceptRejectLoops:
         manager = RevisionManager(mock_editor)
 
         # Mock accept_revision to track calls
-        def mock_accept(rev_id: int) -> bool:
+        def mock_accept(rev_id: int, element_index: dict | None = None) -> bool:
             processed.add(str(rev_id))
             return True
 
@@ -1096,7 +1096,7 @@ class TestAcceptRejectLoops:
 
         manager = RevisionManager(mock_editor)
 
-        def mock_reject(rev_id: int) -> bool:
+        def mock_reject(rev_id: int, element_index: dict | None = None) -> bool:
             processed.add(str(rev_id))
             return True
 
@@ -1104,6 +1104,57 @@ class TestAcceptRejectLoops:
 
         count = manager.reject_all()
         assert count == 2
+
+    def test_accept_all_does_not_spin_when_listing_shrinks(self):
+        """accept_all must resolve each revision once, not loop until OOM.
+
+        Regression for ISSUES.md #56: an early refactor hoisted
+        list_revisions() out of the resolution loop, so termination depended
+        solely on accept_revision() returning False. Because the test doubles
+        here always return True, the loop never exited — and since MagicMock
+        retains every recorded call, memory grew without bound until the OOM
+        killer took the machine down (observed at ~42 GiB RSS).
+
+        Re-listing on each pass is what bounds this: the listing shrinks as
+        revisions are processed. The call cap below makes a regression fail in
+        milliseconds instead of exhausting RAM.
+        """
+        mock_editor = MagicMock()
+        mock_editor.dom = MagicMock()
+        processed: set[str] = set()
+
+        def make_ins(rev_id):
+            m = MagicMock()
+            m.getAttribute.side_effect = lambda n, i=rev_id: i if n == "w:id" else ("Author" if n == "w:author" else "")
+            m.getElementsByTagName.return_value = []
+            m.parentNode = MagicMock()
+            return m
+
+        insertions = {"1": make_ins("1"), "2": make_ins("2")}
+
+        def get_elements(tag):
+            if tag == "w:ins":
+                return [e for i, e in insertions.items() if i not in processed]
+            return []
+
+        mock_editor.dom.getElementsByTagName.side_effect = get_elements
+        manager = RevisionManager(mock_editor)
+
+        calls = {"n": 0}
+
+        def counting_accept(rev_id, element_index=None):
+            calls["n"] += 1
+            assert calls["n"] <= 10, (
+                f"accept_all did not terminate: accept_revision called {calls['n']} times "
+                "for 2 revisions (unbounded loop — see docstring)"
+            )
+            processed.add(str(rev_id))
+            return True
+
+        manager.accept_revision = counting_accept  # type: ignore[method-assign]
+
+        assert manager.accept_all() == 2
+        assert calls["n"] == 2, f"expected one resolve per revision, got {calls['n']}"
 
 
 def _make_revision_manager(body_xml):

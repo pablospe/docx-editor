@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Benchmark: accept-path scaling with revision count (ISSUES.md #57).
+"""Benchmark: accept-path scaling with revision count (ISSUES.md #57, #56).
 
 Builds a large multi-run document (via ``batch_edit_scaling.build_large_doc``),
 lays down an N-operation ``batch_edit`` redline (one changeset, N groups, 2N
 revisions), then times three ways to resolve it on identical revisions:
 
-    * ``accept_all()``        — the multi-pass baseline (never regressed)
+    * ``accept_all()``        — resolves every revision in the document
     * ``accept_changeset()``  — resolves the whole batch's changeset
     * ``accept_group()`` ×N   — group-by-group resolution loop
 
@@ -15,8 +15,12 @@ and group-loop paths were O(members x doc): on a 3000-paragraph doc a 240-rev
 ``accept_changeset`` measured 5.35 s (2.26x ``accept_all``) and the
 ``accept_group`` ×120 loop 6.13 s (2.59x) — see scratchpad
 ``dogfood4-perfscale/perf-report.md`` §4. After #57 the group/changeset path
-builds one w:id->element index per call and threads it through every member, so
-its cost tracks ``accept_all`` (ratio ~1x).
+builds one w:id->element index per call and threads it through every member.
+After #56, ``accept_all``/``reject_all`` delegate to that same indexed
+resolution path (rather than hand-rolling a scan per revision per pass), so
+all three modes now scale the same way — roughly one index build per
+resolution pass, not one full-document scan per member. A ratio near 1.00x no
+longer means "matches a slow baseline"; it means all three are cheap.
 
 Usage:
     uv run python benchmarks/accept_scaling.py [--ops 500] [--paras 3000]

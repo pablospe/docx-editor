@@ -1558,13 +1558,19 @@ class RevisionManager:
         if not rewrites:
             return []
 
+        # One full-DOM <w:p> walk shared by the whole batch — same reasoning
+        # as batch_edit: rewrites never add, remove, or reorder <w:p>
+        # elements (a tracked split only shifts indices of paragraphs already
+        # processed, see the descending-order application loop below).
+        paragraphs = self.editor.dom.getElementsByTagName("w:p")
+
         # Parse and validate all refs upfront
         parsed: list[tuple[int, ParagraphRef, str]] = []
         seen_indices: set[int] = set()
         for i, (ref_str, new_text) in enumerate(rewrites):
             try:
                 ref = ParagraphRef.parse(ref_str)
-                self._resolve_paragraph(ref)  # Raises HashMismatchError if stale
+                self._resolve_paragraph(ref, paragraphs)  # Raises HashMismatchError if stale
             except (ValueError, DocxEditError) as e:
                 raise BatchOperationError(i, str(e), original=e) from e
             if ref.index in seen_indices:
@@ -1601,7 +1607,9 @@ class RevisionManager:
                         # The inner rewrite_paragraph's own _changeset() becomes
                         # a no-op (reentrancy guard), so the whole call is one
                         # changeset with one group per rewrite.
-                        group_ids[original_idx] = self.rewrite_paragraph(f"P{ref.index}#{ref.hash}", new_text)
+                        group_ids[original_idx] = self.rewrite_paragraph(
+                            f"P{ref.index}#{ref.hash}", new_text, paragraphs
+                        )
                     except (ValueError, DocxEditError) as e:
                         raise BatchOperationError(original_idx, str(e), original=e) from e
             return group_ids
@@ -1616,7 +1624,7 @@ class RevisionManager:
             self._restore_registry(registry_snapshot)
             raise
 
-    def rewrite_paragraph(self, ref_str: str, new_text: str) -> int | None:
+    def rewrite_paragraph(self, ref_str: str, new_text: str, paragraphs: list[Element] | None = None) -> int | None:
         """Rewrite a paragraph's text, generating fine-grained tracked changes.
 
         Diffs old vs new text at word level and applies minimal tracked changes
@@ -1628,6 +1636,9 @@ class RevisionManager:
         Args:
             ref_str: Paragraph reference string (e.g., "P3#a7b2")
             new_text: Desired new text for the paragraph
+            paragraphs: Optional pre-fetched ``<w:p>`` list (the #51 pattern);
+                threaded in by ``batch_rewrite`` so a batch shares one walk.
+                None fetches fresh — the default for standalone calls.
 
         Returns:
             The rewrite's revision group id, or None when no revisions were
@@ -1647,13 +1658,13 @@ class RevisionManager:
             )
         _reject_control_chars(new_text, field="'new_text'", ctx="rewrite_paragraph(): ", allow_newline=True)
         with self._changeset(), self._grouped() as capture:
-            self._rewrite_paragraph_inner(ref_str, new_text)
+            self._rewrite_paragraph_inner(ref_str, new_text, paragraphs)
         return capture.group_id
 
-    def _rewrite_paragraph_inner(self, ref_str: str, new_text: str) -> None:
+    def _rewrite_paragraph_inner(self, ref_str: str, new_text: str, paragraphs: list[Element] | None = None) -> None:
         """Diff-and-apply body of ``rewrite_paragraph`` (runs inside _grouped)."""
         ref = ParagraphRef.parse(ref_str)
-        p = self._resolve_paragraph(ref)
+        p = self._resolve_paragraph(ref, paragraphs)
         text_map = build_text_map(p)
         old_text = text_map.text
 
@@ -3705,18 +3716,24 @@ class RevisionManager:
     def _resolve_ids(self, members: Iterable[int], resolve: Callable[[int, dict[str, Element] | None], bool]) -> int:
         """Apply ``resolve`` (accept/reject_revision) to every id in ``members``.
 
-        Same reverse-id, loop-until-no-progress pattern as accept_all/
-        reject_all, restricted to ``members``: nested members become
+        Reverse-id, loop-until-no-progress pattern: nested members become
         resolvable once their host is processed, and members already resolved
-        individually are simply skipped. Shared by group and changeset
-        resolution (a changeset passes the union of its groups' revisions).
+        individually are simply skipped. Shared by group resolution, changeset
+        resolution (a changeset passes the union of its groups' revisions),
+        and accept_all/reject_all (which pass every listed revision's id).
 
-        The w:id -> element index is built once here and threaded through every
-        ``resolve`` call, so resolution costs two full-DOM walks total instead
-        of one scan per member per pass (ISSUES.md #57). The index stays valid
-        across passes: accept/reject only ever *detach* elements, and
+        Members are a fixed set with unique ids (the allocator guarantees it),
+        so the w:id -> element index is built once here and threaded through
+        every ``resolve`` call: resolution costs two full-DOM walks instead of
+        one scan per member per pass (ISSUES.md #57). The index stays valid
+        across passes because accept/reject only ever *detach* elements, and
         ``_is_in_document`` (inside ``resolve``) treats a detached member as
         already gone.
+
+        Termination rests on ``resolve`` returning False once an id has no live
+        element left. accept_all/reject_all cannot use this loop — they resolve
+        every id in the document, where Word may repeat a w:id across authors;
+        see ``_resolve_all``.
         """
         members = list(members)
         element_index = self._revision_element_index()
@@ -3808,15 +3825,49 @@ class RevisionManager:
         """
         return self._resolve_changeset(changeset_id, self.reject_revision)
 
+    def _resolve_all(self, author: str | None, resolve: Callable[[int, dict[str, Element] | None], bool]) -> int:
+        """Apply ``resolve`` to every listed revision, re-listing on each pass.
+
+        The whole-document counterpart to ``_resolve_ids``. Two differences,
+        both forced by resolving *every* revision rather than a known member
+        set:
+
+        * **Re-listing each pass is what terminates the loop.** The listing
+          shrinks as revisions are resolved, so an empty (or no-progress) pass
+          ends it. ``_resolve_ids`` can instead lean on ``resolve`` returning
+          False, because its members are a fixed set of unique ids.
+        * **The element index is rebuilt each pass.** Word may reuse one w:id
+          across authors (A's w:ins and B's w:del both id=7); the index keeps
+          one element per id, so the second only becomes reachable once the
+          first is detached.
+
+        Each pass still threads one index through every ``resolve`` call, so a
+        revision costs an O(1) lookup rather than a fresh full-document scan
+        (ISSUES.md #56) — the per-pass cost is constant in revision count.
+        """
+        count = 0
+        while True:
+            revisions = self.list_revisions(author=author, with_location=False)
+            if not revisions:
+                return count
+            element_index = self._revision_element_index()
+            progressed = False
+            for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
+                if resolve(rev.id, element_index):
+                    count += 1
+                    progressed = True
+            if not progressed:
+                return count
+
     def accept_all(self, author: str | None = None) -> int:
         """Accept all revisions, optionally filtered by author.
 
-        Repeats passes until no listed revision can be processed, fully
-        resolving nested revisions in Word-authored files (e.g. a w:del inside
-        a w:ins) and terminating even when an author filter leaves other
-        authors' revisions in the document. Revisions are matched by w:id, so
-        if Word emits duplicate ids across authors, a filtered call may also
-        process a same-id revision by another author.
+        Delegates to ``_resolve_all``, which re-lists and re-indexes on each
+        pass: that fully resolves nested revisions in Word-authored files
+        (e.g. a w:del inside a w:ins) and terminates even when an author
+        filter leaves other authors' revisions in the document. Revisions are
+        matched by w:id, so if Word emits duplicate ids across authors, a
+        filtered call may also process a same-id revision by another author.
 
         Args:
             author: If provided, only accept revisions by this author
@@ -3824,27 +3875,17 @@ class RevisionManager:
         Returns:
             Number of revisions accepted
         """
-        count = 0
-        while True:
-            progressed = False
-            # Process in reverse order by ID to avoid index issues
-            revisions = self.list_revisions(author=author, with_location=False)
-            for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
-                if self.accept_revision(rev.id):
-                    count += 1
-                    progressed = True
-            if not progressed:
-                return count
+        return self._resolve_all(author, self.accept_revision)
 
     def reject_all(self, author: str | None = None) -> int:
         """Reject all revisions, optionally filtered by author.
 
-        Repeats passes until no listed revision can be processed, fully
-        resolving nested revisions in Word-authored files (e.g. a w:del inside
-        a w:ins) and terminating even when an author filter leaves other
-        authors' revisions in the document. Revisions are matched by w:id, so
-        if Word emits duplicate ids across authors, a filtered call may also
-        process a same-id revision by another author.
+        Delegates to ``_resolve_all``, which re-lists and re-indexes on each
+        pass: that fully resolves nested revisions in Word-authored files
+        (e.g. a w:del inside a w:ins) and terminates even when an author
+        filter leaves other authors' revisions in the document. Revisions are
+        matched by w:id, so if Word emits duplicate ids across authors, a
+        filtered call may also process a same-id revision by another author.
 
         Args:
             author: If provided, only reject revisions by this author
@@ -3852,17 +3893,7 @@ class RevisionManager:
         Returns:
             Number of revisions rejected
         """
-        count = 0
-        while True:
-            progressed = False
-            # Process in reverse order by ID to avoid index issues
-            revisions = self.list_revisions(author=author, with_location=False)
-            for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
-                if self.reject_revision(rev.id):
-                    count += 1
-                    progressed = True
-            if not progressed:
-                return count
+        return self._resolve_all(author, self.reject_revision)
 
     def _unwrap_element(self, elem) -> None:
         """Remove an element's wrapper, keeping its children in place."""

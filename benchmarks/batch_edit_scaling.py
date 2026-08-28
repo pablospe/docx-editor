@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Benchmark: batch_edit scaling with operation count (ISSUES.md #51).
+"""Benchmark: batch_edit and batch_rewrite scaling with op count (#51, #56).
 
 Builds a ~600-paragraph document (multi-run paragraphs, ~400 chars each) and
 measures batch_edit at increasing operation counts, apply and dry_run. Before
 the per-batch <w:p> snapshot + seeded change-id fixes, per-op cost was
 O(document size) and flat in the op count (~26 ms/op apply, ~3.5 ms/op
 dry_run at this size); after, ~1.3 ms/op apply and ~0.3 ms/op dry_run,
-falling further as the per-batch fixed cost amortizes over more ops.
+falling further as the per-batch fixed cost amortizes over more ops. Since
+#56 moved change-id seeding into ``DocxXMLEditor.__init__`` (parse time), the
+first measured op no longer absorbs a one-time seed-scan on top of its own
+cost — every op, including the first, times the same steady-state work.
+
+Also measures ``batch_rewrite`` the same way (#56 threaded the same shared
+<w:p> snapshot into its validation and apply loops, closing the O(items x
+doc) gap batch_edit had before #51).
 
 Usage:
     uv run python benchmarks/batch_edit_scaling.py [--ops 1000]
@@ -125,6 +132,40 @@ def _timed_batch(doc: Document, n_ops: int, *, dry_run: bool) -> float:
     return elapsed
 
 
+def run_rewrite_batch(persist_path: Path, n_ops: int) -> float:
+    """Time one batch_rewrite of n_ops on a fresh copy; return elapsed seconds."""
+    tmp = tempfile.mkdtemp(prefix="bench_scale_rw_")
+    try:
+        dest = Path(tmp) / "b.docx"
+        shutil.copy(persist_path, dest)
+        doc = Document.open(dest, force_recreate=True)
+        try:
+            return _timed_rewrite_batch(doc, n_ops)
+        finally:
+            doc.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _timed_rewrite_batch(doc: Document, n_ops: int) -> float:
+    """Build and time the rewrite batch; assert the results are correct.
+
+    Unlike batch_edit, batch_rewrite rejects duplicate paragraph targets
+    within one call, so (unlike ``_timed_batch``) n_ops is capped at the
+    paragraph count rather than allowed to revisit paragraphs.
+    """
+    refs = doc.list_paragraphs(limit=None)
+    n_paras = len(refs)
+    assert n_ops <= n_paras, f"at most {n_paras} ops supported (one rewrite per paragraph)"
+    rewrites = [(refs[(i * 397) % n_paras].split("|")[0], f"[REWRITTEN {i:04d}] {FILLER}") for i in range(n_ops)]
+
+    start = time.perf_counter()
+    group_ids = doc.batch_rewrite(rewrites)
+    elapsed = time.perf_counter() - start
+    assert len(group_ids) == n_ops, f"expected {n_ops} group ids, got {len(group_ids)}"
+    return elapsed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="batch_edit scaling benchmark")
     parser.add_argument("--ops", type=int, default=None, help="extra op count to measure (e.g. 1000)")
@@ -148,6 +189,21 @@ def main() -> None:
             print(f"{n:>5} | {apply_s:>8.3f} {apply_s / n * 1000:>7.2f} | {dry_s:>9.3f} {dry_s / n * 1000:>7.2f}")
         print()
         print("All correctness assertions passed (refs valid after each batch).")
+
+        # batch_rewrite: same shared-<w:p>-snapshot fix (#56), but each rewrite
+        # must target a distinct paragraph, so op counts are capped at N_PARAGRAPHS.
+        rewrite_op_counts = [n for n in op_counts if n <= N_PARAGRAPHS]
+        skipped = [n for n in op_counts if n > N_PARAGRAPHS]
+        if skipped:
+            print(f"\nSkipping batch_rewrite for op counts > {N_PARAGRAPHS} (one rewrite per paragraph): {skipped}")
+        print()
+        print(f"{'ops':>5} | {'rewrite s':>9} {'ms/op':>7}")
+        print("-" * 26)
+        for n in rewrite_op_counts:
+            rewrite_s = run_rewrite_batch(persist_path, n)
+            print(f"{n:>5} | {rewrite_s:>9.3f} {rewrite_s / n * 1000:>7.2f}")
+        print()
+        print("All correctness assertions passed (group id returned for each rewrite).")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

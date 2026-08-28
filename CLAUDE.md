@@ -6,11 +6,28 @@
 ```bash
 # Development
 uv sync --dev              # Install dependencies
-uv run pytest              # Run tests
 uv run ruff check .        # Lint
 uv run ruff format .       # Format
+uv run ty check            # Type check (CI gates on this)
 uv run mkdocs serve        # Preview docs
+
+# Tests — ALWAYS serial, niced, and memory-capped:
+systemd-run --user --scope -p MemoryMax=8G -- nice -n 10 uv run pytest -q
+
+# While iterating, cap the same way but target files:
+systemd-run --user --scope -p MemoryMax=8G -- nice -n 10 uv run pytest -q tests/test_foo.py
 ```
+
+**The memory cap is not optional: a leak must fail the run, not the desktop.**
+An unbounded loop in `accept_all` once grew a single pytest process to 42 GB
+RSS and got the machine OOM-killed; under the cap the same defect fails in
+under a second. `--user` is required — plain `systemd-run --scope` needs root.
+
+**Never pass `-n` / `-n auto`, and never add it to `addopts`.** `pytest-xdist`
+is installed as a dependency but must not be used for local runs: parallel
+workers multiply both load and peak memory on a shared machine. CI has its own
+separate settings. Skip `--cov` locally too — it is slow and adds nothing while
+iterating.
 
 ## Code Quality Principles (CRITICAL)
 

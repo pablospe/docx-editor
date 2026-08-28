@@ -15,6 +15,8 @@ import pytest
 pytest.importorskip("jupyter_client")
 pytest.importorskip("ipykernel")
 
+from conftest import _sweep_leaked_kernels  # noqa: E402
+
 from docx_editor.exceptions import SessionDeadError, SessionError  # noqa: E402
 from docx_editor.session import (  # noqa: E402
     ExecResult,
@@ -815,3 +817,74 @@ def test_module_entrypoint_runs():
     )
     assert proc.returncode == 0
     assert "exec" in proc.stdout
+
+
+class TestKernelReaping:
+    """ISSUES.md #62: a kernel must not survive the test that started it.
+
+    ``start_session`` detaches the kernel so it outlives the spawning process.
+    That is correct for the CLI (the whole point is a session that persists
+    across invocations) but means a test process killed mid-flight leaks a live
+    kernel: unlike a failing test, a killed one never unwinds through its
+    fixture teardown. Repeated over time this is what accumulated the orphaned
+    kernels behind #62.
+    """
+
+    def test_kernel_orphaned_by_killed_owner_is_swept(self, tmp_path):
+        conn = tmp_path / "kernel.json"
+        # A stand-in for a test that starts a session and is then killed before
+        # it can stop it. Runs in its own process so it can be SIGKILLed
+        # without taking this test down with it.
+        helper = (
+            "import time\n"
+            "from pathlib import Path\n"
+            "from docx_editor.session import start_session\n"
+            f"start_session(Path({str(conn)!r}))\n"
+            "time.sleep(300)\n"
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", helper],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    stderr = proc.stderr.read() if proc.stderr else ""
+                    raise AssertionError(f"helper exited during startup: {stderr}")
+                if conn.exists() and is_session_running(conn, timeout=2.0):
+                    break
+                time.sleep(0.2)
+            else:
+                raise AssertionError("kernel never became ready within 60s")
+
+            # Kill the owner outright — no teardown, no stop_session.
+            proc.kill()
+            proc.wait(timeout=30)
+
+            # The leak this fixture exists to catch: the kernel is detached, so
+            # it is still alive with its owner gone.
+            assert is_session_running(conn) is True, "expected an orphaned kernel to reproduce the leak"
+
+            # Exactly what the session-scoped autouse fixture runs at teardown.
+            assert _sweep_leaked_kernels({conn}) == [conn]
+            assert is_session_running(conn) is False
+            assert conn.exists() is False
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            if conn.exists():
+                stop_session(conn)
+
+    def test_sweep_ignores_already_stopped_sessions(self, tmp_path):
+        """A kernel a test stopped itself is not re-swept (the common case)."""
+        conn = tmp_path / "kernel.json"
+        start_session(conn)
+        assert stop_session(conn) is True
+        assert _sweep_leaked_kernels({conn}) == []
+
+    def test_sweep_ignores_paths_that_never_had_a_kernel(self, tmp_path):
+        assert _sweep_leaked_kernels({tmp_path / "never.json"}) == []
