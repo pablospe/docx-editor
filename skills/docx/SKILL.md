@@ -390,17 +390,49 @@ doc.replace("clause  2", "clause 2", paragraph="P5#d4e5")
 result = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
 doc.reject_group(result.group_id)   # undo the whole edit (del + ins together)
 
+# Attach the WHY to the redline: note= anchors a comment on exactly the
+# revisions this edit creates, and result.comment_id is that comment's id.
+# The comment is deleted when the edit is resolved — accept OR reject.
+result = doc.replace("30 days", "60 days", paragraph="P2#f3c1",
+                     note="Aligns with the master agreement (§4.2).")
+
 doc.save("edited.docx")
 doc.close()
 ```
 
-**Return values:** All edit methods return an `EditResult` — a `str` subclass whose value is the new paragraph reference (e.g., `"P2#c3d4"`); use it for follow-up edits on the same paragraph without calling `list_paragraphs()` again. It also carries `group_id` (the revision group holding every revision the edit created — pass to `accept_group()`/`reject_group()`) and `revision_ids` (the members' change ids). `group_id` is `None` when the edit created no new revisions (e.g. text spliced into one of your own pending insertions). A single edit routinely creates **more than two** revisions: a replace whose (trimmed) span crosses run boundaries (e.g. part of the text is bold) creates one deletion per run plus the insertion, and a rewrite creates one revision per diff hunk — resolve them via `group_id`, never by guessing id pairs.
+**Return values:** All edit methods return an `EditResult` — a `str` subclass whose value is the new paragraph reference (e.g., `"P2#c3d4"`); use it for follow-up edits on the same paragraph without calling `list_paragraphs()` again. It also carries `group_id` (the revision group holding every revision the edit created — pass to `accept_group()`/`reject_group()`), `revision_ids` (the members' change ids), and `comment_id` (the rationale comment created by `note=`, else `None`). `group_id` is `None` when the edit created no new revisions (e.g. text spliced into one of your own pending insertions). A single edit routinely creates **more than two** revisions: a replace whose (trimmed) span crosses run boundaries (e.g. part of the text is bold) creates one deletion per run plus the insertion, and a rewrite creates one revision per diff hunk — resolve them via `group_id`, never by guessing id pairs.
 
 **Replace granularity:** `replace()` trims words shared by `find` and `replace_with` at either end, so only the changed words are written as revisions — a replace that only adds or only removes words becomes a pure insertion or deletion. The insertion carries the formatting that covers the most characters of the replaced span — runs sharing identical formatting tally together (ties → earliest-seen formatting). **Accepting** a replace that straddled mixed formatting therefore leaves the replacement uniformly in that one majority format, while each deletion run keeps its own original formatting — so a **reject** restores the pre-edit mix. Replacing text with itself is a **no-op**: no revisions are written and the returned `EditResult` equals the input ref with `group_id=None` and `revision_ids=()` — check that triple to detect it.
 
 **Multi-author documents:** Editing inside *another* author's pending insertion preserves their proposal, matching Word: deletions nest a `<w:del>` under your authorship inside their `<w:ins>`, and replacements/insertions put your text in your own sibling `<w:ins>` (splitting theirs when needed) instead of silently rewriting it. `accept_all(author=...)` / `reject_all(author=...)` then resolve each author's changes independently. Only your own pending insertions are edited in place.
 
 **Amending your own pending text:** an edit landing wholly inside one of *your own* pending insertions **amends that insertion** rather than tracking a change against it — the new text is spliced in at the match position, whether it covers part of the insertion or all of it. Your unsaved text was never in the document, so there is nothing to counter-propose: no `<w:del>`/`<w:ins>` pair is written, no new revision is created, and the `EditResult` comes back with `group_id=None` and `revision_ids=()` (with an updated ref). The amended text lives on inside the insertion holding the **end** of the match, which keeps its id and its group — so **to undo an amendment, reject the group of the insertion it amended**, not the amending call's (there isn't one). `list_revisions()` shows that insertion carrying its current, amended text. A match spanning two of your own adjacent insertions consolidates into that one; any insertion it consumed whole is dropped.
+
+**Rationale notes (`note=`):** every edit method — `replace`, `delete`, `insert_after`, `insert_before`, `rewrite_paragraph`, and each `EditOperation` of a `batch_edit` — takes an optional `note=`. The note becomes a Word comment whose range brackets exactly the revisions that edit created, so the reviewer sees the change and the reason for it together; the comment's id comes back on `EditResult.comment_id`. Five rules:
+
+1. **One comment per operation, deduplicated per call.** Twenty ops of one `batch_edit` sharing a note string produce **one** comment (anchored on the first of them), and all twenty results carry that same `comment_id`; twenty different notes produce twenty comments. Two separate calls with the same note are two proposals, so two comments.
+2. **The note dies with the revision it explains** — on **accept** as well as reject, through every verb (`accept_revision`/`reject_revision`, `accept_group`/`reject_group`, `accept_changeset`/`reject_changeset`, `accept_all`/`reject_all`). So a pipeline ending in `accept_all()` ships a clean document, not one full of agent rationale. `accept_all(author="Someone Else")` leaves your revisions and your notes alone. A later edit that amends the annotated insertion out of existence takes the note with it too — no accept or reject happened, but nothing is left to explain either. **For rationale that must survive resolution, use `add_comment()`** — plain comments are document-scoped, note comments are revision-scoped.
+3. **`comment_id` is an ordinary live comment id** — `reply_to_comment()`, `resolve_comment()` and `delete_comment()` all take it.
+4. **Nothing to anchor warns, never fails.** A no-op `replace`, an amendment to your own pending insertion, an unchanged `rewrite_paragraph`, and a bare `"\n"` split (its only revision is the paragraph mark, which cannot host a comment anchor) create no revision to bracket: the **edit still applies**, `comment_id` is `None`, and an `UnanchoredNoteWarning` names the cause. Silence it with `warnings.filterwarnings("ignore", category=UnanchoredNoteWarning)`.
+5. **The link is per-session.** The comment survives `save()` as an ordinary OOXML comment, but the note-to-revision link is per-open-`Document` like `group_id` — after a reopen, rejecting the (inferred) group leaves the comment behind; `delete_comment()` removes it.
+
+A note must be a non-empty string with no control characters (`\n` included — a comment body is a single `<w:t>`), and it is validated **before** the edit runs, so a bad note never leaves an applied edit with a dropped rationale. In a batch it fails the whole batch atomically (`BatchOperationError`), and `dry_run=True` reports the row. Note that a `note=` edit writes the comment parts into the workspace, so it carries the same workspace side effect `add_comment()` does (see the Comments API section below).
+
+```python
+# A redline that explains itself:
+result = doc.replace("30 days", "60 days", paragraph="P2#f3c1",
+                     note="Aligns payment terms with the master agreement (§4.2).")
+
+# One rationale over several redlines: one comment, three results carrying its id.
+results = doc.batch_edit([
+    EditOperation.replace("Manager", "Director", paragraph="P3#a7b2", note="Title change per HR."),
+    EditOperation.replace("manager", "director", paragraph="P5#c4d8", note="Title change per HR."),
+    EditOperation.delete("(interim)", paragraph="P7#e1f9", note="Title change per HR."),
+])
+assert len({r.comment_id for r in results}) == 1
+
+doc.accept_all()          # clean deliverable: revisions applied, notes gone
+```
 
 **Raises:** `TextNotFoundError` if the text is not found (or the requested `occurrence` is out of range — the error then reports `total_occurrences`). `AmbiguousTextError` if `occurrence` is omitted and the target matches more than once in the search scope. `ValueError` for search/anchor text that is not a non-empty string, replacement/insertion text that is not a string, a non-string `paragraph` ref, or an `occurrence` that is not a non-negative integer — all rejected up front, before any change is made.
 

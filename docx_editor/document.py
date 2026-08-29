@@ -7,7 +7,7 @@ and comments.
 import html
 import shutil
 import warnings
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Literal, overload
 from xml.dom.minidom import Attr, Element
@@ -20,6 +20,7 @@ from .exceptions import (
     DocumentProtectedError,
     HashMismatchError,
     ParagraphIndexError,
+    UnanchoredNoteWarning,
 )
 from .track_changes import (
     EditOperation,
@@ -33,6 +34,7 @@ from .track_changes import (
     _ancestor_paragraph,
     _paragraph_hint,
     _resolve_search_target,
+    _validate_note,
 )
 from .workspace import Workspace
 from .xml_editor import (
@@ -142,6 +144,35 @@ def _attr_node(elem: Element, local_name: str) -> Attr | None:
     return None
 
 
+# Why a note= rationale had nothing to anchor to. Each is inferred where the
+# information actually exists — the edit method knows whether it asked for a
+# no-op, only the span lookup knows a group is paragraph-mark-only — and lands
+# verbatim in the UnanchoredNoteWarning message.
+_NOTE_NOOP_REPLACE = "the replace was a no-op ('find' equals 'replace_with'), so no revision was created"
+_NOTE_AMENDED_INSERTION = "the edit amended your own pending insertion, which creates no new revision"
+_NOTE_REWRITE_NO_REVISION = (
+    "the rewrite created no revisions (text unchanged, or every change amended your own pending insertions)"
+)
+_NOTE_PARAGRAPH_MARK_ONLY = "the only revision is a tracked paragraph mark, which cannot carry a comment anchor"
+
+
+def _batch_note_reason(op: EditOperation) -> str:
+    """Why a batch operation's note had no group, inferred from the operation."""
+    if op.action == "replace" and op.find == op.replace_with:
+        return _NOTE_NOOP_REPLACE
+    return _NOTE_AMENDED_INSERTION
+
+
+def _unanchored_note_message(note: str, reason: str) -> str:
+    """The one UnanchoredNoteWarning message, with the cause filled in."""
+    shown = note if len(note) <= 60 else note[:57] + "..."
+    return (
+        f"note={shown!r} was not recorded: {reason}. The edit itself applied — only the note "
+        f"was dropped, and this EditResult's comment_id is None. Use add_comment() to attach "
+        f"it as an ordinary, document-scoped comment if it is still wanted."
+    )
+
+
 def _require_ref_string(paragraph: str | None, field: str | None = None) -> str:
     """Reject a missing or non-string paragraph ref before it can silently select
     the RevisionManager's document-wide search branch (its ``paragraph=None``
@@ -209,6 +240,14 @@ class Document:
         self._closed = False
         # Lazily parsed word/styles.xml maps (see _style_maps).
         self._style_maps_cache: tuple[dict[str, int], dict[str, ListItem]] | None = None
+        # note= rationale channel, both directions. A note comment is
+        # revision-scoped: it is deleted as soon as every group it explains is
+        # resolved (accepted or rejected alike), so rationale never outlives
+        # the proposal. Both maps are per-open-Document, like the group
+        # registry they key on, and stay empty for callers that never pass a
+        # note — which is what keeps _reap_note_comments free on that path.
+        self._note_comments: dict[int, int] = {}  # group id -> comment id
+        self._note_groups: dict[int, set[int]] = {}  # comment id -> every group it explains
 
         # Create the document editor. Every post-open workspace write goes
         # through an editor (or the comment manager's template copies), so
@@ -554,6 +593,7 @@ class Document:
         group_id: int | None,
         paragraphs: list[Element] | None = None,
         element_index: dict[str, list[Element]] | None = None,
+        comment_id: int | None = None,
     ) -> EditResult:
         """Build an EditResult from a mutated paragraph's old ref, group, and changeset."""
         revision_ids = self._revision_manager.group_revisions(group_id) if group_id is not None else ()
@@ -567,7 +607,128 @@ class Document:
             revision_ids=revision_ids,
             changeset_id=changeset_id,
             refs=refs,
+            comment_id=comment_id,
         )
+
+    def _attach_notes(self, pairs: list[tuple[int | None, str | None, str]]) -> list[int | None]:
+        """Anchor each operation's ``note=`` as a comment on its revisions.
+
+        The single implementation behind ``note=`` on every edit method and on
+        ``batch_edit``. Each pair is ``(group_id, note, reason)`` for one
+        operation, in input order; ``reason`` is that operation's explanation
+        for a ``None`` group, supplied by the caller because only the caller
+        knows whether it asked for a no-op.
+
+        Operations of one call that carry the *same* note text share one
+        comment, anchored on the first of them with an anchorable revision —
+        20 redlines explaining themselves the same way leave the reviewer one
+        comment, not 20, while genuinely different rationales stay distinct.
+
+        Returns one ``comment_id | None`` per input pair. Every ``None`` where a
+        note was actually given comes with exactly one ``UnanchoredNoteWarning``
+        naming why: a dropped rationale is never silent.
+
+        Comment markers change no paragraph text, so this can run before or
+        after the caller builds its refs; it costs one DOM walk for the whole
+        call, and none at all when no pair carries a note.
+        """
+        # Called after the caller's own mutation, and by every edit path — the
+        # one place that can notice an edit which amended an *earlier* note's
+        # insertion out of existence. That empties a group with no accept or
+        # reject call to key cleanup on, so without this the rationale would
+        # outlive its revision and ship in the saved file. Free until a note
+        # has actually been attached.
+        self._reap_note_comments()
+
+        results: list[int | None] = [None] * len(pairs)
+        pending = [(i, gid, note) for i, (gid, note, _) in enumerate(pairs) if note is not None and gid is not None]
+        for gid, note, reason in pairs:
+            if note is not None and gid is None:
+                self._warn_unanchored_note(note, reason)
+        if not pending:
+            return results
+
+        spans = self._revision_manager.group_spans({gid for _, gid, _ in pending})
+        # Dedupe by note text: the first group *with a span* owns the comment,
+        # so a note shared with a paragraph-mark-only operation still lands.
+        owners: dict[str, int] = {}
+        for _, gid, note in pending:
+            if note not in owners and gid in spans:
+                owners[note] = gid
+        comment_of_note: dict[str, int] = {}
+        for note, gid in owners.items():
+            first, last = spans[gid]
+            comment_of_note[note] = self._comment_manager.add_comment_on_elements(first, last, note)
+
+        for i, gid, note in pending:
+            comment_id = comment_of_note.get(note)
+            if comment_id is None:
+                # Every group carrying this note is paragraph-mark-only.
+                self._warn_unanchored_note(note, _NOTE_PARAGRAPH_MARK_ONLY)
+                continue
+            results[i] = comment_id
+            self._note_comments[gid] = comment_id
+            self._note_groups.setdefault(comment_id, set()).add(gid)
+        return results
+
+    def _warn_unanchored_note(self, note: str, reason: str) -> None:
+        """Report a note that had no revision to anchor to, at the caller's line."""
+        warnings.warn(
+            _unanchored_note_message(note, reason),
+            UnanchoredNoteWarning,
+            # 4 frames out of warnings.warn: _warn_unanchored_note ->
+            # _attach_notes -> Document.replace (or any other edit method) ->
+            # caller, so the warning points at the caller's edit line rather
+            # than at library internals.
+            stacklevel=4,
+        )
+
+    def _note_groups_of_revision(self, revision_id: int) -> list[int]:
+        """The group a single-revision resolution could have emptied, if any."""
+        group_id = self._revision_manager.group_id_of(revision_id)
+        return [] if group_id is None else [group_id]
+
+    def _swept_note_groups(self, author: str | None) -> Iterable[int] | None:
+        """Which note groups an ``accept_all``/``reject_all`` could have emptied.
+
+        ``None`` (every registered group) for an unfiltered sweep or one
+        filtered to this document's own author; an empty list for a sweep
+        filtered to somebody else, which leaves our revisions — and so our
+        rationale — untouched.
+        """
+        return None if author is None or author == self.author else []
+
+    def _reap_note_comments(self, candidates: Iterable[int] | None = None) -> None:
+        """Delete every note comment whose revisions are all gone.
+
+        Called from every resolution entry point — one invariant instead of a
+        special case per verb: a note explains a *proposal*, and accepting ends
+        the proposal just as rejecting does, so the comment goes either way.
+        Also called from the edit paths, where an amendment can empty a group
+        with no resolution call at all (see ``_attach_notes``).
+        ``candidates`` are the groups the caller just resolved; ``None`` means
+        every registered group (whole-document sweeps and edits alike).
+
+        Returns before any DOM work when no note was ever attached, so callers
+        that never pass ``note=`` pay nothing.
+        """
+        if not self._note_comments:
+            return
+        watch = set(self._note_comments) if candidates is None else {g for g in candidates if g in self._note_comments}
+        if not watch:
+            return
+        # A note shared by several operations only goes when every group it
+        # explains is dead, so widen to each candidate comment's whole group set
+        # — one liveness pass answers for all of them.
+        watch = {g for cid in {self._note_comments[g] for g in watch} for g in self._note_groups[cid]}
+        dead = self._revision_manager.groups_are_dead(watch)
+        for comment_id in {self._note_comments[g] for g in dead}:
+            groups = self._note_groups[comment_id]
+            if groups <= dead:
+                self._comment_manager.delete_comment(comment_id)
+                del self._note_groups[comment_id]
+                for group_id in groups:
+                    del self._note_comments[group_id]
 
     def _resulting_refs(
         self,
@@ -1181,6 +1342,7 @@ class Document:
         *,
         paragraph: str | None = None,
         occurrence: int | None = None,
+        note: str | None = None,
     ) -> EditResult:
         """Replace text with tracked changes.
 
@@ -1221,19 +1383,35 @@ class Document:
                 1 = second, etc.). Omitted → ``find`` must be unique in the
                 paragraph, else AmbiguousTextError (use find_all() to
                 enumerate the matches, or pass an explicit occurrence).
+            note: Rationale for this edit, anchored as a comment bracketing
+                the revisions it creates, with its id on the result's
+                ``comment_id``. The comment is revision-scoped: it is deleted
+                as soon as the edit is resolved, accepted or rejected alike.
+                Operations of one call that share the same note text share one
+                comment. For rationale that must survive resolution, use
+                ``add_comment()`` instead — those comments are
+                document-scoped.
 
         Returns:
             EditResult — the new paragraph reference with updated hash (e.g.,
             "P2#c3d4"; usable anywhere a ref string is expected), carrying
             ``group_id``/``revision_ids`` of the revisions this edit created
-            for accept_group()/reject_group().
+            for accept_group()/reject_group(), and ``comment_id`` when a
+            ``note`` was anchored.
+
+        Warns:
+            UnanchoredNoteWarning: If ``note`` was given but the call created
+                no revision to anchor it on (a no-op, or an amendment to your
+                own pending insertion). The edit still applies; the note is
+                dropped and ``comment_id`` is None.
 
         Raises:
             ValueError: If ``find`` is not a non-empty string,
                 ``replace_with`` is not a string, ``paragraph`` is missing or
                 not a ref string, ``occurrence`` is negative or not an integer,
-                or ``find`` is a SearchResult and ``paragraph``/``occurrence``
-                was given too.
+                ``note`` is neither None nor a non-empty control-character-free
+                string, or ``find`` is a SearchResult and
+                ``paragraph``/``occurrence`` was given too.
             TextNotFoundError: If ``find`` is absent or ``occurrence`` is out
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
@@ -1254,11 +1432,21 @@ class Document:
             find, paragraph, occurrence, ctx="replace(): ", field="'find'"
         )
         paragraph = _require_ref_string(paragraph, "'find'")
+        # Before the edit: a bad note must not leave an applied edit behind it.
+        _validate_note(note, ctx="replace(): ")
         change_id = self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
-        return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
+        group_id = self._revision_manager.group_id_of(change_id)
+        reason = _NOTE_NOOP_REPLACE if find == replace_with else _NOTE_AMENDED_INSERTION
+        comment_id = self._attach_notes([(group_id, note, reason)])[0]
+        return self._edit_result(paragraph, group_id, comment_id=comment_id)
 
     def delete(
-        self, text: str | SearchResult, *, paragraph: str | None = None, occurrence: int | None = None
+        self,
+        text: str | SearchResult,
+        *,
+        paragraph: str | None = None,
+        occurrence: int | None = None,
+        note: str | None = None,
     ) -> EditResult:
         """Mark text as deleted with tracked changes.
 
@@ -1273,17 +1461,27 @@ class Document:
             occurrence: Which occurrence within the paragraph (0 = first,
                 1 = second, etc.). Omitted → ``text`` must be unique in the
                 paragraph, else AmbiguousTextError.
+            note: Rationale for this edit, anchored as a comment bracketing
+                the deletion it creates, and deleted with it when the deletion
+                is resolved (see :meth:`replace`).
 
         Returns:
             EditResult — the new paragraph reference with updated hash (e.g.,
             "P2#c3d4"), carrying ``group_id``/``revision_ids`` of the
-            revisions this edit created.
+            revisions this edit created, and ``comment_id`` when a ``note``
+            was anchored.
+
+        Warns:
+            UnanchoredNoteWarning: If ``note`` was given but the call created
+                no revision to anchor it on. The edit still applies; the note
+                is dropped and ``comment_id`` is None.
 
         Raises:
             ValueError: If ``text`` is not a non-empty string, ``paragraph``
                 is missing or not a ref string, ``occurrence`` is negative or
-                not an integer, or ``text`` is a SearchResult and
-                ``paragraph``/``occurrence`` was given too.
+                not an integer, ``note`` is neither None nor a non-empty
+                control-character-free string, or ``text`` is a SearchResult
+                and ``paragraph``/``occurrence`` was given too.
             TextNotFoundError: If ``text`` is absent or ``occurrence`` is out
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
@@ -1299,8 +1497,11 @@ class Document:
             text, paragraph, occurrence, ctx="delete(): ", field="'text'"
         )
         paragraph = _require_ref_string(paragraph, "'text'")
+        _validate_note(note, ctx="delete(): ")
         change_id = self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
-        return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
+        group_id = self._revision_manager.group_id_of(change_id)
+        comment_id = self._attach_notes([(group_id, note, _NOTE_AMENDED_INSERTION)])[0]
+        return self._edit_result(paragraph, group_id, comment_id=comment_id)
 
     def insert_after(
         self,
@@ -1309,6 +1510,7 @@ class Document:
         *,
         paragraph: str | None = None,
         occurrence: int | None = None,
+        note: str | None = None,
     ) -> EditResult:
         """Insert text after anchor with tracked changes.
 
@@ -1324,17 +1526,30 @@ class Document:
             occurrence: Which occurrence of anchor within the paragraph
                 (0 = first). Omitted → ``anchor`` must be unique in the
                 paragraph, else AmbiguousTextError.
+            note: Rationale for this edit, anchored as a comment bracketing
+                the insertion it creates, and deleted with it when the
+                insertion is resolved (see :meth:`replace`).
 
         Returns:
             EditResult — the new paragraph reference with updated hash (e.g.,
             "P2#c3d4"), carrying ``group_id``/``revision_ids`` of the
-            revisions this edit created.
+            revisions this edit created, and ``comment_id`` when a ``note``
+            was anchored.
+
+        Warns:
+            UnanchoredNoteWarning: If ``note`` was given but the call created
+                no revision a comment can bracket — an amendment to your own
+                pending insertion, or a bare ``"\n"`` whose only revision is
+                the paragraph mark. The edit still applies; the note is
+                dropped and ``comment_id`` is None.
 
         Raises:
             ValueError: If ``anchor`` is not a non-empty string, ``text`` is
                 not a string, ``paragraph`` is missing or not a ref string,
-                ``occurrence`` is negative or not an integer, or ``anchor`` is
-                a SearchResult and ``paragraph``/``occurrence`` was given too.
+                ``occurrence`` is negative or not an integer, ``note`` is
+                neither None nor a non-empty control-character-free string, or
+                ``anchor`` is a SearchResult and ``paragraph``/``occurrence``
+                was given too.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
@@ -1350,8 +1565,11 @@ class Document:
             anchor, paragraph, occurrence, ctx="insert_after(): ", field="'anchor'"
         )
         paragraph = _require_ref_string(paragraph, "'anchor'")
+        _validate_note(note, ctx="insert_after(): ")
         change_id = self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
-        return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
+        group_id = self._revision_manager.group_id_of(change_id)
+        comment_id = self._attach_notes([(group_id, note, _NOTE_AMENDED_INSERTION)])[0]
+        return self._edit_result(paragraph, group_id, comment_id=comment_id)
 
     def insert_before(
         self,
@@ -1360,6 +1578,7 @@ class Document:
         *,
         paragraph: str | None = None,
         occurrence: int | None = None,
+        note: str | None = None,
     ) -> EditResult:
         """Insert text before anchor with tracked changes.
 
@@ -1375,17 +1594,30 @@ class Document:
             occurrence: Which occurrence of anchor within the paragraph
                 (0 = first). Omitted → ``anchor`` must be unique in the
                 paragraph, else AmbiguousTextError.
+            note: Rationale for this edit, anchored as a comment bracketing
+                the insertion it creates, and deleted with it when the
+                insertion is resolved (see :meth:`replace`).
 
         Returns:
             EditResult — the new paragraph reference with updated hash (e.g.,
             "P2#c3d4"), carrying ``group_id``/``revision_ids`` of the
-            revisions this edit created.
+            revisions this edit created, and ``comment_id`` when a ``note``
+            was anchored.
+
+        Warns:
+            UnanchoredNoteWarning: If ``note`` was given but the call created
+                no revision a comment can bracket — an amendment to your own
+                pending insertion, or a bare ``"\n"`` whose only revision is
+                the paragraph mark. The edit still applies; the note is
+                dropped and ``comment_id`` is None.
 
         Raises:
             ValueError: If ``anchor`` is not a non-empty string, ``text`` is
                 not a string, ``paragraph`` is missing or not a ref string,
-                ``occurrence`` is negative or not an integer, or ``anchor`` is
-                a SearchResult and ``paragraph``/``occurrence`` was given too.
+                ``occurrence`` is negative or not an integer, ``note`` is
+                neither None nor a non-empty control-character-free string, or
+                ``anchor`` is a SearchResult and ``paragraph``/``occurrence``
+                was given too.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
@@ -1401,8 +1633,11 @@ class Document:
             anchor, paragraph, occurrence, ctx="insert_before(): ", field="'anchor'"
         )
         paragraph = _require_ref_string(paragraph, "'anchor'")
+        _validate_note(note, ctx="insert_before(): ")
         change_id = self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
-        return self._edit_result(paragraph, self._revision_manager.group_id_of(change_id))
+        group_id = self._revision_manager.group_id_of(change_id)
+        comment_id = self._attach_notes([(group_id, note, _NOTE_AMENDED_INSERTION)])[0]
+        return self._edit_result(paragraph, group_id, comment_id=comment_id)
 
     def split_paragraph(self, ref: str, *, before: str, occurrence: int | None = None) -> EditResult:
         """Split a paragraph into two with a tracked paragraph break.
@@ -1475,11 +1710,18 @@ class Document:
             When dry_run is False: list of EditResult (new paragraph references
             with updated hashes), in input order. Each operation gets its own
             revision group — accept one op and reject another via
-            accept_group()/reject_group().
+            accept_group()/reject_group(). Operations carrying ``note=`` also
+            carry the resulting ``comment_id``; ops of this call that share the
+            same note text share one comment, deleted when the last operation
+            it explains is resolved (see :meth:`replace`).
             When dry_run is True: list of EditValidationResult, one per
             operation. A row that failed on a stale hash carries
             ``current_ref``, the ref for that paragraph's current content —
             rebuild the operation with it instead of parsing ``error``.
+
+        Warns:
+            UnanchoredNoteWarning: Once per operation whose ``note`` had no
+                revision to anchor to. The batch still applies in full.
 
         Raises:
             ValueError: If ``operations`` is not a list at all (e.g. None or
@@ -1528,15 +1770,22 @@ class Document:
         # the index entirely, so its DOM-walk count stays constant (ISSUES.md #51).
         mgr = self._revision_manager
         group_ids = [mgr.group_id_of(change_id) for change_id in change_ids]
+        # One _attach_notes call for the whole batch: that is what lets ops
+        # sharing a note share one comment, and costs one DOM walk rather than
+        # one per op. Comment markers add no <w:p>, so the walks below stay
+        # valid whichever side of them this runs on.
+        comment_ids = self._attach_notes([
+            (gid, op.note, _batch_note_reason(op)) for op, gid in zip(operations, group_ids, strict=True)
+        ])
         any_split = any(gid is not None and mgr.split_count(gid) for gid in group_ids)
         paragraphs = self._document_editor.dom.getElementsByTagName("w:p")
         element_index = mgr._revision_element_index() if any_split else None
         return [
-            self._edit_result(op.paragraph, gid, paragraphs, element_index)
-            for op, gid in zip(operations, group_ids, strict=True)
+            self._edit_result(op.paragraph, gid, paragraphs, element_index, comment_id=cid)
+            for op, gid, cid in zip(operations, group_ids, comment_ids, strict=True)
         ]
 
-    def rewrite_paragraph(self, ref: str, new_text: str) -> EditResult:
+    def rewrite_paragraph(self, ref: str, new_text: str, *, note: str | None = None) -> EditResult:
         """Rewrite a paragraph's text with automatic fine-grained tracked changes.
 
         Diffs the current paragraph text against new_text at word level and
@@ -1549,6 +1798,10 @@ class Document:
         Args:
             ref: Paragraph reference from list_paragraphs() (e.g., "P2#f3c1")
             new_text: Desired new text for the paragraph
+            note: Rationale for the rewrite, anchored as one comment
+                spanning its first through last revision — one comment for the
+                whole rewrite, not one per diff hunk — and deleted with it when
+                the rewrite is resolved (see :meth:`replace`).
 
         Returns:
             EditResult — the new paragraph reference with updated hash (e.g.,
@@ -1556,11 +1809,19 @@ class Document:
             revisions the rewrite created (``group_id`` is None when
             new_text equals the current text, or when every change landed
             inside your own pending insertions and amended them in place —
-            undo those by rejecting the group of the amended insertion).
+            undo those by rejecting the group of the amended insertion), and
+            ``comment_id`` when a ``note`` was anchored.
+
+        Warns:
+            UnanchoredNoteWarning: If ``note`` was given but the rewrite
+                created no revisions. The rewrite still applies; the note is
+                dropped and ``comment_id`` is None.
 
         Raises:
             ValueError: If ``new_text`` is not a string (empty string is
-                allowed — it deletes all text), or ``ref`` is malformed.
+                allowed — it deletes all text), ``note`` is neither None nor a
+                non-empty control-character-free string, or ``ref`` is
+                malformed.
             ParagraphIndexError: If ``ref``'s index is out of range.
             HashMismatchError: If ``ref``'s hash is stale.
 
@@ -1569,8 +1830,10 @@ class Document:
             doc.reject_group(result.group_id)  # undo the whole rewrite
         """
         self._ensure_open()
+        _validate_note(note, ctx="rewrite_paragraph(): ")
         group_id = self._revision_manager.rewrite_paragraph(ref, new_text)
-        return self._edit_result(ref, group_id)
+        comment_id = self._attach_notes([(group_id, note, _NOTE_REWRITE_NO_REVISION)])[0]
+        return self._edit_result(ref, group_id, comment_id=comment_id)
 
     def batch_rewrite(self, rewrites: list[tuple[str, str]]) -> list[EditResult]:
         """Rewrite multiple paragraphs with upfront hash validation.
@@ -1608,6 +1871,9 @@ class Document:
         if not isinstance(rewrites, list):
             raise ValueError(f"batch_rewrite(): 'rewrites' must be a list of (ref, new_text) tuples, got {rewrites!r}")
         group_ids = self._revision_manager.batch_rewrite(rewrites)
+        # No note= of its own, but a rewrite here can amend an earlier note's
+        # insertion out of existence just as batch_edit can (see _attach_notes).
+        self._reap_note_comments()
         # Shared <w:p> walk; if any rewrite split, resolve every ref by element
         # identity so a shifted later rewrite never reports a stale index.
         mgr = self._revision_manager
@@ -1814,11 +2080,16 @@ class Document:
         Returns:
             True if accepted, False if not found
 
+        Any ``note=`` rationale whose revisions are now all resolved is
+        deleted with them (see :meth:`replace`).
+
         Example:
             doc.accept_revision(1)
         """
         self._ensure_open()
-        return self._revision_manager.accept_revision(revision_id)
+        resolved = self._revision_manager.accept_revision(revision_id)
+        self._reap_note_comments(self._note_groups_of_revision(revision_id))
+        return resolved
 
     def reject_revision(self, revision_id: int) -> bool:
         """Reject a revision by ID.
@@ -1832,11 +2103,16 @@ class Document:
         Returns:
             True if rejected, False if not found
 
+        Any ``note=`` rationale whose revisions are now all resolved is
+        deleted with them (see :meth:`replace`).
+
         Example:
             doc.reject_revision(1)
         """
         self._ensure_open()
-        return self._revision_manager.reject_revision(revision_id)
+        resolved = self._revision_manager.reject_revision(revision_id)
+        self._reap_note_comments(self._note_groups_of_revision(revision_id))
+        return resolved
 
     def accept_group(self, group_id: int) -> int:
         """Accept every revision created by one logical edit operation.
@@ -1869,12 +2145,17 @@ class Document:
         Raises:
             RevisionError: If the group id is unknown to this open Document.
 
+        Any ``note=`` rationale whose revisions are now all resolved is
+        deleted with them (see :meth:`replace`).
+
         Example:
             result = doc.rewrite_paragraph(ref, "New text.")
             doc.accept_group(result.group_id)  # apply the whole rewrite
         """
         self._ensure_open()
-        return self._revision_manager.accept_group(group_id)
+        count = self._revision_manager.accept_group(group_id)
+        self._reap_note_comments([group_id])
+        return count
 
     def reject_group(self, group_id: int) -> int:
         """Reject every revision created by one logical edit operation.
@@ -1895,12 +2176,17 @@ class Document:
         Raises:
             RevisionError: If the group id is unknown to this open Document.
 
+        Any ``note=`` rationale whose revisions are now all resolved is
+        deleted with them (see :meth:`replace`).
+
         Example:
             result = doc.rewrite_paragraph(ref, "New text.")
             doc.reject_group(result.group_id)  # undo the whole rewrite
         """
         self._ensure_open()
-        return self._revision_manager.reject_group(group_id)
+        count = self._revision_manager.reject_group(group_id)
+        self._reap_note_comments([group_id])
+        return count
 
     def accept_changeset(self, changeset_id: int) -> int:
         """Accept every revision created by one whole call (a changeset).
@@ -1939,12 +2225,18 @@ class Document:
         Raises:
             RevisionError: If the changeset id is unknown to this open Document.
 
+        Any ``note=`` rationale whose revisions are now all resolved is
+        deleted with them (see :meth:`replace`).
+
         Example:
             results = doc.batch_edit([...])
             doc.accept_changeset(results[0].changeset_id)  # accept the whole batch
         """
         self._ensure_open()
-        return self._revision_manager.accept_changeset(changeset_id)
+        groups = self._revision_manager.changeset_groups(changeset_id)
+        count = self._revision_manager.accept_changeset(changeset_id)
+        self._reap_note_comments(groups)
+        return count
 
     def reject_changeset(self, changeset_id: int) -> int:
         """Reject every revision created by one whole call (a changeset).
@@ -1966,12 +2258,18 @@ class Document:
         Raises:
             RevisionError: If the changeset id is unknown to this open Document.
 
+        Any ``note=`` rationale whose revisions are now all resolved is
+        deleted with them (see :meth:`replace`).
+
         Example:
             results = doc.batch_edit([...])
             doc.reject_changeset(results[0].changeset_id)  # undo the whole batch
         """
         self._ensure_open()
-        return self._revision_manager.reject_changeset(changeset_id)
+        groups = self._revision_manager.changeset_groups(changeset_id)
+        count = self._revision_manager.reject_changeset(changeset_id)
+        self._reap_note_comments(groups)
+        return count
 
     def list_unhandled_revisions(self, author: str | None = None) -> list[UnhandledRevision]:
         """List the revision types this library does not accept or reject.
@@ -2042,6 +2340,11 @@ class Document:
             UnhandledRevisionWarning: If ``.unhandled`` is nonzero — the point
                 at which "everything is accepted" would be a false claim.
 
+        Any ``note=`` rationale whose revisions this sweep resolved is deleted
+        with them, so a pipeline that calls ``accept_all()`` to produce a clean
+        deliverable does not ship agent rationale as live comments. A sweep
+        filtered to another author leaves our revisions, and their notes, alone.
+
         Example:
             result = doc.accept_all()
             print(f"Accepted {result} revisions")
@@ -2049,7 +2352,9 @@ class Document:
                 print(f"Still pending: {result.unhandled_types}")
         """
         self._ensure_open()
-        return self._revision_manager.accept_all(author=author)
+        result = self._revision_manager.accept_all(author=author)
+        self._reap_note_comments(self._swept_note_groups(author))
+        return result
 
     def reject_all(self, author: str | None = None) -> ResolveResult:
         """Reject all insertions and deletions.
@@ -2068,13 +2373,18 @@ class Document:
         Warns:
             UnhandledRevisionWarning: If ``.unhandled`` is nonzero.
 
+        Any ``note=`` rationale whose revisions this sweep resolved is deleted
+        with them (see :meth:`accept_all`).
+
         Example:
             result = doc.reject_all(author="OtherUser")
             if result.unhandled:
                 print(f"Still pending: {result.unhandled_types}")
         """
         self._ensure_open()
-        return self._revision_manager.reject_all(author=author)
+        result = self._revision_manager.reject_all(author=author)
+        self._reap_note_comments(self._swept_note_groups(author))
+        return result
 
     # ==================== Save/Close API ====================
 

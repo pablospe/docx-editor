@@ -427,3 +427,25 @@ class UnhandledRevisionWarning(UserWarning):
 
         warnings.filterwarnings("ignore", category=UnhandledRevisionWarning)
     """
+
+
+class UnanchoredNoteWarning(UserWarning):
+    """Warns that a ``note=`` rationale had no revision to anchor to.
+
+    Emitted by the edit methods when ``note=`` was given but the operation
+    created no revision a comment could bracket — a no-op replace, an edit
+    that amended one of your own pending insertions (physically merged, so
+    no new revision exists), a rewrite that found no differences, or a pure
+    tracked paragraph split whose only revision is the paragraph mark inside
+    ``w:pPr/w:rPr`` (which cannot host a comment anchor). The edit itself
+    still applied; only the note was dropped, and ``EditResult.comment_id``
+    is ``None``.
+
+    Without the warning a dropped rationale would be indistinguishable from
+    a recorded one — the same silent-failure mode ``UnhandledRevisionWarning``
+    exists to prevent. The message names which of those causes applied.
+    ``Document.add_comment()`` attaches the text as an ordinary, document-scoped
+    comment if it is still wanted. To silence it::
+
+        warnings.filterwarnings("ignore", category=UnanchoredNoteWarning)
+    """

@@ -163,30 +163,101 @@ class CommentManager:
         """
         if not isinstance(anchor_text, str) or not anchor_text:
             raise CommentError(f"anchor_text must be a non-empty string, got {anchor_text!r}")
-        if not isinstance(comment_text, str):
-            # Must fail here, before _place_markers mutates document.xml —
-            # a crash later (html.escape) would leave orphaned range markers.
-            raise CommentError(f"comment_text must be a string, got {comment_text!r}")
-        # Comments carry no split semantics, so reject '\n' too — a literal
-        # newline in a single <w:t> would be an invisible, unreviewable artifact.
+        # Both must be validated here, before _place_markers mutates
+        # document.xml — a crash later (html.escape) would leave orphaned range
+        # markers. Comments carry no split semantics, so '\n' is rejected in
+        # both: in the anchor it could never match, and in the body it would be
+        # an invisible, unreviewable literal.
+        self._validate_comment_text(comment_text, field="comment_text", ctx="add_comment(): ")
         try:
             _reject_control_chars(anchor_text, field="anchor_text", ctx="add_comment(): ", allow_newline=False)
-            _reject_control_chars(comment_text, field="comment_text", ctx="add_comment(): ", allow_newline=False)
         except ValueError as e:
             raise CommentError(str(e)) from e
         _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id
-        para_id = _generate_hex_id()
-        durable_id = _generate_hex_id()
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Place range markers at character-precise positions in document.xml
         self._place_markers(match, comment_id)
 
+        return self._commit_comment(comment_id, comment_text)
+
+    @staticmethod
+    def _validate_comment_text(text: str, *, field: str, ctx: str) -> None:
+        """Reject comment/note text that cannot be written into a comment part.
+
+        One rule for every comment body — ``add_comment``'s ``comment_text``,
+        ``reply_to_comment``'s reply, and the edit methods' ``note=`` — so the
+        three cannot drift: it must be a string, and must carry no control
+        characters (``\n`` included: a comment body is a single ``<w:t>``, where
+        a literal newline is an invisible, unreviewable artifact).
+
+        Raises:
+            CommentError: If ``text`` is not a string or holds a control character.
+        """
+        if not isinstance(text, str):
+            raise CommentError(f"{field} must be a string, got {text!r}")
+        try:
+            _reject_control_chars(text, field=field, ctx=ctx, allow_newline=False)
+        except ValueError as e:
+            raise CommentError(str(e)) from e
+
+    def add_comment_on_elements(self, first: Element, last: Element, comment_text: str) -> int:
+        """Anchor a comment on the span from ``first`` to ``last`` (document order).
+
+        The element-anchored counterpart of ``add_comment``: the range markers
+        become *siblings* of whole elements instead of being spliced into a run
+        at character offsets. That is what lets a comment bracket a tracked
+        revision — a ``w:del``'s text is not in the accepted text map at all,
+        and an inserted string may repeat in its paragraph, so text search
+        cannot address either one unambiguously.
+
+        ``first`` and ``last`` may be the same element, and may live in
+        different paragraphs (a tracked split); ``w:commentRangeStart`` /
+        ``w:commentRangeEnd`` are range marks, valid anywhere run-level content
+        is.
+
+        Markers sit *outside* the bracketed elements, so rejecting the revision
+        does not carry them away — the caller owns cleanup (see
+        ``Document._reap_note_comments``).
+
+        Args:
+            first: First element of the span; the start marker goes before it.
+            last: Last element of the span; the end marker and the comment
+                reference run go after it.
+            comment_text: The comment content.
+
+        Returns:
+            The comment ID.
+
+        Raises:
+            CommentError: If ``comment_text`` is not a string or holds a
+                control character.
+        """
+        self._validate_comment_text(comment_text, field="comment_text", ctx="add_comment_on_elements(): ")
+
+        comment_id = self.next_comment_id
+        self.document_editor.insert_before(first, self._comment_range_start_xml(comment_id))
+        # _comment_range_end_xml emits the end marker *and* the reference run.
+        self.document_editor.insert_after(last, self._comment_range_end_xml(comment_id))
+        return self._commit_comment(comment_id, comment_text)
+
+    def _commit_comment(self, comment_id: int, comment_text: str, *, parent_para_id: str | None = None) -> int:
+        """Write the four comment parts for an already-placed marker pair.
+
+        The shared tail of every comment creation path — ``add_comment``,
+        ``add_comment_on_elements`` and ``reply_to_comment`` (which passes its
+        parent's ``para_id``): the markers are already in document.xml, this
+        records the body. ``next_comment_id`` moves here and nowhere else, so a
+        note comment and a user comment can never be allocated the same id.
+        """
+        para_id = _generate_hex_id()
+        durable_id = _generate_hex_id()
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
         # Add to all comment XML files
         self._add_to_comments_xml(comment_id, para_id, comment_text, timestamp)
-        self._add_to_comments_extended_xml(para_id, parent_para_id=None)
+        self._add_to_comments_extended_xml(para_id, parent_para_id=parent_para_id)
         self._add_to_comments_ids_xml(para_id, durable_id)
         self._add_to_comments_extensible_xml(durable_id)
 
@@ -436,9 +507,6 @@ class CommentManager:
 
         parent_info = self.existing_comments[parent_comment_id]
         comment_id = self.next_comment_id
-        para_id = _generate_hex_id()
-        durable_id = _generate_hex_id()
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Find parent comment markers in document.xml
         parent_start_elem = self.document_editor.get_node(
@@ -455,17 +523,7 @@ class CommentManager:
         self.document_editor.insert_after(parent_ref_run, f'<w:commentRangeEnd w:id="{comment_id}"/>')
         self.document_editor.insert_after(parent_ref_run, self._comment_ref_run_xml(comment_id))
 
-        # Add to all comment XML files
-        self._add_to_comments_xml(comment_id, para_id, reply_text, timestamp)
-        self._add_to_comments_extended_xml(para_id, parent_para_id=parent_info["para_id"])
-        self._add_to_comments_ids_xml(para_id, durable_id)
-        self._add_to_comments_extensible_xml(durable_id)
-
-        # Track for further replies
-        self.existing_comments[comment_id] = {"para_id": para_id}
-        self.next_comment_id += 1
-
-        return comment_id
+        return self._commit_comment(comment_id, reply_text, parent_para_id=parent_info["para_id"])
 
     def list_comments(self, author: str | None = None) -> list[Comment]:
         """List all comments in the document.

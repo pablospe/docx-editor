@@ -52,6 +52,7 @@ from .exceptions import (
     ParagraphIndexError,
     RevisionError,
     TextNotFoundError,
+    UnanchoredNoteWarning,
     UnhandledRevisionWarning,
     WorkspaceError,
     WorkspaceExistsError,
@@ -111,6 +112,7 @@ __all__ = [
     "BatchOperationError",
     # Warnings
     "UnhandledRevisionWarning",
+    "UnanchoredNoteWarning",
     # Paragraph refs
     "ParagraphInfo",
     "ParagraphRef",

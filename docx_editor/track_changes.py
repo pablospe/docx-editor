@@ -49,6 +49,29 @@ from .xml_editor import (
 GroupSource = Literal["recorded", "inferred"]
 
 
+def _validate_note(note: str | None, *, ctx: str) -> None:
+    """Reject a ``note=`` rationale that could not become a comment body.
+
+    ``None`` means "no note". Anything else must be a non-empty string free of
+    control characters: the note is written into a single ``<w:t>`` of a comment
+    part, exactly like ``add_comment``'s text, so a newline or a tab would land
+    there as an invisible, unreviewable artifact.
+
+    Called *before* the edit runs (and at ``EditOperation`` construction), so a
+    bad note never leaves an applied edit with a dropped rationale behind it.
+
+    Raises:
+        ValueError: If ``note`` is neither None nor a valid note string.
+    """
+    if note is None:
+        return
+    if not isinstance(note, str) or not note:
+        raise ValueError(
+            f"{ctx}'note' must be a non-empty string or None — the rationale to attach as a comment, got {note!r}"
+        )
+    _reject_control_chars(note, field="'note'", ctx=ctx, allow_newline=False)
+
+
 @dataclass
 class _RegistrySnapshot:
     """Copy of the group + changeset registry, for rollback with a DOM snapshot."""
@@ -88,6 +111,7 @@ class EditOperation:
     text: str | None = None  # For delete (text to delete) or insert (text to insert)
     anchor: str | None = None  # For insert_after/insert_before
     occurrence: int | None = None  # None = target must be unique in the paragraph
+    note: str | None = None  # Rationale to anchor as a comment on this op's revisions
 
     @staticmethod
     def _validate_common(constructor: str, paragraph: str | None, occurrence: int | None, field: str) -> str:
@@ -117,6 +141,7 @@ class EditOperation:
         *,
         paragraph: str | None = None,
         occurrence: int | None = None,
+        note: str | None = None,
     ) -> "EditOperation":
         """Build a validated replace operation (mirrors ``Document.replace``).
 
@@ -131,12 +156,15 @@ class EditOperation:
             occurrence: Which occurrence within the paragraph (0 = first).
                 Omitted → ``find`` must be unique in the paragraph, else the
                 batch fails with a wrapped AmbiguousTextError at apply time.
+            note: Rationale for this edit, anchored as a comment on the
+                revisions it creates (see ``Document.replace``).
 
         Raises:
             ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
                 is not a non-negative integer, ``find`` is not a non-empty
-                string, ``replace_with`` is not a string, or ``find`` is a
-                SearchResult and ``paragraph``/``occurrence`` was given too.
+                string, ``replace_with`` is not a string, ``note`` is neither
+                None nor a non-empty control-character-free string, or ``find``
+                is a SearchResult and ``paragraph``/``occurrence`` was given too.
         """
         find, paragraph, occurrence = _resolve_search_target(
             find, paragraph, occurrence, ctx="EditOperation.replace(): ", field="'find'"
@@ -153,17 +181,24 @@ class EditOperation:
             )
         _reject_control_chars(find, field="'find'", ctx="EditOperation.replace(): ", allow_newline=False)
         _reject_control_chars(replace_with, field="'replace_with'", ctx="EditOperation.replace(): ", allow_newline=True)
+        _validate_note(note, ctx="EditOperation.replace(): ")
         return cls(
             action="replace",
             paragraph=paragraph,
             find=find,
             replace_with=replace_with,
             occurrence=occurrence,
+            note=note,
         )
 
     @classmethod
     def delete(
-        cls, text: "str | SearchResult", *, paragraph: str | None = None, occurrence: int | None = None
+        cls,
+        text: "str | SearchResult",
+        *,
+        paragraph: str | None = None,
+        occurrence: int | None = None,
+        note: str | None = None,
     ) -> "EditOperation":
         """Build a validated delete operation (mirrors ``Document.delete``).
 
@@ -176,11 +211,14 @@ class EditOperation:
             occurrence: Which occurrence within the paragraph (0 = first).
                 Omitted → ``text`` must be unique in the paragraph, else the
                 batch fails with a wrapped AmbiguousTextError at apply time.
+            note: Rationale for this edit, anchored as a comment on the
+                revisions it creates (see ``Document.delete``).
 
         Raises:
             ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
                 is not a non-negative integer, ``text`` is not a non-empty
-                string, or ``text`` is a SearchResult and
+                string, ``note`` is neither None nor a non-empty
+                control-character-free string, or ``text`` is a SearchResult and
                 ``paragraph``/``occurrence`` was given too.
         """
         text, paragraph, occurrence = _resolve_search_target(
@@ -192,7 +230,8 @@ class EditOperation:
                 f"EditOperation.delete(): 'text' must be a non-empty string — the text to mark as deleted, got {text!r}"
             )
         _reject_control_chars(text, field="'text'", ctx="EditOperation.delete(): ", allow_newline=False)
-        return cls(action="delete", paragraph=paragraph, text=text, occurrence=occurrence)
+        _validate_note(note, ctx="EditOperation.delete(): ")
+        return cls(action="delete", paragraph=paragraph, text=text, occurrence=occurrence, note=note)
 
     @classmethod
     def _insert(
@@ -202,6 +241,7 @@ class EditOperation:
         text: str,
         paragraph: str | None,
         occurrence: int | None,
+        note: str | None,
     ) -> "EditOperation":
         anchor, paragraph, occurrence = _resolve_search_target(
             anchor, paragraph, occurrence, ctx=f"EditOperation.{action}(): ", field="'anchor'"
@@ -218,7 +258,8 @@ class EditOperation:
             )
         _reject_control_chars(anchor, field="'anchor'", ctx=f"EditOperation.{action}(): ", allow_newline=False)
         _reject_control_chars(text, field="'text'", ctx=f"EditOperation.{action}(): ", allow_newline=True)
-        return cls(action=action, paragraph=paragraph, anchor=anchor, text=text, occurrence=occurrence)
+        _validate_note(note, ctx=f"EditOperation.{action}(): ")
+        return cls(action=action, paragraph=paragraph, anchor=anchor, text=text, occurrence=occurrence, note=note)
 
     @classmethod
     def insert_after(
@@ -228,6 +269,7 @@ class EditOperation:
         *,
         paragraph: str | None = None,
         occurrence: int | None = None,
+        note: str | None = None,
     ) -> "EditOperation":
         """Build a validated insert_after operation (mirrors ``Document.insert_after``).
 
@@ -242,14 +284,17 @@ class EditOperation:
                 (0 = first). Omitted → ``anchor`` must be unique in the
                 paragraph, else the batch fails with a wrapped
                 AmbiguousTextError at apply time.
+            note: Rationale for this edit, anchored as a comment on the
+                revisions it creates (see ``Document.insert_after``).
 
         Raises:
             ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
                 is not a non-negative integer, ``anchor`` is not a non-empty
-                string, ``text`` is not a string, or ``anchor`` is a
+                string, ``text`` is not a string, ``note`` is neither None nor a
+                non-empty control-character-free string, or ``anchor`` is a
                 SearchResult and ``paragraph``/``occurrence`` was given too.
         """
-        return cls._insert("insert_after", anchor, text, paragraph, occurrence)
+        return cls._insert("insert_after", anchor, text, paragraph, occurrence, note)
 
     @classmethod
     def insert_before(
@@ -259,6 +304,7 @@ class EditOperation:
         *,
         paragraph: str | None = None,
         occurrence: int | None = None,
+        note: str | None = None,
     ) -> "EditOperation":
         """Build a validated insert_before operation (mirrors ``Document.insert_before``).
 
@@ -273,14 +319,17 @@ class EditOperation:
                 (0 = first). Omitted → ``anchor`` must be unique in the
                 paragraph, else the batch fails with a wrapped
                 AmbiguousTextError at apply time.
+            note: Rationale for this edit, anchored as a comment on the
+                revisions it creates (see ``Document.insert_before``).
 
         Raises:
             ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
                 is not a non-negative integer, ``anchor`` is not a non-empty
-                string, ``text`` is not a string, or ``anchor`` is a
+                string, ``text`` is not a string, ``note`` is neither None nor a
+                non-empty control-character-free string, or ``anchor`` is a
                 SearchResult and ``paragraph``/``occurrence`` was given too.
         """
-        return cls._insert("insert_before", anchor, text, paragraph, occurrence)
+        return cls._insert("insert_before", anchor, text, paragraph, occurrence, note)
 
 
 @dataclass(frozen=True)
@@ -373,12 +422,22 @@ class EditResult(str):
       the next structural edit; after a split, later paragraphs' indexes have
       shifted, so re-resolve (``list_paragraphs``/``find_text``) before reusing
       stale refs.
+    - ``comment_id``: id of the comment holding this edit's ``note=``
+      rationale, anchored on the revisions above — a live comment id, usable
+      with ``reply_to_comment()``/``delete_comment()``/``resolve_comment()``.
+      None when no ``note=`` was given, and None with an
+      :class:`~docx_editor.exceptions.UnanchoredNoteWarning` when a note was
+      given but the edit created no revision to anchor it on. Operations of one
+      call that share the same note text share one comment, so several
+      EditResults can carry the same id. The comment is deleted when the last
+      revision it explains is resolved, accepted or rejected alike.
     """
 
     group_id: int | None
     changeset_id: int | None
     revision_ids: tuple[int, ...]
     refs: tuple[str, ...]
+    comment_id: int | None
 
     def __new__(
         cls,
@@ -387,12 +446,14 @@ class EditResult(str):
         revision_ids: tuple[int, ...] = (),
         changeset_id: int | None = None,
         refs: tuple[str, ...] | None = None,
+        comment_id: int | None = None,
     ) -> "EditResult":
         result = super().__new__(cls, ref)
         result.group_id = group_id
         result.changeset_id = changeset_id
         result.revision_ids = revision_ids
         result.refs = refs if refs is not None else (str(ref),)
+        result.comment_id = comment_id
         return result
 
 
@@ -973,6 +1034,25 @@ def _has_ancestor(node, ancestor) -> bool:
     return False
 
 
+def _outermost_revision(elem: Element) -> Element:
+    """``elem``, or the outermost ``w:ins``/``w:del`` it is nested inside.
+
+    Where a comment marker may be anchored. A marker placed *inside* another
+    author's pending insertion is carried away when that insertion is
+    rejected, stranding its twin outside as an unpaired range marker; hoisting
+    to the outermost revision keeps both markers in run-level content whatever
+    anyone later does to the host. Our own group's members are never above
+    ``elem`` (``group_spans`` spans outermost members only), so every revision
+    ancestor found here is somebody else's.
+    """
+    outermost = elem
+    node = elem.parentNode
+    while isinstance(node, Element) and node.tagName in ("w:ins", "w:del"):
+        outermost = node
+        node = node.parentNode
+    return outermost
+
+
 def _node_depth(node) -> int:
     """Number of ancestors above ``node``, root included."""
     depth = 0
@@ -1495,6 +1575,80 @@ class RevisionManager:
             )
         return members
 
+    def group_spans(self, group_ids: Iterable[int]) -> dict[int, tuple[Element, Element]]:
+        """First and last *content-level* revision element of each group, document order.
+
+        The anchor lookup behind ``note=``: a comment bracketing a whole edit
+        needs the outermost elements the edit created, not a text position —
+        a deletion's text is not in the accepted text map at all, and an
+        insertion's text may repeat in its paragraph.
+
+        Paragraph-mark insertions are excluded: a comment marker cannot live in
+        ``w:pPr/w:rPr``. A group whose only revision is one — a pure tracked
+        split — is therefore absent from the result, as is a group with no live
+        revision at all; callers must handle a missing key rather than assume
+        one span per requested group.
+
+        An endpoint nested inside *another author's* revision is reported as
+        that outermost revision instead, so a marker placed beside it cannot be
+        carried away when that author's proposal is rejected.
+
+        One full-DOM walk regardless of how many groups are asked about, so a
+        whole batch's notes cost one pass.
+        """
+        wanted = {rev_id: gid for gid in group_ids for rev_id in self._groups.get(gid, ())}
+        if not wanted:
+            return {}
+        members: dict[int, list[Element]] = {}
+        for elem in _revision_elements(self.editor.dom):
+            if _is_paragraph_mark_ins(elem):
+                continue
+            try:
+                rev_id = int(elem.getAttribute("w:id"))
+            except ValueError:  # pragma: no cover - our own ids are always numeric
+                continue
+            gid = wanted.get(rev_id)
+            if gid is not None:
+                members.setdefault(gid, []).append(elem)
+        spans: dict[int, tuple[Element, Element]] = {}
+        for gid, elems in members.items():
+            # A member nested inside another member of the same group would put
+            # a marker *inside* the revision it explains, where rejecting would
+            # carry it away and orphan its twin. Span the outermost members only.
+            outer = [e for e in elems if not any(other is not e and _has_ancestor(e, other) for other in elems)]
+            if outer:  # pragma: no branch - a member is outermost or nested in one
+                # Hoisting keeps both markers out of a foreign revision that a
+                # later reject could carry away; it only ever widens the span
+                # outwards, so first still precedes last.
+                spans[gid] = (_outermost_revision(outer[0]), _outermost_revision(outer[-1]))
+        return spans
+
+    def groups_are_dead(self, group_ids: Iterable[int]) -> set[int]:
+        """The subset of ``group_ids`` with no revision element left in the document.
+
+        A group goes dead when the last revision it holds is accepted, rejected,
+        or carried away inside a resolved host — which is exactly when anything
+        keyed to it (a ``note=`` comment) has nothing left to explain. One
+        ``w:id`` index for the whole call, so asking about every registered
+        group costs the same walk as asking about one.
+
+        A group id this manager does not know reads as dead: it has no live
+        revision either.
+        """
+        group_ids = list(group_ids)
+        if not group_ids:
+            return set()
+        element_index = self._revision_element_index()
+        return {
+            gid
+            for gid in group_ids
+            if not any(
+                self._is_in_document(elem)
+                for rev_id in self._groups.get(gid, ())
+                for elem in element_index.get(str(rev_id), ())
+            )
+        }
+
     def _resolve_paragraph(self, ref: ParagraphRef, paragraphs: list[Element] | None = None):
         """Resolve a ParagraphRef to its <w:p> element, validating the hash.
 
@@ -1671,11 +1825,16 @@ class RevisionManager:
         so both paths fail cleanly before the search.
 
         Raises:
-            ValueError: If ``occurrence`` is negative or not an integer, required arguments for
+            ValueError: If ``occurrence`` is negative or not an integer, ``note``
+                is neither None nor a valid note string, required arguments for
                 op.action are missing or not strings, or the action is
                 unrecognized.
         """
         _require_valid_occurrence(op.occurrence)
+        # Validated on both paths, so a raw EditOperation(action=..., note=<bad>)
+        # that skipped the typed constructors fails the dry run *and* fails the
+        # batch atomically, before any mutation.
+        _validate_note(op.note, ctx=f"{op.action}(): ")
 
         if op.action == "replace":
             if not op.find or not isinstance(op.replace_with, str):
