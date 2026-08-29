@@ -1357,7 +1357,7 @@ class TestControlCharRejection:
 
     def test_rewrite_rejects_tab(self, hello_doc):
         # A tab in new_text is only allowed where the paragraph already has one
-        # (ISSUES.md #6); this paragraph has none, so the diff refuses it.
+        # (ISSUES.md #6); this paragraph has none, so the tab-count check refuses it.
         doc, ref = hello_doc
         with pytest.raises(ValueError, match="tab marks"):
             doc.rewrite_paragraph(ref, "new\ttext")

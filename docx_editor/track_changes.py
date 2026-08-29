@@ -2139,7 +2139,8 @@ class RevisionManager:
             if not isinstance(new_text, str):
                 raise BatchOperationError(
                     i,
-                    f"'new_text' must be a string (empty string is allowed — it deletes all text), got {new_text!r}",
+                    f"'new_text' must be a string (empty string deletes all text of a tab-free paragraph), "
+                    f"got {new_text!r}",
                 )
             seen_indices.add(ref.index)
             parsed.append((i, ref, new_text))
@@ -2215,11 +2216,11 @@ class RevisionManager:
         if not isinstance(new_text, str):
             raise ValueError(
                 f"rewrite_paragraph(): 'new_text' must be a string "
-                f"(empty string is allowed — it deletes all text), got {new_text!r}"
+                f"(empty string deletes all text of a tab-free paragraph), got {new_text!r}"
             )
-        # A tab is allowed only where the paragraph already has one — the diff
-        # in _rewrite_paragraph_inner refuses any hunk that would add, remove
-        # or move a tab (ISSUES.md #6).
+        # new_text may hold tabs: _rewrite_paragraph_inner requires the same
+        # count as the paragraph and diffs the text between them segment by
+        # segment (ISSUES.md #6).
         _reject_control_chars(
             new_text, field="'new_text'", ctx="rewrite_paragraph(): ", allow_newline=True, allow_tab=True
         )

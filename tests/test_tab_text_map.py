@@ -476,8 +476,8 @@ class TestRewrite:
         assert paragraph_tokens(mgr) == ["foo", "TAB", "bar"]
 
     def test_rewrite_moving_words_around_the_tab_keeps_the_element(self, temp_xml):
-        # The diff aligns the one tab as `equal` and redlines the words around
-        # it, so the <w:tab/> never moves yet the text reads as requested.
+        # Each side of the tab is diffed as its own segment, so the words on
+        # either side are redlined and the <w:tab/> is never part of the diff.
         mgr = _make_manager(temp_xml("<w:p><w:r><w:t>foo</w:t><w:tab/><w:t>bar baz</w:t></w:r></w:p>"))
         mgr.rewrite_paragraph(_first_ref(mgr), "foo bar\tbaz")
         assert build_text_map(mgr.editor.dom.getElementsByTagName("w:p")[0]).text == "foo bar\tbaz"
@@ -513,7 +513,8 @@ class TestRewrite:
         assert tab_doc.get_visible_text().splitlines()[0] == "Name\tWorth here"
 
     def test_long_paragraph_keeps_several_tabs_aligned(self, temp_xml):
-        # >200 tokens so SequenceMatcher's autojunk heuristic is in play.
+        # 150 tab-delimited segments, each diffed on its own: the segment
+        # splitting and hunk offsets at scale.
         cells = [f"w{i}" for i in range(150)]
         runs = "".join(f"<w:t>{c} </w:t><w:tab/>" for c in cells) + "<w:t>end</w:t>"
         mgr = _make_manager(temp_xml(f"<w:p><w:r>{runs}</w:r></w:p>"))

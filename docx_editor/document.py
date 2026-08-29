@@ -1891,8 +1891,9 @@ class Document:
 
         Raises:
             ValueError: If ``new_text`` is not a string (empty string is
-                allowed — it deletes all text) or does not hold the same number
-                of tab marks (``\\t``) as the paragraph (ISSUES.md #6),
+                allowed — it deletes all text of a tab-free paragraph) or does
+                not hold the same number of tab marks (``\\t``) as the
+                paragraph (ISSUES.md #6),
                 ``note`` is neither None nor a
                 non-empty control-character-free string, or ``ref`` is
                 malformed.
