@@ -7,7 +7,7 @@ and comments.
 import html
 import shutil
 import warnings
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal, overload
 from xml.dom.minidom import Attr, Element
@@ -240,14 +240,16 @@ class Document:
         self._closed = False
         # Lazily parsed word/styles.xml maps (see _style_maps).
         self._style_maps_cache: tuple[dict[str, int], dict[str, ListItem]] | None = None
-        # note= rationale channel, both directions. A note comment is
-        # revision-scoped: it is deleted as soon as every group it explains is
-        # resolved (accepted or rejected alike), so rationale never outlives
-        # the proposal. Both maps are per-open-Document, like the group
-        # registry they key on, and stay empty for callers that never pass a
-        # note — which is what keeps _reap_note_comments free on that path.
+        # note= rationale channel. A note comment is revision-scoped: it is
+        # deleted as soon as every group it explains is gone (accepted,
+        # rejected, or carried away with a foreign host), so rationale never
+        # outlives the proposal. All three maps are per-open-Document, like the
+        # group registry they key on, and stay empty for callers that never
+        # pass a note — which is what keeps _reap_note_comments free on that
+        # path.
         self._note_comments: dict[int, int] = {}  # group id -> comment id
         self._note_groups: dict[int, set[int]] = {}  # comment id -> every group it explains
+        self._note_anchors: dict[int, int] = {}  # comment id -> the group its markers bracket
 
         # Create the document editor. Every post-open workspace write goes
         # through an editor (or the comment manager's template copies), so
@@ -641,34 +643,35 @@ class Document:
         self._reap_note_comments()
 
         results: list[int | None] = [None] * len(pairs)
-        pending = [(i, gid, note) for i, (gid, note, _) in enumerate(pairs) if note is not None and gid is not None]
-        for gid, note, reason in pairs:
-            if note is not None and gid is None:
-                self._warn_unanchored_note(note, reason)
-        if not pending:
-            return results
+        grouped = [(gid, note) for gid, note, _ in pairs if note is not None and gid is not None]
+        spans = self._revision_manager.group_spans({gid for gid, _ in grouped}) if grouped else {}
 
-        spans = self._revision_manager.group_spans({gid for _, gid, _ in pending})
         # Dedupe by note text: the first group *with a span* owns the comment,
         # so a note shared with a paragraph-mark-only operation still lands.
         owners: dict[str, int] = {}
-        for _, gid, note in pending:
+        for gid, note in grouped:
             if note not in owners and gid in spans:
                 owners[note] = gid
         comment_of_note: dict[str, int] = {}
         for note, gid in owners.items():
             first, last = spans[gid]
             comment_of_note[note] = self._comment_manager.add_comment_on_elements(first, last, note)
+            self._note_anchors[comment_of_note[note]] = gid
 
-        for i, gid, note in pending:
+        for i, (gid, note, reason) in enumerate(pairs):
+            if note is None:
+                continue
             comment_id = comment_of_note.get(note)
             if comment_id is None:
-                # Every group carrying this note is paragraph-mark-only.
-                self._warn_unanchored_note(note, _NOTE_PARAGRAPH_MARK_ONLY)
+                # This note reached no anchorable revision anywhere in the call.
+                self._warn_unanchored_note(note, reason if gid is None else _NOTE_PARAGRAPH_MARK_ONLY)
                 continue
+            # Recorded — by this operation or by a sibling sharing its text.
+            # Either way the rationale is in the document, so no warning.
             results[i] = comment_id
-            self._note_comments[gid] = comment_id
-            self._note_groups.setdefault(comment_id, set()).add(gid)
+            if gid is not None:
+                self._note_comments[gid] = comment_id
+                self._note_groups.setdefault(comment_id, set()).add(gid)
         return results
 
     def _warn_unanchored_note(self, note: str, reason: str) -> None:
@@ -683,22 +686,7 @@ class Document:
             stacklevel=4,
         )
 
-    def _note_groups_of_revision(self, revision_id: int) -> list[int]:
-        """The group a single-revision resolution could have emptied, if any."""
-        group_id = self._revision_manager.group_id_of(revision_id)
-        return [] if group_id is None else [group_id]
-
-    def _swept_note_groups(self, author: str | None) -> Iterable[int] | None:
-        """Which note groups an ``accept_all``/``reject_all`` could have emptied.
-
-        ``None`` (every registered group) for an unfiltered sweep or one
-        filtered to this document's own author; an empty list for a sweep
-        filtered to somebody else, which leaves our revisions — and so our
-        rationale — untouched.
-        """
-        return None if author is None or author == self.author else []
-
-    def _reap_note_comments(self, candidates: Iterable[int] | None = None) -> None:
+    def _reap_note_comments(self) -> None:
         """Delete every note comment whose revisions are all gone.
 
         Called from every resolution entry point — one invariant instead of a
@@ -706,29 +694,51 @@ class Document:
         the proposal just as rejecting does, so the comment goes either way.
         Also called from the edit paths, where an amendment can empty a group
         with no resolution call at all (see ``_attach_notes``).
-        ``candidates`` are the groups the caller just resolved; ``None`` means
-        every registered group (whole-document sweeps and edits alike).
+
+        Every registered group is examined, never a narrowed candidate set:
+        which revisions a call removed is not the same question as which
+        groups it emptied. Rejecting *another author's* insertion carries away
+        any of our revisions nested inside it, so even a sweep filtered to
+        somebody else can leave one of our groups with nothing left to explain.
+        ``groups_are_dead`` is the authority; guessing is what breaks the
+        invariant.
 
         Returns before any DOM work when no note was ever attached, so callers
         that never pass ``note=`` pay nothing.
         """
         if not self._note_comments:
             return
-        watch = set(self._note_comments) if candidates is None else {g for g in candidates if g in self._note_comments}
-        if not watch:
+        dead = self._revision_manager.groups_are_dead(set(self._note_comments))
+        if not dead:
             return
-        # A note shared by several operations only goes when every group it
-        # explains is dead, so widen to each candidate comment's whole group set
-        # — one liveness pass answers for all of them.
-        watch = {g for cid in {self._note_comments[g] for g in watch} for g in self._note_groups[cid]}
-        dead = self._revision_manager.groups_are_dead(watch)
         for comment_id in {self._note_comments[g] for g in dead}:
             groups = self._note_groups[comment_id]
-            if groups <= dead:
+            for group_id in groups & dead:
+                del self._note_comments[group_id]
+            live = groups - dead
+            if not live:
+                # Nothing left to explain: the note goes, and so does any reply
+                # threaded under it — a reply left behind would point at a
+                # paraId no part of the document still holds.
+                for reply_id in self._comment_manager.reply_ids(comment_id):
+                    self._comment_manager.delete_comment(reply_id)
                 self._comment_manager.delete_comment(comment_id)
                 del self._note_groups[comment_id]
-                for group_id in groups:
-                    del self._note_comments[group_id]
+                del self._note_anchors[comment_id]
+                continue
+            # Part of a shared note's edit was resolved. The rest is still
+            # pending, so the comment stays — but if the markers were on one of
+            # the resolved groups they now bracket text nobody changed, so move
+            # them onto a redline that is still there.
+            self._note_groups[comment_id] = live
+            if self._note_anchors[comment_id] not in dead:
+                continue
+            spans = self._revision_manager.group_spans(live)
+            for group_id in sorted(live):
+                if group_id in spans:
+                    self._comment_manager.move_comment_markers(comment_id, *spans[group_id])
+                    self._note_anchors[comment_id] = group_id
+                    break
 
     def _resulting_refs(
         self,
@@ -1678,6 +1688,8 @@ class Document:
         self._ensure_open()
         _require_ref_string(ref)
         change_id = self._revision_manager.insert_text_before(before, "\n", occurrence=occurrence, paragraph=ref)
+        # Takes no note= of its own, but every edit path reaps (see _attach_notes).
+        self._reap_note_comments()
         return self._edit_result(ref, self._revision_manager.group_id_of(change_id))
 
     @overload
@@ -2074,21 +2086,22 @@ class Document:
         For insertions: keeps the inserted content.
         For deletions: permanently removes the deleted content.
 
+        Note:
+            Any ``note=`` rationale left with no live revision to explain is
+            deleted with it, replies included (see :meth:`replace`).
+
         Args:
             revision_id: ID of the revision to accept
 
         Returns:
             True if accepted, False if not found
 
-        Any ``note=`` rationale whose revisions are now all resolved is
-        deleted with them (see :meth:`replace`).
-
         Example:
             doc.accept_revision(1)
         """
         self._ensure_open()
         resolved = self._revision_manager.accept_revision(revision_id)
-        self._reap_note_comments(self._note_groups_of_revision(revision_id))
+        self._reap_note_comments()
         return resolved
 
     def reject_revision(self, revision_id: int) -> bool:
@@ -2097,21 +2110,22 @@ class Document:
         For insertions: removes the inserted content.
         For deletions: restores the deleted content.
 
+        Note:
+            Any ``note=`` rationale left with no live revision to explain is
+            deleted with it, replies included (see :meth:`replace`).
+
         Args:
             revision_id: ID of the revision to reject
 
         Returns:
             True if rejected, False if not found
 
-        Any ``note=`` rationale whose revisions are now all resolved is
-        deleted with them (see :meth:`replace`).
-
         Example:
             doc.reject_revision(1)
         """
         self._ensure_open()
         resolved = self._revision_manager.reject_revision(revision_id)
-        self._reap_note_comments(self._note_groups_of_revision(revision_id))
+        self._reap_note_comments()
         return resolved
 
     def accept_group(self, group_id: int) -> int:
@@ -2134,6 +2148,10 @@ class Document:
         previous session may resolve to a different group. save() does not
         invalidate groups.
 
+        Note:
+            Any ``note=`` rationale left with no live revision to explain is
+            deleted with it, replies included (see :meth:`replace`).
+
         Args:
             group_id: Group id from an EditResult (or a Revision's
                 ``group_id``)
@@ -2145,16 +2163,13 @@ class Document:
         Raises:
             RevisionError: If the group id is unknown to this open Document.
 
-        Any ``note=`` rationale whose revisions are now all resolved is
-        deleted with them (see :meth:`replace`).
-
         Example:
             result = doc.rewrite_paragraph(ref, "New text.")
             doc.accept_group(result.group_id)  # apply the whole rewrite
         """
         self._ensure_open()
         count = self._revision_manager.accept_group(group_id)
-        self._reap_note_comments([group_id])
+        self._reap_note_comments()
         return count
 
     def reject_group(self, group_id: int) -> int:
@@ -2164,6 +2179,10 @@ class Document:
         the whole edit, restoring the exact pre-edit text (deletions are
         restored, insertions removed). Same group semantics and lifetime as
         accept_group(), including inferred groups after reopen.
+
+        Note:
+            Any ``note=`` rationale left with no live revision to explain is
+            deleted with it, replies included (see :meth:`replace`).
 
         Args:
             group_id: Group id from an EditResult (or a Revision's
@@ -2176,16 +2195,13 @@ class Document:
         Raises:
             RevisionError: If the group id is unknown to this open Document.
 
-        Any ``note=`` rationale whose revisions are now all resolved is
-        deleted with them (see :meth:`replace`).
-
         Example:
             result = doc.rewrite_paragraph(ref, "New text.")
             doc.reject_group(result.group_id)  # undo the whole rewrite
         """
         self._ensure_open()
         count = self._revision_manager.reject_group(group_id)
-        self._reap_note_comments([group_id])
+        self._reap_note_comments()
         return count
 
     def accept_changeset(self, changeset_id: int) -> int:
@@ -2213,6 +2229,10 @@ class Document:
         EditResult or list_revisions(). Rump-tolerant: after Word has already
         resolved part of the changeset, accepting resolves whatever survives.
 
+        Note:
+            Any ``note=`` rationale left with no live revision to explain is
+            deleted with it, replies included (see :meth:`replace`).
+
         Args:
             changeset_id: Changeset id from an EditResult (or a Revision's
                 ``changeset_id``)
@@ -2225,17 +2245,13 @@ class Document:
         Raises:
             RevisionError: If the changeset id is unknown to this open Document.
 
-        Any ``note=`` rationale whose revisions are now all resolved is
-        deleted with them (see :meth:`replace`).
-
         Example:
             results = doc.batch_edit([...])
             doc.accept_changeset(results[0].changeset_id)  # accept the whole batch
         """
         self._ensure_open()
-        groups = self._revision_manager.changeset_groups(changeset_id)
         count = self._revision_manager.accept_changeset(changeset_id)
-        self._reap_note_comments(groups)
+        self._reap_note_comments()
         return count
 
     def reject_changeset(self, changeset_id: int) -> int:
@@ -2245,6 +2261,10 @@ class Document:
         undoes the entire call (every group), restoring the exact pre-call
         text. Same changeset semantics and lifetime as accept_changeset(),
         including inferred changesets after reopen. No tier exists above this.
+
+        Note:
+            Any ``note=`` rationale left with no live revision to explain is
+            deleted with it, replies included (see :meth:`replace`).
 
         Args:
             changeset_id: Changeset id from an EditResult (or a Revision's
@@ -2258,17 +2278,13 @@ class Document:
         Raises:
             RevisionError: If the changeset id is unknown to this open Document.
 
-        Any ``note=`` rationale whose revisions are now all resolved is
-        deleted with them (see :meth:`replace`).
-
         Example:
             results = doc.batch_edit([...])
             doc.reject_changeset(results[0].changeset_id)  # undo the whole batch
         """
         self._ensure_open()
-        groups = self._revision_manager.changeset_groups(changeset_id)
         count = self._revision_manager.reject_changeset(changeset_id)
-        self._reap_note_comments(groups)
+        self._reap_note_comments()
         return count
 
     def list_unhandled_revisions(self, author: str | None = None) -> list[UnhandledRevision]:
@@ -2326,6 +2342,15 @@ class Document:
         Only ``word/document.xml`` is inspected; headers, footers and
         footnotes are the container-parts epic (ISSUES.md #30).
 
+        Note:
+            Any ``note=`` rationale left with no live revision to explain is
+            deleted with it, replies included, so a pipeline that calls
+            ``accept_all()`` to produce a clean deliverable does not ship agent
+            rationale as live comments. A sweep filtered to another author
+            leaves the notes whose revisions survive it alone — but one of ours
+            nested inside a rejected foreign insertion goes with its host, and
+            so does its note.
+
         Args:
             author: If provided, only accept revisions by this author
 
@@ -2340,11 +2365,6 @@ class Document:
             UnhandledRevisionWarning: If ``.unhandled`` is nonzero — the point
                 at which "everything is accepted" would be a false claim.
 
-        Any ``note=`` rationale whose revisions this sweep resolved is deleted
-        with them, so a pipeline that calls ``accept_all()`` to produce a clean
-        deliverable does not ship agent rationale as live comments. A sweep
-        filtered to another author leaves our revisions, and their notes, alone.
-
         Example:
             result = doc.accept_all()
             print(f"Accepted {result} revisions")
@@ -2353,7 +2373,7 @@ class Document:
         """
         self._ensure_open()
         result = self._revision_manager.accept_all(author=author)
-        self._reap_note_comments(self._swept_note_groups(author))
+        self._reap_note_comments()
         return result
 
     def reject_all(self, author: str | None = None) -> ResolveResult:
@@ -2361,6 +2381,10 @@ class Document:
 
         Resolves ``w:ins``/``w:del`` only; every other revision type is left
         pending and reported exactly as in ``accept_all()``.
+
+        Note:
+            Any ``note=`` rationale left with no live revision to explain is
+            deleted with it, replies included (see :meth:`accept_all`).
 
         Args:
             author: If provided, only reject revisions by this author
@@ -2373,9 +2397,6 @@ class Document:
         Warns:
             UnhandledRevisionWarning: If ``.unhandled`` is nonzero.
 
-        Any ``note=`` rationale whose revisions this sweep resolved is deleted
-        with them (see :meth:`accept_all`).
-
         Example:
             result = doc.reject_all(author="OtherUser")
             if result.unhandled:
@@ -2383,7 +2404,7 @@ class Document:
         """
         self._ensure_open()
         result = self._revision_manager.reject_all(author=author)
-        self._reap_note_comments(self._swept_note_groups(author))
+        self._reap_note_comments()
         return result
 
     # ==================== Save/Close API ====================

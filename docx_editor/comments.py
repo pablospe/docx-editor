@@ -186,11 +186,13 @@ class CommentManager:
     def _validate_comment_text(text: str, *, field: str, ctx: str) -> None:
         """Reject comment/note text that cannot be written into a comment part.
 
-        One rule for every comment body — ``add_comment``'s ``comment_text``,
-        ``reply_to_comment``'s reply, and the edit methods' ``note=`` — so the
-        three cannot drift: it must be a string, and must carry no control
-        characters (``\n`` included: a comment body is a single ``<w:t>``, where
-        a literal newline is an invisible, unreviewable artifact).
+        One rule for the two element-or-text anchored bodies — ``add_comment``'s
+        ``comment_text`` and ``add_comment_on_elements``' — so they cannot
+        drift: it must be a string, and must carry no control characters
+        (``\n`` included: a comment body is a single ``<w:t>``, where a literal
+        newline is an invisible, unreviewable artifact). ``reply_to_comment``
+        keeps its own check because a reply may not be empty and reports a
+        wrong type as ``ValueError``, not ``CommentError``.
 
         Raises:
             CommentError: If ``text`` is not a string or holds a control character.
@@ -638,28 +640,7 @@ class CommentManager:
 
         para_id = self.existing_comments[comment_id]["para_id"]
 
-        # Remove from document.xml
-        try:
-            range_start = self.document_editor.get_node(tag="w:commentRangeStart", attrs={"w:id": str(comment_id)})
-            range_start.parentNode.removeChild(range_start)
-        except Exception:
-            pass
-
-        try:
-            range_end = self.document_editor.get_node(tag="w:commentRangeEnd", attrs={"w:id": str(comment_id)})
-            range_end.parentNode.removeChild(range_end)
-        except Exception:
-            pass
-
-        try:
-            ref = self.document_editor.get_node(tag="w:commentReference", attrs={"w:id": str(comment_id)})
-            # Remove the parent run containing the reference
-            if ref.parentNode and ref.parentNode.nodeName == "w:r":
-                ref.parentNode.parentNode.removeChild(ref.parentNode)
-            else:
-                ref.parentNode.removeChild(ref)
-        except Exception:
-            pass
+        self._remove_range_markers(comment_id)
 
         # Remove from comments.xml
         if self.comments_path.exists():
@@ -677,22 +658,94 @@ class CommentManager:
                     ex_elem.parentNode.removeChild(ex_elem)
                     break
 
-        # Remove from commentsIds.xml
+        # Remove from commentsIds.xml, keeping the durable id it holds — that
+        # entry is the only place the two ids are linked, so the extensible
+        # part can only be found before this element goes.
+        durable_id = None
         if self.comments_ids_path.exists():
             editor = self._get_editor(self.comments_ids_path)
             for id_elem in editor.dom.getElementsByTagName("w16cid:commentId"):
                 if id_elem.getAttribute("w16cid:paraId") == para_id:
+                    durable_id = id_elem.getAttribute("w16cid:durableId")
                     id_elem.parentNode.removeChild(id_elem)
                     break
 
         # Remove from commentsExtensible.xml
-        if self.comments_extensible_path.exists():
-            # Need durable_id, which is in commentsIds.xml - already removed
-            # Just leave it, or we'd need to track durable_id
-            pass
+        if durable_id and self.comments_extensible_path.exists():
+            editor = self._get_editor(self.comments_extensible_path)
+            for ex_elem in editor.dom.getElementsByTagName("w16cex:commentExtensible"):
+                if ex_elem.getAttribute("w16cex:durableId") == durable_id:
+                    ex_elem.parentNode.removeChild(ex_elem)
+                    break
 
         del self.existing_comments[comment_id]
         return True
+
+    def _remove_range_markers(self, comment_id: int) -> None:
+        """Drop a comment's range markers and reference run from document.xml.
+
+        Each lookup is guarded: a marker can already be gone (carried away
+        inside a rejected revision that hosted it), and a comment missing one
+        marker must still lose the others rather than keep a half-range.
+        """
+        for tag in ("w:commentRangeStart", "w:commentRangeEnd"):
+            try:
+                marker = self.document_editor.get_node(tag=tag, attrs={"w:id": str(comment_id)})
+                marker.parentNode.removeChild(marker)
+            except Exception:
+                pass
+
+        try:
+            ref = self.document_editor.get_node(tag="w:commentReference", attrs={"w:id": str(comment_id)})
+            # Remove the parent run containing the reference
+            if ref.parentNode and ref.parentNode.nodeName == "w:r":
+                ref.parentNode.parentNode.removeChild(ref.parentNode)
+            else:
+                ref.parentNode.removeChild(ref)
+        except Exception:
+            pass
+
+    def move_comment_markers(self, comment_id: int, first: Element, last: Element) -> None:
+        """Re-anchor an existing comment's range on the span ``first``..``last``.
+
+        The comment body, id and any replies are untouched — only the range
+        markers and the reference run move. Used when the revisions a note
+        comment was anchored on are resolved while other revisions it explains
+        are still pending: leaving the range behind would point the rationale
+        at text nobody changed.
+        """
+        self._remove_range_markers(comment_id)
+        self.document_editor.insert_before(first, self._comment_range_start_xml(comment_id))
+        self.document_editor.insert_after(last, self._comment_range_end_xml(comment_id))
+
+    def reply_ids(self, comment_id: int) -> list[int]:
+        """Ids of every comment threaded under ``comment_id``, descendants included.
+
+        A reply is linked to its parent only by ``w15:paraIdParent`` in
+        commentsExtended.xml; deleting the parent alone would leave that
+        attribute pointing at a paraId no part of the document still holds.
+        """
+        if not self.comments_extended_path.exists():
+            return []
+        para_of_id = {cid: info["para_id"] for cid, info in self.existing_comments.items()}
+        id_of_para = {para_id: cid for cid, para_id in para_of_id.items()}
+        editor = self._get_editor(self.comments_extended_path)
+        children: dict[str, list[int]] = {}
+        for ex_elem in editor.dom.getElementsByTagName("w15:commentEx"):
+            parent_para = ex_elem.getAttribute("w15:paraIdParent")
+            child_id = id_of_para.get(ex_elem.getAttribute("w15:paraId"))
+            if parent_para and child_id is not None:
+                children.setdefault(parent_para, []).append(child_id)
+
+        found: list[int] = []
+        queue = [comment_id]
+        while queue:
+            current = queue.pop()
+            for child_id in children.get(para_of_id.get(current, ""), ()):
+                if child_id not in found and child_id != comment_id:
+                    found.append(child_id)
+                    queue.append(child_id)
+        return found
 
     def save_all(self) -> None:
         """Save all modified XML files."""

@@ -6,6 +6,7 @@ resolved — accepted or rejected alike.
 """
 
 import warnings
+import zipfile
 
 import pytest
 from conftest import NS, find_ref, replace_document_xml
@@ -338,6 +339,63 @@ class TestResolutionRemovesTheNote:
         assert doc.list_comments() == []
         assert _marker_counts(doc) == (0, 0, 0)
 
+    def test_a_foreign_reject_that_carries_our_revision_away_reaps_the_note(self, simple_docx, temp_dir):
+        """Rejecting their insertion takes the w:del we nested inside it.
+
+        Our group empties under a sweep filtered to *their* name, so narrowing
+        cleanup to "groups this call resolved" would leave the rationale behind
+        with nothing to explain. Liveness is the only safe authority.
+        """
+        doc = Document.open(_foreign_ins_docx(simple_docx, temp_dir), force_recreate=True)
+        try:
+            doc.delete("thirty (30)", paragraph=find_ref(doc, "term is"), note="why we cut it")
+
+            doc.reject_all(author="Other")
+
+            assert doc.list_revisions() == []
+            assert doc.list_comments() == []
+            assert _marker_counts(doc) == (0, 0, 0)
+        finally:
+            doc.close()
+
+    def test_a_shared_note_moves_onto_a_redline_that_is_still_pending(self, doc):
+        """Resolving the anchoring operation must not leave the rationale
+        bracketing text nobody changed."""
+        refs = [find_ref(doc, "quick brown"), find_ref(doc, "sample document")]
+        results = doc.batch_edit([
+            EditOperation.replace("quick", "swift", paragraph=refs[0], note="house style"),
+            EditOperation.replace("sample", "example", paragraph=refs[1], note="house style"),
+        ])
+        assert _paragraph_index(doc, _markers(doc, results[0].comment_id)[0]) == 2
+
+        doc.reject_group(results[0].group_id)
+
+        comment_id = results[1].comment_id
+        start, end = _markers(doc, comment_id)
+        assert _paragraph_index(doc, start) == 3  # with the surviving redline
+        assert _next_element(start).tagName == "w:del"
+        assert _prev_element(end).tagName == "w:ins"
+        assert _marker_counts(doc) == (1, 1, 1)
+
+        doc.reject_group(results[1].group_id)
+        assert doc.list_comments() == []
+        assert _marker_counts(doc) == (0, 0, 0)
+
+    def test_a_shared_note_stays_put_when_its_own_anchor_survives(self, doc):
+        """Only a dead anchor moves: resolving the other operation is not a
+        reason to churn the markers."""
+        refs = [find_ref(doc, "quick brown"), find_ref(doc, "sample document")]
+        results = doc.batch_edit([
+            EditOperation.replace("quick", "swift", paragraph=refs[0], note="house style"),
+            EditOperation.replace("sample", "example", paragraph=refs[1], note="house style"),
+        ])
+
+        doc.reject_group(results[1].group_id)
+
+        start, _ = _markers(doc, results[0].comment_id)
+        assert _paragraph_index(doc, start) == 2
+        assert _next_element(start).tagName == "w:del"
+
     def test_a_partly_amended_group_keeps_its_note(self, doc):
         """Amending one revision away is not resolution: the group's deletion
         is still pending, so the rationale still has something to explain."""
@@ -500,6 +558,24 @@ class TestNothingToAnchor:
             doc.replace("quick", "quick", paragraph=ref)
             doc.insert_before("jumps", "\n", paragraph=find_ref(doc, "quick brown"))
 
+    def test_an_op_whose_note_a_sibling_recorded_reports_it_and_does_not_warn(self, doc):
+        """The note reached the document, so the rationale was not dropped —
+        whatever this particular operation managed to create."""
+        refs = [find_ref(doc, "quick brown"), find_ref(doc, "sample document")]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UnanchoredNoteWarning)
+            results = doc.batch_edit([
+                # A no-op and a paragraph-mark-only split, both sharing their
+                # note with the one operation that does create a revision.
+                EditOperation.replace("quick", "quick", paragraph=refs[0], note="house style"),
+                EditOperation.insert_before("jumps", "\n", paragraph=refs[0], note="house style"),
+                EditOperation.replace("sample", "example", paragraph=refs[1], note="house style"),
+            ])
+
+        assert len({r.comment_id for r in results}) == 1
+        assert results[0].comment_id is not None
+        assert [c.text for c in doc.list_comments()] == ["house style"]
+
     def test_batch_warns_once_per_unanchorable_op(self, doc):
         refs = [find_ref(doc, "quick brown"), find_ref(doc, "sample document")]
 
@@ -592,6 +668,29 @@ class TestNotesAndOrdinaryComments:
 
         assert reply_id != annotated.comment_id
         assert [r.text for r in doc.list_comments()[0].replies] == ["agreed"]
+
+    def test_reaping_a_note_takes_its_replies_with_it(self, doc):
+        """A reply outliving its parent points at a paraId nothing still holds."""
+        annotated = doc.replace("quick", "swift", paragraph=find_ref(doc, "quick brown"), note="tone")
+        doc.reply_to_comment(annotated.comment_id, "agreed")
+
+        doc.accept_group(annotated.group_id)
+
+        assert doc.list_comments() == []
+        assert _marker_counts(doc) == (0, 0, 0)
+
+    def test_deleting_a_comment_removes_its_extensible_entry(self, doc, temp_dir):
+        """Automatic reaping made the one part delete_comment skipped add up."""
+        annotated = doc.replace("quick", "swift", paragraph=find_ref(doc, "quick brown"), note="tone")
+        doc.accept_group(annotated.group_id)
+        out = temp_dir / "reaped.docx"
+        doc.save(out)
+
+        with zipfile.ZipFile(out) as zf:
+            names = set(zf.namelist())
+            part = "word/commentsExtensible.xml"
+            extensible = zf.read(part).decode() if part in names else ""
+        assert "commentExtensible" not in extensible
 
 
 class TestNoteLifetimeAcrossSave:

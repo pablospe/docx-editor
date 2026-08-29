@@ -474,11 +474,19 @@ document sees the change and its rationale together. Five rules govern it.
    `reject_revision`, `accept_group`, `reject_group`, `accept_changeset`,
    `reject_changeset`, `accept_all`, `reject_all`. A pipeline that calls
    `accept_all()` to produce a clean deliverable therefore does not ship agent
-   rationale as live comments. An `accept_all(author=...)` naming somebody else
-   leaves your revisions, and your notes, alone. A later edit that amends the
-   annotated insertion out of existence takes the note with it too — there is
-   no accept or reject in that case, but there is nothing left to explain
-   either.
+   rationale as live comments. Any replies threaded under the note go with it.
+
+   The test is whether the revisions still exist, not which call removed them,
+   so two cases that involve no accept or reject of yours also end the note: a
+   later edit that amends the annotated insertion out of existence, and a
+   rejection of *another author's* insertion that carries away a revision of
+   yours nested inside it — including one made by `reject_all(author=...)`
+   naming them. An `accept_all(author=...)` naming somebody else leaves notes
+   whose revisions survive it untouched.
+
+   When only part of a shared note's edits is resolved, the comment stays and
+   its range moves onto a redline that is still pending, so the rationale never
+   points at text nobody changed.
 
    For rationale that must survive resolution, use
    [`add_comment()`](#add_commentanchor_text-comment-paragraphnone-occurrencenone)
@@ -496,7 +504,10 @@ document sees the change and its rationale together. Five rules govern it.
    (which lives in `w:pPr/w:rPr`, where a comment marker cannot go). In each
    case the **edit still applies**, `comment_id` is `None`, and an
    `UnanchoredNoteWarning` names which cause it was — a dropped rationale is
-   never silent. To silence the category:
+   never silent. An operation that shares its note text with a sibling
+   operation of the same call that *did* anchor it is not a dropped rationale:
+   it reports that shared `comment_id` and warns nothing. To silence the
+   category:
 
    ```python
    warnings.filterwarnings("ignore", category=UnanchoredNoteWarning)
@@ -507,6 +518,11 @@ document sees the change and its rationale together. Five rules govern it.
    is per-open-`Document`, exactly like `group_id` and `changeset_id`. After a
    reopen a note comment is just a comment: rejecting the (freshly inferred)
    group leaves it in place, and `delete_comment()` removes it.
+
+   A `note=` edit writes the comment parts into the workspace as
+   [`add_comment()`](#add_commentanchor_text-comment-paragraphnone-occurrencenone)
+   does, where a bare tracked-change edit stays in memory until `save()` — so
+   it carries that method's workspace side effect too.
 
 A note is validated **before** the edit runs, so a bad one never leaves an
 applied edit with a dropped rationale behind it: it must be a non-empty string
@@ -1263,8 +1279,8 @@ from docx_editor import EditResult
 | `group_id` | int or None | Revision group holding every revision this edit created, for [`accept_group()`](#accept_groupgroup_id) / [`reject_group()`](#reject_groupgroup_id). None when the edit created no new revisions (e.g. text spliced into one of your own pending insertions, a no-change rewrite, or a rewrite whose changes all merged into your own pending insertions). Valid only while this Document stays open — after reopen the same revisions belong to a freshly inferred group with a new id. |
 | `changeset_id` | int or None | Changeset (one whole call) this edit's group belongs to, for [`accept_changeset()`](#accept_changesetchangeset_id) / [`reject_changeset()`](#reject_changesetchangeset_id). Every `EditResult` from one `batch_edit`/`batch_rewrite` shares it; None iff `group_id` is None. Per-open-`Document`, like `group_id`. |
 | `revision_ids` | tuple[int, ...] | The `w:id`s of the group's member revisions, in creation order; `()` when `group_id` is None |
-| `comment_id` | int or None | Id of the comment holding this edit's `note=` rationale, anchored on the revisions above — a live comment id, usable with `reply_to_comment()`/`delete_comment()`. `None` when no `note=` was given, and `None` with an `UnanchoredNoteWarning` when a note was given but there was nothing to anchor it on. See [Rationale notes](#rationale-notes). |
 | `refs` | tuple[str, ...] | Every resulting paragraph ref, in document order. `(str(self),)` for a normal edit; for a `\n` paragraph split it carries the first paragraph (== the string value) plus one ref per new paragraph the split created. A split shifts later indexes, so re-resolve stale refs before reuse. |
+| `comment_id` | int or None | Id of the comment holding this edit's `note=` rationale, anchored on the revisions above — a live comment id, usable with `reply_to_comment()`/`delete_comment()`. `None` when no `note=` was given, and `None` with an `UnanchoredNoteWarning` when a note was given but there was nothing to anchor it on. See [Rationale notes](#rationale-notes). |
 
 ### Example
 
