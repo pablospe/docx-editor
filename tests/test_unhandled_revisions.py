@@ -1,16 +1,20 @@
 """The honesty floor: revision types this library never resolves (ISSUES.md #64).
 
-``accept_all``/``reject_all`` walk ``w:ins``/``w:del`` only, so a Word redline
-whose revisions are all format changes or moves used to return ``0`` and read
-as "there was nothing to accept" rather than "nothing here could be accepted".
-These tests pin that the count is now accompanied by ``.unhandled`` /
-``.unhandled_types``, a warning, and a ``list_unhandled_revisions()`` listing.
+``accept_all``/``reject_all`` resolve ``HANDLED_REVISION_TAGS`` only —
+insertions, deletions, content moves and paragraph-property changes (the last
+two since ISSUES.md #68; see ``test_move_and_ppr_change_resolution.py``). A
+Word redline whose revisions are run-format changes or table revisions used to
+return ``0`` and read as "there was nothing to accept" rather than "nothing here
+could be accepted". These tests pin that the count is accompanied by
+``.unhandled`` / ``.unhandled_types``, a warning, and a
+``list_unhandled_revisions()`` listing — and that what *is* handled never
+enters that count.
 
-The corpus makes the case concrete: of 77 real-world files, ``TC-table-DnD-move``
-(LibreOffice core's ooxmlexport fixtures) carries 20 move marks and
-``UnknownStyleInRedline`` carries 2 ``w:pPrChange`` — both returned a silent 0 —
-and the Word-authored ``oxpt_RP*`` fixtures (Open-Xml-PowerTools) carry every
-type in ``UNHANDLED_REVISION_TAGS`` straight from Word.
+The corpus makes the case concrete: of 77 real-world files, the Word-authored
+``oxpt_RP*`` fixtures (Open-Xml-PowerTools) carry every type in
+``UNHANDLED_REVISION_TAGS`` straight from Word, while ``TC-table-DnD-move``
+(20 move marks) and ``UnknownStyleInRedline`` (2 ``w:pPrChange``) — the two
+files that once returned a silent 0 — now resolve completely.
 
 Fixtures are hand-authored ``word/document.xml`` swapped into ``simple.docx``
 (``replace_document_xml``), one per revision family, because
@@ -18,8 +22,6 @@ Fixtures are hand-authored ``word/document.xml`` swapped into ``simple.docx``
 deliberately omit ``w:author``/``w:date`` (``w:tblGridChange`` and the range
 ``*End`` marks carry only ``w:id`` in the schema), which is what exercises the
 ``"Unknown"`` author default and the author-filter exclusion.
-
-Resolving any of these types is out of scope here — that is ISSUES.md #68.
 """
 
 import warnings
@@ -38,6 +40,7 @@ from docx_editor.track_changes import (
     ALL_REVISION_TAGS,
     CHANGE_RECORD_TAGS,
     HANDLED_REVISION_TAGS,
+    MOVE_RANGE_TAGS,
     UNHANDLED_REVISION_TAGS,
     count_revision_elements,
 )
@@ -55,7 +58,8 @@ def _document(body: str) -> str:
 
 
 # Property changes. The sectPrChange sits in the body's sectPr, outside every
-# <w:p> — that is the paragraph_ref=None case.
+# <w:p> — that is the paragraph_ref=None case. The pPrChange is a *handled*
+# type: it resolves, and only the other two are reported.
 PROPERTY_CHANGES = _document(
     "<w:p>"
     f'<w:pPr><w:pPrChange w:id="1" {_ANN}><w:pPr/></w:pPrChange></w:pPr>'
@@ -66,18 +70,20 @@ PROPERTY_CHANGES = _document(
 )
 
 # A drag-and-drop move: the moveFrom/moveTo pair plus their four range marks.
-# The *End marks carry only w:id, exactly as Word writes them.
+# The *End marks carry only w:id, matching their Start's, exactly as Word
+# writes them. Handled since
+# ISSUES.md #68 — kept here to pin that none of it is counted as unhandled.
 MOVES = _document(
     "<w:p>"
     f'<w:moveFromRangeStart w:id="10" {_ANN} w:name="move1"/>'
     f'<w:moveFrom w:id="11" {_ANN}><w:r><w:delText>relocated clause</w:delText></w:r></w:moveFrom>'
-    '<w:moveFromRangeEnd w:id="12"/>'
+    '<w:moveFromRangeEnd w:id="10"/>'
     "<w:r><w:t>tail</w:t></w:r>"
     "</w:p>"
     "<w:p>"
-    f'<w:moveToRangeStart w:id="13" {_ANN} w:name="move1"/>'
-    f'<w:moveTo w:id="14" {_ANN}><w:r><w:t>relocated clause</w:t></w:r></w:moveTo>'
-    '<w:moveToRangeEnd w:id="15"/>'
+    f'<w:moveToRangeStart w:id="12" {_ANN} w:name="move1"/>'
+    f'<w:moveTo w:id="13" {_ANN}><w:r><w:t>relocated clause</w:t></w:r></w:moveTo>'
+    '<w:moveToRangeEnd w:id="12"/>'
     "</w:p>"
 )
 
@@ -119,8 +125,8 @@ CUSTOM_XML_RANGES = _document(
 # the two it resolved and the one it could not.
 MIXED = _document(
     "<w:p>"
-    f'<w:pPr><w:pPrChange w:id="50" {_ANN}><w:pPr/></w:pPrChange></w:pPr>'
-    '<w:r><w:t xml:space="preserve">This </w:t></w:r>'
+    f'<w:r><w:rPr><w:rPrChange w:id="50" {_ANN}><w:rPr/></w:rPrChange></w:rPr>'
+    '<w:t xml:space="preserve">This </w:t></w:r>'
     f'<w:del w:id="51" {_ANN}><w:r><w:delText xml:space="preserve">old </w:delText></w:r></w:del>'
     f'<w:ins w:id="52" {_ANN}><w:r><w:t xml:space="preserve">new </w:t></w:r></w:ins>'
     "<w:r><w:t>clause.</w:t></w:r>"
@@ -217,35 +223,32 @@ def _open(path: Path) -> Document:
 
 class TestForeignOnlyDocumentsAreNotSilentlyResolved:
     @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
-    def test_property_only_redline_reports_what_it_could_not_resolve(self, make_docx, method):
+    def test_property_redline_reports_what_it_could_not_resolve(self, make_docx, method):
         path = make_docx(PROPERTY_CHANGES, "props")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UnhandledRevisionWarning)
             with _open(path) as doc:
                 result = getattr(doc, method)()
-        # The number that used to be the whole story: nothing was resolvable.
-        assert result == 0
-        # ...and the part that was missing: three revisions are still pending.
-        assert result.unhandled == 3
-        assert result.unhandled_types == {"w:pPrChange": 1, "w:rPrChange": 1, "w:sectPrChange": 1}
+        # The paragraph-property change is resolvable (ISSUES.md #68)...
+        assert result == 1
+        # ...and the part that used to be missing: the other two are still pending.
+        assert result.unhandled == 2
+        assert result.unhandled_types == {"w:rPrChange": 1, "w:sectPrChange": 1}
 
     @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
-    def test_move_only_redline_counts_every_mark_including_range_ends(self, make_docx, method):
+    def test_move_redline_is_resolved_and_its_range_marks_are_never_counted(self, make_docx, method):
+        """Moves are handled: two rows resolve, and the four range marks —
+        scaffolding, not revisions — neither enter the count nor survive it."""
         path = make_docx(MOVES, "moves")
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UnhandledRevisionWarning)
+            warnings.simplefilter("error", UnhandledRevisionWarning)
             with _open(path) as doc:
+                assert [r.type for r in doc.list_revisions()] == ["move_from", "move_to"]
                 result = getattr(doc, method)()
-        assert result == 0
-        assert result.unhandled == 6
-        assert result.unhandled_types == {
-            "w:moveFrom": 1,
-            "w:moveFromRangeStart": 1,
-            "w:moveFromRangeEnd": 1,
-            "w:moveTo": 1,
-            "w:moveToRangeStart": 1,
-            "w:moveToRangeEnd": 1,
-        }
+                assert count_revision_elements(doc._revision_manager.editor.dom).total == 0
+        assert result == 2
+        assert result.unhandled == 0
+        assert result.unhandled_types == {}
 
     @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
     def test_table_revisions_are_counted(self, make_docx, method):
@@ -295,11 +298,11 @@ class TestMixedDocument:
                 result = doc.accept_all()
                 assert result == 2  # the w:del and the w:ins
                 assert result.unhandled == 1
-                assert result.unhandled_types == {"w:pPrChange": 1}
+                assert result.unhandled_types == {"w:rPrChange": 1}
                 assert doc.list_revisions() == []
 
     def test_unresolved_mark_survives_save_and_reopen(self, make_docx, tmp_path):
-        """The count did not over-claim: the pPrChange is still in the file."""
+        """The count did not over-claim: the rPrChange is still in the file."""
         path = make_docx(MIXED, "mixed_roundtrip")
         out = tmp_path / "mixed_out.docx"
         with warnings.catch_warnings():
@@ -310,7 +313,7 @@ class TestMixedDocument:
             with _open(out) as reopened:
                 assert reopened.list_revisions() == []  # nothing left to adjudicate
                 rows = reopened.list_unhandled_revisions()
-        assert [r.tag for r in rows] == ["w:pPrChange"]
+        assert [r.tag for r in rows] == ["w:rPrChange"]
 
     @pytest.mark.parametrize(
         "method,expected_types",
@@ -349,7 +352,7 @@ class TestMixedDocument:
             with _open(path) as doc:
                 result = doc.reject_all()
         assert result == 2
-        assert result.unhandled_types == {"w:pPrChange": 1}
+        assert result.unhandled_types == {"w:rPrChange": 1}
 
 
 # --------------------------------------------------------------------------
@@ -398,7 +401,7 @@ class TestWarning:
             with pytest.warns(UnhandledRevisionWarning) as record:
                 getattr(doc, method)()
         message = str(record[0].message)
-        assert "w:pPrChange" in message
+        assert "w:rPrChange" in message
         assert "list_unhandled_revisions()" in message
 
     def test_warning_names_the_verb_that_fired_it(self, make_docx):
@@ -409,7 +412,7 @@ class TestWarning:
         assert "reject_all()" in str(record[0].message)
 
     def test_one_warning_per_call(self, make_docx):
-        path = make_docx(MOVES, "warn_once")
+        path = make_docx(TABLE_REVISIONS, "warn_once")
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             with _open(path) as doc:
@@ -428,9 +431,10 @@ class TestListUnhandledRevisions:
         with _open(path) as doc:
             rows = doc.list_unhandled_revisions()
 
-        assert [r.tag for r in rows] == ["w:pPrChange", "w:rPrChange", "w:sectPrChange"]
-        assert [r.id for r in rows] == [1, 2, 3]
-        assert [r.author for r in rows] == ["Ann", "Bob", "Ann"]
+        # The pPrChange (id 1) is a handled type and belongs to list_revisions.
+        assert [r.tag for r in rows] == ["w:rPrChange", "w:sectPrChange"]
+        assert [r.id for r in rows] == [2, 3]
+        assert [r.author for r in rows] == ["Bob", "Ann"]
         assert rows[0].date is not None
         assert rows[0].date.year == 2026
 
@@ -441,7 +445,6 @@ class TestListUnhandledRevisions:
             paragraph_refs = doc.list_paragraphs(max_chars=0, limit=None)
 
         assert rows[0].paragraph_ref == paragraph_refs[0]
-        assert rows[1].paragraph_ref == paragraph_refs[0]
 
     def test_mark_outside_any_paragraph_has_no_paragraph_ref(self, make_docx):
         """A sectPrChange lives in the body's sectPr, not in a <w:p>."""
@@ -453,33 +456,38 @@ class TestListUnhandledRevisions:
 
     def test_mark_without_w_id_reports_id_none(self, make_docx):
         """cellIns/cellDel/cellMerge are id-bearing here, but a mark can lack one."""
-        body = _document(f"<w:p><w:pPr><w:pPrChange {_ANN}><w:pPr/></w:pPrChange></w:pPr></w:p>")
+        body = _document(f"<w:p><w:r><w:rPr><w:rPrChange {_ANN}><w:rPr/></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p>")
         path = make_docx(body, "no_id")
         with _open(path) as doc:
             rows = doc.list_unhandled_revisions()
-        assert [(r.tag, r.id) for r in rows] == [("w:pPrChange", None)]
+        assert [(r.tag, r.id) for r in rows] == [("w:rPrChange", None)]
 
     def test_mark_without_author_reads_as_unknown(self, make_docx):
         """The range *End marks carry only w:id, exactly as Word writes them."""
-        path = make_docx(MOVES, "unknown_author")
+        path = make_docx(CUSTOM_XML_RANGES, "unknown_author")
         with _open(path) as doc:
             rows = doc.list_unhandled_revisions()
         by_tag = {r.tag: r for r in rows}
-        assert by_tag["w:moveFromRangeEnd"].author == "Unknown"
-        assert by_tag["w:moveFromRangeEnd"].date is None
-        assert by_tag["w:moveFrom"].author == "Ann"
+        assert by_tag["w:customXmlInsRangeEnd"].author == "Unknown"
+        assert by_tag["w:customXmlInsRangeEnd"].date is None
+        assert by_tag["w:customXmlInsRangeStart"].author == "Ann"
 
     def test_author_filter_excludes_unattributed_marks(self, make_docx):
-        path = make_docx(MOVES, "author_filter")
+        path = make_docx(CUSTOM_XML_RANGES, "author_filter")
         with _open(path) as doc:
             everyone = doc.list_unhandled_revisions()
             ann = doc.list_unhandled_revisions(author="Ann")
             unknown = doc.list_unhandled_revisions(author="Unknown")
 
-        assert len(everyone) == 6
-        assert len(ann) == 4  # the two *RangeEnd marks carry no w:author
+        assert len(everyone) == 8
+        assert len(ann) == 4  # the four *RangeEnd marks carry no w:author
         assert {r.author for r in ann} == {"Ann"}
-        assert [r.tag for r in unknown] == ["w:moveFromRangeEnd", "w:moveToRangeEnd"]
+        assert [r.tag for r in unknown] == [
+            "w:customXmlInsRangeEnd",
+            "w:customXmlDelRangeEnd",
+            "w:customXmlMoveFromRangeEnd",
+            "w:customXmlMoveToRangeEnd",
+        ]
 
     def test_author_filter_on_accept_all_counts_only_that_author(self, make_docx):
         path = make_docx(TABLE_REVISIONS, "accept_filtered")
@@ -511,9 +519,9 @@ class TestListUnhandledRevisions:
 
     @pytest.mark.xfail(
         strict=True,
-        reason="ISSUES.md #68: list_revisions/accept_all still walk every w:ins/w:del, "
-        "including ones recorded inside a change record. Flip to passing when #68 "
-        "routes the handled path through skip_change_records too.",
+        reason="list_revisions/accept_all still walk every handled tag, including "
+        "ones recorded inside a change record. Flip to passing when the handled "
+        "path is routed through skip_change_records too.",
     )
     def test_handled_path_still_adjudicates_marks_inside_change_records(self, make_docx):
         """Known gap the honesty floor does NOT close (pre-existing).
@@ -626,22 +634,27 @@ def test_every_unhandled_tag_has_a_fixture():
     assert covered == set(UNHANDLED_REVISION_TAGS)
 
 
-def test_change_record_tags_stay_inside_the_unhandled_set():
+def test_change_record_tags_cover_the_whole_property_change_family():
     """CHANGE_RECORD_TAGS repeats the property-change family — pin the overlap.
 
-    A property-change type added to UNHANDLED_REVISION_TAGS but not here would
+    A property-change type added to the revision tags but not here would
     silently stop skip_change_records from skipping its recorded subtree.
+    w:pPrChange is handled (resolved by id) *and* a change record (its
+    recorded subtree is historical), so the family spans both sets.
     """
-    assert set(CHANGE_RECORD_TAGS) <= set(UNHANDLED_REVISION_TAGS)
+    assert set(CHANGE_RECORD_TAGS) <= set(ALL_REVISION_TAGS)
+    assert "w:pPrChange" in CHANGE_RECORD_TAGS and "w:pPrChange" in HANDLED_REVISION_TAGS
     # w:numberingChange records its previous value in an attribute, not a
     # subtree, so it is deliberately not a change record.
     assert "w:numberingChange" not in CHANGE_RECORD_TAGS
-    assert set(CHANGE_RECORD_TAGS) == {t for t in UNHANDLED_REVISION_TAGS if t.endswith("Change")} - {
-        "w:numberingChange"
-    }
+    assert set(CHANGE_RECORD_TAGS) == {t for t in ALL_REVISION_TAGS if t.endswith("Change")} - {"w:numberingChange"}
 
 
 def test_tag_constants_are_disjoint_and_complete():
-    assert set(HANDLED_REVISION_TAGS) & set(UNHANDLED_REVISION_TAGS) == set()
-    assert set(ALL_REVISION_TAGS) == set(HANDLED_REVISION_TAGS) | set(UNHANDLED_REVISION_TAGS)
+    handled, ranges, unhandled = set(HANDLED_REVISION_TAGS), set(MOVE_RANGE_TAGS), set(UNHANDLED_REVISION_TAGS)
+    assert handled & unhandled == set()
+    assert handled & ranges == set()
+    assert ranges & unhandled == set()
+    assert set(ALL_REVISION_TAGS) == handled | ranges | unhandled
     assert len(ALL_REVISION_TAGS) == len(set(ALL_REVISION_TAGS))
+    assert handled == {"w:ins", "w:del", "w:moveFrom", "w:moveTo", "w:pPrChange"}

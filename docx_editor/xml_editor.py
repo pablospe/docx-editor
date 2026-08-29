@@ -1029,9 +1029,12 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
 
     - ``"accepted"`` (default): the visible text — text inside <w:ins> is
       included (with is_inside_ins=True), text inside <w:del>/<w:delText>
-      and <w:moveFrom> is excluded (a move's source reads as gone, its
-      <w:moveTo> destination as present). Paragraph hashes and all editing
-      operations use this view.
+      and <w:moveFrom> is excluded (a move's source reads as gone — Word
+      writes the moved-away text as plain <w:t> inside <w:moveFrom> — and its
+      <w:moveTo> destination as present, as plain text with
+      is_inside_ins=False: it is another author's pending move, not this
+      session's insertion). Paragraph hashes and all editing operations use
+      this view.
     - ``"original"``: the pre-revision text — <w:ins> and <w:moveTo> subtrees
       are excluded, <w:delText> is included, and text inside <w:del> or
       <w:moveFrom> is flagged with is_inside_del=True.
@@ -1066,8 +1069,8 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
                 continue
 
             # Skip w:del (deleted text uses w:delText, but be safe) and
-            # w:moveFrom: its text is w:delText too, but a moved-away tab
-            # mark would otherwise leak into the visible view.
+            # w:moveFrom: Word writes the moved-away text as plain w:t, and a
+            # moved-away tab mark would otherwise leak into the visible view.
             if _is_inside_element(node, "w:del") or _is_inside_element(node, "w:moveFrom"):
                 continue
 

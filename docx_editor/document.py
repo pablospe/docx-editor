@@ -2104,12 +2104,20 @@ class Document:
     # ==================== Revision Management API ====================
 
     def list_revisions(self, author: str | None = None, paragraph: str | None = None) -> list[Revision]:
-        """List the document's tracked insertions and deletions.
+        """List the document's tracked revisions.
 
-        Insertions and deletions only. Every other revision type in the OOXML
-        schema — format changes, moves, table-structure revisions — is listed
-        by ``list_unhandled_revisions()`` instead, because none of it can be
-        passed to ``accept_revision()``.
+        Five ``type`` values: ``"insertion"``, ``"deletion"``, the two halves
+        of a content move (``"move_from"``/``"move_to"`` — two rows, as in
+        Word's revision pane) and ``"property_change"`` (a ``w:pPrChange``:
+        the paragraph's previous properties; ``text`` is ``""``). Every row
+        can be passed to ``accept_revision()``/``reject_revision()``. Every
+        other revision type in the OOXML schema — run/section/table property
+        changes, table-structure revisions — is listed by
+        ``list_unhandled_revisions()`` instead, because none of it can be.
+
+        The two halves of a move are independent rows; resolve them together
+        (``accept_all()``/``reject_all()``, or the inferred changeset both
+        halves share) — see ``accept_revision()``.
 
         Args:
             author: If provided, filter by author name
@@ -2121,11 +2129,12 @@ class Document:
             List of Revision objects sorted by id. Each carries location
             fields: ``paragraph_ref`` (hash-anchored ref of its containing
             paragraph), ``occurrence`` (0-based index of the revision's text
-            within that paragraph — for insertions it plugs into the
-            ``occurrence=`` parameter of replace()/delete()/add_comment();
-            for deletions it counts in the original, pre-revision text and
-            must not be passed to those APIs; None when the text is not
-            locatable, e.g. nested revisions, or when ``paragraph_ref`` is
+            within that paragraph — for insertions and ``move_to`` halves it
+            plugs into the ``occurrence=`` parameter of
+            replace()/delete()/add_comment(); for deletions and ``move_from``
+            halves it counts in the original, pre-revision text and must not
+            be passed to those APIs; None when the text is not locatable,
+            e.g. nested revisions or empty text, or when ``paragraph_ref`` is
             itself None — a revision inside a drawing's text box lists and
             accepts by id, but has no addressable location), plus
             ``nested_under`` and ``contains_ids`` describing revision
@@ -2157,8 +2166,21 @@ class Document:
     def accept_revision(self, revision_id: int) -> bool:
         """Accept a revision by ID.
 
-        For insertions: keeps the inserted content.
-        For deletions: permanently removes the deleted content.
+        - insertion: keeps the inserted content.
+        - deletion: permanently removes the deleted content.
+        - move_to: keeps the moved text at its destination.
+        - move_from: removes the moved text from its source.
+        - property_change: keeps the paragraph's current properties and
+          drops the record of the previous ones.
+
+        A move is two rows. ``accept_all()``/``reject_all()`` and the
+        inferred changeset both halves share resolve them together, which is
+        what keeps the text in exactly one place; resolving one half by id is
+        allowed but is your call — accepting the ``move_to`` and rejecting
+        the ``move_from`` duplicates the text, the inverse loses it. A lone
+        half in a damaged file behaves as what it structurally is: a
+        ``move_from`` alone is a deletion, a ``move_to`` alone an insertion.
+        A move's range marks are swept once their content is resolved.
 
         Note:
             Any ``note=`` rationale left with no live revision to explain is
@@ -2181,8 +2203,15 @@ class Document:
     def reject_revision(self, revision_id: int) -> bool:
         """Reject a revision by ID.
 
-        For insertions: removes the inserted content.
-        For deletions: restores the deleted content.
+        - insertion: removes the inserted content.
+        - deletion: restores the deleted content.
+        - move_to: removes the moved text from its destination.
+        - move_from: restores the moved text at its source.
+        - property_change: restores the paragraph's recorded previous
+          properties (a record with none clears them); the recorded style id
+          is restored verbatim even when the document defines no such style.
+
+        Resolve both halves of a move together — see :meth:`accept_revision`.
 
         Note:
             Any ``note=`` rationale left with no live revision to explain is
@@ -2365,16 +2394,17 @@ class Document:
         """List the revision types this library does not accept or reject.
 
         The complement of ``list_revisions()``: everything in the OOXML
-        revision schema except insertions and deletions — property changes
-        (``w:pPrChange``, ``w:rPrChange``, ``w:sectPrChange``, the table
-        ``*PrChange`` family), content moves (``w:moveFrom``/``w:moveTo`` and
-        their range marks), table-structure revisions (``w:cellIns``,
-        ``w:cellDel``, ``w:cellMerge``), ``w:numberingChange`` and the
-        custom-XML range marks. These survive open/edit/save unchanged and are
-        left pending by ``accept_all()``/``reject_all()``.
+        revision schema except insertions, deletions, moves and
+        paragraph-property changes — run, section and table property changes
+        (``w:rPrChange``, ``w:sectPrChange``, the table ``*PrChange`` family),
+        table-structure revisions (``w:cellIns``, ``w:cellDel``,
+        ``w:cellMerge``), ``w:numberingChange`` and the custom-XML range
+        marks. These survive open/edit/save unchanged and are left pending by
+        ``accept_all()``/``reject_all()``. A move's range marks are never
+        listed here: they are swept with the move they bracket.
 
         Call this before telling a human "all changes accepted": on a
-        format-only redline ``accept_all()`` returns 0 because there was
+        run-format-only redline ``accept_all()`` returns 0 because there was
         nothing it *could* accept, not because there was nothing to do.
 
         These rows are deliberately not ``Revision`` objects — they carry
@@ -2406,12 +2436,16 @@ class Document:
         return self._revision_manager.list_unhandled_revisions(author=author)
 
     def accept_all(self, author: str | None = None) -> ResolveResult:
-        """Accept all insertions and deletions.
+        """Accept every listed revision.
 
-        Resolves ``w:ins``/``w:del`` only. Every other revision type is left
-        pending and reported on the result rather than silently ignored — see
-        ``list_unhandled_revisions()`` for the full list and
-        :class:`ResolveResult` for the counting rule.
+        Resolves insertions, deletions, content moves (both halves, as a
+        unit — the text ends up at its destination exactly once, range marks
+        swept) and paragraph-property changes (the record is dropped). Every
+        other revision type is left pending and reported on the result rather
+        than silently ignored — see ``list_unhandled_revisions()`` for the
+        full list and :class:`ResolveResult` for the counting rule. A moved or
+        deleted paragraph mark resolves approximately: the marker is dropped
+        without merging or splitting paragraphs.
 
         Only ``word/document.xml`` is inspected; headers, footers and
         footnotes are the container-parts epic (ISSUES.md #30).
@@ -2451,10 +2485,13 @@ class Document:
         return result
 
     def reject_all(self, author: str | None = None) -> ResolveResult:
-        """Reject all insertions and deletions.
+        """Reject every listed revision.
 
-        Resolves ``w:ins``/``w:del`` only; every other revision type is left
-        pending and reported exactly as in ``accept_all()``.
+        Resolves insertions, deletions, content moves (both halves, as a
+        unit — the text is back at its source exactly once) and
+        paragraph-property changes (the recorded previous properties are
+        restored); every other revision type is left pending and reported
+        exactly as in ``accept_all()``.
 
         Note:
             Any ``note=`` rationale left with no live revision to explain is

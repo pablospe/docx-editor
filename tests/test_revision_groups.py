@@ -1612,8 +1612,10 @@ class TestAcceptPathIndex:
 
             walks = count_dom_walks(monkeypatch)
             assert getattr(doc, method)(changeset_id) == 6
-            # One index build, not one scan per member per pass.
-            assert walks == ["w:ins", "w:del"]
+            # One index build (a single recursive walk over every handled
+            # tag, invisible to count_dom_walks), not one scan per member
+            # per pass — and no per-tag getElementsByTagName either.
+            assert walks == []
             assert doc.list_revisions() == []
 
     @pytest.mark.parametrize("method", ["accept_group", "reject_group"])
@@ -1624,7 +1626,7 @@ class TestAcceptPathIndex:
 
             walks = count_dom_walks(monkeypatch)
             assert getattr(doc, method)(result.group_id) == 2
-            assert walks == ["w:ins", "w:del"]
+            assert walks == []  # one recursive walk builds the index
             assert doc.list_revisions() == []
 
     @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
@@ -1639,7 +1641,9 @@ class TestAcceptPathIndex:
         per call (``iter_revision_elements`` over all ~30 revision tags), which
         count_dom_walks cannot see because it hooks getElementsByTagName. That
         is the point of the recursive form: the naive per-tag census would have
-        cost ~28 more getElementsByTagName walks and broken this pin.
+        cost ~28 more getElementsByTagName walks and broken this pin. The
+        index build, listing and range-mark sweep (ISSUES.md #68) use the same
+        recursive form for the same reason.
         """
         counts = {}
         for label, words in (("small", ["quick"]), ("large", ["quick", "brown", "lazy"])):

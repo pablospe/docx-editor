@@ -928,27 +928,9 @@ class TestListRevisionsEdgeCases:
 
     def test_list_revisions_filters_by_author_for_insertions(self):
         """Test that list_revisions author filter works for insertions."""
-        mock_editor = MagicMock()
-        mock_editor.dom = MagicMock()
-
-        # Create mock insertion element
-        mock_ins = MagicMock()
-
-        def ins_get_attr(name):
-            if name == "w:id":
-                return "1"
-            elif name == "w:author":
-                return "SpecificAuthor"
-            elif name == "w:date":
-                return ""
-            return ""
-
-        mock_ins.getAttribute.side_effect = ins_get_attr
-        mock_ins.getElementsByTagName.return_value = []
-
-        mock_editor.dom.getElementsByTagName.side_effect = lambda tag: [mock_ins] if tag == "w:ins" else []
-
-        manager = RevisionManager(mock_editor)
+        manager = _make_revision_manager(
+            '<w:p><w:ins w:id="1" w:author="SpecificAuthor"><w:r><w:t>new</w:t></w:r></w:ins></w:p>'
+        )
 
         # Filter by matching author
         revisions = manager.list_revisions(author="SpecificAuthor")
@@ -961,27 +943,9 @@ class TestListRevisionsEdgeCases:
 
     def test_list_revisions_filters_by_author_for_deletions(self):
         """Test that list_revisions author filter works for deletions."""
-        mock_editor = MagicMock()
-        mock_editor.dom = MagicMock()
-
-        # Create mock deletion element
-        mock_del = MagicMock()
-
-        def del_get_attr(name):
-            if name == "w:id":
-                return "2"
-            elif name == "w:author":
-                return "DeleteAuthor"
-            elif name == "w:date":
-                return ""
-            return ""
-
-        mock_del.getAttribute.side_effect = del_get_attr
-        mock_del.getElementsByTagName.return_value = []
-
-        mock_editor.dom.getElementsByTagName.side_effect = lambda tag: [mock_del] if tag == "w:del" else []
-
-        manager = RevisionManager(mock_editor)
+        manager = _make_revision_manager(
+            '<w:p><w:del w:id="2" w:author="DeleteAuthor"><w:r><w:delText>old</w:delText></w:r></w:del></w:p>'
+        )
 
         # Filter by matching author
         revisions = manager.list_revisions(author="DeleteAuthor")
@@ -993,117 +957,48 @@ class TestListRevisionsEdgeCases:
 class TestAcceptRejectLoops:
     """Tests for accept_all and reject_all loops."""
 
-    def test_accept_all_processes_multiple_revisions(self):
-        """Test that accept_all correctly processes multiple revisions."""
-        mock_editor = MagicMock()
-        mock_editor.dom = MagicMock()
+    TWO_INSERTIONS = (
+        '<w:p><w:ins w:id="1" w:author="Author"><w:r><w:t>one</w:t></w:r></w:ins>'
+        '<w:ins w:id="2" w:author="Author"><w:r><w:t>two</w:t></w:r></w:ins></w:p>'
+    )
+    TWO_DELETIONS = (
+        '<w:p><w:del w:id="3" w:author="Author"><w:r><w:delText>one</w:delText></w:r></w:del>'
+        '<w:del w:id="4" w:author="Author"><w:r><w:delText>two</w:delText></w:r></w:del></w:p>'
+    )
 
-        # Create two mock insertions
-        mock_ins1 = MagicMock()
-        mock_ins2 = MagicMock()
+    @staticmethod
+    def _detaching_double(manager, processed: set[str]):
+        """A resolver double that detaches the element it is handed, so the
+        re-listing shrinks exactly as a real accept/reject makes it shrink."""
 
-        def ins1_get_attr(name):
-            if name == "w:id":
-                return "1"
-            elif name == "w:author":
-                return "Author"
-            return ""
-
-        def ins2_get_attr(name):
-            if name == "w:id":
-                return "2"
-            elif name == "w:author":
-                return "Author"
-            return ""
-
-        mock_ins1.getAttribute.side_effect = ins1_get_attr
-        mock_ins1.getElementsByTagName.return_value = []
-        mock_ins1.parentNode = MagicMock()
-
-        mock_ins2.getAttribute.side_effect = ins2_get_attr
-        mock_ins2.getElementsByTagName.return_value = []
-        mock_ins2.parentNode = MagicMock()
-
-        # Track which elements have been processed
-        processed = set()
-
-        def get_elements(tag):
-            if tag == "w:ins":
-                result = []
-                if "1" not in processed:
-                    result.append(mock_ins1)
-                if "2" not in processed:
-                    result.append(mock_ins2)
-                return result
-            return []
-
-        mock_editor.dom.getElementsByTagName.side_effect = get_elements
-
-        manager = RevisionManager(mock_editor)
-
-        # Mock accept_revision to track calls
-        def mock_accept(rev_id: int, element_index: dict | None = None) -> bool:
+        def resolve(rev_id: int, element_index: dict | None = None) -> bool:
+            elem = manager._find_revision_element(rev_id, element_index)
+            assert elem is not None
+            elem.parentNode.removeChild(elem)
             processed.add(str(rev_id))
             return True
 
-        manager.accept_revision = mock_accept  # type: ignore[method-assign]
+        return resolve
+
+    def test_accept_all_processes_multiple_revisions(self):
+        """Test that accept_all correctly processes multiple revisions."""
+        manager = _make_revision_manager(self.TWO_INSERTIONS)
+        processed: set[str] = set()
+        manager.accept_revision = self._detaching_double(manager, processed)
 
         count = manager.accept_all()
         assert count == 2
+        assert processed == {"1", "2"}
 
     def test_reject_all_processes_multiple_revisions(self):
         """Test that reject_all correctly processes multiple revisions."""
-        mock_editor = MagicMock()
-        mock_editor.dom = MagicMock()
-
-        # Create two mock deletions
-        mock_del1 = MagicMock()
-        mock_del2 = MagicMock()
-
-        def del1_get_attr(name):
-            if name == "w:id":
-                return "3"
-            elif name == "w:author":
-                return "Author"
-            return ""
-
-        def del2_get_attr(name):
-            if name == "w:id":
-                return "4"
-            elif name == "w:author":
-                return "Author"
-            return ""
-
-        mock_del1.getAttribute.side_effect = del1_get_attr
-        mock_del1.getElementsByTagName.return_value = []
-
-        mock_del2.getAttribute.side_effect = del2_get_attr
-        mock_del2.getElementsByTagName.return_value = []
-
-        processed = set()
-
-        def get_elements(tag):
-            if tag == "w:del":
-                result = []
-                if "3" not in processed:
-                    result.append(mock_del1)
-                if "4" not in processed:
-                    result.append(mock_del2)
-                return result
-            return []
-
-        mock_editor.dom.getElementsByTagName.side_effect = get_elements
-
-        manager = RevisionManager(mock_editor)
-
-        def mock_reject(rev_id: int, element_index: dict | None = None) -> bool:
-            processed.add(str(rev_id))
-            return True
-
-        manager.reject_revision = mock_reject  # type: ignore[method-assign]
+        manager = _make_revision_manager(self.TWO_DELETIONS)
+        processed: set[str] = set()
+        manager.reject_revision = self._detaching_double(manager, processed)
 
         count = manager.reject_all()
         assert count == 2
+        assert processed == {"3", "4"}
 
     def test_accept_all_does_not_spin_when_listing_shrinks(self):
         """accept_all must resolve each revision once, not loop until OOM.
@@ -1119,27 +1014,9 @@ class TestAcceptRejectLoops:
         revisions are processed. The call cap below makes a regression fail in
         milliseconds instead of exhausting RAM.
         """
-        mock_editor = MagicMock()
-        mock_editor.dom = MagicMock()
+        manager = _make_revision_manager(self.TWO_INSERTIONS)
         processed: set[str] = set()
-
-        def make_ins(rev_id):
-            m = MagicMock()
-            m.getAttribute.side_effect = lambda n, i=rev_id: i if n == "w:id" else ("Author" if n == "w:author" else "")
-            m.getElementsByTagName.return_value = []
-            m.parentNode = MagicMock()
-            return m
-
-        insertions = {"1": make_ins("1"), "2": make_ins("2")}
-
-        def get_elements(tag):
-            if tag == "w:ins":
-                return [e for i, e in insertions.items() if i not in processed]
-            return []
-
-        mock_editor.dom.getElementsByTagName.side_effect = get_elements
-        manager = RevisionManager(mock_editor)
-
+        detach = self._detaching_double(manager, processed)
         calls = {"n": 0}
 
         def counting_accept(rev_id, element_index=None):
@@ -1148,10 +1025,9 @@ class TestAcceptRejectLoops:
                 f"accept_all did not terminate: accept_revision called {calls['n']} times "
                 "for 2 revisions (unbounded loop — see docstring)"
             )
-            processed.add(str(rev_id))
-            return True
+            return detach(rev_id, element_index)
 
-        manager.accept_revision = counting_accept  # type: ignore[method-assign]
+        manager.accept_revision = counting_accept
 
         assert manager.accept_all() == 2
         assert calls["n"] == 2, f"expected one resolve per revision, got {calls['n']}"

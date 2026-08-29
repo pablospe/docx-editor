@@ -612,9 +612,42 @@ class _LocatedMatch:
     paragraph_occurrence: int  # Occurrence index of the match within that paragraph
 
 
+RevisionType = Literal["insertion", "deletion", "move_from", "move_to", "property_change"]
+
+# ``Revision.type`` -> the short kind shown by ``Revision.__repr__``.
+_REPR_KIND_BY_TYPE: dict[str, str] = {
+    "insertion": "ins",
+    "deletion": "del",
+    "move_from": "moveFrom",
+    "move_to": "moveTo",
+    "property_change": "pPrChange",
+}
+
+
 @dataclass
 class Revision:
-    """Represents a tracked change (insertion or deletion).
+    """Represents a tracked change: an insertion, deletion, move half or
+    paragraph-property change.
+
+    ``type`` is one of five values (see ``RevisionType``):
+
+    - ``"insertion"`` / ``"deletion"``: a ``w:ins``/``w:del``; ``text`` is the
+      inserted/deleted text.
+    - ``"move_from"`` / ``"move_to"``: the two halves of a content move
+      (``w:moveFrom``/``w:moveTo``), listed as two entries exactly as Word's
+      revision pane shows "Moved from"/"Moved to"; ``text`` is the moved text
+      as it appears in that half. Word never pairs the halves by id, so they
+      are independent rows sharing an inferred ``changeset_id`` when they
+      carry the same author and date — ``accept_changeset``/
+      ``reject_changeset``, ``accept_all``/``reject_all`` resolve a move as a
+      unit. Resolving one half by id is allowed but is what Word's per-entry
+      resolution also permits: accepting the ``move_to`` and rejecting the
+      ``move_from`` duplicates the text, the inverse loses it; a lone half
+      in a damaged file behaves as the deletion/insertion it structurally is.
+    - ``"property_change"``: a ``w:pPrChange`` — the paragraph's previous
+      properties, recorded inside its ``w:pPr``. ``text`` is ``""``;
+      accepting drops the record, rejecting restores the recorded
+      properties.
 
     Location and nesting fields are populated by ``list_revisions``:
 
@@ -641,14 +674,16 @@ class Revision:
       revision.
     - ``occurrence``: 0-based occurrence index of ``text`` within the
       containing paragraph, counted in the view where the revision's text
-      lives — the accepted (visible) view for insertions, the original
-      (pre-revision) view for deletions. For insertions it plugs directly
+      lives — the accepted (visible) view for insertions and ``move_to``
+      halves, the original (pre-revision) view for deletions and
+      ``move_from`` halves. For insertions and ``move_to`` it plugs directly
       into the ``occurrence=`` parameter of replace()/delete()/
       add_comment(). None whenever targeting-by-text does not apply: empty
-      text, a host insertion whose original text no longer matches its
-      visible span (a nested deletion consumed part of it), a nested
-      deletion (its text never existed in the original document), or a
-      None ``paragraph_ref`` (an occurrence with no ref cannot be acted on).
+      text (property changes, paragraph-mark markers), a host insertion
+      whose original text no longer matches its visible span (a nested
+      deletion consumed part of it), a nested deletion (its text never
+      existed in the original document), or a None ``paragraph_ref`` (an
+      occurrence with no ref cannot be acted on).
     - ``nested_under``: id of the nearest enclosing revision (e.g. a foreign
       deletion inside another author's pending insertion), else None.
     - ``contains_ids``: ids of revisions nested inside this one, in document
@@ -695,7 +730,7 @@ class Revision:
     """
 
     id: int
-    type: Literal["insertion", "deletion"]
+    type: RevisionType
     author: str
     date: datetime | None
     text: str
@@ -709,7 +744,7 @@ class Revision:
     changeset_source: GroupSource | None = None
 
     def __repr__(self) -> str:
-        kind = "ins" if self.type == "insertion" else "del"
+        kind = _REPR_KIND_BY_TYPE.get(self.type, self.type)
         location = f" @{self.paragraph_ref}" if self.paragraph_ref else ""
         preview = self.text[:30] + ("..." if len(self.text) > 30 else "")
         nested = f", nested_under={self.nested_under}" if self.nested_under is not None else ""
@@ -722,26 +757,34 @@ class Revision:
 
 # Revision-bearing element tags, per ECMA-376 Part 1 §17.13 (Annotations).
 #
-# HANDLED are the two this library actually adjudicates: accept_revision /
+# HANDLED are the tags this library adjudicates by id: accept_revision /
 # reject_revision / accept_all / reject_all / list_revisions all walk exactly
-# these. UNHANDLED are the rest of the schema's revision marks — they are
-# parsed, carried through a save unchanged, and never resolved. Splitting them
-# into named constants is what lets accept_all report what it could not touch
-# (the "honesty floor", ISSUES.md #64) instead of silently claiming success;
-# handling them is ISSUES.md #68.
-HANDLED_REVISION_TAGS: tuple[str, ...] = ("w:ins", "w:del")
+# these. Insertions and deletions, the two halves of a content move, and a
+# paragraph-property change (ISSUES.md #68 — the two foreign families the
+# corpus census actually found in the wild, see benchmarks/corpus/README.md).
+#
+# MOVE_RANGE are scaffolding, not revisions: a move's *RangeStart/*RangeEnd
+# pair brackets the moved content but carries no text and nothing to
+# adjudicate, so the marks are never listed and never counted as unhandled —
+# ``_sweep_move_range_marks`` removes a pair once no pending move content of
+# its family remains between them.
+#
+# UNHANDLED are the rest of the schema's revision marks — parsed, carried
+# through a save unchanged, and never resolved. Splitting them into named
+# constants is what lets accept_all report what it could not touch (the
+# "honesty floor", ISSUES.md #64) instead of silently claiming success.
+HANDLED_REVISION_TAGS: tuple[str, ...] = ("w:ins", "w:del", "w:moveFrom", "w:moveTo", "w:pPrChange")
 
-UNHANDLED_REVISION_TAGS: tuple[str, ...] = (
-    # Content moves: the move pair plus its range marks.
-    "w:moveFrom",
+MOVE_RANGE_TAGS: tuple[str, ...] = (
     "w:moveFromRangeStart",
     "w:moveFromRangeEnd",
-    "w:moveTo",
     "w:moveToRangeStart",
     "w:moveToRangeEnd",
-    # Property changes: the previous formatting, recorded alongside the
-    # element whose properties changed.
-    "w:pPrChange",
+)
+
+UNHANDLED_REVISION_TAGS: tuple[str, ...] = (
+    # Property changes other than the paragraph's: the previous formatting,
+    # recorded alongside the element whose properties changed.
     "w:rPrChange",
     "w:sectPrChange",
     "w:tblPrChange",
@@ -765,7 +808,24 @@ UNHANDLED_REVISION_TAGS: tuple[str, ...] = (
     "w:customXmlMoveToRangeEnd",
 )
 
-ALL_REVISION_TAGS: tuple[str, ...] = HANDLED_REVISION_TAGS + UNHANDLED_REVISION_TAGS
+ALL_REVISION_TAGS: tuple[str, ...] = HANDLED_REVISION_TAGS + MOVE_RANGE_TAGS + UNHANDLED_REVISION_TAGS
+
+# Handled tag -> the ``Revision.type`` it is listed as.
+_REVISION_TYPE_BY_TAG: dict[str, RevisionType] = {
+    "w:ins": "insertion",
+    "w:del": "deletion",
+    "w:moveFrom": "move_from",
+    "w:moveTo": "move_to",
+    "w:pPrChange": "property_change",
+}
+
+# Tag -> the bracket kind ``get_markup_text`` renders it with.
+_MARKUP_KINDS: dict[str, str] = {
+    "w:ins": "ins",
+    "w:del": "del",
+    "w:moveFrom": "moveFrom",
+    "w:moveTo": "moveTo",
+}
 
 # The property-change family: each of these records the element's *previous*
 # properties as its child subtree, so everything inside one describes state
@@ -785,11 +845,11 @@ ALL_REVISION_TAGS: tuple[str, ...] = HANDLED_REVISION_TAGS + UNHANDLED_REVISION_
 # w:original attribute and has no recorded subtree to skip.
 #
 # NOTE: only the unhandled/pending path uses this. list_revisions() and
-# accept_all()/reject_all() still walk every w:ins/w:del, so a historical
+# accept_all()/reject_all() still walk every handled tag, so a historical
 # w:del recorded inside a change record is listed and resolved like a live
 # one — pre-existing behavior, pinned as a known gap by
 # tests/test_unhandled_revisions.py::test_handled_path_still_adjudicates_
-# marks_inside_change_records and left to ISSUES.md #68.
+# marks_inside_change_records.
 CHANGE_RECORD_TAGS: tuple[str, ...] = (
     "w:pPrChange",
     "w:rPrChange",
@@ -812,7 +872,7 @@ def iter_revision_elements(root, tags: Iterable[str], *, skip_change_records: bo
 
     By default no subtree is skipped, so a mark nested inside another revision
     — a ``w:del`` inside a foreign ``w:ins`` — is yielded after its host,
-    exactly as ``_revision_elements`` does for the handled pair.
+    exactly as ``_revision_elements`` does for the handled tags.
 
     Args:
         root: any DOM node; its descendants are searched, not itself.
@@ -889,7 +949,7 @@ def count_revision_elements(root) -> RevisionCensus:
     for elem in iter_revision_elements(root, ALL_REVISION_TAGS):
         tag = elem.tagName
         by_tag[tag] = by_tag.get(tag, 0) + 1
-        if tag in HANDLED_REVISION_TAGS:
+        if tag in ("w:ins", "w:del"):
             parent = elem.parentNode
             parent_tag = getattr(parent, "tagName", "(root)")
             contexts[parent_tag] = contexts.get(parent_tag, 0) + 1
@@ -906,7 +966,7 @@ class UnhandledRevision:
 
     Attributes:
         tag: the element's tag, one of ``UNHANDLED_REVISION_TAGS``
-            (e.g. ``"w:pPrChange"``).
+            (e.g. ``"w:rPrChange"``).
         id: the element's ``w:id``, or None when it carries none or a
             non-numeric one. Unlike :class:`Revision`, an id-less mark is still
             listed — nothing here is targeted by id, so there is nothing to
@@ -948,11 +1008,12 @@ class ResolveResult(int):
     Extra attributes:
 
     - ``unhandled``: how many revision elements the document still holds that
-      this library never resolves — format changes, moves, table-structure
-      revisions, custom-XML range marks (see ``UNHANDLED_REVISION_TAGS``).
-      ``0`` on an ordinary insertions-and-deletions redline.
+      this library never resolves — run/section/table property changes,
+      table-structure revisions, ``w:numberingChange``, custom-XML range
+      marks (see ``UNHANDLED_REVISION_TAGS``). ``0`` on a redline made of
+      insertions, deletions, moves and paragraph-property changes.
     - ``unhandled_types``: tag -> count for those elements, e.g.
-      ``{"w:rPrChange": 3, "w:moveTo": 1}``. Empty when ``unhandled`` is 0.
+      ``{"w:rPrChange": 3, "w:cellIns": 1}``. Empty when ``unhandled`` is 0.
 
     Both are counted *after* resolution, which is the honest measure of the
     claim being made ("everything is resolved"): a foreign mark inside a
@@ -1029,10 +1090,10 @@ def _addressable_paragraph(elem) -> Element | None:
 
 
 def _nearest_revision_ancestor_id(elem) -> int | None:
-    """id of the closest <w:ins>/<w:del> ancestor carrying a w:id, else None."""
+    """id of the closest handled-revision ancestor carrying a w:id, else None."""
     node = elem.parentNode
     while node is not None and node.nodeType == node.ELEMENT_NODE:
-        if node.tagName in ("w:ins", "w:del"):
+        if node.tagName in HANDLED_REVISION_TAGS:
             rev_id = node.getAttribute("w:id")
             if rev_id:
                 return int(rev_id)
@@ -1041,42 +1102,23 @@ def _nearest_revision_ancestor_id(elem) -> int | None:
 
 
 def _descendant_revision_ids(elem) -> tuple[int, ...]:
-    """ids of all <w:ins>/<w:del> descendants of ``elem``, in document order."""
+    """ids of all handled-revision descendants of ``elem``, in document order."""
     ids: list[int] = []
-
-    def walk(node) -> None:
-        for child in node.childNodes:
-            if child.nodeType != child.ELEMENT_NODE:
-                continue
-            if child.tagName in ("w:ins", "w:del"):
-                rev_id = child.getAttribute("w:id")
-                if rev_id:
-                    ids.append(int(rev_id))
-            walk(child)
-
-    walk(elem)
+    for child in iter_revision_elements(elem, HANDLED_REVISION_TAGS):
+        rev_id = child.getAttribute("w:id")
+        if rev_id:
+            ids.append(int(rev_id))
     return tuple(ids)
 
 
 def _revision_elements(root) -> list[Element]:
-    """All <w:ins>/<w:del> elements under ``root``, in document order.
+    """All handled-revision elements under ``root``, in document order.
 
-    Same unconditional-recursion pattern as ``_descendant_revision_ids``:
-    nested revisions (e.g. a w:del inside a w:ins) are included, each
-    appearing right after its host.
+    Unconditional recursion (``iter_revision_elements`` without
+    ``skip_change_records``): nested revisions (e.g. a w:del inside a w:ins)
+    are included, each appearing right after its host.
     """
-    elems: list[Element] = []
-
-    def walk(node) -> None:
-        for child in node.childNodes:
-            if child.nodeType != child.ELEMENT_NODE:
-                continue
-            if child.tagName in ("w:ins", "w:del"):
-                elems.append(child)
-            walk(child)
-
-    walk(root)
-    return elems
+    return list(iter_revision_elements(root, HANDLED_REVISION_TAGS))
 
 
 def _insertion_text_nodes(elem) -> list:
@@ -1213,13 +1255,24 @@ def _paragraph_mark_ins(paragraph) -> Element | None:
     return _first_child_element(rPr, "w:ins")
 
 
-def _is_paragraph_mark_ins(ins) -> bool:
-    """True if ``ins`` is a paragraph-mark insertion (child of ``w:pPr/w:rPr``)."""
-    parent = ins.parentNode
+def _is_paragraph_mark_marker(elem) -> bool:
+    """True if ``elem`` marks a paragraph mark: a child of ``w:pPr/w:rPr``.
+
+    Word records a revision of the paragraph mark itself — an inserted
+    (split), deleted (merge) or moved paragraph boundary — as an empty
+    ``w:ins``/``w:del``/``w:moveFrom``/``w:moveTo`` in the paragraph's own
+    run properties, rather than around any content.
+    """
+    parent = elem.parentNode
     if parent is None or getattr(parent, "tagName", "") != "w:rPr":
         return False
     grandparent = parent.parentNode
     return grandparent is not None and getattr(grandparent, "tagName", "") == "w:pPr"
+
+
+def _is_paragraph_mark_ins(ins) -> bool:
+    """True if ``ins`` is a paragraph-mark insertion (child of ``w:pPr/w:rPr``)."""
+    return ins.tagName == "w:ins" and _is_paragraph_mark_marker(ins)
 
 
 @dataclass
@@ -4049,12 +4102,17 @@ class RevisionManager:
         *,
         with_location: bool = True,
     ) -> list[Revision]:
-        """List the document's insertions and deletions.
+        """List the document's revisions: insertions, deletions, move halves
+        and paragraph-property changes.
 
-        Walks ``w:ins``/``w:del`` only — every other revision type in the
-        OOXML schema (property changes, moves, table-structure revisions,
-        custom-XML range marks) is invisible here and is listed instead by
-        ``list_unhandled_revisions()``.
+        Walks ``HANDLED_REVISION_TAGS`` (``w:ins``, ``w:del``, ``w:moveFrom``,
+        ``w:moveTo``, ``w:pPrChange``) in one recursive pass — every row is
+        adjudicable by ``accept_revision``/``reject_revision``. Every other
+        revision type in the OOXML schema (run/section/table property
+        changes, table-structure revisions, custom-XML range marks) is
+        invisible here and is listed instead by ``list_unhandled_revisions()``.
+        A move's range marks are scaffolding: never listed, swept with their
+        content.
 
         Args:
             author: If provided, filter by author name
@@ -4096,16 +4154,8 @@ class RevisionManager:
             return paragraph_filter is None or rev.paragraph_ref == paragraph_filter
 
         revisions = []
-
-        # Find all insertions
-        for ins_elem in self.editor.dom.getElementsByTagName("w:ins"):
-            rev = self._parse_revision(ins_elem, "insertion", ctx)
-            if matches(rev):
-                revisions.append(rev)
-
-        # Find all deletions
-        for del_elem in self.editor.dom.getElementsByTagName("w:del"):
-            rev = self._parse_revision(del_elem, "deletion", ctx)
+        for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
+            rev = self._parse_revision(elem, _REVISION_TYPE_BY_TAG[elem.tagName], ctx)
             if matches(rev):
                 revisions.append(rev)
 
@@ -4119,6 +4169,10 @@ class RevisionManager:
         Each paragraph is one line; tracked changes wrap their content as
         ``[ins#{id}:{author}]...[/ins]`` / ``[del#{id}:{author}]...[/del]``,
         nesting included (e.g. ``[ins#1:A]kept [del#9:B]gone[/del][/ins]``).
+        The two halves of a content move render the same way as
+        ``[moveFrom#{id}:{author}]...[/moveFrom]`` /
+        ``[moveTo#{id}:{author}]...[/moveTo]``. A ``w:pPrChange`` has no text
+        and does not appear.
 
         A human/agent verification view, not a parseable format: author
         names are not escaped and tabs/breaks are not rendered (unlike
@@ -4137,8 +4191,8 @@ class RevisionManager:
             for child in node.childNodes:
                 if child.nodeType != child.ELEMENT_NODE:
                     continue
-                if child.tagName in ("w:ins", "w:del"):
-                    kind = "ins" if child.tagName == "w:ins" else "del"
+                if child.tagName in _MARKUP_KINDS:
+                    kind = _MARKUP_KINDS[child.tagName]
                     rev_id = child.getAttribute("w:id") or "?"
                     rev_author = child.getAttribute("w:author") or "Unknown"
                     parts.append(f"[{kind}#{rev_id}:{rev_author}]{render(child)}[/{kind}]")
@@ -4155,17 +4209,17 @@ class RevisionManager:
     def _parse_revision(
         self,
         elem,
-        rev_type: Literal["insertion", "deletion"],
+        rev_type: RevisionType,
         ctx: _RevisionLocationContext | None = None,
     ) -> Revision | None:
-        """Parse a w:ins or w:del element into a Revision object.
+        """Parse a handled revision element into a Revision object.
 
-        Only these two tags are representable as a :class:`Revision`; the rest
-        of the revision schema has no adjudicable id and surfaces as
+        Only ``HANDLED_REVISION_TAGS`` are representable as a
+        :class:`Revision`; the rest of the revision schema surfaces as
         :class:`UnhandledRevision` instead.
 
         Args:
-            elem: The <w:ins>/<w:del> element
+            elem: The <w:ins>/<w:del>/<w:moveFrom>/<w:moveTo>/<w:pPrChange> element
             rev_type: Which kind of revision ``elem`` is
             ctx: Per-call location cache from list_revisions. None (detached
                 elements, unit tests) leaves paragraph_ref/occurrence unset.
@@ -4185,7 +4239,13 @@ class RevisionManager:
         date = _parse_w_date(elem)
 
         # Extract text content
-        if rev_type == "insertion":
+        if rev_type == "property_change":
+            # A change record holds the previous properties, never text.
+            text_elems = []
+        elif rev_type != "deletion":
+            # Insertions and both move halves: Word writes plain w:t inside a
+            # w:moveFrom (a hand-authored one may use w:delText); the shared
+            # walk reads both, box-excluded.
             text_elems = _insertion_text_nodes(elem)
         else:
             text_elems = _deletion_text_nodes(elem)
@@ -4202,9 +4262,12 @@ class RevisionManager:
                     # An occurrence with no ref cannot be acted on (the
                     # paragraph is not addressable — e.g. it lives inside a
                     # text box), so half a location is worse than none.
-                    # Insertions live in the visible text; deletions in the
-                    # original (pre-revision) text.
-                    view: Literal["accepted", "original"] = "accepted" if rev_type == "insertion" else "original"
+                    # Insertions and moved-to text live in the visible text;
+                    # deletions and moved-from text in the original
+                    # (pre-revision) text.
+                    view: Literal["accepted", "original"] = (
+                        "accepted" if rev_type in ("insertion", "move_to") else "original"
+                    )
                     occurrence = _occurrence_in_text_map(ctx.text_map(paragraph, view), elem, text)
 
         group_id = self._revision_groups.get(rev_id_int)
@@ -4226,12 +4289,15 @@ class RevisionManager:
         )
 
     def _revision_element_index(self) -> dict[str, list[Element]]:
-        """Map ``w:id`` -> its <w:ins>/<w:del> elements, one full-DOM walk per tag.
+        """Map ``w:id`` -> its handled revision elements, in one recursive walk.
 
-        Two tags, deliberately: these are the only revision elements
+        ``HANDLED_REVISION_TAGS`` only: these are the revision elements
         ``accept_revision``/``reject_revision`` can act on, so indexing the
         rest of the schema would build lookups nothing could consume (the
-        honesty floor reports them separately — see ``accept_all``).
+        honesty floor reports them separately — see ``accept_all``). One
+        ``iter_revision_elements`` pass rather than a ``getElementsByTagName``
+        per tag: five tags would otherwise cost five full-DOM walks per
+        group/changeset call (the ISSUES.md #57 pin).
 
         Built once per resolution call and threaded through
         ``accept_revision``/``reject_revision`` so locating a member is a dict
@@ -4247,14 +4313,13 @@ class RevisionManager:
         element, so they resolve within a single pass instead of costing a
         rebuilt index and a whole extra pass each.
 
-        Insertion order is w:ins before w:del within a tag, then document order
-        within each tag — mirroring the fresh scan, which checks insertions
-        first.
+        Each id's list is in document order — the same order the fresh scan
+        in ``_find_revision_element`` uses, so a duplicated id resolves the
+        same element whichever path finds it.
         """
         element_index: dict[str, list[Element]] = {}
-        for tag in HANDLED_REVISION_TAGS:
-            for elem in self.editor.dom.getElementsByTagName(tag):
-                element_index.setdefault(elem.getAttribute("w:id"), []).append(elem)
+        for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
+            element_index.setdefault(elem.getAttribute("w:id"), []).append(elem)
         return element_index
 
     def _is_in_document(self, elem) -> bool:
@@ -4278,12 +4343,12 @@ class RevisionManager:
     def _find_revision_element(
         self, revision_id: int, element_index: dict[str, list[Element]] | None
     ) -> Element | None:
-        """Locate the live <w:ins>/<w:del> element for ``revision_id``.
+        """Locate the live handled revision element for ``revision_id``.
 
-        ``element_index is None`` scans the document fresh (insertions before
-        deletions), matching the historical lookup exactly. Otherwise the id is
-        resolved through the pre-built ``element_index``, returning the first
-        candidate still attached to the document.
+        ``element_index is None`` scans the document fresh, returning the
+        first match in document order. Otherwise the id is resolved through
+        the pre-built ``element_index``, returning the first candidate still
+        attached to the document.
 
         Returning the *first still-attached* candidate (rather than a single
         remembered element) is what lets duplicate ids resolve from one index:
@@ -4291,12 +4356,10 @@ class RevisionManager:
         same-id revisions resolve in one pass rather than N.
         """
         if element_index is None:
-            for ins_elem in self.editor.dom.getElementsByTagName("w:ins"):
-                if ins_elem.getAttribute("w:id") == str(revision_id):
-                    return ins_elem
-            for del_elem in self.editor.dom.getElementsByTagName("w:del"):
-                if del_elem.getAttribute("w:id") == str(revision_id):
-                    return del_elem
+            wanted = str(revision_id)
+            for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
+                if elem.getAttribute("w:id") == wanted:
+                    return elem
             return None
         for elem in element_index.get(str(revision_id), ()):
             if self._is_in_document(elem):
@@ -4306,8 +4369,21 @@ class RevisionManager:
     def accept_revision(self, revision_id: int, element_index: dict[str, list[Element]] | None = None) -> bool:
         """Accept a revision by ID.
 
-        For insertions: removes the w:ins wrapper, keeping the content.
-        For deletions: removes the w:del element entirely.
+        - insertion (``w:ins``): removes the wrapper, keeping the content.
+        - deletion (``w:del``): removes the element entirely.
+        - move_to (``w:moveTo``): removes the wrapper, keeping the moved text
+          at its destination.
+        - move_from (``w:moveFrom``): removes the element — the text leaves
+          its source. The two halves of a move are independent rows; resolve
+          them together (``accept_all``, or the inferred changeset both halves
+          share) so the text neither doubles nor vanishes.
+        - property_change (``w:pPrChange``): removes the record, keeping the
+          paragraph's current properties.
+
+        A paragraph-mark move marker (``w:pPr/w:rPr/w:moveFrom``/``w:moveTo``)
+        is dropped, the same approximate treatment a deleted paragraph mark
+        gets (see ``accept_all``). After a move half is resolved, range marks
+        whose content is all gone are swept (``_sweep_move_range_marks``).
 
         Args:
             revision_id: The w:id of the revision to accept
@@ -4322,19 +4398,42 @@ class RevisionManager:
         elem = self._find_revision_element(revision_id, element_index)
         if elem is None:
             return False
-        if elem.tagName == "w:ins":
+        tag = elem.tagName
+        if tag == "w:ins":
             # Accept insertion: unwrap the content
             self._unwrap_element(elem)
-        else:  # w:del
-            # Accept deletion: remove the element entirely
+        elif tag in ("w:del", "w:pPrChange"):
+            # Accept deletion: remove the element entirely. Accept a property
+            # change: drop the record of the previous properties.
             self._remove_element(elem)
+        elif tag == "w:moveTo" and not _is_paragraph_mark_marker(elem):
+            # Accept the destination half: the moved text stays.
+            self._unwrap_element(elem)
+            self._sweep_move_range_marks()
+        else:  # w:moveFrom, or a paragraph-mark marker of either half
+            # Accept the source half: the moved-away text goes.
+            self._remove_element(elem)
+            self._sweep_move_range_marks()
         return True
 
     def reject_revision(self, revision_id: int, element_index: dict[str, list[Element]] | None = None) -> bool:
         """Reject a revision by ID.
 
-        For insertions: removes the w:ins element and its content entirely.
-        For deletions: removes the w:del wrapper and converts w:delText back to w:t.
+        - insertion (``w:ins``): removes the element and its content entirely
+          (a paragraph-mark insertion rejoins the split paragraph).
+        - deletion (``w:del``): removes the wrapper and converts ``w:delText``
+          back to ``w:t``.
+        - move_to (``w:moveTo``): removes the element — the text leaves its
+          destination.
+        - move_from (``w:moveFrom``): restores the text at its source exactly
+          as a rejected deletion is (``w:delText`` -> ``w:t``, ``w:rsidDel``
+          -> ``w:rsidR``, unwrap). Word writes plain ``w:t`` inside a
+          ``w:moveFrom``, which the same path leaves as is. Resolve both
+          halves together — see ``accept_revision``.
+        - property_change (``w:pPrChange``): puts the recorded previous
+          properties back (``_restore_paragraph_properties``).
+
+        A paragraph-mark move marker is dropped, as on accept.
 
         Args:
             revision_id: The w:id of the revision to reject
@@ -4349,7 +4448,8 @@ class RevisionManager:
         elem = self._find_revision_element(revision_id, element_index)
         if elem is None:
             return False
-        if elem.tagName == "w:ins":
+        tag = elem.tagName
+        if tag == "w:ins":
             if _is_paragraph_mark_ins(elem):
                 # Reject a paragraph-mark insertion: remove the mark and rejoin
                 # the tail paragraph (the inverse of the tracked split).
@@ -4357,9 +4457,19 @@ class RevisionManager:
             else:
                 # Reject insertion: remove entirely
                 self._remove_element(elem)
-        else:  # w:del
+        elif tag == "w:del":
             # Reject deletion: restore the deleted text
             self._restore_deletion(elem)
+        elif tag == "w:pPrChange":
+            self._restore_paragraph_properties(elem)
+        elif tag == "w:moveFrom" and not _is_paragraph_mark_marker(elem):
+            # Reject the source half: the text stays where it was.
+            self._restore_deletion(elem)
+            self._sweep_move_range_marks()
+        else:  # w:moveTo, or a paragraph-mark marker of either half
+            # Reject the destination half: the moved-in text goes.
+            self._remove_element(elem)
+            self._sweep_move_range_marks()
         return True
 
     def _resolve_ids(
@@ -4481,11 +4591,11 @@ class RevisionManager:
     def _resolve_all(self, author: str | None, resolve: Callable[[int, dict[str, list[Element]] | None], bool]) -> int:
         """Apply ``resolve`` to every listed revision, re-listing on each pass.
 
-        "Every listed revision" is every ``w:ins``/``w:del``, because that is
-        what ``list_revisions`` walks — so the loop terminates as soon as no
-        insertion or deletion remains, regardless of what other revision types
-        are still pending. ``_resolve_all_reporting`` is what turns that into
-        an honest count for callers.
+        "Every listed revision" is every ``HANDLED_REVISION_TAGS`` element,
+        because that is what ``list_revisions`` walks — so the loop terminates
+        as soon as none remains, regardless of what other revision types are
+        still pending. ``_resolve_all_reporting`` is what turns that into an
+        honest count for callers.
 
         The whole-document counterpart to ``_resolve_ids``. Two differences,
         both forced by resolving *every* revision rather than a known member
@@ -4544,8 +4654,9 @@ class RevisionManager:
         """List the revision elements this library does not accept or reject.
 
         The complement of ``list_revisions``: everything in the OOXML revision
-        schema except the ``w:ins``/``w:del`` pair — property changes, content
-        moves, table-structure revisions, custom-XML range marks (see
+        schema except ``HANDLED_REVISION_TAGS`` and a move's range marks —
+        run/section/table property changes, table-structure revisions,
+        ``w:numberingChange``, custom-XML range marks (see
         ``UNHANDLED_REVISION_TAGS``). They survive open/edit/save unchanged and
         are left pending by ``accept_all``/``reject_all``.
 
@@ -4599,8 +4710,13 @@ class RevisionManager:
         The census is taken *after* resolution, so a foreign mark carried away
         inside a rejected insertion's subtree correctly does not appear, and
         the number always answers "what did this call leave behind".
+
+        Move range marks are swept unconditionally afterwards, so a document
+        holding only stray marks (no move content at all) still comes out
+        clean.
         """
         count = self._resolve_all(author, resolve)
+        self._sweep_move_range_marks()
         unhandled_types: dict[str, int] = {}
         for elem in self._unhandled_elements(author):
             unhandled_types[elem.tagName] = unhandled_types.get(elem.tagName, 0) + 1
@@ -4610,8 +4726,9 @@ class RevisionManager:
             scope = f" (author={author!r})" if author is not None else ""
             warnings.warn(
                 f"{verb}{scope} resolved {count} revision(s) but left {total} unresolved: {listing}. "
-                f"This library resolves w:ins/w:del only; inspect the rest with "
-                f"list_unhandled_revisions() before reporting the document as fully adjudicated.",
+                f"This library resolves insertions, deletions, moves and paragraph-property "
+                f"changes only; inspect the rest with list_unhandled_revisions() before "
+                f"reporting the document as fully adjudicated.",
                 UnhandledRevisionWarning,
                 # 4 frames out of warnings.warn: _resolve_all_reporting ->
                 # RevisionManager.accept_all -> Document.accept_all -> caller.
@@ -4622,29 +4739,36 @@ class RevisionManager:
         return ResolveResult(count, unhandled_types)
 
     def accept_all(self, author: str | None = None) -> ResolveResult:
-        """Accept all insertions and deletions, optionally filtered by author.
+        """Accept every listed revision, optionally filtered by author.
 
-        Walks ``w:ins``/``w:del`` only. Delegates to ``_resolve_all``, which
-        re-lists and re-indexes on each pass: that fully resolves *nested
-        insertions and deletions* in Word-authored files (e.g. a w:del inside a
+        Walks ``HANDLED_REVISION_TAGS``: insertions, deletions, both halves of
+        a content move, and paragraph-property changes. Delegates to
+        ``_resolve_all``, which re-lists on each pass: that fully resolves
+        *nested* revisions in Word-authored files (e.g. a w:del inside a
         w:ins) and terminates even when an author filter leaves other authors'
         revisions in the document. Revisions are matched by w:id, so if Word
         emits duplicate ids across authors, a filtered call may also process a
         same-id revision by another author.
 
-        Every other revision type in the OOXML schema — property changes,
-        moves, table-structure revisions, custom-XML range marks — is left
-        untouched and counted on the result (``.unhandled`` /
-        ``.unhandled_types``, listed by ``list_unhandled_revisions()``), with an
-        ``UnhandledRevisionWarning`` when the count is nonzero. Handling them is
-        ISSUES.md #68.
+        A move is resolved as a unit: its ``w:moveFrom`` content is removed and
+        its ``w:moveTo`` content unwrapped in the same call, and the range
+        marks bracketing them are swept once empty — the text ends up at its
+        destination exactly once. A ``w:pPrChange`` record is dropped, keeping
+        the paragraph's current properties.
 
-        Two ``w:ins``/``w:del`` cases resolve *approximately* and are not part
-        of that count, because the marker itself is consumed: a deleted
-        paragraph mark (``w:pPr/w:rPr/w:del``) should merge the paragraph with
-        its successor, and ``w:trPr`` row markers should add or drop the table
-        row — today only the marker is removed. Also ISSUES.md #68; a document's
-        exposure is visible via
+        Every other revision type in the OOXML schema — run/section/table
+        property changes, table-structure revisions, ``w:numberingChange``,
+        custom-XML range marks — is left untouched and counted on the result
+        (``.unhandled`` / ``.unhandled_types``, listed by
+        ``list_unhandled_revisions()``), with an ``UnhandledRevisionWarning``
+        when the count is nonzero.
+
+        Paragraph-mark and row markers resolve *approximately* and are not
+        part of that count, because the marker itself is consumed: a deleted
+        or moved paragraph mark (``w:pPr/w:rPr/w:del``, ``.../w:moveFrom``,
+        ``.../w:moveTo``) should merge or split paragraphs, and ``w:trPr`` row
+        markers should add or drop the table row — today only the marker is
+        removed. A document's exposure is visible via
         ``docx_editor.track_changes.count_revision_elements`` (``ins_del_contexts``).
 
         Args:
@@ -4657,19 +4781,25 @@ class RevisionManager:
         return self._resolve_all_reporting(author, self.accept_revision, "accept_all()")
 
     def reject_all(self, author: str | None = None) -> ResolveResult:
-        """Reject all insertions and deletions, optionally filtered by author.
+        """Reject every listed revision, optionally filtered by author.
 
-        Walks ``w:ins``/``w:del`` only. Delegates to ``_resolve_all``, which
-        re-lists and re-indexes on each pass: that fully resolves *nested
-        insertions and deletions* in Word-authored files (e.g. a w:del inside a
+        Walks ``HANDLED_REVISION_TAGS``: insertions, deletions, both halves of
+        a content move, and paragraph-property changes. Delegates to
+        ``_resolve_all``, which re-lists on each pass: that fully resolves
+        *nested* revisions in Word-authored files (e.g. a w:del inside a
         w:ins) and terminates even when an author filter leaves other authors'
         revisions in the document. Revisions are matched by w:id, so if Word
         emits duplicate ids across authors, a filtered call may also process a
         same-id revision by another author.
 
+        A move is undone as a unit: its ``w:moveTo`` content is removed and
+        its ``w:moveFrom`` content restored in place, range marks swept — the
+        text is back at its source exactly once. A ``w:pPrChange`` puts the
+        recorded previous paragraph properties back.
+
         Every other revision type is left untouched and reported exactly as in
         ``accept_all`` — see that docstring for the full scope, including the
-        two structural ``w:ins``/``w:del`` cases that resolve approximately.
+        structural marker cases that resolve approximately.
 
         Args:
             author: If provided, only reject revisions by this author
@@ -4691,6 +4821,89 @@ class RevisionManager:
     def _remove_element(self, elem) -> None:
         """Detach an element (and its whole subtree) from its parent."""
         elem.parentNode.removeChild(elem)
+
+    def _restore_paragraph_properties(self, ppr_change) -> None:
+        """Reject a ``w:pPrChange``: put the recorded previous properties back.
+
+        The record's ``w:pPr`` child (CT_PPrBase) holds the properties the
+        paragraph had before the change. The live ``w:pPr``'s base children —
+        everything except ``w:rPr``, ``w:sectPr`` and the record itself — are
+        replaced by the recorded ones, inserted ahead of ``w:rPr``/``w:sectPr``
+        so schema order holds even for producers that wrote the record before
+        ``w:rPr`` (LibreOffice does). A record with no ``w:pPr`` child, which
+        LibreOffice writes for "previously no properties", restores exactly
+        that: the base children are cleared. The recorded style id is put back
+        verbatim even when ``styles.xml`` lacks it — that is what the file says
+        the paragraph had (Word falls back to Normal for an unknown id).
+        """
+        ppr = ppr_change.parentNode
+        if getattr(ppr, "tagName", "") != "w:pPr":
+            # Schema-invalid placement: nothing to restore into. Drop the record
+            # rather than rewrite whatever parent this is.
+            self._remove_element(ppr_change)
+            return
+        tail_tags = ("w:rPr", "w:sectPr", "w:pPrChange")
+        for child in list(ppr.childNodes):
+            if child.nodeType == child.ELEMENT_NODE and child.tagName not in tail_tags:
+                ppr.removeChild(child)
+        anchor = next(
+            (c for c in ppr.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName in tail_tags),
+            None,
+        )
+        recorded = _first_child_element(ppr_change, "w:pPr")
+        if recorded is not None:
+            # Same document, so moving the nodes is enough — insertBefore
+            # detaches them from the record first.
+            for child in list(recorded.childNodes):
+                if child.nodeType == child.ELEMENT_NODE and getattr(child, "tagName", "") not in tail_tags:
+                    ppr.insertBefore(child, anchor)
+        self._remove_element(ppr_change)
+
+    def _sweep_move_range_marks(self) -> None:
+        """Remove move range marks whose content has all been resolved.
+
+        One recursive walk in document order over the four range-mark tags
+        plus ``w:moveFrom``/``w:moveTo``. Per family (From/To), a
+        ``*RangeStart`` is paired with the ``*RangeEnd`` carrying the same
+        ``w:id``; the pair is removed when no pending content of its family
+        lies between them. Marks left unpaired (a Start with no End or the
+        reverse — a damaged file, or an End that precedes its Start) are
+        removed once no pending content of their family remains anywhere in
+        the document. Never destroys content: only the empty marks go.
+
+        Called after every move resolution and at the end of
+        ``accept_all``/``reject_all``. Word writes the From-range's End at body
+        level for a moved table (outside any paragraph), which is why this is
+        a document walk rather than a paragraph-local one.
+        """
+        # family -> open Start marks by w:id -> [element, content seen inside]
+        open_starts: dict[str, dict[str, list]] = {"From": {}, "To": {}}
+        unpaired: dict[str, list[Element]] = {"From": [], "To": []}
+        content_seen: dict[str, bool] = {"From": False, "To": False}
+        tags = MOVE_RANGE_TAGS + ("w:moveFrom", "w:moveTo")
+        for elem in list(iter_revision_elements(self.editor.dom, tags)):
+            tag = elem.tagName
+            family = "From" if tag.startswith("w:moveFrom") else "To"
+            if tag in ("w:moveFrom", "w:moveTo"):
+                content_seen[family] = True
+                for entry in open_starts[family].values():
+                    entry[1] = True
+            elif tag.endswith("RangeStart"):
+                open_starts[family][elem.getAttribute("w:id")] = [elem, False]
+            else:  # *RangeEnd
+                entry = open_starts[family].pop(elem.getAttribute("w:id"), None)
+                if entry is None:
+                    unpaired[family].append(elem)
+                elif not entry[1]:
+                    self._remove_element(entry[0])
+                    self._remove_element(elem)
+        for family in ("From", "To"):
+            if content_seen[family]:
+                continue
+            for entry in open_starts[family].values():
+                self._remove_element(entry[0])
+            for elem in unpaired[family]:
+                self._remove_element(elem)
 
     def _restore_deletion(self, del_elem) -> None:
         """Restore deleted content by converting w:delText back to w:t."""
