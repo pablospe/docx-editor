@@ -540,8 +540,9 @@ class Revision:
       other group carrying that author and the identical raw ``w:date``
       string. Copies that share a ``w:id`` (a producer that duplicated the
       ``mc:Choice`` content verbatim) are ungroupable: ``group_id`` and
-      ``changeset_id`` are both None, so only ``accept_all``/``reject_all``
-      reach them. A box stored in one form only (VML ``w:pict`` with no
+      ``changeset_id`` are both None, so no group- or changeset-keyed call
+      can reach them and ``accept_all``/``reject_all`` is the single call
+      that takes both. A box stored in one form only (VML ``w:pict`` with no
       ``mc:Fallback`` twin) is listed once and behaves like any other
       revision.
     - ``occurrence``: 0-based occurrence index of ``text`` within the
@@ -916,6 +917,21 @@ def _ancestor_paragraph(elem) -> Element | None:
             return node
         node = node.parentNode
     return None
+
+
+def _addressable_paragraph(elem) -> Element | None:
+    """The ``<w:p>`` a location may name for ``elem``, or None.
+
+    ``_ancestor_paragraph`` climbs straight past ``w:txbxContent``, so a mark
+    with no ``<w:p>`` of its own inside a text box — a ``w:trPr`` row marker
+    or a ``w:tblPrChange`` in a box's table — would otherwise report the
+    *host* paragraph's ref and be returned by a ``paragraph=`` filter on it,
+    attributing the box's content to a paragraph whose text excludes it.
+    """
+    paragraph = _ancestor_paragraph(elem)
+    if paragraph is None or _inside_textbox(elem, paragraph):
+        return None
+    return paragraph
 
 
 def _nearest_revision_ancestor_id(elem) -> int | None:
@@ -3920,7 +3936,7 @@ class RevisionManager:
         paragraph_ref = None
         occurrence = None
         if ctx is not None:
-            paragraph = _ancestor_paragraph(elem)
+            paragraph = _addressable_paragraph(elem)
             if paragraph is not None:
                 paragraph_ref = ctx.paragraph_ref(paragraph)
                 if text and paragraph_ref is not None:
@@ -4301,7 +4317,7 @@ class RevisionManager:
                 elem_id = int(raw_id) if raw_id else None
             except ValueError:
                 elem_id = None
-            paragraph = _ancestor_paragraph(elem)
+            paragraph = _addressable_paragraph(elem)
             rows.append(
                 UnhandledRevision(
                     tag=elem.tagName,

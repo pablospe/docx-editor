@@ -428,8 +428,9 @@ class Document:
         is not reachable from here. To read it, go through HTML —
         ``soffice --headless --convert-to html file.docx`` then
         ``pandoc file.html -t plain`` — rather than reporting the document
-        as empty; LibreOffice's HTML export prefixes each box with a
-        ``[ShapeN]`` label, so drop those lines. Its ``txt:Text`` filter and
+        as empty; pandoc may render a ``[ShapeN]`` label beside a box's text,
+        from the placeholder LibreOffice exports for a named shape — ignore
+        those. Its ``txt:Text`` filter and
         pandoc reading the ``.docx`` directly both drop text boxes silently.
         """
         self._ensure_open()

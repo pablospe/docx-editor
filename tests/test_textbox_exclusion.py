@@ -1,11 +1,12 @@
 """Text-box content is excluded from the document's addressable surface.
 
-Word stores one text box twice — once under ``mc:Choice`` (``wps:txbx``) and
-once under ``mc:Fallback`` (``v:textbox``) — so before this exclusion a single
-box leaked its text four times: twice inline in the host paragraph's text map
-and twice more as paragraphs of its own. Those extra paragraphs were
-addressable, which made each copy independently editable and let one edit
-desynchronize the two twins.
+Word normally stores one text box twice — once under ``mc:Choice``
+(``wps:txbx``) and once under ``mc:Fallback`` (``v:textbox``) — so before this
+exclusion such a box leaked its text four times: twice inline in the host
+paragraph's text map and twice more as paragraphs of its own. Those extra
+paragraphs were addressable, which made each copy independently editable and
+let one edit desynchronize the pair. The exclusion does not depend on the copy
+count: a box stored once (see ``TestSingleCopyBox``) is excluded the same way.
 
 Text boxes are therefore not an editing surface at all: their paragraphs are
 absent from ``paragraph_count``/``list_paragraphs``/``find_all``, their text is
@@ -386,13 +387,13 @@ class TestRevisionsInsideABox:
         finally:
             doc.close()
 
-    def test_word_shaped_twins_share_an_id_and_are_ungroupable(self, simple_docx, temp_dir):
-        """Why accept_all is the only unconditional path.
+    def test_twins_sharing_an_id_are_ungroupable(self, simple_docx, temp_dir):
+        """Why accept_all is the unconditional path.
 
-        Word copies the mc:Choice content into mc:Fallback verbatim, ids
-        included. A duplicated id is ungroupable, so group_id and
-        changeset_id are both None and no group- or changeset-keyed call can
-        reach either copy — accept_revision resolves exactly one.
+        A producer that copies the mc:Choice content into mc:Fallback
+        verbatim carries the w:id across with it. A duplicated id is
+        ungroupable, so group_id and changeset_id are both None and no group-
+        or changeset-keyed call can reach either copy.
         """
         body = f"<w:p><w:r>{word_box(_boxed_ins(90))}</w:r></w:p>"
         docx = make_docx(simple_docx, temp_dir / "same_id_twins.docx", body)
@@ -430,11 +431,71 @@ class TestRevisionsInsideABox:
         assert xml.count("BOXADD") == 2
 
 
+class TestMarksWithNoParagraphOfTheirOwn:
+    """A boxed mark must not borrow the host paragraph's ref.
+
+    ``w:trPr`` row markers and ``w:tblPrChange`` have no ``w:p`` between them
+    and the box's edge, so the plain ancestor walk climbs out of the box and
+    lands on the host — which would attribute the box's content to a paragraph
+    whose own text excludes it, and return it from a ``paragraph=`` filter on
+    that ref.
+    """
+
+    ROW_MARK = (
+        "<w:tbl><w:tr><w:trPr>"
+        '<w:ins w:id="77" w:author="Reviewer" w:date="2024-01-01T00:00:00Z"/>'
+        "</w:trPr><w:tc><w:p><w:r><w:t>CELL</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+    )
+    TBL_CHANGE = (
+        "<w:tbl><w:tblPr>"
+        '<w:tblPrChange w:id="55" w:author="Reviewer" w:date="2024-01-01T00:00:00Z"><w:tblPr/></w:tblPrChange>'
+        "</w:tblPr><w:tr><w:tc><w:p><w:r><w:t>CELL</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+    )
+
+    def _doc(self, simple_docx, temp_dir, name: str, inner: str) -> Path:
+        return make_docx(
+            simple_docx,
+            temp_dir / name,
+            f"<w:p><w:r><w:t>Host</w:t>{word_box(inner)}</w:r></w:p>",
+        )
+
+    def test_boxed_row_marker_has_no_location(self, simple_docx, temp_dir):
+        doc = Document.open(self._doc(simple_docx, temp_dir, "boxed_row.docx", self.ROW_MARK))
+        try:
+            host_ref = doc.list_paragraphs()[0].split("|")[0]
+            assert [(r.id, r.paragraph_ref) for r in doc.list_revisions()] == [(77, None)] * 2
+            # …and the host's own filter does not pick them up.
+            assert doc.list_revisions(paragraph=host_ref) == []
+        finally:
+            doc.close()
+
+    def test_boxed_unhandled_mark_has_no_location(self, simple_docx, temp_dir):
+        doc = Document.open(self._doc(simple_docx, temp_dir, "boxed_tblpr.docx", self.TBL_CHANGE))
+        try:
+            rows = doc.list_unhandled_revisions()
+            assert [(r.tag, r.paragraph_ref) for r in rows] == [("w:tblPrChange", None)] * 2
+        finally:
+            doc.close()
+
+    def test_a_body_row_marker_is_unchanged(self, simple_docx, temp_dir):
+        """The same mark outside a box already reported None — this is the
+        behaviour boxed marks now match, not a new one."""
+        docx = make_docx(
+            simple_docx, temp_dir / "body_row.docx", f"<w:p><w:r><w:t>Host</w:t></w:r></w:p>{self.ROW_MARK}"
+        )
+        doc = Document.open(docx)
+        try:
+            assert [(r.id, r.paragraph_ref) for r in doc.list_revisions()] == [(77, None)]
+        finally:
+            doc.close()
+
+
 class TestSingleCopyBox:
     """A box stored in one form only is listed once and behaves normally.
 
-    The twin caveats are about how Word stores a box, not about boxes: a bare
-    VML ``w:pict`` has no ``mc:Fallback`` copy, so nothing is duplicated.
+    The twin caveats are about how a box is stored, not about boxes: a bare
+    VML ``w:pict`` has no ``mc:Fallback`` copy, so nothing is duplicated. The
+    exclusion applies all the same.
     """
 
     @pytest.fixture

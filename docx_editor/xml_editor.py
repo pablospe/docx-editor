@@ -878,12 +878,13 @@ def _inside_textbox(node, stop_at) -> bool:
 def body_paragraphs(dom) -> list[Element]:
     """The document's genuine body paragraphs, in document order.
 
-    Every ``w:p`` except those inside a drawing's ``w:txbxContent``. Word
-    stores a text box twice — once under ``mc:Choice`` (``wps:txbx``) and once
-    under ``mc:Fallback`` (``v:textbox``) — so its paragraphs are not
-    addressable content: enumerating them would list the same text twice and
-    make each copy independently editable, desynchronizing the two twins. They
-    are excluded from the ref index space entirely.
+    Every ``w:p`` except those inside a drawing's ``w:txbxContent``. A box's
+    paragraphs are not addressable content: Word normally stores a box twice —
+    once under ``mc:Choice`` (``wps:txbx``) and once under ``mc:Fallback``
+    (``v:textbox``) — so enumerating them would list the same text twice and
+    make each copy independently editable, desynchronizing the pair. The
+    exclusion does not depend on that: it drops every box paragraph, however
+    many copies a producer wrote, so the ref index space has one meaning.
 
     Deliberately filters the result of a single ``Document.getElementsByTagName``
     walk rather than recursing by hand: the ``count_dom_walks`` instrumentation
