@@ -719,18 +719,20 @@ class CommentManager:
         other revisions it explains are still pending: leaving the range behind
         would point the rationale at text nobody changed.
         """
-        replies = self.reply_ids(comment_id)
-        for reply_id in replies:
+        thread = self._thread(comment_id)
+        for reply_id, _ in thread:
             self._remove_range_markers(reply_id)
         self._remove_range_markers(comment_id)
         self.document_editor.insert_before(first, self._comment_range_start_xml(comment_id))
         self.document_editor.insert_after(last, self._comment_range_end_xml(comment_id))
-        if not replies:
-            return
-        start = self.document_editor.get_node(tag="w:commentRangeStart", attrs={"w:id": str(comment_id)})
-        ref = self.document_editor.get_node(tag="w:commentReference", attrs={"w:id": str(comment_id)})
-        for reply_id in replies:
-            self._place_reply_markers(reply_id, start, ref)
+        # Parent-first order, so each reply lands on its own parent's new
+        # markers — the same relative placement reply_to_comment gave it.
+        for reply_id, parent_id in thread:
+            self._place_reply_markers(
+                reply_id,
+                self.document_editor.get_node(tag="w:commentRangeStart", attrs={"w:id": str(parent_id)}),
+                self.document_editor.get_node(tag="w:commentReference", attrs={"w:id": str(parent_id)}),
+            )
 
     def reply_ids(self, comment_id: int) -> list[int]:
         """Ids of every comment threaded under ``comment_id``, descendants included.
@@ -738,6 +740,15 @@ class CommentManager:
         A reply is linked to its parent only by ``w15:paraIdParent`` in
         commentsExtended.xml; deleting the parent alone would leave that
         attribute pointing at a paraId no part of the document still holds.
+        """
+        return [reply_id for reply_id, _ in self._thread(comment_id)]
+
+    def _thread(self, comment_id: int) -> list[tuple[int, int]]:
+        """``(reply, its parent)`` for the whole thread under ``comment_id``.
+
+        Ordered so a reply always follows the comment it answers, which is what
+        lets ``move_comment_markers`` re-seat each reply on its own parent's
+        freshly placed markers rather than flattening the thread onto the root.
         """
         if not self.comments_extended_path.exists():
             return []
@@ -751,14 +762,19 @@ class CommentManager:
             if parent_para and child_id is not None:
                 children.setdefault(parent_para, []).append(child_id)
 
-        found: list[int] = []
+        found: list[tuple[int, int]] = []
+        seen = {comment_id}
         queue = [comment_id]
         while queue:
-            current = queue.pop()
+            current = queue.pop(0)
             for child_id in children.get(para_of_id.get(current, ""), ()):
-                if child_id not in found and child_id != comment_id:
-                    found.append(child_id)
-                    queue.append(child_id)
+                # A malformed commentsExtended could name the same child twice,
+                # or point a thread back at itself; either would loop forever.
+                if child_id in seen:
+                    continue
+                seen.add(child_id)
+                found.append((child_id, current))
+                queue.append(child_id)
         return found
 
     def save_all(self) -> None:

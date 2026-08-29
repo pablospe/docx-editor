@@ -55,6 +55,15 @@ def _markers(doc, comment_id):
     return one("w:commentRangeStart"), one("w:commentRangeEnd")
 
 
+def _marker_order(doc):
+    """Every range marker and reference run in document order, as (tag, id)."""
+    dom = doc._document_editor.dom
+    tags = ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
+    nodes = [(n, n.getAttribute("w:id")) for tag in tags for n in dom.getElementsByTagName(tag)]
+    ordered = [n for n in dom.getElementsByTagName("*") if any(n is m for m, _ in nodes)]
+    return [int(n.getAttribute("w:id")) for n in ordered]
+
+
 def _marker_counts(doc):
     """(range starts, range ends, reference runs) left in document.xml."""
     dom = doc._document_editor.dom
@@ -432,6 +441,29 @@ class TestResolutionRemovesTheNote:
         assert _marker_counts(doc) == (0, 0, 0)
         # The split itself is untouched — only its rationale went.
         assert doc.list_revisions() != []
+
+    def test_re_anchoring_reproduces_the_thread_layout(self, doc):
+        """A moved thread must be seated exactly as reply_to_comment seats it:
+        every reply on its own parent's markers, not flattened onto the root."""
+        refs = [find_ref(doc, "quick brown"), find_ref(doc, "sample document")]
+        results = doc.batch_edit([
+            EditOperation.replace("quick", "swift", paragraph=refs[0], note="house style"),
+            EditOperation.replace("sample", "example", paragraph=refs[1], note="house style"),
+        ])
+        root = results[0].comment_id
+        child = doc.reply_to_comment(root, "agreed")
+        grandchild = doc.reply_to_comment(child, "and here too")
+        sibling = doc.reply_to_comment(root, "one more")
+        before = _marker_order(doc)
+
+        doc.reject_group(results[0].group_id)
+
+        assert _marker_order(doc) == before
+        assert {root, child, grandchild, sibling} == set(before)
+        for comment_id in (root, child, grandchild, sibling):
+            start, end = _markers(doc, comment_id)
+            assert _paragraph_index(doc, start) == 3
+            assert _paragraph_index(doc, end) == 3
 
     def test_a_shared_note_dies_when_no_survivor_can_hold_the_anchor(self, doc):
         """A registered group can still be whittled down to a paragraph mark.
