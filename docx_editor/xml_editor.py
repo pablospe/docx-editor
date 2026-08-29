@@ -1527,32 +1527,44 @@ class DocxXMLEditor(XMLEditor):
         """
         nodes = super()._parse_fragment(xml_content)
         for node in nodes:
-            if node.nodeType != node.ELEMENT_NODE:
-                continue
-            if node.tagName in ("w:ins", "w:del"):
-                self._fold_change_id(node.getAttribute("w:id"))
-            for tag in ("w:ins", "w:del"):
-                for elem in node.getElementsByTagName(tag):
-                    self._fold_change_id(elem.getAttribute("w:id"))
+            self._fold_revision_ids(node)
         return nodes
 
+    def _fold_revision_ids(self, node) -> None:
+        """Fold the w:id of ``node`` (if it is a revision mark) and of every
+        revision mark under it.
+
+        Every tag in ``ALL_REVISION_TAGS``, not just ``w:ins``/``w:del``: Word
+        draws every revision mark's id from one counter, and list_revisions /
+        accept_revision address moves and paragraph-property changes by that
+        id too. An allocation that reused a pending ``w:moveFrom``'s id would
+        make our own edit and the foreign move indistinguishable by id — the
+        group undoing our edit would resolve their move instead.
+        """
+        # Imported here: track_changes imports this module at load time.
+        from .track_changes import ALL_REVISION_TAGS, iter_revision_elements
+
+        if node.nodeType == node.ELEMENT_NODE and node.tagName in ALL_REVISION_TAGS:
+            self._fold_change_id(node.getAttribute("w:id"))
+        for elem in iter_revision_elements(node, ALL_REVISION_TAGS):
+            self._fold_change_id(elem.getAttribute("w:id"))
+
     def _seed_max_change_id(self) -> None:
-        """Fold every <w:ins>/<w:del> w:id already in the document into the mark.
+        """Fold every revision mark's w:id already in the document into the mark.
 
         Called once, eagerly, from __init__, so the full-DOM walk happens at
-        parse time rather than on the first change-id allocation. Reuses
-        _fold_change_id for the per-id logic (non-numeric and empty ids are
-        ignored there).
+        parse time rather than on the first change-id allocation. One
+        recursive walk over ``ALL_REVISION_TAGS`` (see ``_fold_revision_ids``);
+        non-numeric and empty ids are ignored by ``_fold_change_id``.
 
         The cost lands on every editor, including read-only workflows that
         never allocate an id, and including the small side-part editors
         ([Content_Types].xml, rels, settings, people.xml) which can never hold
-        revisions. Measured at ~39 ms on a 3000-paragraph document (~3% of
-        Document.open), which is the trade for taking it off the first edit.
+        revisions. The former two-tag scan measured ~39 ms on a
+        3000-paragraph document (~3% of Document.open) and the single walk is
+        cheaper still, which is the trade for taking it off the first edit.
         """
-        for tag in ("w:ins", "w:del"):
-            for elem in self.dom.getElementsByTagName(tag):
-                self._fold_change_id(elem.getAttribute("w:id"))
+        self._fold_revision_ids(self.dom)
 
     def _get_next_change_id(self) -> int:
         """Get the next available change ID.

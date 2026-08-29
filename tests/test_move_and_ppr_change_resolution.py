@@ -29,7 +29,7 @@ from pathlib import Path
 
 import defusedxml.minidom
 import pytest
-from conftest import replace_document_xml
+from conftest import find_ref, replace_document_xml
 
 from docx_editor import Document, UnhandledRevisionWarning
 from docx_editor.track_changes import MOVE_RANGE_TAGS, count_revision_elements
@@ -576,3 +576,46 @@ class TestParagraphPropertyChange:
             assert reopened.list_revisions() == []
             assert reopened.list_unhandled_revisions() == []
             assert reopened.get_paragraph(3).style == "UnknownStyle"
+
+
+# --------------------------------------------------------------------------
+# Change-id allocation
+# --------------------------------------------------------------------------
+
+
+class TestChangeIdAllocation:
+    """A new edit's ids never collide with a pending move or property change.
+
+    Word draws every revision mark's id from one counter, and these types are
+    now addressed by id: an allocation that reused one would make our own
+    edit and the foreign revision the same id, so undoing ours (reject_group)
+    would resolve theirs.
+    """
+
+    @pytest.mark.parametrize(
+        ("body", "needle", "highest"),
+        [
+            (TABLE_MOVE, "Text", 17),  # moves, markers and range marks 0..17
+            (PPR_RECORDED, "Heading", 5),
+            (STRAY_MARKS_ONLY, "Nothing moved", 15),  # only range marks
+        ],
+        ids=["moves", "pPrChange", "range-marks"],
+    )
+    def test_new_edit_ids_start_past_every_revision_mark(self, make_docx, body, needle, highest):
+        with _open(make_docx(body)) as doc:
+            before = [r.id for r in doc.list_revisions()]
+            doc.replace(needle, "changed", paragraph=find_ref(doc, needle))
+            after = [r.id for r in doc.list_revisions()]
+            new_ids = [i for i in after if i not in before]
+            assert len(after) == len(set(after))  # no duplicated id
+            assert new_ids and min(new_ids) > highest
+
+    def test_undoing_our_own_edit_leaves_the_foreign_move_alone(self, make_docx):
+        with _open(make_docx(TABLE_MOVE)) as doc:
+            result = doc.replace("Text", "Texte", paragraph=find_ref(doc, "Text"))
+            assert result.group_id is not None
+
+            doc.reject_group(result.group_id)
+
+            assert [r.id for r in doc.list_revisions()] == TABLE_MOVE_IDS
+            assert doc.get_visible_text() == TABLE_VISIBLE_MOVED

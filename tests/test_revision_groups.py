@@ -550,11 +550,13 @@ class TestSplitReconstruction:
         texts = [t.firstChild.data for t in manager.editor.dom.getElementsByTagName("w:t") if t.firstChild]
         assert "C" in texts
 
-    def test_split_formatted_paragraph_copies_and_cleans_pPr(self, temp_xml):
+    @pytest.mark.parametrize("mark_tag", ["w:del", "w:moveFrom", "w:moveTo"])
+    def test_split_formatted_paragraph_copies_and_cleans_pPr(self, temp_xml, mark_tag):
         # Splitting a paragraph with rich properties: the tail copies pStyle +
-        # rPr formatting but drops the tracked pPrChange and the mark revision;
-        # the original keeps its pPr and takes the inserted split mark.
-        del_mark = '<w:del w:id="7" w:author="X" w:date="2024-01-01T00:00:00Z"/>'
+        # rPr formatting but drops the tracked pPrChange and the mark revision
+        # (a deleted or moved paragraph mark alike — copying it would duplicate
+        # its id); the original keeps its pPr and takes the inserted split mark.
+        del_mark = f'<{mark_tag} w:id="7" w:author="X" w:date="2024-01-01T00:00:00Z"/>'
         ppr_change = '<w:pPrChange w:id="8" w:author="X" w:date="2024-01-01T00:00:00Z"><w:pPr/></w:pPrChange>'
         body = (
             f'<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:rPr><w:b/>{del_mark}</w:rPr>{ppr_change}</w:pPr>'
@@ -571,7 +573,7 @@ class TestSplitReconstruction:
         assert not tail_pPr.getElementsByTagName("w:pPrChange")  # tracked change dropped
         tail_rPr = tail_pPr.getElementsByTagName("w:rPr")
         assert tail_rPr and tail_rPr[0].getElementsByTagName("w:b")  # rPr formatting copied
-        assert not tail_rPr[0].getElementsByTagName("w:del")  # mark dropped from the copy
+        assert not tail_rPr[0].getElementsByTagName(mark_tag)  # mark dropped from the copy
 
     def test_split_paragraph_pStyle_without_rPr(self, temp_xml):
         # pPr present but no rPr: the mark check finds no ins mark, and flagging

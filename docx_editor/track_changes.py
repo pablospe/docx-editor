@@ -819,6 +819,10 @@ _REVISION_TYPE_BY_TAG: dict[str, RevisionType] = {
     "w:pPrChange": "property_change",
 }
 
+# The handled tags that wrap run content (CT_RunTrackChange). The same four
+# appear empty under ``w:pPr/w:rPr`` as paragraph-mark markers.
+_RUN_TRACK_CHANGE_TAGS: tuple[str, ...] = ("w:ins", "w:del", "w:moveFrom", "w:moveTo")
+
 # Tag -> the bracket kind ``get_markup_text`` renders it with.
 _MARKUP_KINDS: dict[str, str] = {
     "w:ins": "ins",
@@ -1190,11 +1194,12 @@ def _has_ancestor(node, ancestor) -> bool:
 
 
 def _outermost_revision(elem: Element) -> Element:
-    """``elem``, or the outermost ``w:ins``/``w:del`` it is nested inside.
+    """``elem``, or the outermost run-level revision wrapper it is nested inside.
 
     Where a comment marker may be anchored. A marker placed *inside* another
-    author's pending insertion is carried away when that insertion is
-    rejected, stranding its twin outside as an unpaired range marker; hoisting
+    author's pending insertion (or the destination half of their move) is
+    carried away when that revision is rejected, stranding its twin outside
+    as an unpaired range marker; hoisting
     to the outermost revision keeps both markers in run-level content whatever
     anyone later does to the host. Our own group's members are never above
     ``elem`` (``group_spans`` spans outermost members only), so every revision
@@ -1202,7 +1207,7 @@ def _outermost_revision(elem: Element) -> Element:
     """
     outermost = elem
     node = elem.parentNode
-    while isinstance(node, Element) and node.tagName in ("w:ins", "w:del"):
+    while isinstance(node, Element) and node.tagName in _RUN_TRACK_CHANGE_TAGS:
         outermost = node
         node = node.parentNode
     return outermost
@@ -4008,7 +4013,7 @@ class RevisionManager:
                     pPr_copy.removeChild(child)
             rPr = _first_child_element(pPr_copy, "w:rPr")
             if rPr is not None:
-                for tag in ("w:ins", "w:del"):
+                for tag in _RUN_TRACK_CHANGE_TAGS:
                     mark = _first_child_element(rPr, tag)
                     if mark is not None:
                         rPr.removeChild(mark)
