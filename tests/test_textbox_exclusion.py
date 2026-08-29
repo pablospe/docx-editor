@@ -335,7 +335,8 @@ class TestRevisionsInsideABox:
         Word writes every box twice, so one logical insertion is two w:ins
         elements. Resolving one by id leaves the other pending — the twins go
         out of step, which is the same desynchronization that makes box
-        paragraphs unaddressable in the first place.
+        paragraphs unaddressable in the first place. See
+        ``test_accept_changeset_resolves_both_copies`` for the way out.
         """
         doc = Document.open(boxed_revision_docx)
         try:
@@ -346,6 +347,28 @@ class TestRevisionsInsideABox:
             doc.close()
 
         assert saved_document_xml(boxed_revision_docx).count("<w:ins ") == 1
+
+    def test_accept_changeset_resolves_both_copies(self, boxed_revision_docx):
+        """The precise way to resolve a box revision.
+
+        The twins are byte-identical apart from their ids, so they always
+        share a ``(w:author, w:date)`` changeset even though they reconstruct
+        into separate groups. Resolving the changeset takes both without
+        touching the rest of the document, which ``accept_all`` would.
+        """
+        doc = Document.open(boxed_revision_docx)
+        try:
+            (changeset_id,) = {r.changeset_id for r in doc.list_revisions()}
+            assert changeset_id is not None
+            assert doc.accept_changeset(changeset_id) == 2
+            assert doc.list_revisions() == []
+            doc.save()
+        finally:
+            doc.close()
+
+        xml = saved_document_xml(boxed_revision_docx)
+        assert "<w:ins " not in xml
+        assert xml.count("BOXADD") == 2
 
     def test_accept_all_still_resolves_it(self, boxed_revision_docx):
         doc = Document.open(boxed_revision_docx)
@@ -428,12 +451,18 @@ class TestTableIndexSpace:
 
     def test_batch_and_per_call_index_agree(self, boxed_table_docx):
         """list_paragraph_locations() precomputes the map; the per-ref path
-        rescans. Both must skip the boxed table or they disagree."""
+        rescans. The two must not drift apart — and both must land on 1.
+
+        Filtering only one of them would make index N mean different tables in
+        different methods; filtering neither would agree on the wrong number,
+        which is why the expected value is asserted here too.
+        """
         doc = Document.open(boxed_table_docx)
         try:
             batch = [loc for _, loc in doc.list_paragraph_locations()]
             per_call = [doc.get_paragraph_location(doc.get_paragraph(i).ref) for i in (1, 2)]
             assert [loc.table for loc in batch] == [loc.table for loc in per_call]
+            assert [loc.table and loc.table.index for loc in batch] == [None, 1]
         finally:
             doc.close()
 
@@ -443,6 +472,20 @@ class TestHasTextboxContent:
 
     def test_true_when_a_box_is_present(self, box_doc):
         assert box_doc.has_textbox_content is True
+
+    def test_false_for_an_empty_box(self, simple_docx, temp_dir):
+        """A box with no paragraph in it hides nothing, so the flag stays False.
+
+        The flag is the complement of what ``body_paragraphs`` drops, not a
+        "is a drawing present" check — reporting hidden text where there is
+        none is the false positive it exists to avoid.
+        """
+        docx = make_docx(simple_docx, temp_dir / "empty_box_flag.docx", f"<w:p><w:r>{word_box('')}</w:r></w:p>")
+        doc = Document.open(docx)
+        try:
+            assert doc.has_textbox_content is False
+        finally:
+            doc.close()
 
     def test_false_for_a_plain_document(self, simple_docx, temp_dir):
         docx = make_docx(simple_docx, temp_dir / "plain.docx", "<w:p><w:r><w:t>Plain</w:t></w:r></w:p>")

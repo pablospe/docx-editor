@@ -313,9 +313,13 @@ class TableCell:
     for ``w:gridSpan`` of preceding cells in the same row, so a cell that
     visually sits in column 4 reports ``col=4`` even when earlier cells
     in the row are merged.
+
+    ``index`` counts body tables only: a ``w:tbl`` inside a drawing's
+    ``w:txbxContent`` is skipped, so the numbering has no gaps and never
+    names a table no ref can reach (see :func:`_body_tables`).
     """
 
-    index: int  # 1-based, doc-wide, depth-first order of <w:tbl>
+    index: int  # 1-based, depth-first order among body <w:tbl>
     row: int  # 1-based
     col: int  # 1-based logical grid (accounts for w:gridSpan)
     depth: int  # 1 = outermost, >1 = nested table
@@ -485,7 +489,7 @@ def _logical_col_in_row(tr, target_tc) -> int:
     raise ValueError("target_tc not found in tr")  # pragma: no cover
 
 
-def _body_tables(dom) -> list:
+def _body_tables(dom) -> list[Element]:
     """The document's addressable ``<w:tbl>`` elements, in depth-first order.
 
     Excludes tables inside a drawing's ``w:txbxContent`` for the same reason
@@ -783,8 +787,10 @@ def _compute_paragraph_location(
     ``table_index`` is an optional ``{tbl_node: 1-based-index}`` map (see
     :func:`_build_table_index`). When supplied, the enclosing table's index
     is looked up there instead of via a whole-document rescan — the batch
-    fast path. The result is identical to the ``None`` (per-call) path; a
-    table missing from the map falls back to the rescan defensively.
+    fast path. Both paths count the same population (:func:`_body_tables`),
+    so the result is identical to the ``None`` (per-call) path and a table
+    can only be missing from the map by being unaddressable — the rescan
+    then raises rather than inventing an index.
 
     ``style_outlines`` is an optional precomputed ``{style_id:
     outline_level}`` map (see :func:`_build_style_outline_map`) used to

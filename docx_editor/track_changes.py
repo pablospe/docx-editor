@@ -526,12 +526,13 @@ class Revision:
       containing paragraph, or None when the revision sits in no *addressable*
       paragraph — outside any ``<w:p>`` (e.g. ``<w:trPr>`` row markers), or
       inside a drawing's text box, whose paragraphs are excluded from the ref
-      index space (see ``body_paragraphs``). Such a revision is still listed,
-      and ``accept_all``/``reject_all`` still resolve it — but Word writes
-      every box twice, so it is listed once per copy and a single
-      ``accept_revision``/``accept_group`` resolves only the copy it lands
-      on, leaving the twins out of step. Resolve box revisions with the
-      whole-document forms.
+      index space (see ``body_paragraphs``). Such a revision is still
+      listed — but Word writes every box twice, so it is listed once per
+      copy, and a single ``accept_revision``/``accept_group`` resolves only
+      the copy it lands on, leaving the twins out of step. The copies always
+      share an ``(author, date)`` changeset, so
+      ``accept_changeset``/``reject_changeset`` resolve both, as do
+      ``accept_all``/``reject_all``.
     - ``occurrence``: 0-based occurrence index of ``text`` within the
       containing paragraph, counted in the view where the revision's text
       lives — the accepted (visible) view for insertions, the original

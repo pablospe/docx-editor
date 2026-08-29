@@ -119,6 +119,21 @@ Get the path to this document's workspace folder. Since the workspace lives in t
 print(doc.workspace_path)  # Path("/home/you/.cache/docx-editor/0bebafb463a87cfa")
 ```
 
+#### `has_textbox_content`
+
+Whether any paragraph is hidden inside a drawing's text box (`w:txbxContent`).
+
+Text boxes are not an editing surface: their paragraphs are absent from every listing, their text from every view, search and hash. That makes an all-text-box document — a poster, a flyer, a certificate — read as empty, which is indistinguishable from a genuinely empty document without this flag. Exactly the complement of the paragraph exclusion: `True` means at least one `<w:p>` was excluded, so text the file carries is not reachable from here. Extract it with LibreOffice (`soffice --headless --convert-to txt:Text file.docx`) rather than reporting the document as empty.
+
+**Returns:** `True` if any paragraph was excluded as text-box content (bool)
+
+**Example:**
+
+```python
+if not doc.get_visible_text() and doc.has_textbox_content:
+    print("Text lives in text boxes — not editable through refs")
+```
+
 ### Track Changes Methods
 
 #### `paragraph_count()`
@@ -133,21 +148,6 @@ Paragraphs inside a drawing's text box (`w:txbxContent`) are not counted — tex
 
 ```python
 count = doc.paragraph_count()
-```
-
-#### `has_textbox_content`
-
-Property. Whether the document holds any text-box content (`w:txbxContent`) that this API excludes.
-
-Text boxes are not an editing surface: their paragraphs are absent from every listing, their text from every view, search and hash. That makes an all-text-box document — a poster, a flyer, a certificate — read as empty, which is indistinguishable from a genuinely empty document without this flag. `True` means some text the file carries is deliberately not reachable from here; extract it with LibreOffice (`soffice --headless --convert-to txt:Text file.docx`) rather than reporting the document as empty.
-
-**Returns:** `True` if any text box is present (bool)
-
-**Example:**
-
-```python
-if not doc.get_visible_text() and doc.has_textbox_content:
-    print("Text lives in text boxes — not editable through refs")
 ```
 
 #### `list_paragraphs(max_chars=80, *, start=1, limit=200)`
@@ -228,7 +228,7 @@ Report whether a paragraph lives in the document body or inside a table cell, wh
 
 - `ref` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`
 
-**Returns:** `ParagraphLocation`. `location.in_table` is `False` for body paragraphs; `True` when the paragraph is inside a `<w:tc>` cell, in which case `location.table` carries the 1-based table index, row, `w:gridSpan`-aware logical column, and nesting depth. `location.list` is a `ListItem(num_id, ilvl)` for list paragraphs, `None` otherwise: a direct `w:pPr/w:numPr` wins when present — including Word's `numId=0` "numbering disabled" marker, which reports `None` with no style fallback — otherwise the numbering defined by the paragraph's style applies, with `w:basedOn` inheritance chains resolved. Rendered display numbers (e.g. "7.2(a)") are not computed.
+**Returns:** `ParagraphLocation`. `location.in_table` is `False` for body paragraphs; `True` when the paragraph is inside a `<w:tc>` cell, in which case `location.table` carries the 1-based table index (body tables only — a table inside a text box is not counted), row, `w:gridSpan`-aware logical column, and nesting depth. `location.list` is a `ListItem(num_id, ilvl)` for list paragraphs, `None` otherwise: a direct `w:pPr/w:numPr` wins when present — including Word's `numId=0` "numbering disabled" marker, which reports `None` with no style fallback — otherwise the numbering defined by the paragraph's style applies, with `w:basedOn` inheritance chains resolved. Rendered display numbers (e.g. "7.2(a)") are not computed.
 
 `location.style` is the raw `w:pStyle` style id (e.g. `"Heading1"`), `None` when the paragraph carries no explicit style — no name resolution against `word/styles.xml`. `location.outline_level` is the 0-based outline level (`0` == Heading 1, so a document heading level is `outline_level + 1`): a direct `w:outlineLvl` on the paragraph wins, and the spec's `w:val="9"` marker means body text (`None`); otherwise the level defined by the paragraph's style applies, with `w:basedOn` inheritance chains resolved. `location.heading_path` is the chain of nearest preceding headings that contains the paragraph, outermost first (e.g. `("Chapter one", "Termination")`), built from each heading's current visible text; a heading's own path lists only its ancestors, never itself. Headings inside table cells participate in document order. `location.section` is the paragraph's 1-based section index: a paragraph carrying a direct `w:pPr/w:sectPr` closes a section and belongs to the section it closes, the next paragraph starts the following one, and the body-level `w:sectPr` defines the final section — single-section documents report `1` everywhere.
 
@@ -268,7 +268,7 @@ for ref, loc in doc.list_paragraph_locations():
 
 #### `get_visible_text()`
 
-Get flattened visible document text. Inserted text is included and deleted text is excluded. Text inside a drawing's text box is excluded too — it belongs to the box, not to any addressable paragraph.
+Get flattened visible document text. Inserted text is included and deleted text is excluded. Text inside a drawing's text box is excluded too — it belongs to the box, not to any addressable paragraph. A document whose content lives entirely in text boxes therefore returns `""`; check [`has_textbox_content`](#has_textbox_content) before reporting it as empty.
 
 **Returns:** Visible text with paragraphs separated by newlines (str)
 
@@ -1010,7 +1010,7 @@ from docx_editor import Revision
 | `author` | str | The revision author |
 | `date` | datetime or None | When the revision was made |
 | `text` | str | The inserted or deleted text |
-| `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits in no addressable paragraph — outside any `<w:p>` (e.g. a `<w:trPr>` row marker), or inside a drawing's text box — still listed, but Word writes every box twice, so it is listed once per copy and only `accept_all()`/`reject_all()` resolve both; a single `accept_revision()`/`accept_group()` leaves the twins out of step |
+| `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits in no addressable paragraph — outside any `<w:p>` (e.g. a `<w:trPr>` row marker), or inside a drawing's text box — still listed, but Word writes every box twice, so it is listed once per copy and a single `accept_revision()`/`accept_group()` leaves the twins out of step; the copies share an `(author, date)` changeset, so `accept_changeset()`/`reject_changeset()` resolve both, as do `accept_all()`/`reject_all()` |
 | `occurrence` | int or None | 0-based occurrence index of `text` within the containing paragraph, counted in the view where the revision's text lives (the visible view for insertions, the original pre-revision view for deletions). For insertions it plugs directly into the `occurrence=` parameter of the anchor APIs; None whenever targeting-by-text does not apply (empty text, a host insertion partly consumed by a nested deletion, a nested deletion, or a None `paragraph_ref`) |
 | `nested_under` | int or None | id of the nearest enclosing revision (e.g. a foreign deletion inside another author's pending insertion), else None |
 | `contains_ids` | tuple[int, ...] | ids of the revisions nested inside this one, in document order (empty tuple when none). Both nesting fields report *structural* containment and so, unlike `text`, still cross into a text box — accepting a host insertion does not resolve the box's own revisions |

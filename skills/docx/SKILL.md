@@ -346,7 +346,7 @@ original = doc.get_original_text()
 # numbering resolved), heading context, and section index. Base conventions
 # are MIXED — read the comments:
 loc = doc.get_paragraph_location("P3#b2c4")
-if loc.table:  # table.index, row, col are all 1-based
+if loc.table:  # table.index, row, col are all 1-based (body tables only)
     print(f"table {loc.table.index} r{loc.table.row} c{loc.table.col}")
 if loc.list:  # ilvl is 0-based (0 == top level)
     print(f"list numId={loc.list.num_id} level={loc.list.ilvl}")
@@ -1191,7 +1191,7 @@ If unsure, ask the user: "Should I use Opus (best), Sonnet (recommended) or Haik
 
 ### Limitations
 
-- **Text in shapes/text boxes**: Excluded, deliberately — text boxes are not an editing surface. Text-box content (`w:txbxContent`) appears in no paragraph listing, no text view, no search and no paragraph hash, and no ref addresses it. Word stores every box twice (an `mc:Choice` copy and an `mc:Fallback` copy) and a correct edit must write both twins, so an addressable box paragraph would let one write update a single copy and desynchronize the pair. To read a box's text, convert with LibreOffice (`soffice --headless --convert-to txt:Text file.docx`) — pandoc drops text boxes entirely. A revision *inside* a box is still listed with `paragraph_ref`/`occurrence` left `None`, but it is listed once per copy and only `accept_all()`/`reject_all()` resolve both — a single `accept_revision()`/`accept_group()` updates one copy and leaves the twins out of step. Because an all-text-box file (a poster, a flyer, a certificate) therefore reads as empty, check `doc.has_textbox_content` before reporting a document as having no text.
+- **Text in shapes/text boxes**: Excluded, deliberately — text boxes are not an editing surface. Text-box content (`w:txbxContent`) appears in no paragraph listing, no text view, no search and no paragraph hash, and no ref addresses it. Word stores every box twice (an `mc:Choice` copy and an `mc:Fallback` copy) and a correct edit must write both twins, so an addressable box paragraph would let one write update a single copy and desynchronize the pair. To read a box's text, convert with LibreOffice (`soffice --headless --convert-to txt:Text file.docx`) — pandoc drops text boxes entirely. A revision *inside* a box is still listed with `paragraph_ref`/`occurrence` left `None`, but it is listed once per copy, and a single `accept_revision()`/`accept_group()` updates one copy and leaves the twins out of step — use `accept_changeset()`/`reject_changeset()` (the copies share an `(author, date)` changeset) or `accept_all()`/`reject_all()`. Because an all-text-box file (a poster, a flyer, a certificate) therefore reads as empty, check `doc.has_textbox_content` before reporting a document as having no text.
 - **Charts**: Text inside charts is embedded in separate XML, not easily editable
 - **Concurrent editing**: Not supported — a second open of the same document raises `WorkspaceLockedError`; use sequential access
 - **Most edits**: Are in paragraphs and tables, which are well supported

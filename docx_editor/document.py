@@ -28,6 +28,7 @@ from .track_changes import (
 )
 from .workspace import Workspace
 from .xml_editor import (
+    _TEXTBOX_CONTENT,
     DocxXMLEditor,
     ListItem,
     ParagraphInfo,
@@ -40,6 +41,7 @@ from .xml_editor import (
     _compute_heading_paths,
     _compute_paragraph_location,
     _compute_section_indexes,
+    _is_inside_element,
     body_paragraphs,
     build_text_map,
     compute_paragraph_hash,
@@ -276,6 +278,27 @@ class Document:
         """
         return self._workspace.workspace_path
 
+    @property
+    def has_textbox_content(self) -> bool:
+        """Whether any paragraph is hidden inside a drawing's text box.
+
+        Text boxes are not an editing surface: their paragraphs are absent
+        from every listing, their text from every view, search and hash (see
+        :func:`~docx_editor.xml_editor.body_paragraphs`). That makes an
+        all-text-box document — a poster, a flyer, a certificate — read as
+        empty, which is indistinguishable from a genuinely empty document
+        without this flag.
+
+        Exactly the complement of what ``body_paragraphs`` drops: True means
+        at least one ``w:p`` was excluded, so text the file carries is not
+        reachable from here. Extract it with LibreOffice
+        (``soffice --headless --convert-to txt:Text file.docx``) rather than
+        reporting the document as empty.
+        """
+        self._ensure_open()
+        dom = self._document_editor.dom
+        return any(_is_inside_element(p, _TEXTBOX_CONTENT) for p in dom.getElementsByTagName("w:p"))
+
     # ==================== Track Changes API ====================
 
     def find_text(self, text: str, occurrence: int = 0, paragraph: str | None = None) -> SearchResult | None:
@@ -506,25 +529,6 @@ class Document:
         """
         self._ensure_open()
         return len(body_paragraphs(self._document_editor.dom))
-
-    @property
-    def has_textbox_content(self) -> bool:
-        """Whether the document holds any text-box content this API excludes.
-
-        Text boxes are not an editing surface: their paragraphs are absent
-        from every listing, their text from every view, search and hash (see
-        :func:`~docx_editor.xml_editor.body_paragraphs`). That makes an
-        all-text-box document — a poster, a flyer, a certificate — read as
-        empty, which is indistinguishable from a genuinely empty document
-        without this flag.
-
-        True means some text the file carries is deliberately not reachable
-        from here; extract it with LibreOffice
-        (``soffice --headless --convert-to txt:Text file.docx``) rather than
-        reporting the document as empty.
-        """
-        self._ensure_open()
-        return bool(self._document_editor.dom.getElementsByTagName("w:txbxContent"))
 
     def list_paragraphs(
         self, max_chars: int = 80, *, start: int = 1, limit: int | None = _DEFAULT_LIST_LIMIT
