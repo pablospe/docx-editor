@@ -95,25 +95,28 @@ trigger it manually with `workflow_dispatch` after changes.
 Every run also counts revision-bearing elements by tag across each file's
 `word/*.xml` parts (recorded as `rec["census"]` in `results.json`). It is
 informational — never a stage, never a failure — and exists to answer which
-revision types real-world producers actually emit. Observed 2026-08-29 over the
-77-file corpus:
+revision types real-world producers actually emit. The `save2` stage adds the
+one hard check derived from it: after `accept_all()`, the saved
+`word/document.xml` may hold only tags in `UNHANDLED_REVISION_TAGS` (a leftover
+`w:ins`, `w:moveFrom` or `w:pPrChange` fails the file with
+`AssertResolvedTypesRemain`). Observed 2026-08-30 over the 77-file corpus:
 
 ```text
 tag                               elements  files  producers
  w:ins                                 162     10  LibreOffice (docx re-save), LibreOffice core ooxmlexport fix
  w:del                                 136     11  LibreOffice (docx re-save), Open-Xml-PowerTools test fixture
 *w:tcPrChange                           36      6  Open-Xml-PowerTools test fixture (Word)
-*w:moveFrom                             27      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
-*w:moveTo                               27      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
-*w:pPrChange                            11      5  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+ w:moveFrom                             27      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+ w:moveTo                               27      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+ w:pPrChange                            11      5  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
 *w:cellMerge                             6      1  Open-Xml-PowerTools test fixture (Word)
 *w:tblGridChange                         6      6  Open-Xml-PowerTools test fixture (Word)
 *w:cellDel                               4      1  Open-Xml-PowerTools test fixture (Word)
 *w:cellIns                               4      1  Open-Xml-PowerTools test fixture (Word)
-*w:moveFromRangeEnd                      4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
-*w:moveFromRangeStart                    4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
-*w:moveToRangeEnd                        4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
-*w:moveToRangeStart                      4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+ w:moveFromRangeEnd                      4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+ w:moveFromRangeStart                    4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+ w:moveToRangeEnd                        4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+ w:moveToRangeStart                      4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
 *w:tblPrChange                           4      4  Open-Xml-PowerTools test fixture (Word)
 *w:rPrChange                             3      2  Open-Xml-PowerTools test fixture (Word)
 *w:tblPrExChange                         3      2  Open-Xml-PowerTools test fixture (Word)
@@ -130,7 +133,7 @@ tag                               elements  files  producers
 *w:sectPrChange                          1      1  Open-Xml-PowerTools test fixture (Word)
 
 26/77 files carry at least one revision element
-* = not resolved by accept_all/reject_all (169 element(s), ISSUES.md #68)
+* = not resolved by accept_all/reject_all (88 element(s))
 
 w:ins/w:del by parent element (structural markers vs content revisions):
   w:rPr                            172  <- paragraph-mark ins/del, or a change record's rPr
@@ -144,32 +147,52 @@ w:ins/w:del by parent element (structural markers vs content revisions):
   - poi_ExternalEntityInText.docx [word/document.xml]: EntitiesForbidden: ...
 ```
 
-Read as evidence for ISSUES.md #68:
+Read as evidence:
 
-- **Every unhandled type now has genuine Word output behind it.** The 21
+- **Every unhandled type has genuine Word output behind it.** The 21
   `oxpt_RP*` files were authored in Word (see Provenance) and between them
-  emit all 26 tags in `UNHANDLED_REVISION_TAGS`. Before they were added, the
-  five revision-bearing files were almost all LibreOffice-produced and only
-  moves and `w:pPrChange` had any real-producer evidence; the rest was
+  emit all 19 tags in `UNHANDLED_REVISION_TAGS` as well as the moves and
+  `w:pPrChange` that ISSUES.md #68 took out of it. Before they were added,
+  the five revision-bearing files were almost all LibreOffice-produced and
+  only moves and `w:pPrChange` had any real-producer evidence; the rest was
   hand-authored XML in `tests/test_unhandled_revisions.py` (still there, for
   the edge shapes).
-- **Moves are the largest unhandled family** (27 + 27 + range marks) and they
-  are real, not synthetic: `locore_TC-table-DnD-move.docx` (a Word
-  drag-and-drop move re-exported by LibreOffice core) and the Word-native
-  `oxpt_RP015-MoveFrom-MoveTo.docx` / `oxpt_RP018-MoveFrom-MoveTo-CC.docx`
-  (the latter inside a content control, with `customXmlMove*` marks).
-  `accept_all()` resolves none of them and leaves the whole redline pending.
-- **Property changes are the next family**: `w:pPrChange` in five files
-  (Word: `oxpt_RP022`, `RP025`, `RP037`, plus the kitchen-sink `RP001`),
-  `w:rPrChange` on a run (`oxpt_RP037`) and on a paragraph mark
-  (`oxpt_RP024`), `w:sectPrChange` (`oxpt_RP027`), `w:numberingChange`
-  (`oxpt_RP026`), and the whole table family — `w:tblPrChange`,
-  `w:tblPrExChange`, `w:trPrChange`, `w:tcPrChange`, `w:tblGridChange`
-  (`oxpt_RP028`, `RP033`, `RP001`).
+- **Moves resolve, on every producer that emits them** (ISSUES.md #68):
+  `locore_TC-table-DnD-move.docx` (a Word drag-and-drop move of a whole table,
+  re-exported by LibreOffice core) carries 20 move marks — `accept_all()`
+  lists and resolves its 16 `w:moveFrom`/`w:moveTo` elements as one inferred
+  changeset and sweeps the 4 range marks with them, leaving the table at its
+  destination exactly once; `reject_all()` puts it back. The Word-native
+  `oxpt_RP015-MoveFrom-MoveTo.docx` resolves clean (6 elements);
+  `oxpt_RP018-MoveFrom-MoveTo-CC.docx` resolves its 7 move elements and leaves
+  the 8 `customXmlMove*` marks around its content control pending. Half the
+  DnD file's move elements are paragraph-mark markers
+  (`w:pPr/w:rPr/w:moveFrom`, one per moved cell); like a deleted paragraph
+  mark these resolve *approximately* — the marker is dropped without merging
+  or splitting paragraphs — which on that shape is also the exact result.
+  Both shapes are mirrored by hand-authored fixtures in
+  `tests/test_move_and_ppr_change_resolution.py` and run against the real
+  files by `tests/test_corpus_fixtures.py` when the corpus is built.
+- **Paragraph-property changes resolve too**: `w:pPrChange` in five files
+  (Word: `oxpt_RP022`, `RP025`, `RP037`, the kitchen-sink `RP001`, and
+  `locore_UnknownStyleInRedline.docx`, whose two records share `w:id="0"`, one
+  self-closing, one naming a style `styles.xml` does not define — accept drops
+  the records, reject restores the recorded properties verbatim). `RP037`
+  also carries two `w:pPrChange` inside `word/styles.xml` style definitions,
+  outside the part the library reads (ISSUES.md #30); they show in the
+  per-part census and are not a `save2` failure, the same way
+  `oxpt_RP050-Deleted-Footnote.docx`'s deletions in `word/footnotes.xml` are
+  not.
+- **The rest of the property family is still unhandled**: `w:rPrChange` on a
+  run (`oxpt_RP037`) and on a paragraph mark (`oxpt_RP024`), `w:sectPrChange`
+  (`oxpt_RP027`), `w:numberingChange` (`oxpt_RP026`), and the whole table
+  family — `w:tblPrChange`, `w:tblPrExChange`, `w:trPrChange`,
+  `w:tcPrChange`, `w:tblGridChange` (`oxpt_RP028`, `RP033`, `RP001`). These
+  stay behind the honesty floor (`ResolveResult.unhandled`, ISSUES.md #64).
 - **Table-structure revisions exist in the wild**: `w:cellIns` (`oxpt_RP035`),
   `w:cellDel` (`oxpt_RP034`), `w:cellMerge` (`oxpt_RP036`), each alongside the
   `w:ins`/`w:del` Word writes for the cells' content.
-- **The structural `w:ins`/`w:del` contexts are now the majority row**: 172
+- **The structural `w:ins`/`w:del` contexts are the majority row**: 172
   paragraph-mark markers (`w:pPr/w:rPr/w:ins|del`; the kitchen-sink file alone
   has 160) and 22 table-row markers (`w:trPr`, from `oxpt_RP009`/`RP010` and
   `RP001`), against 73 ordinary content revisions. These resolve
@@ -204,23 +227,22 @@ lists.
   `w:trackRevisions` flag, or a vanished edit marker still fails. A waiver
   that turns out to be unnecessary fails the file with
   `StaleSurvivalWaiver`, so the manifest cannot quietly outlive the behavior
-  it documents. Two files carry one today, both verified by dumping
-  LibreOffice's import as flat ODT:
+  it documents. One file carries one today, verified by dumping LibreOffice's
+  import as flat ODT:
   - `poi_FieldCodes.docx` — the first paragraph is an `AUTHOR` field result;
     Writer fields carry no redlines, so LibreOffice flattens our del/ins into
     the result text (`ANTONIANTONI-EDITED`).
-  - `locore_TC-table-DnD-move.docx` — the first paragraph sits inside a
-    foreign `w:moveFrom` (moved-away text); LibreOffice folds our deletion
-    into the move's own deletion region and only the insertion comes back.
-    (That the library edits inside `w:moveFrom` content at all — text that is
-    deleted at its source — is a finding for ISSUES.md #68, not for the gate.)
+  `locore_TC-table-DnD-move.docx` carried one until ISSUES.md #68: its first
+  paragraphs sit inside a foreign `w:moveFrom` (moved-away text), which the
+  library now treats as invisible, so the harness edits the first paragraph
+  that is actually visible and the redline survives LibreOffice unaided.
 - The harness exits nonzero if any file has a real failure (failed stage or
   harness error), and if the corpus directory is empty or a `--only` filter
   matches nothing (a run that tested nothing must not look green).
   Baseline: 76 clean + 1 rejected → exit 0. Of the 76, the `lo_roundtrip`
-  survival assertion ran on 68 (1 of them with the flag check not
+  survival assertion ran on 69 (1 of them with the flag check not
   applicable, `onlyoffice_sample.docx`), was skipped on 6 with no editable
-  paragraph, and was waived on 2.
+  paragraph, and was waived on 1.
 
 ## Provenance policy
 

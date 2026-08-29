@@ -363,8 +363,7 @@
     "producer": "LibreOffice core ooxmlexport fixture (Word/LO mixed)",
     "source": "https://raw.githubusercontent.com/LibreOffice/core/1c29ec6c2b2ec1f343545915ba66b7e9718b3792/sw/qa/extras/ooxmlexport/data/TC-table-DnD-move.docx",
     "size": 12977,
-    "sha256": "32419eb1c66dc5ca",
-    "survival_waiver": "the edited paragraph sits inside a foreign w:moveFrom (moved-away text); LibreOffice folds our deletion into the move's own deletion region on import"
+    "sha256": "32419eb1c66dc5ca"
   },
   "locore_99_Fields.docx": {
     "kind": "download",

@@ -22,7 +22,10 @@ Stages per file:
   save1           save-as to out/<name>_edited.docx + zip/XML validation
   reopen          reopen saved file, assert the edit survived and the revision
                   count is coherent, then accept_all
-  save2           save to out/<name>_final.docx + zip/XML validation
+  save2           save to out/<name>_final.docx + zip/XML validation, then
+                  assert the saved word/document.xml holds only revision types
+                  accept_all does not resolve (UNHANDLED_REVISION_TAGS): an
+                  ins/del/move/pPrChange element left behind is a failure
   lo_roundtrip    soffice --headless --convert-to docx on the *edited* output,
                   then assert that what we wrote survived the re-save
   pdf             soffice --headless --convert-to pdf on the final output
@@ -49,8 +52,8 @@ Every file also gets a *census*: a count of revision-bearing elements by tag
 across its ``word/*.xml`` parts, recorded as ``rec["census"]``. It is
 informational and can never fail a run, so it is not a stage — it exists to
 say which revision types real-world producers actually emit, which is the
-evidence base for handling the ones this library does not resolve
-(ISSUES.md #68). ``--census`` prints just that table, in seconds.
+evidence base for handling the ones this library does not resolve.
+``--census`` prints just that table, in seconds.
 """
 
 import argparse
@@ -193,7 +196,7 @@ def census_file(path: Path) -> dict:
 
 def print_census(results: list[dict]) -> None:
     """Print the corpus-wide revision census: which tags real producers emit."""
-    from docx_editor.track_changes import HANDLED_REVISION_TAGS, UNHANDLED_REVISION_TAGS
+    from docx_editor.track_changes import UNHANDLED_REVISION_TAGS
 
     totals: dict[str, int] = {}
     files_with: dict[str, set[str]] = {}
@@ -230,14 +233,14 @@ def print_census(results: list[dict]) -> None:
     print("\nRevision census (all word/*.xml parts)")
     print(f"{'tag':<32}{'elements':>10}{'files':>7}  producers")
     for tag, n in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0])):
-        mark = " " if tag in HANDLED_REVISION_TAGS else "*"
+        mark = "*" if tag in UNHANDLED_REVISION_TAGS else " "
         prods = ", ".join(sorted(producers[tag]))
         print(f"{mark}{tag:<31}{n:>10}{len(files_with[tag]):>7}  {prods[:60]}")
     if not totals:
         print("  (no revision elements found in any corpus file)")
     print(f"\n{carrying}/{n_files} files carry at least one revision element")
     unhandled_total = sum(n for tag, n in totals.items() if tag in UNHANDLED_REVISION_TAGS)
-    print(f"* = not resolved by accept_all/reject_all ({unhandled_total} element(s), ISSUES.md #68)")
+    print(f"* = not resolved by accept_all/reject_all ({unhandled_total} element(s))")
     if contexts:
         print("\nw:ins/w:del by parent element (structural markers vs content revisions):")
         for parent, n in sorted(contexts.items(), key=lambda kv: (-kv[1], kv[0])):
@@ -658,19 +661,24 @@ def run_single(path: Path, do_soffice: bool) -> dict:
                 )
                 fail_rest("reopen")
                 return result
-            stages["reopen"] = {"status": "pass", "accepted": accepted}
+            stages["reopen"] = {
+                "status": "pass",
+                "accepted": accepted,
+                "unhandled": dict(accepted.unhandled_types),
+            }
         except Exception as e:
             stages["reopen"] = err_record(e)
             fail_rest("reopen")
             return result
 
-        # Stage 6: save2 + validate
+        # Stage 6: save2 + validate + post-condition: after accept_all, the
+        # saved file may hold only revision types the library never resolves.
         try:
+            from docx_editor.track_changes import UNHANDLED_REVISION_TAGS
+
             doc2.save(out2)
             v = validate_docx(out2)
-            if v["ok"]:
-                stages["save2"] = {"status": "pass"}
-            else:
+            if not v["ok"]:
                 stages["save2"] = {
                     "status": "fail",
                     "error_type": "OutputValidation:" + v["error_type"],
@@ -678,6 +686,20 @@ def run_single(path: Path, do_soffice: bool) -> dict:
                 }
                 fail_rest("save2")
                 return result
+            # word/document.xml only: the part accept_all reads (ISSUES.md #30).
+            # A redline in styles.xml or footnotes.xml is visible in the
+            # per-part census but is not something accept_all claimed to do.
+            final_census = census_file(out2)
+            body_tags = final_census.get("parts", {}).get("word/document.xml", {}).get("by_tag", {})
+            leftover = {tag: n for tag, n in body_tags.items() if tag not in UNHANDLED_REVISION_TAGS}
+            if leftover:
+                stages["save2"] = assert_fail(
+                    "AssertResolvedTypesRemain",
+                    f"accept_all() left resolvable revision elements in the saved file: {leftover}",
+                )
+                fail_rest("save2")
+                return result
+            stages["save2"] = {"status": "pass", "census": final_census.get("by_tag", {})}
         except Exception as e:
             stages["save2"] = err_record(e)
             fail_rest("save2")
