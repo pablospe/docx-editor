@@ -532,8 +532,12 @@ import os
 author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("reviewed.docx", author=author)
 
-# List the document's tracked insertions and deletions (list[Revision]).
-# Other revision types are not listed here — see list_unhandled_revisions().
+# List the document's tracked revisions (list[Revision]). r.type is one of
+# "insertion", "deletion", "move_from", "move_to" (the two halves of a
+# drag-and-drop move — two rows, as in Word's revision pane) or
+# "property_change" (a w:pPrChange: the paragraph's previous properties,
+# text ""). Other revision types are not listed here — see
+# list_unhandled_revisions().
 revisions = doc.list_revisions()
 for r in revisions:
     print(f"ID: {r.id}, Type: {r.type}, Author: {r.author}, Text: {r.text}")
@@ -616,7 +620,9 @@ doc.reject_changeset(results[0].changeset_id)   # undo the whole call, or:
 # stored in the document XML and survive save()/close()/reopen — resolving
 # by revision id in a later session is always safe.
 
-# Accept or reject all insertions and deletions. The return value counts the
+# Accept or reject every listed revision: insertions, deletions, moves (both
+# halves as a unit — the text ends up in exactly one place, range marks
+# swept) and paragraph-property changes. The return value counts the
 # revisions processed and behaves as that int in comparisons, arithmetic and
 # f-strings; it also carries what could NOT be processed.
 result = doc.accept_all()
@@ -624,12 +630,12 @@ doc.reject_all()
 
 # ALWAYS check this before telling a human "all changes accepted", and check
 # the result of THIS call — .unhandled describes the call it came from.
-# accept_all/reject_all resolve w:ins/w:del only. A Word redline whose
-# revisions are format changes (w:pPrChange, w:rPrChange) or drag-and-drop
-# moves (w:moveFrom/w:moveTo) returns 0 — not because there was nothing to
-# do, but because nothing there could be resolved.
+# A Word redline whose revisions are run-format changes (w:rPrChange),
+# section/table property changes or table-structure revisions (w:cellIns...)
+# returns 0 — not because there was nothing to do, but because nothing there
+# could be resolved.
 if result.unhandled:
-    print(result.unhandled_types)   # {'w:moveFrom': 8, 'w:moveTo': 8, ...}
+    print(result.unhandled_types)   # {'w:rPrChange': 3, 'w:cellIns': 1}
     for row in doc.list_unhandled_revisions():
         print(f"still pending: {row.tag} by {row.author} @{row.paragraph_ref}")
     # Report these to the human as STILL PENDING — the document is not fully
@@ -666,10 +672,22 @@ nested deletion's `nested_under` points back at its host.
   nested inside it survives as an independent pending deletion.
 - *Rejecting* the insertion removes everything inside it — nested deletions
   disappear with it.
-- `accept_all()` / `reject_all()` resolve nesting fully **for insertions and
-  deletions** (they re-scan until no `w:ins`/`w:del` remain), and `author=`
-  filters process each author's changes independently. Other revision types
-  are not resolved at all — see the `result.unhandled` recipe above.
+- `accept_all()` / `reject_all()` resolve nesting fully (they re-scan until
+  no listed revision remains), and `author=` filters process each author's
+  changes independently. Revision types outside `list_revisions()` are not
+  resolved at all — see the `result.unhandled` recipe above.
+
+**Moves are two rows.** A drag-and-drop move lists as a `move_from` (the
+source, text excluded from the visible view) and a `move_to` (the
+destination). `accept_all()`/`reject_all()` — or `accept_changeset()` on the
+inferred changeset both halves share — resolve the pair together, which is
+what keeps the text in exactly one place. Resolving one half by id is allowed
+but is your call: accepting the `move_to` and rejecting the `move_from`
+duplicates the text, the inverse loses it. A lone half in a damaged file
+behaves as what it structurally is (`move_from` alone = deletion, `move_to`
+alone = insertion). Rejecting a `property_change` restores the paragraph's
+recorded previous properties — a record with none clears them, and a recorded
+style id is restored verbatim even when the document defines no such style.
 
 Predict the outcome, then verify with `get_markup_text()`.
 

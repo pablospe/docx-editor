@@ -283,9 +283,10 @@ count = doc.reject_all(author="OtherUser")
 print(f"Rejected {count} revisions")
 ```
 
-These resolve insertions and deletions only. If the document also holds format
-changes or moves, the returned count carries them as `.unhandled` — check it
-before reporting a document as fully adjudicated:
+These resolve insertions, deletions, content moves (both halves together) and
+paragraph-property changes. If the document also holds other revision types —
+run-format changes, table revisions — the returned count carries them as
+`.unhandled`; check it before reporting a document as fully adjudicated:
 
 ```python
 result = doc.accept_all()

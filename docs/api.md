@@ -814,12 +814,17 @@ doc.delete_comment(0)
 
 #### `list_revisions(author=None, paragraph=None)`
 
-List the document's tracked insertions and deletions.
+List the document's tracked revisions.
 
-Insertions and deletions only. Every other revision type in the OOXML schema —
-format changes, moves, table-structure revisions — is listed by
+Five `type` values: `"insertion"`, `"deletion"`, the two halves of a content
+move (`"move_from"`/`"move_to"` — two rows, as in Word's revision pane) and
+`"property_change"` (a `w:pPrChange`: the paragraph's previous properties;
+`text` is `""`). Every row can be passed to `accept_revision()` /
+`reject_revision()`. Every other revision type in the OOXML schema — run,
+section and table property changes, table-structure revisions — is listed by
 [`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone) instead,
-because none of it can be passed to `accept_revision()`.
+because none of it can be. A move's range marks (`w:moveFromRangeStart` etc.)
+are scaffolding: never listed, swept once the move they bracket is resolved.
 
 **Parameters:**
 
@@ -836,6 +841,10 @@ because none of it can be passed to `accept_revision()`.
 revisions = doc.list_revisions()
 for r in revisions:
     print(f"{r.type}: {r.text} by {r.author}")
+# insertion: speedy by Reviewer
+# move_from: relocated clause by Ann
+# move_to: relocated clause by Ann
+# property_change:  by Ann
 ```
 
 #### `accept_revision(revision_id)`
@@ -844,7 +853,18 @@ Accept a revision by ID.
 
 - For insertions: keeps the inserted content
 - For deletions: permanently removes the deleted content
+- For `move_to`: keeps the moved text at its destination
+- For `move_from`: removes the moved text from its source
+- For `property_change`: keeps the paragraph's current properties and drops the record of the previous ones
 - Nested revisions: accepting an insertion unwraps it in place, so a deletion another author nested inside it survives as an independent pending deletion
+
+**A move is two rows.** `accept_all()`/`reject_all()` and the inferred
+changeset both halves share (`accept_changeset(rev.changeset_id)`) resolve
+them together, which is what keeps the text in exactly one place. Resolving
+one half by id is allowed — Word allows it too — but it is your call:
+accepting the `move_to` and rejecting the `move_from` duplicates the text, the
+inverse loses it. A lone half in a damaged file behaves as what it structurally
+is: a `move_from` alone is a deletion, a `move_to` alone an insertion.
 
 **Parameters:**
 
@@ -866,7 +886,12 @@ Reject a revision by ID.
 
 - For insertions: removes the inserted content
 - For deletions: restores the deleted content
+- For `move_to`: removes the moved text from its destination
+- For `move_from`: restores the moved text at its source
+- For `property_change`: restores the paragraph's recorded previous properties. A record with none (LibreOffice writes a self-closing `w:pPrChange` for "previously no properties") clears them; the recorded style id is restored verbatim even when the document defines no such style (Word falls back to Normal for it)
 - Nested revisions: rejecting an insertion removes everything inside it — deletions another author nested inside it disappear with it
+
+Resolve both halves of a move together — see `accept_revision()`.
 
 **Parameters:**
 
@@ -1040,13 +1065,16 @@ doc.reject_changeset(results[0].changeset_id)  # undo the whole batch
 
 #### `accept_all(author=None)`
 
-Accept all insertions and deletions.
+Accept every listed revision.
 
-Resolves `w:ins`/`w:del` only. Every other revision type is left pending and
-reported on the result rather than silently ignored — see
+Resolves insertions, deletions, content moves (both halves as a unit — the
+text ends up at its destination exactly once, range marks swept) and
+paragraph-property changes (the record is dropped). Every other revision type
+is left pending and reported on the result rather than silently ignored — see
 [`ResolveResult`](#resolveresult) for the counting rule and
 [`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone) for what is
-in that set.
+in that set. A moved or deleted paragraph mark resolves approximately: the
+marker is dropped without merging or splitting paragraphs.
 
 Only `word/document.xml` is inspected; headers, footers and footnotes are the
 container-parts epic (ISSUES.md #30).
@@ -1070,15 +1098,17 @@ result = doc.accept_all()
 print(f"Accepted {result} revisions")
 if result.unhandled:
     print(f"Still pending: {result.unhandled_types}")
-    # -> Still pending: {'w:moveFrom': 8, 'w:moveTo': 8, ...}
+    # -> Still pending: {'w:rPrChange': 3, 'w:cellIns': 1}
 ```
 
 #### `reject_all(author=None)`
 
-Reject all insertions and deletions.
+Reject every listed revision.
 
-Resolves `w:ins`/`w:del` only; every other revision type is left pending and
-reported exactly as in `accept_all()`.
+Resolves insertions, deletions, content moves (both halves as a unit — the
+text is back at its source exactly once) and paragraph-property changes (the
+recorded previous properties are restored); every other revision type is left
+pending and reported exactly as in `accept_all()`.
 
 **Parameters:**
 
@@ -1105,14 +1135,15 @@ if result.unhandled:
 List the revision types this library does not accept or reject.
 
 The complement of `list_revisions()`: everything in the OOXML revision schema
-except insertions and deletions — property changes (`w:pPrChange`,
-`w:rPrChange`, `w:sectPrChange`, the table `*PrChange` family), content moves
-(`w:moveFrom`/`w:moveTo` and their range marks), table-structure revisions
-(`w:cellIns`, `w:cellDel`, `w:cellMerge`), `w:numberingChange` and the
-custom-XML range marks. These survive open/edit/save unchanged and are left
-pending by `accept_all()`/`reject_all()`.
+except insertions, deletions, moves and paragraph-property changes — run,
+section and table property changes (`w:rPrChange`, `w:sectPrChange`, the table
+`*PrChange` family), table-structure revisions (`w:cellIns`, `w:cellDel`,
+`w:cellMerge`), `w:numberingChange` and the custom-XML range marks. These
+survive open/edit/save unchanged and are left pending by
+`accept_all()`/`reject_all()`. A move's range marks are never listed here:
+they are swept with the move they bracket.
 
-Call this before telling a human "all changes accepted": on a format-only
+Call this before telling a human "all changes accepted": on a run-format-only
 redline `accept_all()` returns 0 because there was nothing it *could* accept,
 not because there was nothing to do.
 
@@ -1227,7 +1258,8 @@ for comment in comments:
 
 ## Revision
 
-Represents a tracked change (insertion or deletion).
+Represents a tracked change: an insertion, a deletion, one half of a content
+move, or a paragraph-property change.
 
 ```python
 from docx_editor import Revision
@@ -1238,12 +1270,12 @@ from docx_editor import Revision
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `id` | int | The revision ID |
-| `type` | str | Either "insertion" or "deletion" |
+| `type` | str | `"insertion"`, `"deletion"`, `"move_from"`, `"move_to"` or `"property_change"`. The two halves of a move are two rows (Word's revision pane shows "Moved from"/"Moved to" the same way), sharing an inferred `changeset_id` when they carry the same author and date; resolve them together — see [`accept_revision()`](#accept_revisionrevision_id). `"property_change"` is a `w:pPrChange`: the paragraph's previous properties |
 | `author` | str | The revision author |
 | `date` | datetime or None | When the revision was made |
-| `text` | str | The inserted or deleted text |
+| `text` | str | The inserted, deleted or moved text; `""` for a property change or a paragraph-mark marker |
 | `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits in no addressable paragraph — outside any `<w:p>` (e.g. a `<w:trPr>` row marker), or inside a drawing's text box — still listed, and `accept_all()`/`reject_all()` always resolve it. Anything narrower depends on how the box is stored: Word normally writes a box twice (an `mc:Choice` copy and an `mc:Fallback` copy), so the revision is listed once per copy and one `accept_revision()`/`accept_group()` call resolves only the copy it lands on. Copies with distinct ids and identical author/date join one inferred changeset, which `accept_changeset()` resolves — along with every other group carrying that author and the identical raw `w:date` string. Copies sharing a `w:id` are ungroupable (`group_id` and `changeset_id` both None), so no group- or changeset-keyed call can reach them and `accept_all()`/`reject_all()` is the single call that takes both |
-| `occurrence` | int or None | 0-based occurrence index of `text` within the containing paragraph, counted in the view where the revision's text lives (the visible view for insertions, the original pre-revision view for deletions). For insertions it plugs directly into the `occurrence=` parameter of the anchor APIs; None whenever targeting-by-text does not apply (empty text, a host insertion partly consumed by a nested deletion, a nested deletion, or a None `paragraph_ref`) |
+| `occurrence` | int or None | 0-based occurrence index of `text` within the containing paragraph, counted in the view where the revision's text lives (the visible view for insertions and `move_to` halves, the original pre-revision view for deletions and `move_from` halves). For insertions and `move_to` it plugs directly into the `occurrence=` parameter of the anchor APIs; None whenever targeting-by-text does not apply (empty text, a host insertion partly consumed by a nested deletion, a nested deletion, or a None `paragraph_ref`) |
 | `nested_under` | int or None | id of the nearest enclosing revision (e.g. a foreign deletion inside another author's pending insertion), else None |
 | `contains_ids` | tuple[int, ...] | ids of the revisions nested inside this one, in document order (empty tuple when none). Both nesting fields report *structural* containment and so, unlike `text`, still cross into a text box — accepting a host insertion does not resolve the box's own revisions |
 | `group_id` | int or None | Revision group this revision belongs to (see [`accept_group()`](#accept_groupgroup_id)): recorded for this session's edits, inferred by reconstruction for revisions already in the file; None only for ungroupable revisions (missing author/date, outside any paragraph, duplicated id, or a mid-session split half of a foreign insertion) |
@@ -1255,9 +1287,9 @@ from docx_editor import Revision
 
 ```python
 revisions = doc.list_revisions()
+symbols = {"insertion": "+", "deletion": "-", "move_from": "<", "move_to": ">", "property_change": "¶"}
 for rev in revisions:
-    symbol = "+" if rev.type == "insertion" else "-"
-    print(f"{symbol} {rev.text} (by {rev.author})")
+    print(f"{symbols[rev.type]} {rev.text} (by {rev.author})")
 ```
 
 ---
@@ -1387,9 +1419,9 @@ from docx_editor import ResolveResult
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| *(the int value)* | int | Number of `w:ins`/`w:del` revisions resolved |
-| `unhandled` | int | How many revision elements this library never resolves are still in the document. On an `author=`-filtered call this counts only that author's marks, matching the scope of the claim being made. `0` on an ordinary insertions-and-deletions redline. |
-| `unhandled_types` | dict[str, int] | Tag → count for those elements, e.g. `{"w:rPrChange": 3, "w:moveTo": 1}`. Empty when `unhandled` is 0. |
+| *(the int value)* | int | Number of revisions resolved (insertions, deletions, move halves, paragraph-property changes) |
+| `unhandled` | int | How many revision elements this library never resolves are still in the document. On an `author=`-filtered call this counts only that author's marks, matching the scope of the claim being made. `0` on a redline made of insertions, deletions, moves and paragraph-property changes. |
+| `unhandled_types` | dict[str, int] | Tag → count for those elements, e.g. `{"w:rPrChange": 3, "w:cellIns": 1}`. Empty when `unhandled` is 0. |
 
 Both are counted **after** resolution, which is the honest measure of the claim
 being made ("everything is resolved"): a foreign mark inside a rejected
@@ -1406,10 +1438,9 @@ second time alongside the change itself.
 result = doc.accept_all()
 print(result)             # "2" — str/format stay the plain int
 print(result + 1)         # 3
-print(result.unhandled)   # 20
+print(result.unhandled)   # 4
 print(result.unhandled_types)
-# {'w:moveFrom': 8, 'w:moveFromRangeStart': 1, 'w:moveFromRangeEnd': 1,
-#  'w:moveTo': 8, 'w:moveToRangeStart': 1, 'w:moveToRangeEnd': 1}
+# {'w:rPrChange': 3, 'w:sectPrChange': 1}
 ```
 
 ---
@@ -1427,7 +1458,7 @@ from docx_editor import UnhandledRevision
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `tag` | str | The element's tag, e.g. `"w:pPrChange"` |
+| `tag` | str | The element's tag, e.g. `"w:rPrChange"` |
 | `id` | int or None | The element's `w:id`, or None when it carries none or a non-numeric one. Unlike `Revision`, an id-less mark is still listed — nothing here is targeted by id. |
 | `author` | str | `w:author`, or `"Unknown"` when the attribute is absent — matching `Revision`. `w:tblGridChange` and the range `*End` marks carry only `w:id` in the schema, so they always read as `"Unknown"`. |
 | `date` | datetime or None | Parsed `w:date`, or None when absent or unparseable |
@@ -1438,8 +1469,8 @@ from docx_editor import UnhandledRevision
 ```python
 for row in doc.list_unhandled_revisions():
     print(row)
-# UnhandledRevision(moveFrom 0 @P1#6c81 by László Németh)
-# UnhandledRevision(pPrChange 0 @P3#026f by Kelemen Gábor 2)
+# UnhandledRevision(rPrChange 2 @P1#6c81 by Bob)
+# UnhandledRevision(sectPrChange 3 by Ann)
 ```
 
 ---
@@ -1883,10 +1914,11 @@ except WorkspaceLockedError as e:
 ### `UnhandledRevisionWarning`
 
 Emitted by `accept_all()` / `reject_all()` when the document still holds
-revision elements outside the `w:ins`/`w:del` pair those verbs walk — format
-changes, content moves, table-structure revisions, custom-XML range marks.
-Without it, `accept_all()` returning 0 on a format-only redline reads as "there
-was nothing to accept" rather than "nothing here could be accepted".
+revision elements outside the types those verbs resolve (insertions,
+deletions, moves, paragraph-property changes) — run/section/table property
+changes, table-structure revisions, custom-XML range marks. Without it,
+`accept_all()` returning 0 on a run-format-only redline reads as "there was
+nothing to accept" rather than "nothing here could be accepted".
 
 Inspect what remains with
 [`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone), or read
