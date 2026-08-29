@@ -465,6 +465,33 @@ class TestResolutionRemovesTheNote:
             assert _paragraph_index(doc, start) == 3
             assert _paragraph_index(doc, end) == 3
 
+    def test_a_note_whose_own_anchor_is_amended_away_goes_with_it(self, doc):
+        """The group survives — its paragraph mark is still pending — but a
+        marker cannot bracket a paragraph mark, so an empty range would be all
+        that was left of the rationale."""
+        annotated = doc.insert_after(
+            "document", "\nNew line", paragraph=find_ref(doc, "sample document"), note="split it"
+        )
+        assert annotated.comment_id is not None
+
+        doc.delete("New line", paragraph=annotated.refs[1])
+
+        assert doc.list_comments() == []
+        assert _marker_counts(doc) == (0, 0, 0)
+        assert doc.list_revisions() != []  # the split is still pending
+
+    def test_deleting_a_note_comment_takes_its_replies(self, doc):
+        """Deleting a thread parent must not orphan its replies: reply_ids
+        walks paraIdParent, so a stranded descendant is unreachable after."""
+        annotated = doc.replace("quick", "swift", paragraph=find_ref(doc, "quick brown"), note="tone")
+        reply_id = doc.reply_to_comment(annotated.comment_id, "agreed")
+        doc.reply_to_comment(reply_id, "and here too")
+
+        assert doc.delete_comment(annotated.comment_id) is True
+
+        assert doc.list_comments() == []
+        assert _marker_counts(doc) == (0, 0, 0)
+
     def test_a_shared_note_dies_when_no_survivor_can_hold_the_anchor(self, doc):
         """A registered group can still be whittled down to a paragraph mark.
 

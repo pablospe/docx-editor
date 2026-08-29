@@ -690,7 +690,7 @@ class Document:
         )
 
     def _reap_note_comments(self) -> None:
-        """Delete every note comment whose revisions are all gone.
+        """Keep every note comment pointing at a redline that is still pending.
 
         Called from every resolution entry point — one invariant instead of a
         special case per verb: a note explains a *proposal*, and accepting ends
@@ -699,12 +699,18 @@ class Document:
         with no resolution call at all (see ``_attach_notes``).
 
         Every registered group is examined, never a narrowed candidate set:
-        which revisions a call removed is not the same question as which
-        groups it emptied. Rejecting *another author's* insertion carries away
-        any of our revisions nested inside it, so even a sweep filtered to
-        somebody else can leave one of our groups with nothing left to explain.
-        ``groups_are_dead`` is the authority; guessing is what breaks the
-        invariant.
+        which revisions a call removed is not the same question as which groups
+        it emptied. Rejecting *another author's* insertion carries away any of
+        our revisions nested inside it, so even a sweep filtered to somebody
+        else can leave one of our groups with nothing left to explain. And a
+        group can survive with nothing a marker could bracket — its content
+        revisions amended away, only a tracked paragraph mark left — so a group
+        counts here only while ``group_spans`` still offers a span for it.
+
+        A comment whose anchor is gone moves onto another group it explains;
+        one with no such group left is deleted, replies included. Registered
+        groups only ever lose revisions, so a group dropped here can never
+        become anchorable again.
 
         Returns before any DOM work when no note was ever attached, so callers
         that never pass ``note=`` pay nothing.
@@ -712,41 +718,31 @@ class Document:
         if not self._note_comments:
             return
         dead = self._revision_manager.groups_are_dead(set(self._note_comments))
-        if not dead:
-            return
-        for comment_id in {self._note_comments[g] for g in dead}:
+        spans = self._revision_manager.group_spans(set(self._note_comments) - dead)
+        for comment_id in list(self._note_groups):
             # Every registered comment still exists: delete_comment() forgets
             # the ones a caller removes, so nothing here can re-anchor a comment
             # with no body — which would make the file unreadable.
             groups = self._note_groups[comment_id]
-            live = groups - dead
-            if live:
-                # Part of a shared note's edit was resolved. The rest is still
-                # pending, so the comment stays — but if the markers were on one
-                # of the resolved groups they now bracket text nobody changed,
-                # so move the thread onto a redline that is still there.
-                for group_id in groups & dead:
-                    del self._note_comments[group_id]
-                self._note_groups[comment_id] = live
-                if self._note_anchors[comment_id] not in dead:
-                    continue
-                spans = self._revision_manager.group_spans(live)
-                anchor = next((gid for gid in sorted(live) if gid in spans), None)
-                if anchor is not None:
-                    self._comment_manager.move_comment_markers(comment_id, *spans[anchor])
-                    self._note_anchors[comment_id] = anchor
-                    continue
-                # Every surviving group has been whittled down to something a
-                # marker cannot bracket, so there is nowhere honest left to
-                # point: the note goes with the anchor it lost.
-                groups = live
-            # Nothing left to explain: the note goes, and so does any reply
-            # threaded under it — a reply left behind would point at a paraId
-            # no part of the document still holds.
-            for reply_id in self._comment_manager.reply_ids(comment_id):
-                self._comment_manager.delete_comment(reply_id)
-            self._comment_manager.delete_comment(comment_id)
-            self._forget_note_comment(comment_id, groups)
+            live = {gid for gid in groups if gid in spans}
+            if live == groups and self._note_anchors[comment_id] in live:
+                continue
+            for group_id in groups - live:
+                del self._note_comments[group_id]
+            if not live:
+                # Nothing left it can honestly bracket: the note goes, and
+                # delete_comment takes the replies threaded under it with it.
+                self._comment_manager.delete_comment(comment_id)
+                self._forget_note_comment(comment_id, groups)
+                continue
+            self._note_groups[comment_id] = live
+            if self._note_anchors[comment_id] in live:
+                continue
+            # The markers sat on an edit that is now resolved, where they would
+            # bracket text nobody changed. Move the thread onto one that is not.
+            anchor = min(live)
+            self._comment_manager.move_comment_markers(comment_id, *spans[anchor])
+            self._note_anchors[comment_id] = anchor
 
     def _forget_note_comment(self, comment_id: int, groups: Iterable[int]) -> None:
         """Drop every trace of one note comment from the three note maps."""
@@ -2029,7 +2025,7 @@ class Document:
         return self._comment_manager.resolve_comment(comment_id)
 
     def delete_comment(self, comment_id: int) -> bool:
-        """Delete a comment from the document.
+        """Delete a comment, and every reply threaded under it, from the document.
 
         Args:
             comment_id: ID of the comment to delete

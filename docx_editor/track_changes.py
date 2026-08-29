@@ -69,7 +69,15 @@ def _validate_note(note: str | None, *, ctx: str) -> None:
         raise ValueError(
             f"{ctx}'note' must be a non-empty string or None — the rationale to attach as a comment, got {note!r}"
         )
-    _reject_control_chars(note, field="'note'", ctx=ctx, allow_newline=False)
+    # The shared newline message explains a *search* failure ("it can never
+    # match"), which says nothing to someone writing a comment body — so say
+    # why a newline is wrong here, and leave the rest to the shared rule.
+    if "\n" in note:
+        raise ValueError(
+            f"{ctx}'note' must not contain a newline ('\\n') — a comment body is a single "
+            f"<w:t>, where a literal newline is an invisible, unreviewable artifact."
+        )
+    _reject_control_chars(note, field="'note'", ctx=ctx, allow_newline=True)
 
 
 @dataclass

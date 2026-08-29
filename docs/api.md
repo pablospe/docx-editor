@@ -493,11 +493,11 @@ document sees the change and its rationale together. Five rules govern it.
    naming them. An `accept_all(author=...)` naming somebody else leaves notes
    whose revisions survive it untouched.
 
-   When only part of a shared note's edits is resolved, the comment stays and
-   the whole thread's range — replies included — moves onto a redline that is
-   still pending, so the rationale never points at text nobody changed. If no
-   surviving edit can carry a comment marker, the note goes with the anchor it
-   lost.
+   A note's range never points at text nobody changed: when the edit its
+   markers bracket is resolved while another edit it explains is still
+   pending, the whole thread — replies included — moves onto that surviving
+   redline. When no edit it explains can carry a comment marker any more, the
+   note goes with the anchor it lost.
 
    For rationale that must survive resolution, use
    [`add_comment()`](#add_commentanchor_text-comment-paragraphnone-occurrencenone)
@@ -506,7 +506,10 @@ document sees the change and its rationale together. Five rules govern it.
 
 3. **`EditResult.comment_id`** holds the id of the comment created, or `None`
    when no note was given. It is an ordinary, live comment id — usable with
-   `reply_to_comment()`, `resolve_comment()` and `delete_comment()`.
+   `reply_to_comment()`, `resolve_comment()` and `delete_comment()`. Deleting
+   it yourself is final and takes the whole thread: the note stops tracking
+   the revisions it explained, so resolving them later neither resurrects nor
+   re-anchors it.
 
 4. **Nothing to anchor warns, never fails.** Some edits create no revision a
    comment could bracket: a no-op `replace` (`find` equals `replace_with`), an
@@ -760,7 +763,10 @@ doc.resolve_comment(0)
 
 #### `delete_comment(comment_id)`
 
-Delete a comment from the document.
+Delete a comment, and every reply threaded under it, from the document. A reply
+is linked to its parent only by `w15:paraIdParent`, so the thread goes as a
+unit — left behind, a reply would point at a paragraph id no part of the
+document still holds.
 
 **Parameters:**
 

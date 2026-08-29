@@ -622,7 +622,12 @@ class CommentManager:
         return False
 
     def delete_comment(self, comment_id: int) -> bool:
-        """Delete a comment from the document.
+        """Delete a comment, and every reply threaded under it, from the document.
+
+        A reply is linked to its parent only by ``w15:paraIdParent``: left
+        behind, it would point at a paraId no part of the document still holds,
+        and its own descendants would become unreachable — so the thread goes
+        as a unit, the way Word deletes one.
 
         Args:
             comment_id: The comment ID to delete
@@ -639,6 +644,9 @@ class CommentManager:
             raise ValueError(f"delete_comment(): 'comment_id' must be an integer, got {comment_id!r}")
         if comment_id not in self.existing_comments:
             return False
+
+        for reply_id in self.reply_ids(comment_id):
+            self.delete_comment(reply_id)
 
         para_id = self.existing_comments[comment_id]["para_id"]
 
