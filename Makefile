@@ -37,7 +37,7 @@ publish: ## Publish a release to PyPI.
 build-and-publish: build publish ## Build and publish.
 
 .PHONY: corpus-check
-corpus-check: ## Assemble the docx corpus and run the round-trip harness (full run, incl. PDF stage)
+corpus-check: ## Assemble the docx corpus and run the round-trip harness (full run, incl. LibreOffice stages)
 	@uv run python benchmarks/corpus/build_corpus.py
 	@uv run python benchmarks/corpus/corpus_harness.py
 

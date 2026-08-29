@@ -279,6 +279,11 @@ def run_census_only(only: str | None) -> int:
 AUTHOR = "CorpusHarness"
 EDIT_MARKER = "-EDITED"
 
+# The survival assertions a manifest ``survival_waiver`` may cover: the ones
+# about our redline's placement. A dropped w:trackRevisions flag is never
+# about placement, so it is not waivable.
+WAIVABLE_ASSERTIONS = frozenset({"AssertEditMarkerLostInRoundtrip", "AssertOwnRevisionsDropped"})
+
 
 @dataclass
 class SofficeRun:
@@ -646,8 +651,9 @@ def apply_manifest_expectations(rec: dict) -> None:
     move, ...). The survival assertion is then reported as a skip with that
     reason — never as a pass — and a waiver that turns out to be unnecessary
     (everything survived) is itself a failure, so the manifest cannot quietly
-    outlive the LibreOffice behavior it describes. Only the survival
-    assertions are waived: a refused load or an Error: line still fails.
+    outlive the LibreOffice behavior it describes. Only the redline-placement
+    assertions (``WAIVABLE_ASSERTIONS``) are waived: a refused load, an
+    Error: line, or a dropped w:trackRevisions flag still fails.
     """
     prov = rec["provenance"]
     stages = rec["stages"]
@@ -659,7 +665,7 @@ def apply_manifest_expectations(rec: dict) -> None:
         }
     waiver = prov.get("survival_waiver")
     lo = stages.get("lo_roundtrip", {})
-    if waiver and lo.get("status") == "fail" and lo.get("error_type", "").startswith("Assert"):
+    if waiver and lo.get("status") == "fail" and lo.get("error_type") in WAIVABLE_ASSERTIONS:
         stages["lo_roundtrip"] = {
             "status": "skip",
             "reason": f"survival waived: {waiver}",

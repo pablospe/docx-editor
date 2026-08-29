@@ -188,7 +188,9 @@ lists.
   own document model cannot hold our redline in that file. The
   `lo_roundtrip` survival assertion is then reported as a **skip** carrying
   the reason (never as a pass), while the opens-clean part of the stage — a
-  refused load, an `Error:` line, an unparseable output — still fails. A
+  refused load, an `Error:` line, an unparseable output — still fails, and so
+  does a dropped `w:trackRevisions` flag (the waiver covers where our redline
+  sits, not the flag). A
   waiver that turns out to be unnecessary fails the file with
   `StaleSurvivalWaiver`, so the manifest cannot quietly outlive the behavior
   it documents. Two files carry one today, both verified by dumping

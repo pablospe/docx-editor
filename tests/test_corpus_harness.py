@@ -269,6 +269,18 @@ def test_survival_waiver_does_not_cover_a_refused_load():
     assert harness.file_failed(rec)
 
 
+def test_survival_waiver_does_not_cover_a_dropped_track_revisions_flag():
+    # The waiver reasons are about where our redline sits; a dropped flag is
+    # the #77 class and must fail on a waived file like on any other.
+    rec = _record(
+        {"status": "fail", "error_type": "AssertTrackRevisionsDropped", "error": "..."},
+        {"survival_waiver": "field result"},
+    )
+    harness.apply_manifest_expectations(rec)
+    assert rec["stages"]["lo_roundtrip"]["error_type"] == "AssertTrackRevisionsDropped"
+    assert harness.file_failed(rec)
+
+
 def test_survival_waiver_that_is_no_longer_needed_fails():
     rec = _record({"status": "pass", "survival": "checked"}, {"survival_waiver": "field result"})
     harness.apply_manifest_expectations(rec)
