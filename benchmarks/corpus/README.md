@@ -52,10 +52,10 @@ So the stages are:
   whether the flag check applied: a producer that wrote
   `<w:trackRevisions w:val="false"/>` (the library preserves it), or a
   document with no settings part at all (the library saves it without adding
-  one), leaves nothing for LibreOffice to drop. The run summary prints how many files
-  were actually checked, skipped, or waived. LibreOffice also rewrites or
-  drops some *foreign* revision types on re-save; that is its behavior, not
-  ours, and is not asserted on.
+  one), leaves nothing for LibreOffice to drop. The run summary prints how
+  many files were actually checked, skipped, or waived. LibreOffice also
+  rewrites or drops some *foreign* revision types on re-save; that is its
+  behavior, not ours, and is not asserted on.
 - `pdf` renders the **final** output (after `accept_all`) as PDF, the
   can-other-tools-read-it check.
 

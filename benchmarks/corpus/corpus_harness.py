@@ -34,8 +34,9 @@ line and a missing output file), and it prints nothing at all for an element
 it does not recognize — it silently drops it on re-save (ISSUES.md #66, PR #77).
 So each stage fails on any Error:/Warning: line soffice prints and on a
 missing output (a nonzero exit after a good output is also a failure, though
-never the signal relied on), and lo_roundtrip additionally reopens the re-saved file and checks that our
-w:trackRevisions flag and our own insertion/deletion are still there. Where
+never the signal relied on), and lo_roundtrip additionally reopens the
+re-saved file and checks that our w:trackRevisions flag and our own
+insertion/deletion are still there. Where
 LibreOffice's own model cannot hold our redline (inside a field result,
 inside a foreign move), the manifest records a ``survival_waiver`` with the
 reason; see apply_manifest_expectations.
@@ -445,9 +446,10 @@ def survival_check(out1: Path, roundtrip: Path, work: Path, author: str) -> dict
     return {"status": "pass", "survival": CHECKED, "flag": flag}
 
 
-# Error types: ``Lo*`` names are LibreOffice-process failures shared by both
-# stages (LoMessage, LoNonzeroExit, SofficeSpawnFailed); ``LoRoundtrip*`` and
-# ``Pdf*`` names are stage-specific.
+# Error types: ``Lo*`` names are LibreOffice-side failures — shared by both
+# stages (LoMessage, LoNonzeroExit, SofficeSpawnFailed) or, for LoLoadRefused
+# and LoOutputInvalid, raised only by lo_roundtrip; ``LoRoundtrip*`` and
+# ``Pdf*`` names carry their stage explicitly.
 
 
 def run_lo_roundtrip(out1: Path, edited: bool, soffice: str | None, work: Path) -> dict:

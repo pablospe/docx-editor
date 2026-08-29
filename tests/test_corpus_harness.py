@@ -338,9 +338,10 @@ def test_run_lo_roundtrip_reads_soffice_the_only_way_it_can_be_read(
         assert record["error"] == "exit 1 after writing the docx: convert x"
 
 
-def test_run_lo_roundtrip_names_a_soffice_that_cannot_be_started(edited: Path, tmp_path: Path):
+def test_run_lo_roundtrip_names_a_soffice_that_cannot_be_started(edited: Path, tmp_path: Path, monkeypatch):
     # shutil.which() happily returns a half-removed install; that is a stage
     # failure with a name, not a crash that discards the file's other stages.
+    monkeypatch.setattr(harness, "LO_DIR", tmp_path)
     broken = tmp_path / "soffice"
     broken.write_text("#!/nonexistent/interpreter\n")
     broken.chmod(0o755)
