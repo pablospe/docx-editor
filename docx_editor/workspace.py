@@ -609,6 +609,10 @@ class Workspace:
         # plaintext in a shared, predictably-named cache base, so restrict it to
         # the owner. mkdir(parents=True, mode=...) applies the mode to the leaf
         # only, so the base is created separately to keep it 0o700 too.
+        # Asked before the mkdir, because exist_ok=True cannot tell "we made it"
+        # from "it was already here" afterwards — and only the first of those
+        # licenses a failure path to delete it again.
+        already_there = self.workspace_path.exists()
         try:
             self.workspace_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
             self.workspace_path.mkdir(mode=0o700, exist_ok=True)
@@ -618,9 +622,9 @@ class Workspace:
                 f"Set DOCX_EDITOR_WORKSPACE_DIR to a writable absolute path, "
                 f"or pass workspace_dir=."
             ) from exc
-        # Set once the directory is ours, before unpacking: a failure partway
-        # through unpack still leaves a workspace this call is responsible for.
-        self.created = True
+        # Set before unpacking: a failure partway through unpack still leaves a
+        # workspace this call is responsible for.
+        self.created = not already_there
 
         try:
             # Unpack document

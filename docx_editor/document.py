@@ -54,13 +54,13 @@ from .xml_editor import (
 # the output of a bare call on large documents; pass limit=None for everything.
 _DEFAULT_LIST_LIMIT = 200
 
-# CT_Settings is a sequence (ECMA-376 Part 1 §17.15.1.78), so w:trackChanges has
+# CT_Settings is a sequence (ECMA-376 Part 1 §17.15.1.78), so w:trackRevisions has
 # exactly one legal slot. These are the elements the schema puts *before* it —
 # the flag goes after the last of them that the document actually has. Only the
 # prefix is listed, on purpose: an element we do not recognize (a w14:/w15:
 # extension, a producer oddity) is never used as an anchor, so an unknown
 # trailing element can never push the flag out of its slot.
-_SETTINGS_BEFORE_TRACK_CHANGES: tuple[str, ...] = (
+_SETTINGS_BEFORE_TRACK_REVISIONS: tuple[str, ...] = (
     "writeProtection",
     "view",
     "zoom",
@@ -2026,7 +2026,7 @@ class Document:
                 (raising DocumentOpenError). Pass force=True only for a
                 confirmed-stale lock left by a crashed session.
             track_changes: Whether to turn Word's track-changes switch
-                (``<w:trackChanges/>`` in settings.xml) on in the saved file.
+                (``<w:trackRevisions/>`` in settings.xml) on in the saved file.
                 None (the default) writes it exactly when this document carries
                 a revision authored by us — so the human who keeps typing in
                 Word after our redline stays tracked, and the return leg is
@@ -2041,7 +2041,7 @@ class Document:
                 already had.
 
                 A document that turns tracking *off* explicitly
-                (``<w:trackChanges w:val="false"/>``) is respected, not
+                (``<w:trackRevisions w:val="false"/>``) is respected, not
                 overridden: under the default the element is left as it is and
                 the save warns that the recipient's edits will not be tracked.
                 ``track_changes=True`` overrides it. Ownership is by ``w:author``,
@@ -2278,7 +2278,7 @@ class Document:
     def _ensure_track_changes_flag(self, track_changes: bool | None) -> None:
         """Turn Word's track-changes switch on in settings.xml at save time.
 
-        A ``<w:trackChanges/>`` in settings.xml is what makes Word keep tracking
+        A ``<w:trackRevisions/>`` in settings.xml is what makes Word keep tracking
         after our redline lands: without it the recipient's own edits are
         untracked and the two rounds can no longer be told apart.
 
@@ -2320,10 +2320,10 @@ class Document:
         prefix = root.tagName.split(":")[0] if ":" in root.tagName else "w"
 
         children = [c for c in root.childNodes if c.nodeType == c.ELEMENT_NODE]
-        existing = next((c for c in children if _local_name(c.tagName) == "trackChanges"), None)
+        existing = next((c for c in children if _local_name(c.tagName) == "trackRevisions"), None)
 
         if existing is not None:
-            # No w:val means on: a bare <w:trackChanges/> is how Word writes
+            # No w:val means on: a bare <w:trackRevisions/> is how Word writes
             # "tracking is on". A w:val we cannot read is not on — reporting it
             # as on would make an explicit track_changes=True a silent no-op.
             val = _attr_node(existing, "val")
@@ -2333,7 +2333,7 @@ class Document:
             if track_changes is None:
                 warnings.warn(
                     f"{self._workspace.source_path} does not have track changes on "
-                    f'(<w:trackChanges w:val="{val.value}"/> in settings.xml), so it is left as it '
+                    f'(<w:trackRevisions w:val="{val.value}"/> in settings.xml), so it is left as it '
                     f"is: the revisions saved here stay visible, but edits the recipient makes in "
                     f"Word will not be tracked. Save with track_changes=True to turn tracking on "
                     f"instead.",
@@ -2343,22 +2343,22 @@ class Document:
                 return
             # An explicit track_changes=True is the caller saying it in as many
             # words, which outranks whatever the document's w:val held. Dropping
-            # the attribute leaves Word's own canonical <w:trackChanges/>.
+            # the attribute leaves Word's own canonical <w:trackRevisions/>.
             existing.removeAttribute(val.name)
             editor.save()
             return
 
-        flag_xml = f"<{prefix}:trackChanges/>"
+        flag_xml = f"<{prefix}:trackRevisions/>"
         # CT_Settings is a sequence: land after the last element the schema puts
-        # before trackChanges, never after an element we do not recognize.
+        # before trackRevisions, never after an element we do not recognize.
         anchor = None
         for child in children:
-            if _local_name(child.tagName) in _SETTINGS_BEFORE_TRACK_CHANGES:
+            if _local_name(child.tagName) in _SETTINGS_BEFORE_TRACK_REVISIONS:
                 anchor = child
         if anchor is not None:
             editor.insert_after(anchor, flag_xml)
         elif children:
-            # Nothing the schema puts before trackChanges is here, so every
+            # Nothing the schema puts before trackRevisions is here, so every
             # sibling belongs after it: go first, never last.
             editor.insert_before(children[0], flag_xml)
         else:  # pragma: no cover - _update_settings guarantees a w:rsids sibling by save time

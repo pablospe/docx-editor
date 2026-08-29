@@ -993,7 +993,7 @@ A directory-permission problem surfaces as a plain `PermissionError`, not
 to save under a new path instead.
 
 **The track-changes switch.** A save that leaves a revision you authored also turns
-Word's Track Changes switch on in the saved file (`<w:trackChanges/>` in
+Word's Track Changes switch on in the saved file (`<w:trackRevisions/>` in
 `word/settings.xml`). Your redline is visible either way; the switch is what keeps
 the *recipient's* own typing tracked, so the next round of edits can still be told
 apart from yours. What counts is the document's state, not whether this session
@@ -1002,7 +1002,7 @@ switch on, because it is still waiting for a reply. Nothing else is touched: a
 document holding no revision of yours — one you did not redline, or one whose
 revisions you accepted — is saved with its settings as they were. Pass `doc.save(path, track_changes=False)` to opt out; it never removes a
 switch the document already had. A document that turns tracking *off* explicitly
-(`<w:trackChanges w:val="false"/>`) is left exactly as its author configured it and
+(`<w:trackRevisions w:val="false"/>`) is left exactly as its author configured it and
 the save emits a `UserWarning` saying the recipient's edits will not be tracked —
 if the user wants tracking on anyway, `save(path, track_changes=True)` overrides it.
 

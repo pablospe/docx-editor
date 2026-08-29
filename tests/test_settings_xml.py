@@ -3,7 +3,7 @@
 ``word/settings.xml`` carries a document's application-level state. Two elements
 there matter to this library:
 
-* ``<w:trackChanges/>`` — Word's *Track Changes* switch. Our revisions are in
+* ``<w:trackRevisions/>`` — Word's *Track Changes* switch. Our revisions are in
   document.xml and show up without it, but a recipient who keeps typing in Word
   produces *untracked* edits unless the switch is on. ``save()`` turns it on
   when the document carries a revision we authored.
@@ -31,7 +31,7 @@ NS = (
     'xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"'
 )
 
-# A Word-shaped settings.xml: the sequence around trackChanges' slot, plus a
+# A Word-shaped settings.xml: the sequence around trackRevisions' slot, plus a
 # trailing extension element from a namespace the schema list does not know.
 WORD_SHAPED_BODY = (
     '<w:zoom w:val="bestFit"/>'
@@ -62,9 +62,9 @@ def saved_settings(path: Path):
         return defusedxml.minidom.parseString(archive.read("word/settings.xml"))
 
 
-def track_changes_elements(path: Path) -> list:
-    """Every ``w:trackChanges`` element in a saved document's settings.xml."""
-    return saved_settings(path).getElementsByTagName("w:trackChanges")
+def track_revisions_elements(path: Path) -> list:
+    """Every ``w:trackRevisions`` element in a saved document's settings.xml."""
+    return saved_settings(path).getElementsByTagName("w:trackRevisions")
 
 
 def edit_and_save(source: Path, dest: Path, old: str = "quick", new: str = "slow", **save_kwargs) -> Path:
@@ -81,10 +81,10 @@ class TestTrackChangesFlag:
     """save() writes Word's track-changes switch when we leave a redline."""
 
     def test_redline_turns_the_flag_on(self, temp_docx, temp_dir):
-        """A tracked edit puts exactly one bare w:trackChanges in the output."""
+        """A tracked edit puts exactly one bare w:trackRevisions in the output."""
         out = edit_and_save(temp_docx, temp_dir / "out.docx")
 
-        elements = track_changes_elements(out)
+        elements = track_revisions_elements(out)
         assert len(elements) == 1
         assert not elements[0].getAttribute("w:val")
 
@@ -94,13 +94,13 @@ class TestTrackChangesFlag:
         out = doc.save(temp_dir / "out.docx")
         doc.close()
 
-        assert track_changes_elements(out) == []
+        assert track_revisions_elements(out) == []
 
     def test_track_changes_false_skips_the_write(self, temp_docx, temp_dir):
         """save(track_changes=False) leaves settings.xml alone despite the redline."""
         out = edit_and_save(temp_docx, temp_dir / "out.docx", track_changes=False)
 
-        assert track_changes_elements(out) == []
+        assert track_revisions_elements(out) == []
 
     def test_track_changes_true_writes_without_revisions(self, temp_docx, temp_dir):
         """save(track_changes=True) writes the flag even with nothing to redline."""
@@ -108,14 +108,14 @@ class TestTrackChangesFlag:
         out = doc.save(temp_dir / "out.docx", track_changes=True)
         doc.close()
 
-        assert len(track_changes_elements(out)) == 1
+        assert len(track_revisions_elements(out)) == 1
 
     def test_existing_flag_is_not_duplicated(self, temp_docx, temp_dir):
         """A document that already has the flag keeps exactly one."""
-        source = with_settings(temp_docx, temp_dir / "already_on.docx", "<w:zoom/><w:trackChanges/>")
+        source = with_settings(temp_docx, temp_dir / "already_on.docx", "<w:zoom/><w:trackRevisions/>")
         out = edit_and_save(source, temp_dir / "out.docx")
 
-        assert len(track_changes_elements(out)) == 1
+        assert len(track_revisions_elements(out)) == 1
 
     @pytest.mark.parametrize("off", ["false", "0", "off"])
     def test_explicit_off_is_respected_and_warned_about(self, temp_docx, temp_dir, off):
@@ -124,7 +124,7 @@ class TestTrackChangesFlag:
         ST_OnOff has three falsy spellings and producers do not all pick the
         same one, so all three have to read as "the author turned this off".
         """
-        source = with_settings(temp_docx, temp_dir / "off.docx", f'<w:zoom/><w:trackChanges w:val="{off}"/>')
+        source = with_settings(temp_docx, temp_dir / "off.docx", f'<w:zoom/><w:trackRevisions w:val="{off}"/>')
 
         doc = Document.open(source)
         try:
@@ -134,13 +134,13 @@ class TestTrackChangesFlag:
         finally:
             doc.close()
 
-        elements = track_changes_elements(out)
+        elements = track_revisions_elements(out)
         assert len(elements) == 1
         assert elements[0].getAttribute("w:val") == off
 
     def test_explicit_true_overrides_the_documents_explicit_off(self, temp_docx, temp_dir):
         """track_changes=True outranks w:val="false" — the caller said it in as many words."""
-        source = with_settings(temp_docx, temp_dir / "off.docx", '<w:zoom/><w:trackChanges w:val="false"/>')
+        source = with_settings(temp_docx, temp_dir / "off.docx", '<w:zoom/><w:trackRevisions w:val="false"/>')
 
         doc = Document.open(source)
         try:
@@ -150,7 +150,7 @@ class TestTrackChangesFlag:
         finally:
             doc.close()
 
-        elements = track_changes_elements(out)
+        elements = track_revisions_elements(out)
         assert len(elements) == 1
         assert not elements[0].getAttribute("w:val")
 
@@ -165,13 +165,34 @@ class TestTrackChangesFlag:
 
         root = saved_settings(out).documentElement
         names = [c.tagName for c in root.childNodes if c.nodeType == c.ELEMENT_NODE]
-        assert names.index("w:proofState") + 1 == names.index("w:trackChanges")
-        assert names.index("w:trackChanges") + 1 == names.index("w:defaultTabStop")
+        assert names.index("w:proofState") + 1 == names.index("w:trackRevisions")
+        assert names.index("w:trackRevisions") + 1 == names.index("w:defaultTabStop")
+
+    def test_flag_matches_the_element_word_itself_writes(self, temp_docx, temp_dir, test_data_dir):
+        """Pin the element name against a document Word produced.
+
+        Every other test in this class asserts on what this library writes,
+        which cannot catch writing the wrong element name *consistently* — the
+        switch would be ignored by Word and the suite would still be green. So
+        this one reads the switch out of a real Word file and requires ours to
+        carry the same tag and sit in the same place.
+        """
+        word_settings = saved_settings(test_data_dir / "test_document_with_errors.docx")
+        word_names = [c.tagName for c in word_settings.documentElement.childNodes if c.nodeType == c.ELEMENT_NODE]
+        assert "w:trackRevisions" in word_names, "fixture no longer carries the switch"
+
+        out = edit_and_save(temp_docx, temp_dir / "out.docx")
+        ours = [c.tagName for c in saved_settings(out).documentElement.childNodes if c.nodeType == c.ELEMENT_NODE]
+
+        assert "w:trackRevisions" in ours
+        # And in the same slot Word puts it: right after w:proofState.
+        assert word_names[word_names.index("w:trackRevisions") - 1] == "w:proofState"
+        assert ours[ours.index("w:trackRevisions") - 1] == "w:proofState"
 
     def test_flag_goes_first_when_nothing_precedes_it(self, temp_docx, temp_dir):
         """With no anchor to land after, the flag goes before the first sibling.
 
-        w:defaultTabStop sorts *after* w:trackChanges in CT_Settings, so a part
+        w:defaultTabStop sorts *after* w:trackRevisions in CT_Settings, so a part
         holding only later elements has to be prepended to, not appended to.
         """
         source = with_settings(temp_docx, temp_dir / "later_only.docx", '<w:defaultTabStop w:val="720"/>')
@@ -179,7 +200,7 @@ class TestTrackChangesFlag:
 
         root = saved_settings(out).documentElement
         names = [c.tagName for c in root.childNodes if c.nodeType == c.ELEMENT_NODE]
-        assert names.index("w:trackChanges") < names.index("w:defaultTabStop")
+        assert names.index("w:trackRevisions") < names.index("w:defaultTabStop")
 
     def test_missing_settings_part_still_saves(self, temp_docx, temp_dir):
         """A document with no settings.xml saves cleanly, just without a flag."""
@@ -203,7 +224,7 @@ class TestTrackChangesFlag:
         finally:
             doc.close()
 
-        assert track_changes_elements(out) == []
+        assert track_revisions_elements(out) == []
 
     def test_foreign_revisions_alone_leave_the_flag_off(self, temp_docx, temp_dir):
         """Passing a foreign redline through untouched is not our redline."""
@@ -224,7 +245,7 @@ class TestTrackChangesFlag:
         out = doc.save(temp_dir / "out.docx")
         doc.close()
 
-        assert track_changes_elements(out) == []
+        assert track_revisions_elements(out) == []
 
     def test_our_pending_revision_from_an_earlier_session_counts(self, temp_docx, temp_dir):
         """A redline of ours reopened, not touched, and saved still flips the switch.
@@ -250,11 +271,11 @@ class TestTrackChangesFlag:
         out = doc.save(temp_dir / "out.docx")
         doc.close()
 
-        assert len(track_changes_elements(out)) == 1
+        assert len(track_revisions_elements(out)) == 1
 
     def test_unreadable_val_does_not_read_as_on(self, temp_docx, temp_dir):
         """A w:val outside ST_OnOff must not make track_changes=True a no-op."""
-        source = with_settings(temp_docx, temp_dir / "odd.docx", '<w:zoom/><w:trackChanges w:val="yes"/>')
+        source = with_settings(temp_docx, temp_dir / "odd.docx", '<w:zoom/><w:trackRevisions w:val="yes"/>')
 
         doc = Document.open(source)
         try:
@@ -262,13 +283,13 @@ class TestTrackChangesFlag:
         finally:
             doc.close()
 
-        elements = track_changes_elements(out)
+        elements = track_revisions_elements(out)
         assert len(elements) == 1
         assert not elements[0].getAttribute("w:val")
 
     def test_unreadable_val_warns_under_the_default(self, temp_docx, temp_dir):
         """Under the default it is left alone, and the warning quotes what it found."""
-        source = with_settings(temp_docx, temp_dir / "odd.docx", '<w:zoom/><w:trackChanges w:val="yes"/>')
+        source = with_settings(temp_docx, temp_dir / "odd.docx", '<w:zoom/><w:trackRevisions w:val="yes"/>')
 
         doc = Document.open(source)
         try:
@@ -278,7 +299,7 @@ class TestTrackChangesFlag:
         finally:
             doc.close()
 
-        assert track_changes_elements(out)[0].getAttribute("w:val") == "yes"
+        assert track_revisions_elements(out)[0].getAttribute("w:val") == "yes"
 
     def test_explicit_true_warns_when_there_is_no_settings_part(self, temp_docx, temp_dir):
         """An explicit request that cannot be honoured is said out loud."""
@@ -300,7 +321,7 @@ class TestTrackChangesFlag:
         first = edit_and_save(temp_docx, temp_dir / "first.docx")
         second = edit_and_save(first, temp_dir / "second.docx", old="lazy", new="sleepy")
 
-        assert len(track_changes_elements(second)) == 1
+        assert len(track_revisions_elements(second)) == 1
 
 
 class TestDocumentProtection:
@@ -410,7 +431,7 @@ class TestDocumentProtection:
         finally:
             doc.close()
 
-        assert len(track_changes_elements(out)) == 1
+        assert len(track_revisions_elements(out)) == 1
 
     @pytest.mark.parametrize("enforcement", ["1", "true", "on"])
     def test_every_enforcement_spelling_counts(self, temp_docx, temp_dir, enforcement):
