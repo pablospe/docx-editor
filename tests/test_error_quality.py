@@ -1316,8 +1316,9 @@ def hello_doc(doc_path):
 
 
 class TestControlCharRejection:
-    """Tab, CR, and other C0/DEL controls are rejected at every text input;
-    only '\\n' passes (a tracked paragraph split). See ISSUES.md #58+61."""
+    """CR and the other C0/DEL controls are rejected at every text input. Two
+    exceptions: '\\n' in content (a tracked paragraph split) and '\\t' in
+    search/anchor text (a tab mark, ISSUES.md #6). See ISSUES.md #58+61."""
 
     def test_replace_rejects_tab_in_content(self, hello_doc):
         doc, ref = hello_doc
@@ -1358,7 +1359,7 @@ class TestControlCharRejection:
         # A tab in new_text is only allowed where the paragraph already has one
         # (ISSUES.md #6); this paragraph has none, so the diff refuses it.
         doc, ref = hello_doc
-        with pytest.raises(ValueError, match="not add, remove or move"):
+        with pytest.raises(ValueError, match="tab marks"):
             doc.rewrite_paragraph(ref, "new\ttext")
 
     def test_rewrite_allows_newline(self, hello_doc):

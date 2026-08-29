@@ -9,6 +9,7 @@ was hoisted into a single run emitted before all text parts.
 from pathlib import Path
 
 import pytest
+from conftest import paragraph_tokens
 
 from docx_editor.track_changes import RevisionManager
 from docx_editor.xml_editor import DocxXMLEditor, compute_paragraph_hash
@@ -34,60 +35,6 @@ def temp_xml(tmp_path):
 def _make_manager(xml_path: Path) -> RevisionManager:
     editor = DocxXMLEditor(xml_path, rsid="00000000", author=AUTHOR)
     return RevisionManager(editor)
-
-
-def _tokens_for_run(run, wrapper: str | None = None) -> list[str]:
-    """Tokenize a run's direct children in document order."""
-
-    def wrap(token: str) -> str:
-        return f"{wrapper}({token})" if wrapper else token
-
-    tokens: list[str] = []
-    for child in run.childNodes:
-        if child.nodeType != child.ELEMENT_NODE:
-            continue
-        tag = child.tagName
-        if tag == "w:rPr":
-            continue
-        if tag in ("w:t", "w:delText"):
-            text = "".join(c.data for c in child.childNodes if c.nodeType == c.TEXT_NODE)
-            if text:
-                tokens.append(wrap(text))
-        elif tag == "w:tab":
-            tokens.append(wrap("TAB"))
-        elif tag == "w:br":
-            tokens.append(wrap("BR"))
-        elif tag == "w:fldChar":
-            tokens.append(wrap(f"FLD({child.getAttribute('w:fldCharType')})"))
-        elif tag == "w:instrText":
-            tokens.append(wrap("INSTR"))
-        elif tag == "w:drawing":
-            tokens.append(wrap("DRAWING"))
-        else:  # pragma: no cover - no other run content used in these fixtures
-            tokens.append(wrap(tag))
-    return tokens
-
-
-def paragraph_tokens(manager: RevisionManager) -> list[str]:
-    """Ordered content tokens of the document's first paragraph.
-
-    Direct runs yield their tokens bare; runs inside <w:ins>/<w:del>
-    wrappers yield tokens wrapped as INS(...)/DEL(...). Exact list
-    comparison makes ordering assertions precise (no substring checks).
-    """
-    paragraph = manager.editor.dom.getElementsByTagName("w:p")[0]
-    tokens: list[str] = []
-    for child in paragraph.childNodes:
-        if child.nodeType != child.ELEMENT_NODE:
-            continue
-        if child.tagName == "w:r":
-            tokens.extend(_tokens_for_run(child))
-        elif child.tagName in ("w:ins", "w:del"):
-            wrapper = "INS" if child.tagName == "w:ins" else "DEL"
-            for run in child.childNodes:
-                if run.nodeType == run.ELEMENT_NODE and run.tagName == "w:r":
-                    tokens.extend(_tokens_for_run(run, wrapper))
-    return tokens
 
 
 MID_RUN_FIXTURES = [("<w:tab/>", "TAB"), ("<w:br/>", "BR")]

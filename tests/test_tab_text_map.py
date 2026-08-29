@@ -10,8 +10,7 @@ place. Nothing writes a new tab.
 from pathlib import Path
 
 import pytest
-from conftest import NS, find_ref, match_for, parse_paragraph, replace_document_xml
-from test_run_child_order import paragraph_tokens
+from conftest import NS, find_ref, match_for, paragraph_tokens, parse_paragraph, replace_document_xml
 
 from docx_editor import (
     AmbiguousTextError,
@@ -70,6 +69,26 @@ def _first_ref(mgr: RevisionManager) -> str:
     return f"P1#{compute_paragraph_hash(p)}"
 
 
+def _spelled_between_markers(dom, comment_id: int) -> str:
+    """The text-map characters between comment ``comment_id``'s range markers."""
+    cid = str(comment_id)
+    start = next(n for n in dom.getElementsByTagName("w:commentRangeStart") if n.getAttribute("w:id") == cid)
+    end = next(n for n in dom.getElementsByTagName("w:commentRangeEnd") if n.getAttribute("w:id") == cid)
+    inside = False
+    spelled = ""
+    for node in dom.getElementsByTagName("*"):
+        if node is start:
+            inside = True
+        elif node is end:
+            inside = False
+        elif inside and node.parentNode.tagName == "w:r":
+            if node.tagName == "w:t":
+                spelled += "".join(c.data for c in node.childNodes if c.nodeType == c.TEXT_NODE)
+            elif node.tagName == "w:tab":
+                spelled += "\t"
+    return spelled
+
+
 def _docx_with_body(simple_docx: Path, tmp_path: Path, body_xml: str) -> Path:
     docx_path = tmp_path / "tabs.docx"
     replace_document_xml(
@@ -125,6 +144,19 @@ class TestTextMap:
         original = build_text_map(p, view="original")
         assert original.text == "a\txb"
         assert original.positions[1].is_tab and original.positions[1].is_inside_del
+
+    def test_tab_inside_move_source_is_not_visible(self):
+        # w:moveFrom stores its text as w:delText, so only the tab could leak
+        # into the accepted view — and make the moved-away region insertable.
+        p = parse_paragraph(
+            f'<w:p><w:moveFrom w:id="7" w:author="{OTHER}" w:date="{DATE}">'
+            "<w:r><w:delText>Name</w:delText><w:tab/><w:delText>Value</w:delText></w:r></w:moveFrom>"
+            "<w:r><w:t>Kept</w:t></w:r></w:p>"
+        )
+        assert build_text_map(p).text == "Kept"
+        original = build_text_map(p, view="original")
+        assert original.text == "Name\tValueKept"
+        assert original.positions[4].is_tab and original.positions[4].is_inside_del
 
     def test_tab_stop_is_not_a_character(self):
         p = parse_paragraph(
@@ -403,6 +435,13 @@ class TestSplits:
         mgr.insert_text_before("bar", "\n")
         assert self._texts(mgr) == ["foo", "bar"]
 
+    def test_split_after_a_leading_break_keeps_the_break_in_the_head(self, temp_xml):
+        # The same rule for any leading child: a w:br before the edge stays put.
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:br/><w:t>bar</w:t></w:r></w:p>"))
+        mgr.insert_text_before("bar", "\n")
+        assert self._texts(mgr) == ["", "bar"]
+        assert paragraph_tokens(mgr) == ["BR"]
+
 
 # ==================== rewrite_paragraph ====================
 
@@ -434,7 +473,7 @@ class TestRewrite:
     )
     def test_rewrite_refuses_to_add_or_remove_a_tab(self, temp_xml, new_text):
         mgr = _make_manager(temp_xml(FOO_TAB_BAR))
-        with pytest.raises(ValueError, match="not add, remove or move"):
+        with pytest.raises(ValueError, match="tab marks"):
             mgr.rewrite_paragraph(_first_ref(mgr), new_text)
         assert paragraph_tokens(mgr) == ["foo", "TAB", "bar"]
 
@@ -449,7 +488,7 @@ class TestRewrite:
 
     def test_batch_rewrite_applies_the_same_guard(self, tab_doc):
         ref = find_ref(tab_doc, "Name")
-        with pytest.raises(BatchOperationError, match="not add, remove or move"):
+        with pytest.raises(BatchOperationError, match="tab marks"):
             tab_doc.batch_rewrite([(ref, "Name Value here")])
         assert tab_doc.get_visible_text().splitlines()[0] == "Name\tValue here"
         tab_doc.batch_rewrite([(ref, "Label\tValue here")])
@@ -516,33 +555,28 @@ class TestComments:
     def test_anchor_spanning_a_tab_brackets_it(self, tab_doc):
         ref = find_ref(tab_doc, "Name")
         cid = tab_doc.add_comment("Name\tValue", "spans the tab", paragraph=ref)
-        dom = tab_doc._document_editor.dom
-        start = dom.getElementsByTagName("w:commentRangeStart")[0]
-        end = dom.getElementsByTagName("w:commentRangeEnd")[0]
-        assert start.getAttribute("w:id") == end.getAttribute("w:id") == str(cid)
         # Everything between the markers spells the anchor, tab included.
-        p = dom.getElementsByTagName("w:p")[0]
-        inside = False
-        spelled = ""
-        for node in p.getElementsByTagName("*"):
-            if node is start:
-                inside = True
-            elif node is end:
-                inside = False
-            elif inside and node.parentNode.tagName == "w:r":
-                if node.tagName == "w:t":
-                    spelled += "".join(c.data for c in node.childNodes if c.nodeType == c.TEXT_NODE)
-                elif node.tagName == "w:tab":
-                    spelled += "\t"
-        assert spelled == "Name\tValue"
+        assert _spelled_between_markers(tab_doc._document_editor.dom, cid) == "Name\tValue"
         assert tab_doc.get_visible_text().splitlines()[0] == "Name\tValue here"
 
-    @pytest.mark.parametrize("anchor", ["\tValue", "Name\t"])
-    def test_anchor_on_a_tab_edge_is_refused(self, tab_doc, anchor):
+    @pytest.mark.parametrize("anchor", ["\tValue", "Name\t", "\t"])
+    def test_anchor_on_a_tab_edge_brackets_the_tab(self, tab_doc, anchor):
+        # Range markers are run-level marks: a tab edge needs no w:t split.
         ref = find_ref(tab_doc, "Name")
-        with pytest.raises(CommentError, match="beside the tab"):
-            tab_doc.add_comment(anchor, "edge", paragraph=ref)
-        assert not tab_doc._document_editor.dom.getElementsByTagName("w:commentRangeStart")
+        cid = tab_doc.add_comment(anchor, "edge", paragraph=ref)
+        assert _spelled_between_markers(tab_doc._document_editor.dom, cid) == anchor
+        assert tab_doc.get_visible_text().splitlines()[0] == "Name\tValue here"
+
+    def test_revision_starting_with_a_tab_can_be_commented(self, simple_docx, tmp_path):
+        # Revision.text spells the tab and its occurrence plugs into add_comment —
+        # the shape Word writes when a tabbed list line is inserted.
+        foreign = _foreign_ins("<w:r><w:tab/><w:t>New item</w:t></w:r>", ins_id=13)
+        body = f"<w:p><w:r><w:t>List:</w:t></w:r>{foreign}</w:p>"
+        with Document.open(_docx_with_body(simple_docx, tmp_path, body), author=AUTHOR) as doc:
+            rev = next(r for r in doc.list_revisions() if r.id == 13)
+            assert rev.text == "\tNew item"
+            cid = doc.add_comment(rev.text, "why?", paragraph=rev.paragraph_ref, occurrence=rev.occurrence)
+            assert _spelled_between_markers(doc._document_editor.dom, cid) == "\tNew item"
 
     def test_comment_body_still_rejects_a_tab(self, tab_doc):
         ref = find_ref(tab_doc, "Name")

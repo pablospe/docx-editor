@@ -190,9 +190,11 @@ class EditOperation:
         Raises:
             ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
                 is not a non-negative integer, ``find`` is not a non-empty
-                string, ``replace_with`` is not a string, ``note`` is neither
-                None nor a non-empty control-character-free string, or ``find``
-                is a SearchResult and ``paragraph``/``occurrence`` was given too.
+                string or contains a tab (``\\t`` — a tab mark can be matched
+                but not replaced yet), ``replace_with`` is not a string,
+                ``note`` is neither None nor a non-empty control-character-free
+                string, or ``find`` is a SearchResult and
+                ``paragraph``/``occurrence`` was given too.
         """
         find, paragraph, occurrence = _resolve_search_target(
             find, paragraph, occurrence, ctx="EditOperation.replace(): ", field="'find'"
@@ -246,7 +248,8 @@ class EditOperation:
         Raises:
             ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
                 is not a non-negative integer, ``text`` is not a non-empty
-                string, ``note`` is neither None nor a non-empty
+                string or contains a tab (``\\t`` — a tab mark can be matched
+                but not deleted yet), ``note`` is neither None nor a non-empty
                 control-character-free string, or ``text`` is a SearchResult and
                 ``paragraph``/``occurrence`` was given too.
         """
@@ -2203,7 +2206,9 @@ class RevisionManager:
             amending one of those is undone by rejecting *its* group).
 
         Raises:
-            ValueError: If ``new_text`` is not a string
+            ValueError: If ``new_text`` is not a string, or would add, remove
+                or displace one of the paragraph's tab marks (``\\t``; the
+                existing tabs must all be kept, in order — ISSUES.md #6)
             HashMismatchError: If the paragraph hash doesn't match
             IndexError: If paragraph index is out of range
         """
@@ -2236,57 +2241,25 @@ class RevisionManager:
         if old_text == new_text:
             return
 
-        old_tokens = _tokenize_words(old_text)
-        new_tokens = _tokenize_words(new_text)
-
-        # In a paragraph of 200+ tokens SequenceMatcher's autojunk heuristic
-        # would treat a frequent "\t" as junk, so a kept tab whose neighbours
-        # both changed could not seed a match and would land inside a replace
-        # hunk — a false refusal below. Exact matching for tab-bearing
-        # paragraphs only; tab-free paragraphs keep the default alignment.
-        sm = difflib.SequenceMatcher(None, old_tokens, new_tokens, autojunk="\t" not in old_text)
-        opcodes = sm.get_opcodes()
-
-        # Convert token indices to character offsets in old_text
-        old_token_offsets = []
-        pos = 0
-        for tok in old_tokens:
-            old_token_offsets.append(pos)
-            pos += len(tok)
-
-        # Build hunks: list of (tag, old_char_start, old_char_end, new_fragment)
-        hunks = []
-        for tag, i1, i2, j1, j2 in opcodes:
-            if tag == "equal":
-                continue
-
-            # Character range in old_text
-            if i1 < len(old_tokens):
-                old_char_start = old_token_offsets[i1]
-            else:
-                old_char_start = len(old_text)
-
-            if i2 > 0:
-                last_tok = old_tokens[i2 - 1]
-                old_char_end = old_token_offsets[i2 - 1] + len(last_tok)
-            else:
-                old_char_end = old_char_start
-
-            new_fragment = "".join(new_tokens[j1:j2])
-
-            hunks.append((tag, old_char_start, old_char_end, new_fragment))
-
-        # Tabs may only be kept in place: a hunk whose old side holds one would
-        # delete or move a <w:tab/>, and a hunk whose new side holds one would
-        # write a tracked tab. Neither is supported yet (ISSUES.md #6).
-        # Refused before any mutation, like the split preflight below.
-        for tag, old_char_start, old_char_end, new_fragment in hunks:
-            if "\t" in old_text[old_char_start:old_char_end] or (tag != "delete" and "\t" in new_fragment):
-                raise ValueError(
-                    "rewrite_paragraph(): 'new_text' can keep the paragraph's tabs but not add, remove or "
-                    "move them — keep each '\\t' exactly where the paragraph has it, or use replace()/"
-                    "delete() on the text beside the tab (ISSUES.md #6)."
-                )
+        # Tabs may only be kept: a hunk whose old side holds one would delete
+        # or move a <w:tab/>, and a hunk whose new side holds one would write
+        # a tracked tab — neither is supported yet (ISSUES.md #6). In a
+        # paragraph of 200+ tokens SequenceMatcher's autojunk heuristic treats
+        # a frequent "\t" as junk that cannot seed a match, so a kept tab whose
+        # neighbours both changed lands inside a replace hunk; retry with
+        # exact matching before refusing — and only then, since exact matching
+        # is quadratic on a long paragraph of repeated tokens. Refused before
+        # any mutation, like the split preflight below.
+        hunks = _diff_hunks(old_text, new_text, autojunk=True)
+        if "\t" in old_text and any(_hunk_touches_tab(hunk, old_text) for hunk in hunks):
+            hunks = _diff_hunks(old_text, new_text, autojunk=False)
+        if any(_hunk_touches_tab(hunk, old_text) for hunk in hunks):
+            raise ValueError(
+                "rewrite_paragraph(): 'new_text' must keep the paragraph's tab marks — the same tabs, in "
+                "the same order, each still recognisable by the text around it — and cannot add or remove "
+                "a '\\t' (nothing writes a tracked tab). Rewrite the words around a tab in smaller steps, "
+                "or use replace()/delete() on the text beside it (ISSUES.md #6)."
+            )
 
         # Preflight the split (\n) hunks against the pre-mutation state: the
         # reversed hunk loop below has no rollback, so anything that can't split
@@ -2650,8 +2623,10 @@ class RevisionManager:
             rejecting the group of the insertion it amended.
 
         Raises:
-            ValueError: If ``find`` is not a non-empty string, ``replace_with``
-                is not a string, or ``occurrence`` is negative or not an integer
+            ValueError: If ``find`` is not a non-empty string or contains a
+                tab (``\\t`` — a tab mark can be matched but not replaced
+                yet), ``replace_with`` is not a string, or ``occurrence`` is
+                negative or not an integer
             TextNotFoundError: If the text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
                 matches more than once in the search scope
@@ -2686,8 +2661,9 @@ class RevisionManager:
             The change ID of the deletion
 
         Raises:
-            ValueError: If ``text`` is not a non-empty string, or
-                ``occurrence`` is negative or not an integer
+            ValueError: If ``text`` is not a non-empty string or contains a
+                tab (``\\t`` — a tab mark can be matched but not deleted yet),
+                or ``occurrence`` is negative or not an integer
             TextNotFoundError: If the text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
                 matches more than once in the search scope
@@ -3935,7 +3911,9 @@ class RevisionManager:
         Splits the run at the boundary when ``pos`` falls mid-run — mid-node,
         or at the start of a node that is not the run's first content child
         (``<w:t>foo</w:t><w:tab/><w:t>bar</w:t>`` split at ``bar`` keeps
-        ``foo`` and the tab in the head). The paragraph properties (``w:pPr``)
+        ``foo`` and the tab in the head; any leading child — a second
+        ``w:t``, a ``w:tab``, a ``w:br``, a drawing — stays on the side it
+        precedes). The paragraph properties (``w:pPr``)
         are never included. Raises RevisionError when the boundary sits inside
         an existing revision or other inline container (deferred — our own
         split flows always cut on a run that is a direct child of the
@@ -4152,7 +4130,8 @@ class RevisionManager:
         nesting included (e.g. ``[ins#1:A]kept [del#9:B]gone[/del][/ins]``).
 
         A human/agent verification view, not a parseable format: author
-        names are not escaped and tabs/breaks are not rendered. Text inside a
+        names are not escaped and tabs/breaks are not rendered (unlike
+        ``get_visible_text``, where a tab mark is a ``\\t``). Text inside a
         drawing's text box does not appear at all — box content is excluded
         from every text view and from paragraph enumeration (same as
         get_visible_text()); see
@@ -4803,6 +4782,42 @@ def _tokenize_words(text: str) -> list[str]:
     any hunk that would consume one (ISSUES.md #6).
     """
     return re.findall(r"\t|[^\S\t]+|\S+", text)
+
+
+def _diff_hunks(old_text: str, new_text: str, *, autojunk: bool) -> list[tuple[str, int, int, str]]:
+    """Word-level diff of ``old_text`` → ``new_text`` as edit hunks.
+
+    Each hunk is ``(tag, old_char_start, old_char_end, new_fragment)`` with the
+    character range in ``old_text``; ``equal`` opcodes are dropped. ``autojunk``
+    is passed through to :class:`difflib.SequenceMatcher`.
+    """
+    old_tokens = _tokenize_words(old_text)
+    new_tokens = _tokenize_words(new_text)
+    opcodes = difflib.SequenceMatcher(None, old_tokens, new_tokens, autojunk=autojunk).get_opcodes()
+
+    old_token_offsets = []
+    pos = 0
+    for tok in old_tokens:
+        old_token_offsets.append(pos)
+        pos += len(tok)
+
+    hunks: list[tuple[str, int, int, str]] = []
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == "equal":
+            continue
+        old_char_start = old_token_offsets[i1] if i1 < len(old_tokens) else len(old_text)
+        if i2 > 0:
+            old_char_end = old_token_offsets[i2 - 1] + len(old_tokens[i2 - 1])
+        else:
+            old_char_end = old_char_start
+        hunks.append((tag, old_char_start, old_char_end, "".join(new_tokens[j1:j2])))
+    return hunks
+
+
+def _hunk_touches_tab(hunk: tuple[str, int, int, str], old_text: str) -> bool:
+    """True when applying ``hunk`` would remove, move or write a tab mark."""
+    tag, old_char_start, old_char_end, new_fragment = hunk
+    return "\t" in old_text[old_char_start:old_char_end] or (tag != "delete" and "\t" in new_fragment)
 
 
 def _trim_replace_affixes(find: str, replace_with: str) -> tuple[int, int]:

@@ -158,8 +158,10 @@ class CommentManager:
                 ``anchor_text`` matches more than once in the search scope.
             HashMismatchError: If a paragraph reference's hash is stale.
             ParagraphIndexError: If a paragraph reference's index is out of range.
-            CommentError: If ``anchor_text`` is not a non-empty string, or
-                ``comment_text`` is not a string.
+            CommentError: If ``anchor_text`` is not a non-empty string,
+                ``comment_text`` is not a string, or either holds a control
+                character (``anchor_text`` may contain ``\\t`` — a tab mark is
+                one text-map character — but ``comment_text`` may not).
             ValueError: If ``occurrence`` is negative or not an integer.
         """
         if not isinstance(anchor_text, str) or not anchor_text:
@@ -174,14 +176,6 @@ class CommentManager:
             _reject_control_chars(anchor_text, field="anchor_text", ctx="add_comment(): ", allow_tab=True)
         except ValueError as e:
             raise CommentError(str(e)) from e
-        # A tab is one text-map character, so an anchor may span one; the range
-        # markers, however, are placed by splitting w:t nodes, so an anchor
-        # that starts or ends on a <w:tab/> has no w:t edge to split.
-        if anchor_text[0] == "\t" or anchor_text[-1] == "\t":
-            raise CommentError(
-                "add_comment(): anchor_text must not start or end with a tab ('\\t') — anchor on the "
-                "text beside the tab instead; a tab inside the anchor is fine (ISSUES.md #6)."
-            )
         _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id
@@ -435,7 +429,9 @@ class CommentManager:
         Iterates *direct* children of ``run`` (not descendants) so non-``w:t``
         content like ``<w:tab/>``, ``<w:br/>``, ``<w:drawing/>``, and field
         markers is preserved, and so ``w:t`` nodes nested inside a drawing's
-        text box are left untouched.
+        text box are left untouched. A ``<w:tab/>`` may itself be an edge: it
+        is one text-map character, so the marker simply lands before or after
+        the tab's own run.
         """
         rPr_xml = get_rPr_xml(run)
 
@@ -477,7 +473,17 @@ class CommentManager:
                     parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after)}</w:t></w:r>")
             return parts
 
-        xml_parts = rebuild_run_fragments(run, rPr_xml, render_wt)
+        def render_other(child) -> list[str]:
+            # Range markers are run-level marks, so a <w:tab/> edge needs no
+            # split: the marker brackets the tab's own run.
+            parts = [f"<w:r>{rPr_xml}{child.toxml()}</w:r>"]
+            if start_marker and child is start_node:
+                parts.insert(0, start_marker)
+            if end_marker and child is end_node:
+                parts.append(end_marker)
+            return parts
+
+        xml_parts = rebuild_run_fragments(run, rPr_xml, render_wt, render_other)
         self.document_editor.replace_node(run, "".join(xml_parts))
 
     def reply_to_comment(self, parent_comment_id: int, reply_text: str) -> int:

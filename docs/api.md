@@ -486,7 +486,8 @@ if match := doc.find_text("Section 6"):
 > and a `replace`/`delete` target that contains `\t` is rejected with a
 > `ValueError`: a tab can be matched but not removed yet (ISSUES.md #6).
 > Because tabs take part in paragraph hashes, refs of tab-bearing paragraphs
-> differ from versions before 0.8.1 (refs are session-scoped anyway).
+> differ from those computed before tabs were mapped (refs are session-scoped
+> anyway).
 
 #### Rationale notes
 
@@ -633,7 +634,7 @@ resolve them as a unit with [`accept_group()`](#accept_groupgroup_id) /
 **Parameters:**
 
 - `ref` (str): Paragraph reference from `list_paragraphs()`
-- `new_text` (str): Desired paragraph text. May contain `\t` only where the paragraph already has a tab mark — the diff keeps each tab in place (so `rewrite_paragraph(ref, info.text.replace(...))` works on tab-bearing paragraphs) and raises `ValueError` for a rewrite that would add or remove one (ISSUES.md #6)
+- `new_text` (str): Desired paragraph text. May contain `\t` only for the paragraph's existing tab marks — the diff keeps those marks, in order, while the text around them changes (so `rewrite_paragraph(ref, info.text.replace(...))` works on tab-bearing paragraphs; a tab's character offset shifts with its surroundings) and raises `ValueError` for a rewrite that would add or remove one, or rewrite so much around a tab that it can no longer be matched (ISSUES.md #6)
 - `note` (str | None): Rationale for the rewrite, anchored as one comment spanning its first through last revision — see [Rationale notes](#rationale-notes)
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`; `group_id` is `None` when `new_text` equals the current text, or when every change landed inside your own pending insertions and amended them in place — undo those by rejecting the group of the amended insertion; `comment_id` carries a `note=`'s comment)
@@ -722,7 +723,7 @@ smart-quote splits, `w:ins` wrappers) are found. Text-box content is excluded, a
 
 **Parameters:**
 
-- `anchor_text` (str | [`SearchResult`](#searchresult)): Text to attach the comment to, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it). May contain `\t` (a tab mark) inside the anchor; an anchor that starts or ends on a tab raises `CommentError` — anchor on the text beside it
+- `anchor_text` (str | [`SearchResult`](#searchresult)): Text to attach the comment to, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it). May contain `\t` (a tab mark) anywhere, including at either end — the comment range brackets the tab
 - `comment` (str): The comment content
 - `paragraph` (str, optional): Paragraph reference (e.g. `P3#a7b2`) to scope the search. `None` searches the whole document. Defaults to None.
 - `occurrence` (int | None): Which occurrence to anchor to, 0-based (0 = first), counted within `paragraph` when given and document-wide otherwise. Omitted → the anchor must be unique in the search scope, else [`AmbiguousTextError`](#ambiguoustexterror).

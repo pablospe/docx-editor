@@ -155,7 +155,9 @@ def _reject_control_chars(
     - ``\\t`` is how a ``<w:tab/>`` mark appears in the text map. Search and
       anchor inputs accept it (``allow_tab=True``) so a tab can be matched;
       content inputs reject it, because no path writes a tracked tab
-      (ISSUES.md #6).
+      (ISSUES.md #6). The one content input that passes ``allow_tab=True``
+      is ``rewrite_paragraph``'s ``new_text``, whose tabs are checked
+      downstream against the paragraph's existing tab marks.
 
     Non-str values are left for the caller's own type check.
     """
@@ -172,8 +174,8 @@ def _reject_control_chars(
         if char in _REJECTED_CONTROL_CHARS:
             if char == "\t":
                 raise ValueError(
-                    f"{ctx}{field} must not contain control character '\\t' — a tab can be searched "
-                    f"and matched but not written: tracked tab insertion is not supported (ISSUES.md #6)."
+                    f"{ctx}{field} must not contain control character '\\t' — a tab mark can be searched "
+                    f"and matched, but nothing writes one into document or comment text (ISSUES.md #6)."
                 )
             raise ValueError(
                 f"{ctx}{field} must not contain control character {char!r} — it would become an "
@@ -1061,8 +1063,10 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
             if node.tagName != "w:t" and not is_tab:
                 continue
 
-            # Skip w:t inside w:del (deleted text uses w:delText, but be safe)
-            if _is_inside_element(node, "w:del"):
+            # Skip w:del (deleted text uses w:delText, but be safe) and
+            # w:moveFrom: its text is w:delText too, but a moved-away tab
+            # mark would otherwise leak into the visible view.
+            if _is_inside_element(node, "w:del") or _is_inside_element(node, "w:moveFrom"):
                 continue
 
             # Text inside a nested text box belongs to the box, not the host.
