@@ -5,6 +5,7 @@ Modes:
   corpus_harness.py                 run all corpus files (parent mode)
   corpus_harness.py --only NAME     run a single file by name (parent mode, filtered)
   corpus_harness.py --no-pdf        skip the LibreOffice PDF-conversion stage
+  corpus_harness.py --census        print the revision census only (no library round-trip)
   corpus_harness.py --single PATH   internal: run stages for one file, JSON to stdout
 
 Parent mode isolates each file in a subprocess with a hard timeout, so one
@@ -26,6 +27,13 @@ Stages per file:
 An input that fails input_validate and is then refused by Document.open is
 recorded as "rejected" (mark: r), not as a failure — refusing an invalid
 document is correct library behavior.
+
+Every file also gets a *census*: a count of revision-bearing elements by tag
+across its ``word/*.xml`` parts, recorded as ``rec["census"]``. It is
+informational and can never fail a run, so it is not a stage — it exists to
+say which revision types real-world producers actually emit, which is the
+evidence base for handling the ones this library does not resolve
+(ISSUES.md #68). ``--census`` prints just that table, in seconds.
 """
 
 import argparse
@@ -110,6 +118,138 @@ def assert_fail(error_type: str, error: str) -> dict:
 
 
 # --------------------------------------------------------------------------
+# Revision census
+# --------------------------------------------------------------------------
+
+
+def census_file(path: Path) -> dict:
+    """Count revision-bearing elements by tag across a .docx's word/*.xml parts.
+
+    Informational only — a file this cannot read contributes
+    ``{"error": ...}`` and nothing else; the census never fails a run.
+
+    Returns ``{"by_tag": {...}, "ins_del_contexts": {...}, "parts": {name: ...}}``,
+    where the top-level maps are the sum over parts and ``parts`` keeps the
+    per-part breakdown (so a redline living only in a header is visible as
+    such — the library reads word/document.xml alone, ISSUES.md #30).
+    """
+    from defusedxml import minidom as safe_minidom
+
+    from docx_editor.track_changes import count_revision_elements
+
+    by_tag: dict[str, int] = {}
+    contexts: dict[str, int] = {}
+    parts: dict[str, dict] = {}
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = [n for n in z.namelist() if n.startswith("word/") and n.endswith(".xml")]
+            for n in sorted(names):
+                try:
+                    dom = safe_minidom.parseString(z.read(n))
+                except Exception as e:
+                    parts[n] = {"error": f"{type(e).__name__}: {e}"[:200]}
+                    continue
+                c = count_revision_elements(dom)
+                if not c.by_tag:
+                    continue
+                parts[n] = {"by_tag": c.by_tag, "ins_del_contexts": c.ins_del_contexts}
+                for tag, n_elems in c.by_tag.items():
+                    by_tag[tag] = by_tag.get(tag, 0) + n_elems
+                for parent, n_elems in c.ins_del_contexts.items():
+                    contexts[parent] = contexts.get(parent, 0) + n_elems
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"[:200]}
+    return {"by_tag": by_tag, "ins_del_contexts": contexts, "parts": parts}
+
+
+def print_census(results: list[dict]) -> None:
+    """Print the corpus-wide revision census: which tags real producers emit."""
+    from docx_editor.track_changes import HANDLED_REVISION_TAGS, UNHANDLED_REVISION_TAGS
+
+    totals: dict[str, int] = {}
+    files_with: dict[str, set[str]] = {}
+    producers: dict[str, set[str]] = {}
+    contexts: dict[str, int] = {}
+    errors: list[str] = []
+    for r in results:
+        census = r.get("census")
+        if not census:
+            # No census key at all: the file's subprocess crashed or timed out
+            # (see run_all). An uncounted file is not a file with no revisions,
+            # which is the distinction this whole block exists to keep.
+            errors.append(f"{r['file']}: census not run (harness stage did not complete)")
+            continue
+        if "error" in census:
+            errors.append(f"{r['file']}: {census['error']}")
+            continue
+        # A part that will not parse (the must_reject entity file) is reported,
+        # not skipped in silence — an uncounted part is not the same as a part
+        # with no revisions, and this table's whole job is that distinction.
+        for part, rec in census["parts"].items():
+            if "error" in rec:
+                errors.append(f"{r['file']} [{part}]: {rec['error']}")
+        producer = (r.get("provenance") or {}).get("producer", "?")
+        for tag, n in census["by_tag"].items():
+            totals[tag] = totals.get(tag, 0) + n
+            files_with.setdefault(tag, set()).add(r["file"])
+            producers.setdefault(tag, set()).add(producer)
+        for parent, n in census["ins_del_contexts"].items():
+            contexts[parent] = contexts.get(parent, 0) + n
+
+    n_files = len(results)
+    carrying = sum(1 for r in results if (r.get("census") or {}).get("by_tag"))
+    print("\nRevision census (all word/*.xml parts)")
+    print(f"{'tag':<32}{'elements':>10}{'files':>7}  producers")
+    for tag, n in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0])):
+        mark = " " if tag in HANDLED_REVISION_TAGS else "*"
+        prods = ", ".join(sorted(producers[tag]))
+        print(f"{mark}{tag:<31}{n:>10}{len(files_with[tag]):>7}  {prods[:60]}")
+    if not totals:
+        print("  (no revision elements found in any corpus file)")
+    print(f"\n{carrying}/{n_files} files carry at least one revision element")
+    unhandled_total = sum(n for tag, n in totals.items() if tag in UNHANDLED_REVISION_TAGS)
+    print(f"* = not resolved by accept_all/reject_all ({unhandled_total} element(s), ISSUES.md #68)")
+    if contexts:
+        print("\nw:ins/w:del by parent element (structural markers vs content revisions):")
+        for parent, n in sorted(contexts.items(), key=lambda kv: (-kv[1], kv[0])):
+            note = {
+                "w:rPr": "  <- paragraph-mark ins/del, or a change record's rPr",
+                "w:trPr": "  <- table-row ins/del",
+            }.get(parent, "")
+            print(f"  {parent:<28}{n:>8}{note}")
+    if errors:
+        n_files = len({e.split(" [", 1)[0].rstrip(":") for e in errors})
+        print(f"\n{len(errors)} XML part(s) across {n_files} file(s) could not be censused:")
+        for e in errors[:6]:
+            print(f"  - {e}")
+        if len(errors) > 6:
+            print(f"  ... and {len(errors) - 6} more")
+
+
+def run_census_only(only: str | None) -> int:
+    """``--census``: census every corpus file in-process, print the table.
+
+    No subprocesses, no library round-trip, no soffice — reading and parsing
+    the zips is all it takes, so the report is reproducible in seconds.
+    """
+    manifest: dict[str, dict] = json.loads((HERE / "manifest.json").read_text())
+    files = sorted(FILES_DIR.glob("*.docx"))
+    if only:
+        files = [f for f in files if only in f.name]
+    if not files:
+        if only:
+            print(f"no corpus files match --only {only!r}", file=sys.stderr)
+        else:
+            print(f"no corpus files in {FILES_DIR} — run build_corpus.py first", file=sys.stderr)
+        return 1
+    results = [
+        {"file": f.name, "census": census_file(f), "provenance": manifest.get(f.name, {}), "stages": {}} for f in files
+    ]
+    print_census(results)
+    return 0
+
+
+# --------------------------------------------------------------------------
 # Single-file mode (runs inside the timeout subprocess)
 # --------------------------------------------------------------------------
 
@@ -128,6 +268,10 @@ def run_single(path: Path, do_pdf: bool) -> dict:
     stages["input_validate"] = validate_docx(path)
     stages["input_validate"]["status"] = "pass" if stages["input_validate"]["ok"] else "fail"
     input_ok = stages["input_validate"]["ok"]
+
+    # Census: not a stage (it has no pass/fail semantics), and taken before
+    # open so a file the library refuses still contributes its tag counts.
+    result["census"] = census_file(path)
 
     work = WORK_DIR / path.stem
     out1 = OUT_DIR / f"{path.stem}_edited.docx"
@@ -470,6 +614,7 @@ def print_summary(results: list[dict]) -> None:
     print(f"\n{clean}/{len(results)} files fully clean (all stages pass/skip)")
     if rejected:
         print(f"{rejected} rejected (invalid input refused by the library — not a failure)")
+    print_census(results)
 
 
 def main() -> None:
@@ -477,7 +622,11 @@ def main() -> None:
     ap.add_argument("--single", type=Path, help="internal: run one file, JSON to stdout")
     ap.add_argument("--only", help="filter corpus files by substring")
     ap.add_argument("--no-pdf", action="store_true", help="skip soffice PDF stage")
+    ap.add_argument("--census", action="store_true", help="print the revision census only")
     args = ap.parse_args()
+
+    if args.census:
+        sys.exit(run_census_only(args.only))
 
     if args.single:
         OUT_DIR.mkdir(exist_ok=True)

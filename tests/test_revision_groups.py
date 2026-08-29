@@ -1634,6 +1634,12 @@ class TestAcceptPathIndex:
         Structural pin for ISSUES.md #56: _resolve_all threads one w:id ->
         element index through every revision in a pass, so the full-DOM walk
         count is a small constant rather than growing with the redline size.
+
+        The ISSUES.md #64 honesty floor adds exactly one *recursive* traversal
+        per call (``iter_revision_elements`` over all ~30 revision tags), which
+        count_dom_walks cannot see because it hooks getElementsByTagName. That
+        is the point of the recursive form: the naive per-tag census would have
+        cost ~28 more getElementsByTagName walks and broken this pin.
         """
         counts = {}
         for label, words in (("small", ["quick"]), ("large", ["quick", "brown", "lazy"])):

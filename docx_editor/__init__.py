@@ -43,6 +43,7 @@ from .exceptions import (
     DocumentClosedError,
     DocumentNotFoundError,
     DocumentOpenError,
+    DocumentProtectedError,
     DocxEditError,
     HashMismatchError,
     InvalidDocumentError,
@@ -51,13 +52,22 @@ from .exceptions import (
     ParagraphIndexError,
     RevisionError,
     TextNotFoundError,
+    UnhandledRevisionWarning,
     WorkspaceError,
     WorkspaceExistsError,
     WorkspaceLockedError,
     WorkspaceSyncError,
     XMLError,
 )
-from .track_changes import EditOperation, EditResult, EditValidationResult, Revision, SearchResult
+from .track_changes import (
+    EditOperation,
+    EditResult,
+    EditValidationResult,
+    ResolveResult,
+    Revision,
+    SearchResult,
+    UnhandledRevision,
+)
 from .xml_editor import (
     ListItem,
     ParagraphInfo,
@@ -73,14 +83,17 @@ __all__ = [
     "EditOperation",
     "EditResult",
     "EditValidationResult",
+    "ResolveResult",
     "Revision",
     "SearchResult",
+    "UnhandledRevision",
     "Comment",
     # Exceptions
     "DocxEditError",
     "DocumentClosedError",
     "DocumentNotFoundError",
     "DocumentOpenError",
+    "DocumentProtectedError",
     "InvalidDocumentError",
     "WorkspaceError",
     "WorkspaceExistsError",
@@ -96,6 +109,8 @@ __all__ = [
     "HashMismatchError",
     "ParagraphIndexError",
     "BatchOperationError",
+    # Warnings
+    "UnhandledRevisionWarning",
     # Paragraph refs
     "ParagraphInfo",
     "ParagraphRef",

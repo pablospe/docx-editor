@@ -5,6 +5,7 @@ Provides RevisionManager for creating and managing tracked changes (insertions/d
 
 import difflib
 import re
+import warnings
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
@@ -21,6 +22,7 @@ from .exceptions import (
     ParagraphIndexError,
     RevisionError,
     TextNotFoundError,
+    UnhandledRevisionWarning,
 )
 from .xml_editor import (
     _TEXTBOX_CONTENT,
@@ -527,18 +529,19 @@ class Revision:
       paragraph — outside any ``<w:p>`` (e.g. ``<w:trPr>`` row markers), or
       inside a drawing's text box, whose paragraphs are excluded from the ref
       index space (see ``body_paragraphs``). Such a revision is still
-      listed — but Word writes every box twice, so it is listed once per
-      copy, and a single ``accept_revision``/``accept_group`` resolves only
-      the copy it lands on, leaving the twins out of step. Only
-      ``accept_all``/``reject_all`` resolve both unconditionally: Word
-      commonly stamps the same ``w:id`` on both copies, and a duplicated id
-      is ungroupable, so ``group_id`` and ``changeset_id`` are both None and
-      no group- or changeset-keyed call can reach them. When the copies do
-      carry distinct ids and identical ``w:author``/``w:date`` they join one
+      listed — but a box is stored twice, so it is listed once per copy and
+      one ``accept_revision``/``reject_revision`` call resolves only the copy
+      it lands on; calling it again with the same id takes the other and then
+      returns False, which is the narrowest way to resolve both.
+      ``accept_all``/``reject_all`` are the only *single* calls that always
+      do it: when a producer copies the ``mc:Choice`` content into
+      ``mc:Fallback`` verbatim the copies share a ``w:id``, and a duplicated
+      id is ungroupable, so ``group_id`` and ``changeset_id`` are both None
+      and no group- or changeset-keyed call can reach them. Copies that do
+      carry distinct ids and identical ``w:author``/``w:date`` join one
       inferred changeset, which ``accept_changeset``/``reject_changeset``
-      resolve — along with every other group that author stamped in the same
-      second, since an inferred changeset is a global ``(author, date)``
-      class.
+      resolve — along with every other group carrying that author and the
+      identical raw ``w:date`` string.
     - ``occurrence``: 0-based occurrence index of ``text`` within the
       containing paragraph, counted in the view where the revision's text
       lives — the accepted (visible) view for insertions, the original
@@ -618,6 +621,283 @@ class Revision:
         group = f", group={self.group_id}{inferred}" if self.group_id is not None else ""
         changeset = f", cs={self.changeset_id}" if self.changeset_id is not None else ""
         return f"Revision({kind} {self.id}{location}: '{preview}' by {self.author}{nested}{contains}{group}{changeset})"
+
+
+# Revision-bearing element tags, per ECMA-376 Part 1 §17.13 (Annotations).
+#
+# HANDLED are the two this library actually adjudicates: accept_revision /
+# reject_revision / accept_all / reject_all / list_revisions all walk exactly
+# these. UNHANDLED are the rest of the schema's revision marks — they are
+# parsed, carried through a save unchanged, and never resolved. Splitting them
+# into named constants is what lets accept_all report what it could not touch
+# (the "honesty floor", ISSUES.md #64) instead of silently claiming success;
+# handling them is ISSUES.md #68.
+HANDLED_REVISION_TAGS: tuple[str, ...] = ("w:ins", "w:del")
+
+UNHANDLED_REVISION_TAGS: tuple[str, ...] = (
+    # Content moves: the move pair plus its range marks.
+    "w:moveFrom",
+    "w:moveFromRangeStart",
+    "w:moveFromRangeEnd",
+    "w:moveTo",
+    "w:moveToRangeStart",
+    "w:moveToRangeEnd",
+    # Property changes: the previous formatting, recorded alongside the
+    # element whose properties changed.
+    "w:pPrChange",
+    "w:rPrChange",
+    "w:sectPrChange",
+    "w:tblPrChange",
+    "w:tblPrExChange",
+    "w:trPrChange",
+    "w:tcPrChange",
+    "w:tblGridChange",
+    # Table-structure revisions and numbering.
+    "w:cellIns",
+    "w:cellDel",
+    "w:cellMerge",
+    "w:numberingChange",
+    # Custom-XML range marks.
+    "w:customXmlInsRangeStart",
+    "w:customXmlInsRangeEnd",
+    "w:customXmlDelRangeStart",
+    "w:customXmlDelRangeEnd",
+    "w:customXmlMoveFromRangeStart",
+    "w:customXmlMoveFromRangeEnd",
+    "w:customXmlMoveToRangeStart",
+    "w:customXmlMoveToRangeEnd",
+)
+
+ALL_REVISION_TAGS: tuple[str, ...] = HANDLED_REVISION_TAGS + UNHANDLED_REVISION_TAGS
+
+# The property-change family: each of these records the element's *previous*
+# properties as its child subtree, so everything inside one describes state
+# that is already gone, not a pending revision.
+#
+# Three of the recorded types can legally hold revision marks:
+#   - w:tcPrChange's w:tcPr is CT_TcPrInner -> w:cellIns/w:cellDel/w:cellMerge
+#   - a paragraph-mark w:rPrChange's w:rPr is CT_ParaRPrOriginal, which opens
+#     with EG_ParaRPrTrackChanges -> w:ins/w:del/w:moveFrom/w:moveTo
+#   - w:pPrChange's w:pPr is CT_PPrBase -> w:numPr -> w:ins/w:numberingChange
+# The rest (CT_SectPrBase, CT_TblPrBase, CT_TblPrExBase, CT_TrPrBase,
+# CT_TblGridBase, and CT_RPrOriginal for a run-level w:rPrChange) cannot. The
+# rule is stated for the whole family anyway, because "a change record
+# describes the past" is what makes any of them historical.
+#
+# w:numberingChange is deliberately absent: it carries its previous value in a
+# w:original attribute and has no recorded subtree to skip.
+#
+# NOTE: only the unhandled/pending path uses this. list_revisions() and
+# accept_all()/reject_all() still walk every w:ins/w:del, so a historical
+# w:del recorded inside a change record is listed and resolved like a live
+# one — pre-existing behavior, pinned as a known gap by
+# tests/test_unhandled_revisions.py::test_handled_path_still_adjudicates_
+# marks_inside_change_records and left to ISSUES.md #68.
+CHANGE_RECORD_TAGS: tuple[str, ...] = (
+    "w:pPrChange",
+    "w:rPrChange",
+    "w:sectPrChange",
+    "w:tblPrChange",
+    "w:tblPrExChange",
+    "w:trPrChange",
+    "w:tcPrChange",
+    "w:tblGridChange",
+)
+
+
+def iter_revision_elements(root, tags: Iterable[str], *, skip_change_records: bool = False) -> Iterator[Element]:
+    """Yield every element under ``root`` whose tag is in ``tags``, document order.
+
+    One recursive pre-order traversal for the whole tag set, rather than one
+    ``getElementsByTagName`` per tag: with 30 revision tags the per-tag form
+    would cost 30 full-document walks, which the ISSUES.md #56/#62 walk-count
+    pin (``tests/test_revision_groups.py``) exists to prevent.
+
+    By default no subtree is skipped, so a mark nested inside another revision
+    — a ``w:del`` inside a foreign ``w:ins`` — is yielded after its host,
+    exactly as ``_revision_elements`` does for the handled pair.
+
+    Args:
+        root: any DOM node; its descendants are searched, not itself.
+        tags: the tag names to yield.
+        skip_change_records: when True, a ``CHANGE_RECORD_TAGS`` element is
+            still yielded but its subtree is not descended into. That subtree
+            is the *recorded previous state*, so a ``w:cellIns`` sitting in a
+            ``w:tcPrChange``'s recorded ``w:tcPr`` is a historical marker, not
+            a second pending revision. Callers reporting what is still pending
+            want True; a raw inventory of what the XML contains wants False.
+    """
+    tag_set = frozenset(tags)
+    change_records = frozenset(CHANGE_RECORD_TAGS) if skip_change_records else frozenset()
+
+    def walk(node) -> Iterator[Element]:
+        for child in node.childNodes:
+            if child.nodeType != child.ELEMENT_NODE:
+                continue
+            if child.tagName in tag_set:
+                yield child
+            if child.tagName in change_records:
+                continue
+            yield from walk(child)
+
+    yield from walk(root)
+
+
+@dataclass(frozen=True)
+class RevisionCensus:
+    """Counts of revision-bearing elements in one XML part, by tag.
+
+    Produced by :func:`count_revision_elements`. Purely descriptive — it says
+    what a document contains, not what any operation did with it. A raw
+    inventory, so unlike the pending-revision count on
+    :class:`ResolveResult` it *does* include marks recorded inside a change
+    record (a ``w:cellIns`` in a ``w:tcPrChange``'s historical ``w:tcPr``).
+
+    Attributes:
+        by_tag: tag name -> number of elements, for every tag in
+            ``ALL_REVISION_TAGS`` that occurs at least once. Tags with no
+            occurrences are absent rather than zero, so the mapping stays a
+            readable inventory.
+        ins_del_contexts: parent tag name -> number of ``w:ins``/``w:del``
+            elements directly under it. ``w:ins`` and ``w:del`` are also
+            *structural* markers: under ``w:rPr`` they usually mark an
+            inserted/deleted paragraph mark (``w:pPr/w:rPr``), though the same
+            parent tag also covers a change record's recorded
+            ``w:rPrChange/w:rPr``; under ``w:trPr`` they mark an
+            inserted/deleted table row. Those cases resolve approximately today
+            (see ``RevisionManager.accept_all``), so the context breakdown is
+            the evidence for whether they occur in real documents (ISSUES.md
+            #68) — an ordinary content revision shows up here as ``"w:p"`` or
+            ``"w:tc"``.
+    """
+
+    by_tag: dict[str, int]
+    ins_del_contexts: dict[str, int]
+
+    @property
+    def total(self) -> int:
+        """Total revision elements counted, across all tags."""
+        return sum(self.by_tag.values())
+
+
+def count_revision_elements(root) -> RevisionCensus:
+    """Census of every revision-bearing element under ``root``.
+
+    One traversal covering all of ``ALL_REVISION_TAGS`` (see
+    :func:`iter_revision_elements`). ``root`` is any DOM node — a whole parsed
+    part, a ``w:body``, a single paragraph.
+    """
+    by_tag: dict[str, int] = {}
+    contexts: dict[str, int] = {}
+    for elem in iter_revision_elements(root, ALL_REVISION_TAGS):
+        tag = elem.tagName
+        by_tag[tag] = by_tag.get(tag, 0) + 1
+        if tag in HANDLED_REVISION_TAGS:
+            parent = elem.parentNode
+            parent_tag = getattr(parent, "tagName", "(root)")
+            contexts[parent_tag] = contexts.get(parent_tag, 0) + 1
+    return RevisionCensus(by_tag=by_tag, ins_del_contexts=contexts)
+
+
+@dataclass(frozen=True)
+class UnhandledRevision:
+    """One revision element this library does not accept or reject.
+
+    Returned by ``Document.list_unhandled_revisions()``. Deliberately not a
+    :class:`Revision`: these carry no adjudicable id, so handing them to
+    ``accept_revision()`` could only fail — see ``list_unhandled_revisions``.
+
+    Attributes:
+        tag: the element's tag, one of ``UNHANDLED_REVISION_TAGS``
+            (e.g. ``"w:pPrChange"``).
+        id: the element's ``w:id``, or None when it carries none or a
+            non-numeric one. Unlike :class:`Revision`, an id-less mark is still
+            listed — nothing here is targeted by id, so there is nothing to
+            omit it from.
+        author: ``w:author``, or ``"Unknown"`` when the attribute is absent —
+            matching :class:`Revision`. ``w:tblGridChange`` and the range
+            ``*End`` marks carry only ``w:id`` in the schema, so they always
+            read as ``"Unknown"``.
+        date: parsed ``w:date``, or None when absent or unparseable.
+        paragraph_ref: hash-anchored ref of the containing ``<w:p>``, or None
+            when the mark sits in no *addressable* paragraph — outside any
+            paragraph (e.g. a ``w:tblPrChange`` in a table's properties, or a
+            ``w:sectPrChange`` in a section break), or inside a drawing's text
+            box, whose paragraphs are excluded from the ref index space (see
+            ``body_paragraphs``).
+    """
+
+    tag: str
+    id: int | None
+    author: str
+    date: datetime | None
+    paragraph_ref: str | None = None
+
+    def __repr__(self) -> str:
+        kind = self.tag.removeprefix("w:")
+        ident = f" {self.id}" if self.id is not None else ""
+        location = f" @{self.paragraph_ref}" if self.paragraph_ref else ""
+        return f"UnhandledRevision({kind}{ident}{location} by {self.author})"
+
+
+class ResolveResult(int):
+    """Result of ``accept_all``/``reject_all``: the count plus what was skipped.
+
+    Subclasses ``int``, and the int value *is* the number of revisions
+    resolved — so ``count = doc.accept_all()`` keeps working unchanged in
+    comparisons, arithmetic, f-strings and ``json.dumps``.
+
+    Extra attributes:
+
+    - ``unhandled``: how many revision elements the document still holds that
+      this library never resolves — format changes, moves, table-structure
+      revisions, custom-XML range marks (see ``UNHANDLED_REVISION_TAGS``).
+      ``0`` on an ordinary insertions-and-deletions redline.
+    - ``unhandled_types``: tag -> count for those elements, e.g.
+      ``{"w:rPrChange": 3, "w:moveTo": 1}``. Empty when ``unhandled`` is 0.
+
+    Both are counted *after* resolution, which is the honest measure of the
+    claim being made ("everything is resolved"): a foreign mark inside a
+    rejected insertion's subtree is removed with it, so it correctly does not
+    appear. It is not a census of what the document held on entry — for that,
+    read the counts before resolving.
+    """
+
+    unhandled: int
+    unhandled_types: dict[str, int]
+
+    def __new__(cls, count: int, unhandled_types: dict[str, int] | None = None) -> "ResolveResult":
+        result = super().__new__(cls, count)
+        types = dict(unhandled_types or {})
+        result.unhandled_types = types
+        result.unhandled = sum(types.values())
+        return result
+
+    def __repr__(self) -> str:
+        if not self.unhandled:
+            return f"ResolveResult({int(self)})"
+        return f"ResolveResult({int(self)}, unhandled={self.unhandled} {self.unhandled_types})"
+
+    # int has no __str__ of its own, so without this str()/format()/f-strings
+    # would fall through to __repr__ and print "ResolveResult(2)" where every
+    # existing caller expects "2".
+    __str__ = int.__repr__
+
+
+def _parse_w_date(elem) -> datetime | None:
+    """Parse an element's ``w:date``, or None when absent or unparseable.
+
+    Word writes UTC as a trailing ``Z``, which ``fromisoformat`` only accepts
+    from 3.11; the replacement keeps the 3.10 floor working. A nonconforming
+    producer's unparseable stamp reads as None rather than failing the listing.
+    """
+    date_str = elem.getAttribute("w:date")
+    if not date_str:
+        return None
+    try:
+        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _ancestor_paragraph(elem) -> Element | None:
@@ -3456,6 +3736,26 @@ class RevisionManager:
         else:
             self.editor.append_to(paragraph, ins_xml)
 
+    def has_own_revisions(self) -> bool:
+        """Whether the document currently holds a revision authored by us.
+
+        Counts *pending* revisions only — accepting or rejecting one removes
+        it from the DOM, so a document we edited and then fully accepted
+        answers False, which is the honest answer: it carries no redline.
+        Ownership is the same test the rest of this class uses, ``w:author``
+        equal to the editor's author, so a foreign redline by someone whose
+        author string happens to match ours reads as ours.
+
+        Returns:
+            True on the first ``w:ins``/``w:del`` we authored, False if there
+            is none.
+        """
+        for tag in ("w:ins", "w:del"):
+            for elem in self.editor.dom.getElementsByTagName(tag):
+                if elem.getAttribute("w:author") == self.editor.author:
+                    return True
+        return False
+
     def list_revisions(
         self,
         author: str | None = None,
@@ -3463,7 +3763,12 @@ class RevisionManager:
         *,
         with_location: bool = True,
     ) -> list[Revision]:
-        """List all tracked changes in the document.
+        """List the document's insertions and deletions.
+
+        Walks ``w:ins``/``w:del`` only — every other revision type in the
+        OOXML schema (property changes, moves, table-structure revisions,
+        custom-XML range marks) is invisible here and is listed instead by
+        ``list_unhandled_revisions()``.
 
         Args:
             author: If provided, filter by author name
@@ -3568,6 +3873,10 @@ class RevisionManager:
     ) -> Revision | None:
         """Parse a w:ins or w:del element into a Revision object.
 
+        Only these two tags are representable as a :class:`Revision`; the rest
+        of the revision schema has no adjudicable id and surfaces as
+        :class:`UnhandledRevision` instead.
+
         Args:
             elem: The <w:ins>/<w:del> element
             rev_type: Which kind of revision ``elem`` is
@@ -3586,12 +3895,7 @@ class RevisionManager:
             return None
 
         author = elem.getAttribute("w:author") or "Unknown"
-        date_str = elem.getAttribute("w:date")
-
-        try:
-            date = datetime.fromisoformat(date_str.replace("Z", "+00:00")) if date_str else None
-        except ValueError:
-            date = None
+        date = _parse_w_date(elem)
 
         # Extract text content
         if rev_type == "insertion":
@@ -3646,6 +3950,11 @@ class RevisionManager:
     def _revision_element_index(self) -> dict[str, list[Element]]:
         """Map ``w:id`` -> its <w:ins>/<w:del> elements, one full-DOM walk per tag.
 
+        Two tags, deliberately: these are the only revision elements
+        ``accept_revision``/``reject_revision`` can act on, so indexing the
+        rest of the schema would build lookups nothing could consume (the
+        honesty floor reports them separately — see ``accept_all``).
+
         Built once per resolution call and threaded through
         ``accept_revision``/``reject_revision`` so locating a member is a dict
         lookup instead of a fresh full-document scan (ISSUES.md #57).
@@ -3665,7 +3974,7 @@ class RevisionManager:
         first.
         """
         element_index: dict[str, list[Element]] = {}
-        for tag in ("w:ins", "w:del"):
+        for tag in HANDLED_REVISION_TAGS:
             for elem in self.editor.dom.getElementsByTagName(tag):
                 element_index.setdefault(elem.getAttribute("w:id"), []).append(elem)
         return element_index
@@ -3894,6 +4203,12 @@ class RevisionManager:
     def _resolve_all(self, author: str | None, resolve: Callable[[int, dict[str, list[Element]] | None], bool]) -> int:
         """Apply ``resolve`` to every listed revision, re-listing on each pass.
 
+        "Every listed revision" is every ``w:ins``/``w:del``, because that is
+        what ``list_revisions`` walks — so the loop terminates as soon as no
+        insertion or deletion remains, regardless of what other revision types
+        are still pending. ``_resolve_all_reporting`` is what turns that into
+        an honest count for callers.
+
         The whole-document counterpart to ``_resolve_ids``. Two differences,
         both forced by resolving *every* revision rather than a known member
         set:
@@ -3930,41 +4245,162 @@ class RevisionManager:
             if not progressed:
                 return count
 
-    def accept_all(self, author: str | None = None) -> int:
-        """Accept all revisions, optionally filtered by author.
+    def _unhandled_elements(self, author: str | None = None) -> list[Element]:
+        """Pending elements whose tag is in ``UNHANDLED_REVISION_TAGS``, document order.
 
-        Delegates to ``_resolve_all``, which re-lists and re-indexes on each
-        pass: that fully resolves nested revisions in Word-authored files
-        (e.g. a w:del inside a w:ins) and terminates even when an author
-        filter leaves other authors' revisions in the document. Revisions are
-        matched by w:id, so if Word emits duplicate ids across authors, a
-        filtered call may also process a same-id revision by another author.
+        Pending, not merely present: the recorded subtree of a change record is
+        skipped (``skip_change_records``), so a ``w:cellIns`` inside a
+        ``w:tcPrChange``'s historical ``w:tcPr`` is not counted as a second
+        revision alongside the change itself.
+
+        Author filtering follows ``list_revisions``: a missing ``w:author``
+        reads as ``"Unknown"``, so an unattributed mark is matched only by
+        ``author="Unknown"`` and excluded from every other filtered scan.
+        """
+        elems = list(iter_revision_elements(self.editor.dom, UNHANDLED_REVISION_TAGS, skip_change_records=True))
+        if author is None:
+            return elems
+        return [e for e in elems if (e.getAttribute("w:author") or "Unknown") == author]
+
+    def list_unhandled_revisions(self, author: str | None = None) -> list[UnhandledRevision]:
+        """List the revision elements this library does not accept or reject.
+
+        The complement of ``list_revisions``: everything in the OOXML revision
+        schema except the ``w:ins``/``w:del`` pair — property changes, content
+        moves, table-structure revisions, custom-XML range marks (see
+        ``UNHANDLED_REVISION_TAGS``). They survive open/edit/save unchanged and
+        are left pending by ``accept_all``/``reject_all``.
+
+        A separate method rather than extra rows from ``list_revisions``: these
+        carry nothing ``accept_revision(rev.id)`` could act on, so mixing them
+        in would break the loop idiom where every listed row is adjudicable.
+
+        Args:
+            author: If provided, filter by author name. Marks with no
+                ``w:author`` read as ``"Unknown"``, so they match only
+                ``author="Unknown"``.
+
+        Returns:
+            List of UnhandledRevision in document order — see
+            :class:`UnhandledRevision`.
+        """
+        elems = self._unhandled_elements(author)
+        if not elems:
+            # The common case on an ins/del-only document. Building the
+            # location context walks the whole DOM, and SKILL.md tells callers
+            # to check this routinely, so do not pay for it to return [].
+            return []
+        ctx = _RevisionLocationContext(self.editor.dom)
+        rows: list[UnhandledRevision] = []
+        for elem in elems:
+            raw_id = elem.getAttribute("w:id")
+            try:
+                elem_id = int(raw_id) if raw_id else None
+            except ValueError:
+                elem_id = None
+            paragraph = _ancestor_paragraph(elem)
+            rows.append(
+                UnhandledRevision(
+                    tag=elem.tagName,
+                    id=elem_id,
+                    author=elem.getAttribute("w:author") or "Unknown",
+                    date=_parse_w_date(elem),
+                    paragraph_ref=ctx.paragraph_ref(paragraph) if paragraph is not None else None,
+                )
+            )
+        return rows
+
+    def _resolve_all_reporting(
+        self,
+        author: str | None,
+        resolve: Callable[[int, dict[str, list[Element]] | None], bool],
+        verb: str,
+    ) -> ResolveResult:
+        """``_resolve_all`` plus the honesty floor: what is still pending after it.
+
+        The census is taken *after* resolution, so a foreign mark carried away
+        inside a rejected insertion's subtree correctly does not appear, and
+        the number always answers "what did this call leave behind".
+        """
+        count = self._resolve_all(author, resolve)
+        unhandled_types: dict[str, int] = {}
+        for elem in self._unhandled_elements(author):
+            unhandled_types[elem.tagName] = unhandled_types.get(elem.tagName, 0) + 1
+        if unhandled_types:
+            total = sum(unhandled_types.values())
+            listing = ", ".join(f"{tag} x{n}" for tag, n in sorted(unhandled_types.items()))
+            scope = f" (author={author!r})" if author is not None else ""
+            warnings.warn(
+                f"{verb}{scope} resolved {count} revision(s) but left {total} unresolved: {listing}. "
+                f"This library resolves w:ins/w:del only; inspect the rest with "
+                f"list_unhandled_revisions() before reporting the document as fully adjudicated.",
+                UnhandledRevisionWarning,
+                # 4 frames out of warnings.warn: _resolve_all_reporting ->
+                # RevisionManager.accept_all -> Document.accept_all -> caller.
+                # Tuned for the supported Document path; calling RevisionManager
+                # directly makes the chain one frame shorter.
+                stacklevel=4,
+            )
+        return ResolveResult(count, unhandled_types)
+
+    def accept_all(self, author: str | None = None) -> ResolveResult:
+        """Accept all insertions and deletions, optionally filtered by author.
+
+        Walks ``w:ins``/``w:del`` only. Delegates to ``_resolve_all``, which
+        re-lists and re-indexes on each pass: that fully resolves *nested
+        insertions and deletions* in Word-authored files (e.g. a w:del inside a
+        w:ins) and terminates even when an author filter leaves other authors'
+        revisions in the document. Revisions are matched by w:id, so if Word
+        emits duplicate ids across authors, a filtered call may also process a
+        same-id revision by another author.
+
+        Every other revision type in the OOXML schema — property changes,
+        moves, table-structure revisions, custom-XML range marks — is left
+        untouched and counted on the result (``.unhandled`` /
+        ``.unhandled_types``, listed by ``list_unhandled_revisions()``), with an
+        ``UnhandledRevisionWarning`` when the count is nonzero. Handling them is
+        ISSUES.md #68.
+
+        Two ``w:ins``/``w:del`` cases resolve *approximately* and are not part
+        of that count, because the marker itself is consumed: a deleted
+        paragraph mark (``w:pPr/w:rPr/w:del``) should merge the paragraph with
+        its successor, and ``w:trPr`` row markers should add or drop the table
+        row — today only the marker is removed. Also ISSUES.md #68; a document's
+        exposure is visible via
+        ``docx_editor.track_changes.count_revision_elements`` (``ins_del_contexts``).
 
         Args:
             author: If provided, only accept revisions by this author
 
         Returns:
-            Number of revisions accepted
+            :class:`ResolveResult` — an int carrying the number of revisions
+            accepted, plus ``.unhandled``/``.unhandled_types``.
         """
-        return self._resolve_all(author, self.accept_revision)
+        return self._resolve_all_reporting(author, self.accept_revision, "accept_all()")
 
-    def reject_all(self, author: str | None = None) -> int:
-        """Reject all revisions, optionally filtered by author.
+    def reject_all(self, author: str | None = None) -> ResolveResult:
+        """Reject all insertions and deletions, optionally filtered by author.
 
-        Delegates to ``_resolve_all``, which re-lists and re-indexes on each
-        pass: that fully resolves nested revisions in Word-authored files
-        (e.g. a w:del inside a w:ins) and terminates even when an author
-        filter leaves other authors' revisions in the document. Revisions are
-        matched by w:id, so if Word emits duplicate ids across authors, a
-        filtered call may also process a same-id revision by another author.
+        Walks ``w:ins``/``w:del`` only. Delegates to ``_resolve_all``, which
+        re-lists and re-indexes on each pass: that fully resolves *nested
+        insertions and deletions* in Word-authored files (e.g. a w:del inside a
+        w:ins) and terminates even when an author filter leaves other authors'
+        revisions in the document. Revisions are matched by w:id, so if Word
+        emits duplicate ids across authors, a filtered call may also process a
+        same-id revision by another author.
+
+        Every other revision type is left untouched and reported exactly as in
+        ``accept_all`` — see that docstring for the full scope, including the
+        two structural ``w:ins``/``w:del`` cases that resolve approximately.
 
         Args:
             author: If provided, only reject revisions by this author
 
         Returns:
-            Number of revisions rejected
+            :class:`ResolveResult` — an int carrying the number of revisions
+            rejected, plus ``.unhandled``/``.unhandled_types``.
         """
-        return self._resolve_all(author, self.reject_revision)
+        return self._resolve_all_reporting(author, self.reject_revision, "reject_all()")
 
     def _unwrap_element(self, elem) -> None:
         """Remove an element's wrapper, keeping its children in place."""

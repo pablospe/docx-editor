@@ -332,13 +332,12 @@ class TestRevisionsInsideABox:
             doc.close()
 
     def test_accept_revision_resolves_only_the_copy_it_lands_on(self, boxed_revision_docx):
-        """Pins the documented limitation: use accept_all for box revisions.
+        """Pins the per-copy limitation: one id-keyed call, one copy.
 
-        Word writes every box twice, so one logical insertion is two w:ins
-        elements. Resolving one by id leaves the other pending — the twins go
-        out of step, which is the same desynchronization that makes box
-        paragraphs unaddressable in the first place. See
-        ``test_accept_changeset_resolves_both_copies`` for the way out.
+        A box is stored twice, so one logical insertion is two w:ins elements.
+        Resolving one by id leaves the other pending — the twins go out of
+        step, which is the same desynchronization that makes box paragraphs
+        unaddressable in the first place.
         """
         doc = Document.open(boxed_revision_docx)
         try:
@@ -361,6 +360,10 @@ class TestRevisionsInsideABox:
         """
         body = (
             f"<w:p><w:r>{word_box(_boxed_ins(90), _boxed_ins(91))}</w:r></w:p>"
+            # Same author and the identical raw w:date as the twins, so it
+            # joins their changeset: the scope the docstring warns about.
+            '<w:p><w:ins w:id="93" w:author="Reviewer" w:date="2024-01-01T00:00:00Z">'
+            "<w:r><w:t>SWEPT</w:t></w:r></w:ins></w:p>"
             '<w:p><w:ins w:id="92" w:author="Someone Else" w:date="2024-06-01T00:00:00Z">'
             "<w:r><w:t>OTHER</w:t></w:r></w:ins></w:p>"
         )
@@ -370,7 +373,8 @@ class TestRevisionsInsideABox:
             twins = [r for r in doc.list_revisions() if r.id in (90, 91)]
             (changeset_id,) = {r.changeset_id for r in twins}
             assert changeset_id is not None
-            assert doc.accept_changeset(changeset_id) == 2
+            # Both copies plus the unrelated same-(author, date) insertion.
+            assert doc.accept_changeset(changeset_id) == 3
             assert [r.id for r in doc.list_revisions()] == [92]
         finally:
             doc.close()
@@ -389,8 +393,10 @@ class TestRevisionsInsideABox:
         try:
             revisions = doc.list_revisions()
             assert [(r.id, r.group_id, r.changeset_id) for r in revisions] == [(90, None, None)] * 2
-            assert doc.accept_revision(90) is True
-            assert [r.id for r in doc.list_revisions()] == [90]
+            # Repeating the call takes the twin, then reports nothing left —
+            # the narrowest way to resolve both when no group or changeset can.
+            assert [doc.accept_revision(90) for _ in range(3)] == [True, True, False]
+            assert doc.list_revisions() == []
         finally:
             doc.close()
 
@@ -527,30 +533,46 @@ class TestHasTextboxContent:
             doc.close()
 
     def test_distinguishes_an_all_box_document_from_an_empty_one(self, simple_docx, temp_dir):
-        """Both read as blank text; only the flag tells them apart.
+        r"""Both read as blank text; only the flag tells them apart.
 
-        A real poster anchors each box in its own paragraph, so the visible
-        text is the separators between them — ``"\n\n"``, not ``""``. That
-        is why the documented idiom tests ``.strip()``.
+        Each host paragraph still contributes its (empty) line, so three boxes
+        in three host paragraphs give "\n\n" while three in one give "" — the
+        visible text is never guaranteed to be exactly "". That is why the
+        documented idiom tests ``.strip()``.
         """
         lines = ["ACME REPORT", "Revenue grew 12 percent.", "Q3 2024"]
-        boxed = make_docx(
+        spread = make_docx(
             simple_docx,
-            temp_dir / "poster.docx",
+            temp_dir / "poster_spread.docx",
             "".join(f"<w:p><w:r>{word_box(f'<w:p><w:r><w:t>{line}</w:t></w:r></w:p>')}</w:r></w:p>" for line in lines),
         )
+        shared = make_docx(
+            simple_docx,
+            temp_dir / "poster_shared.docx",
+            "<w:p><w:r>"
+            + "".join(word_box(f"<w:p><w:r><w:t>{line}</w:t></w:r></w:p>") for line in lines)
+            + "</w:r></w:p>",
+        )
         empty = make_docx(simple_docx, temp_dir / "empty.docx", "<w:p/>")
-        poster = Document.open(boxed)
+        one_per_paragraph = Document.open(spread)
+        all_in_one = Document.open(shared)
         blank = Document.open(empty)
         try:
-            assert poster.get_visible_text() == "\n\n"
-            assert poster.paragraph_count() == 3
+            assert one_per_paragraph.get_visible_text() == "\n\n"
+            assert one_per_paragraph.paragraph_count() == 3
+            assert all_in_one.get_visible_text() == ""
+            assert all_in_one.paragraph_count() == 1
             assert blank.get_visible_text() == ""
-            assert poster.get_visible_text().strip() == blank.get_visible_text().strip() == ""
-            assert poster.has_textbox_content is True
+            # The documented idiom: .strip() covers both box layouts, and the
+            # flag is what separates them from a genuinely empty document.
+            for doc in (one_per_paragraph, all_in_one):
+                assert not doc.get_visible_text().strip()
+                assert doc.has_textbox_content is True
+            assert not blank.get_visible_text().strip()
             assert blank.has_textbox_content is False
         finally:
-            poster.close()
+            one_per_paragraph.close()
+            all_in_one.close()
             blank.close()
 
 

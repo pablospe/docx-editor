@@ -257,6 +257,18 @@ count = doc.reject_all(author="OtherUser")
 print(f"Rejected {count} revisions")
 ```
 
+These resolve insertions and deletions only. If the document also holds format
+changes or moves, the returned count carries them as `.unhandled` — check it
+before reporting a document as fully adjudicated:
+
+```python
+result = doc.accept_all()
+if result.unhandled:
+    print(f"Still pending: {result.unhandled_types}")
+    for row in doc.list_unhandled_revisions():
+        print(f"  {row.tag} by {row.author}")
+```
+
 ## Saving and Closing
 
 ```python

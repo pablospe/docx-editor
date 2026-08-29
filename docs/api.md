@@ -10,7 +10,7 @@ from docx_editor import Document
 
 ### Opening Documents
 
-#### `Document.open(path, author=None, force_recreate=False, workspace_dir=None)`
+#### `Document.open(path, author=None, force_recreate=False, workspace_dir=None, *, allow_protected=False)`
 
 Open a Word document for editing.
 
@@ -20,6 +20,7 @@ Open a Word document for editing.
 - `author` (str, optional): Author name for tracked changes. Defaults to system username.
 - `force_recreate` (bool): If True, delete any existing workspace (stale or in-sync) before opening — whatever XML it holds is discarded — and re-unpack from the current source. Use this to recover from `WorkspaceSyncError`. Defaults to False.
 - `workspace_dir` (str | Path, optional): Base directory for the workspace. Overrides the `DOCX_EDITOR_WORKSPACE_DIR` environment variable and the platform cache default (see [Workspace location](#workspace-location)). A relative path resolves against the document's directory, so `workspace_dir=".docx"` keeps the workspace next to the file. Defaults to None.
+- `allow_protected` (bool): If True, open a document whose editing protection is enforced (Word's *Restrict Editing*) instead of raising [`DocumentProtectedError`](#documentprotectederror). The protection itself is left in place, so the saved document reaches Word still restricted. Defaults to False.
 
 **Returns:** Document instance ready for editing
 
@@ -28,6 +29,7 @@ Open a Word document for editing.
 - `WorkspaceSyncError`: If the source `.docx` was modified since the workspace was created, or if a leftover workspace holds unsaved changes from a previous session — any session that made edits without a final successful `save()` back to the source (it saved to a different path, its save failed, or it closed with `close(cleanup=False)`). Pass `force_recreate=True` to discard the workspace and re-unpack from the current source. The workspace is never deleted silently. The error message includes the workspace path.
 - `WorkspaceLockedError`: If a live session — another process, or an unclosed `Document` in this one — already holds the document's workspace. Close the other session, or pass `force_recreate=True` to take the workspace over and discard its unsaved edits. Locks left by dead processes are reclaimed silently.
 - `WorkspaceError`: If the workspace directory cannot be created (e.g. the base is not writable), the home directory backing the default cache cannot be determined, or an existing workspace was unpacked from a different document. The message names the override to set.
+- `DocumentProtectedError`: If the document enforces an editing protection that locks its body text — `readOnly`, `forms` or `comments`. Carries `path` and `mode`. Unprotect it in Word, or pass `allow_protected=True`. A document enforcing `trackedChanges` opens normally: that mode asks for exactly what this library does.
 
 **Example:**
 
@@ -123,7 +125,7 @@ print(doc.workspace_path)  # Path("/home/you/.cache/docx-editor/0bebafb463a87cfa
 
 Whether any paragraph is hidden inside a drawing's text box (`w:txbxContent`).
 
-Text boxes are not an editing surface: their paragraphs are absent from every listing, their text from every view, search and hash. That makes an all-text-box document — a poster, a flyer, a certificate — read as empty, which is indistinguishable from a genuinely empty document without this flag. Exactly the complement of the paragraph exclusion: `True` means at least one `<w:p>` was excluded, so any text those paragraphs carry is not reachable from here. Extract it with LibreOffice (`soffice --headless --convert-to txt:Text file.docx`) rather than reporting the document as empty.
+Text boxes are not an editing surface: their paragraphs are absent from every listing, their text from every view, search and hash. That makes an all-text-box document — a poster, a flyer, a certificate — read as blank, which is indistinguishable from a genuinely empty document without this flag. Exactly the complement of the paragraph exclusion: `True` means at least one `<w:p>` was excluded, so any text those paragraphs carry is not reachable from here. To read it, go through HTML — `soffice --headless --convert-to html file.docx` then `pandoc file.html -t plain` — rather than reporting the document as empty. LibreOffice's `txt:Text` filter and pandoc reading the `.docx` directly both drop text boxes silently.
 
 **Returns:** `True` if any paragraph was excluded as text-box content (bool)
 
@@ -670,7 +672,12 @@ doc.delete_comment(0)
 
 #### `list_revisions(author=None, paragraph=None)`
 
-List all tracked changes in the document.
+List the document's tracked insertions and deletions.
+
+Insertions and deletions only. Every other revision type in the OOXML schema —
+format changes, moves, table-structure revisions — is listed by
+[`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone) instead,
+because none of it can be passed to `accept_revision()`.
 
 **Parameters:**
 
@@ -879,40 +886,104 @@ doc.reject_changeset(results[0].changeset_id)  # undo the whole batch
 
 #### `accept_all(author=None)`
 
-Accept all revisions.
+Accept all insertions and deletions.
+
+Resolves `w:ins`/`w:del` only. Every other revision type is left pending and
+reported on the result rather than silently ignored — see
+[`ResolveResult`](#resolveresult) for the counting rule and
+[`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone) for what is
+in that set.
+
+Only `word/document.xml` is inspected; headers, footers and footnotes are the
+container-parts epic (ISSUES.md #30).
 
 **Parameters:**
 
 - `author` (str, optional): If provided, only accept revisions by this author
 
-**Returns:** Number of revisions accepted (int)
+**Returns:** [`ResolveResult`](#resolveresult) — an `int` whose value is the
+number of revisions accepted, carrying `.unhandled` and `.unhandled_types`.
+
+**Warns:** [`UnhandledRevisionWarning`](#unhandledrevisionwarning) if
+`.unhandled` is nonzero.
 
 **Example:**
 
 ```python
-count = doc.accept_all()
-print(f"Accepted {count} revisions")
+result = doc.accept_all()
+print(f"Accepted {result} revisions")
+if result.unhandled:
+    print(f"Still pending: {result.unhandled_types}")
+    # -> Still pending: {'w:moveFrom': 8, 'w:moveTo': 8, ...}
 ```
 
 #### `reject_all(author=None)`
 
-Reject all revisions.
+Reject all insertions and deletions.
+
+Resolves `w:ins`/`w:del` only; every other revision type is left pending and
+reported exactly as in `accept_all()`.
 
 **Parameters:**
 
 - `author` (str, optional): If provided, only reject revisions by this author
 
-**Returns:** Number of revisions rejected (int)
+**Returns:** [`ResolveResult`](#resolveresult) — an `int` whose value is the
+number of revisions rejected, carrying `.unhandled` and `.unhandled_types`.
+
+**Warns:** [`UnhandledRevisionWarning`](#unhandledrevisionwarning) if
+`.unhandled` is nonzero.
 
 **Example:**
 
 ```python
-count = doc.reject_all(author="OtherUser")
+result = doc.reject_all(author="OtherUser")
+if result.unhandled:
+    print(f"Still pending: {result.unhandled_types}")
+```
+
+#### `list_unhandled_revisions(author=None)`
+
+List the revision types this library does not accept or reject.
+
+The complement of `list_revisions()`: everything in the OOXML revision schema
+except insertions and deletions — property changes (`w:pPrChange`,
+`w:rPrChange`, `w:sectPrChange`, the table `*PrChange` family), content moves
+(`w:moveFrom`/`w:moveTo` and their range marks), table-structure revisions
+(`w:cellIns`, `w:cellDel`, `w:cellMerge`), `w:numberingChange` and the
+custom-XML range marks. These survive open/edit/save unchanged and are left
+pending by `accept_all()`/`reject_all()`.
+
+Call this before telling a human "all changes accepted": on a format-only
+redline `accept_all()` returns 0 because there was nothing it *could* accept,
+not because there was nothing to do.
+
+Rows are [`UnhandledRevision`](#unhandledrevision), deliberately not `Revision`
+objects — they carry nothing `accept_revision()` could act on.
+
+Only `word/document.xml` is inspected (ISSUES.md #30).
+
+**Parameters:**
+
+- `author` (str, optional): If provided, filter by author name. Marks with no
+  `w:author` attribute read as `"Unknown"`, so they match only
+  `author="Unknown"`, are excluded from every other filtered call, and are
+  included in an unfiltered one.
+
+**Returns:** List of `UnhandledRevision` in document order
+
+**Example:**
+
+```python
+result = doc.accept_all()
+if result.unhandled:
+    for row in doc.list_unhandled_revisions():
+        print(f"still pending: {row.tag} by {row.author} @{row.paragraph_ref}")
 ```
 
 ### Save and Close Methods
 
-#### `save(path=None, validate=False, force=False)`
+#### `save(path=None, validate=False, force=False, *, track_changes=None)`
 
 Save the document.
 
@@ -921,8 +992,11 @@ Save the document.
 - `path` (str | Path, optional): Output path. Defaults to original source path.
 - `validate` (bool): If True, validate with LibreOffice before saving. Defaults to False.
 - `force` (bool): If True, skip save-time safety checks. By default `save()` refuses to overwrite the source if it changed on disk since it was opened (raising [`WorkspaceSyncError`](#workspacesyncerror)), or to write a destination that appears open in Word — a `~$` owner file exists next to it (raising [`DocumentOpenError`](#documentopenerror)). Pass `force=True` only for a confirmed-stale lock left by a crashed session. Defaults to False.
+- `track_changes` (bool, optional): Whether to turn Word's track-changes switch (`<w:trackRevisions/>` in `word/settings.xml`) on in the saved file. `None` (the default) writes it exactly when the document carries a pending revision authored under this session's author name; `True` writes it either way (warning if the document has no `word/settings.xml` to write it into); `False` leaves `settings.xml` alone. See below.
 
 **Returns:** Path to the saved document (Path)
+
+**The track-changes switch.** A saved redline shows up in Word whether or not the switch is on, but the switch is what keeps the *recipient's* own typing tracked — without it the next round of edits arrives untracked and the two rounds can no longer be told apart. So a save of a document holding a revision authored by this session also writes `<w:trackRevisions/>`. The test is the document's state rather than whether this session edited, so a pending redline of ours reopened from an earlier session counts too — it is still awaiting a reply. A document holding no revision of ours (one not redlined, or one whose revisions were accepted) is saved untouched; `track_changes=False` opts out entirely and never removes a flag the document already had. A document that turns tracking *off* explicitly (`<w:trackRevisions w:val="false"/>`) is respected rather than overridden: the element is left as it is and the save emits a `UserWarning` saying the recipient's edits will not be tracked. `track_changes=True` overrides that setting.
 
 After saving to a different path (or a save that fails), the workspace is flagged as holding unsaved changes; a later `Document.open()` of the source raises `WorkspaceSyncError` until the workspace is saved back to the source or discarded — with `force_recreate=True` on the next open, or once with [`Document.discard_workspace(path)`](#documentdiscard_workspacepath-workspace_dirnone). See [`WorkspaceSyncError`](#workspacesyncerror) below.
 
@@ -1010,7 +1084,7 @@ from docx_editor import Revision
 | `author` | str | The revision author |
 | `date` | datetime or None | When the revision was made |
 | `text` | str | The inserted or deleted text |
-| `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits in no addressable paragraph — outside any `<w:p>` (e.g. a `<w:trPr>` row marker), or inside a drawing's text box — still listed, but Word writes every box twice, so it is listed once per copy and a single `accept_revision()`/`accept_group()` leaves the twins out of step. Only `accept_all()`/`reject_all()` resolve both unconditionally: Word commonly stamps the same `w:id` on both copies, and a duplicated id is ungroupable (`group_id` and `changeset_id` are both None). Copies with distinct ids and identical author/date join one inferred changeset, which `accept_changeset()` resolves — along with every other group that author stamped in the same second |
+| `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits in no addressable paragraph — outside any `<w:p>` (e.g. a `<w:trPr>` row marker), or inside a drawing's text box — still listed, but a box is stored twice, so it is listed once per copy and one `accept_revision()`/`reject_revision()` call resolves only the copy it lands on; calling it again with the same id takes the other and then returns `False`. `accept_all()`/`reject_all()` are the only single calls that always resolve both: when a producer copies the `mc:Choice` content into `mc:Fallback` verbatim the copies share a `w:id`, and a duplicated id is ungroupable (`group_id` and `changeset_id` are both None). Copies with distinct ids and identical author/date join one inferred changeset, which `accept_changeset()` resolves — along with every other group carrying that author and the identical raw `w:date` string |
 | `occurrence` | int or None | 0-based occurrence index of `text` within the containing paragraph, counted in the view where the revision's text lives (the visible view for insertions, the original pre-revision view for deletions). For insertions it plugs directly into the `occurrence=` parameter of the anchor APIs; None whenever targeting-by-text does not apply (empty text, a host insertion partly consumed by a nested deletion, a nested deletion, or a None `paragraph_ref`) |
 | `nested_under` | int or None | id of the nearest enclosing revision (e.g. a foreign deletion inside another author's pending insertion), else None |
 | `contains_ids` | tuple[int, ...] | ids of the revisions nested inside this one, in document order (empty tuple when none). Both nesting fields report *structural* containment and so, unlike `text`, still cross into a text box — accepting a host insertion does not resolve the box's own revisions |
@@ -1129,6 +1203,81 @@ print(split.refs)           # ("P2#…", "P3#…")
 
 doc.replace("net", "gross", paragraph=result)  # usable as a plain ref
 doc.reject_group(result.group_id)              # undo the first edit entirely
+```
+
+---
+
+## ResolveResult
+
+The result of `accept_all()` / `reject_all()`: the number of revisions resolved,
+plus what could not be.
+
+Subclasses `int`, and the int value *is* the resolved count — so
+`count = doc.accept_all()` keeps working in comparisons, arithmetic, f-strings
+and `json.dumps`. `isinstance(result, int)` is True; the concrete type is
+`ResolveResult`, so an exact-type check (`type(result) is int`) is not.
+
+```python
+from docx_editor import ResolveResult
+```
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| *(the int value)* | int | Number of `w:ins`/`w:del` revisions resolved |
+| `unhandled` | int | How many revision elements this library never resolves are still in the document. On an `author=`-filtered call this counts only that author's marks, matching the scope of the claim being made. `0` on an ordinary insertions-and-deletions redline. |
+| `unhandled_types` | dict[str, int] | Tag → count for those elements, e.g. `{"w:rPrChange": 3, "w:moveTo": 1}`. Empty when `unhandled` is 0. |
+
+Both are counted **after** resolution, which is the honest measure of the claim
+being made ("everything is resolved"): a foreign mark inside a rejected
+insertion's subtree is removed with it, so it correctly does not appear. It is
+not a census of what the document held on entry.
+
+They count what is still *pending*, so a mark recorded inside a change record —
+a `w:cellIns` in a `w:tcPrChange`'s historical `w:tcPr` — is not counted a
+second time alongside the change itself.
+
+### Example
+
+```python
+result = doc.accept_all()
+print(result)             # "2" — str/format stay the plain int
+print(result + 1)         # 3
+print(result.unhandled)   # 20
+print(result.unhandled_types)
+# {'w:moveFrom': 8, 'w:moveFromRangeStart': 1, 'w:moveFromRangeEnd': 1,
+#  'w:moveTo': 8, 'w:moveToRangeStart': 1, 'w:moveToRangeEnd': 1}
+```
+
+---
+
+## UnhandledRevision
+
+One revision element this library does not accept or reject, as returned by
+[`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone).
+
+```python
+from docx_editor import UnhandledRevision
+```
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `tag` | str | The element's tag, e.g. `"w:pPrChange"` |
+| `id` | int or None | The element's `w:id`, or None when it carries none or a non-numeric one. Unlike `Revision`, an id-less mark is still listed — nothing here is targeted by id. |
+| `author` | str | `w:author`, or `"Unknown"` when the attribute is absent — matching `Revision`. `w:tblGridChange` and the range `*End` marks carry only `w:id` in the schema, so they always read as `"Unknown"`. |
+| `date` | datetime or None | Parsed `w:date`, or None when absent or unparseable |
+| `paragraph_ref` | str or None | Hash-anchored ref of the containing `<w:p>`, or None when the mark sits in no addressable paragraph — outside any paragraph (e.g. a `w:tblPrChange` in a table's properties, or a `w:sectPrChange` in a section break), or inside a drawing's text box |
+
+### Example
+
+```python
+for row in doc.list_unhandled_revisions():
+    print(row)
+# UnhandledRevision(moveFrom 0 @P1#6c81 by László Németh)
+# UnhandledRevision(pPrChange 0 @P3#026f by Kelemen Gábor 2)
 ```
 
 ---
@@ -1535,6 +1684,23 @@ except DocumentOpenError as e:
     print(f"Close {e.path} in Word first (lock: {e.owner_file})")
 ```
 
+### `DocumentProtectedError`
+
+Raised by `Document.open()` when the document's editing protection is enforced and its mode locks the body text. Word's *Restrict Editing* writes `<w:documentProtection>` into `word/settings.xml`; `readOnly`, `forms` and `comments` all mean the author asked for the content not to be edited, so opening refuses rather than producing a file Word reopens with the same lock over unexpected edits. A protection configured but switched off (`w:enforcement="0"`) never raises, and neither does the `trackedChanges` mode — it enforces exactly what this library already does. An enforcement value outside the schema's on/off spellings fails closed and raises. Only `w:documentProtection` is read: `w:writeProtection` (*Password to modify*, *Always Open Read-Only*) restricts saving rather than editing and is out of scope. The exception carries `path` (the document) and `mode` (the raw `w:edit` value) attributes.
+
+Recovery: unprotect the document in Word (Review > Restrict Editing > Stop Protection), or open it anyway with `allow_protected=True`, which leaves the protection in the saved file.
+
+```python
+from docx_editor import Document
+from docx_editor.exceptions import DocumentProtectedError
+
+try:
+    doc = Document.open("contract.docx")
+except DocumentProtectedError as e:
+    print(f"{e.path} is protected ({e.mode})")
+    doc = Document.open(e.path, allow_protected=True)
+```
+
 ### `WorkspaceLockedError`
 
 Raised when opening a document whose workspace is locked by a live session — another process (or another `Document` object in the same process) already has it open. Two sessions sharing one workspace would silently overwrite each other's saves. Close the other session, or pass `force_recreate=True` to take the workspace over and discard its unsaved edits. Locks left behind by dead processes are reclaimed automatically and never raise. The exception carries `pid` and `lock_path` attributes.
@@ -1546,4 +1712,25 @@ try:
     doc = Document.open("contract.docx")
 except WorkspaceLockedError as e:
     print(f"Held by pid {e.pid}")
+```
+
+## Warnings
+
+### `UnhandledRevisionWarning`
+
+Emitted by `accept_all()` / `reject_all()` when the document still holds
+revision elements outside the `w:ins`/`w:del` pair those verbs walk — format
+changes, content moves, table-structure revisions, custom-XML range marks.
+Without it, `accept_all()` returning 0 on a format-only redline reads as "there
+was nothing to accept" rather than "nothing here could be accepted".
+
+Inspect what remains with
+[`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone), or read
+the counts off the returned [`ResolveResult`](#resolveresult).
+
+```python
+import warnings
+from docx_editor import UnhandledRevisionWarning
+
+warnings.filterwarnings("ignore", category=UnhandledRevisionWarning)
 ```

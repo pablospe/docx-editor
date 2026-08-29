@@ -25,7 +25,11 @@ make corpus-check                                    # assemble + full run (incl
 uv run python benchmarks/corpus/build_corpus.py      # assemble corpus into files/
 uv run python benchmarks/corpus/corpus_harness.py --no-pdf   # skip the PDF stage
 uv run python benchmarks/corpus/corpus_harness.py --only mammoth  # filter by substring
+uv run python benchmarks/corpus/corpus_harness.py --census   # revision census only
 ```
+
+`--census` reads and parses the zips in-process — no subprocesses, no library
+round-trip, no `soffice` — so the census below is reproducible in seconds.
 
 Each file runs in an isolated subprocess with a hard timeout; one hang or crash
 cannot kill the run. Results are written to `results.json` and a summary table
@@ -34,6 +38,65 @@ is printed. Row marks: `.` pass, `F` fail, `s` skip, `r` rejected, `-` not run.
 A weekly GitHub Actions workflow (`.github/workflows/corpus.yml`) runs the full
 corpus — including the PDF stage — with LibreOffice and pandoc installed;
 trigger it manually with `workflow_dispatch` after changes.
+
+## Revision census
+
+Every run also counts revision-bearing elements by tag across each file's
+`word/*.xml` parts (recorded as `rec["census"]` in `results.json`). It is
+informational — never a stage, never a failure — and exists to answer which
+revision types real-world producers actually emit. Observed 2026-08-28 over the
+56-file corpus:
+
+```text
+tag                               elements  files  producers
+ w:ins                                   9      3  LibreOffice (docx re-save), LibreOffice core ooxmlexport fix
+ w:del                                   8      2  LibreOffice (docx re-save), docx-editor test fixture
+*w:moveFrom                              8      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
+*w:moveTo                                8      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
+*w:pPrChange                             2      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
+*w:moveFromRangeEnd                      1      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
+*w:moveFromRangeStart                    1      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
+*w:moveToRangeEnd                        1      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
+*w:moveToRangeStart                      1      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
+
+5/56 files carry at least one revision element
+* = not resolved by accept_all/reject_all (22 element(s), ISSUES.md #68)
+
+w:ins/w:del by parent element (structural markers vs content revisions):
+  w:p                               16
+  w:rPr                              1  <- paragraph-mark ins/del, or a change record's rPr
+
+1 XML part(s) across 1 file(s) could not be censused:
+  - poi_ExternalEntityInText.docx [word/document.xml]: EntitiesForbidden: ...
+```
+
+Read as evidence for ISSUES.md #68:
+
+- **Moves are the largest unhandled family**, and they are real, not synthetic:
+  `locore_TC-table-DnD-move.docx` (a LibreOffice-core ooxmlexport fixture of a
+  Word drag-and-drop move) carries all 20 move marks. `accept_all()` on it
+  resolves 0 and leaves the whole redline pending.
+- **Property changes occur too**: `locore_UnknownStyleInRedline.docx` carries
+  2 `w:pPrChange` and likewise resolves to 0.
+- **No corpus file uses** `w:rPrChange`, `w:sectPrChange`, `w:numberingChange`,
+  any table-structure revision (`w:cellIns`/`w:cellDel`/`w:cellMerge`, the
+  `*PrChange` family) or any custom-XML range mark. Reported as a gap rather
+  than padded: the provenance policy requires corpus files to represent real
+  producers, so hand-authored XML for those types lives in
+  `tests/test_unhandled_revisions.py` instead.
+- **The structural `w:ins`/`w:del` cases are rare but present**: one
+  paragraph-mark marker (`w:pPr/w:rPr/w:ins`, in `locore_cell-sdt-redline.docx`
+  — checked individually, since a change record's recorded `w:rPrChange/w:rPr`
+  would share the `w:rPr` row) against 16 ordinary content revisions, and no
+  `w:trPr` row markers at all.
+  These resolve *approximately* today — the marker is dropped without merging
+  the paragraph or removing the row — which is why the context breakdown is
+  tracked separately from the unhandled count.
+
+The `*`-marked tags are exactly `UNHANDLED_REVISION_TAGS`
+(`docx_editor/track_changes.py`), which is also what `accept_all()` /
+`reject_all()` report as `.unhandled` and what `list_unhandled_revisions()`
+lists.
 
 ## Failure semantics
 

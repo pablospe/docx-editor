@@ -1,4 +1,4 @@
-"""Custom exceptions for docx_editor library."""
+"""Custom exceptions and warnings for docx_editor library."""
 
 from pathlib import Path
 
@@ -138,6 +138,35 @@ class DocumentOpenError(DocxEditError):
     ):
         self.path = path
         self.owner_file = owner_file
+        super().__init__(message)
+
+
+class DocumentProtectedError(DocxEditError):
+    """Raised when opening a document whose editing protection is enforced.
+
+    Word's *Restrict Editing* writes ``<w:documentProtection>`` into
+    ``word/settings.xml``. When its enforcement is on and the mode locks the
+    body text — ``readOnly``, ``forms`` or ``comments`` — the author asked for
+    the content not to be edited, so ``Document.open()`` refuses rather than
+    producing a file Word will reopen with the same lock over unexpected edits.
+    Unprotect the document in Word, or pass ``allow_protected=True`` to open it
+    anyway.
+
+    The ``trackedChanges`` mode never raises: it enforces exactly what this
+    library already does. Neither does ``w:writeProtection`` (Word's "Password
+    to modify" and "Always Open Read-Only"), which is a different element and
+    out of scope: it restricts saving over the original rather than editing the
+    body.
+
+    Attributes:
+        path: The document that is protected, or None if unknown.
+        mode: The raw ``w:edit`` value that triggered the guard
+            (``"readOnly"``, ``"forms"`` or ``"comments"``), or None if unknown.
+    """
+
+    def __init__(self, message: str, *, path: Path | None = None, mode: str | None = None):
+        self.path = path
+        self.mode = mode
         super().__init__(message)
 
 
@@ -378,3 +407,23 @@ class HashMismatchError(DocxEditError):
             f'Current content: "{paragraph_preview}". '
             f"Use P{paragraph_index}#{actual_hash} to target current content."
         )
+
+
+class UnhandledRevisionWarning(UserWarning):
+    """Warns that a resolution left revision types this library does not resolve.
+
+    Emitted by ``accept_all``/``reject_all`` when the document still holds
+    revision elements outside the ``w:ins``/``w:del`` pair those verbs walk —
+    format changes (``w:pPrChange``, ``w:rPrChange``, ``w:trPrChange``, ...),
+    content moves (``w:moveFrom``/``w:moveTo``), table-structure revisions
+    (``w:cellIns``, ``w:cellDel``, ``w:cellMerge``) and the custom-XML range
+    marks. Without it a
+    ``accept_all()`` returning 0 on a format-only redline reads as "there was
+    nothing to accept" rather than "nothing here could be accepted".
+
+    Inspect what remains with ``Document.list_unhandled_revisions()``, or read
+    the counts off the returned ``ResolveResult`` (``.unhandled`` /
+    ``.unhandled_types``). To silence it::
+
+        warnings.filterwarnings("ignore", category=UnhandledRevisionWarning)
+    """
