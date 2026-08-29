@@ -115,7 +115,7 @@ print(doc.source_path)  # Path("/path/to/contract.docx")
 
 #### `workspace_path`
 
-Get the path to this document's workspace folder. Since the workspace lives in the user cache by default, this is how you locate the unpacked XML — for example after `close(cleanup=False)`, or when a workspace was preserved because an exception was raised. Either way the workspace holds the last state flushed by `save()`: tracked-change edits made but not saved live only in memory and are **not** in it. (A first `add_comment()` is the exception — it writes comment-part scaffolding into the workspace and flags it as diverged before any save; the unsaved comment text itself is still memory-only.)
+Get the path to this document's workspace folder. Since the workspace lives in the user cache by default, this is how you locate the unpacked XML — for example after `close(cleanup=False)`, or when a workspace was preserved because an exception was raised. Either way the workspace holds the last state flushed by `save()`: tracked-change edits made but not saved live only in memory and are **not** in it. (A first `add_comment()` — or a first `note=` edit, which creates a comment too — is the exception: it writes comment-part scaffolding into the workspace and flags it as diverged before any save; the unsaved comment text itself is still memory-only.)
 
 ```python
 print(doc.workspace_path)  # Path("/home/you/.cache/docx-editor/0bebafb463a87cfa")
@@ -365,9 +365,11 @@ A replace landing wholly inside **your own** pending insertion **amends** that i
 - `replace_with` (str): Replacement text
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `find` is a `SearchResult`.
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
-- `note` (str | None, keyword-only): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
+- `note` (str | None): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`/`comment_id`)
+
+**Warns:** [`UnanchoredNoteWarning`](#unanchorednotewarning) if `note=` was given but the edit created no revision to anchor it on — the edit still applies.
 
 **Example:**
 
@@ -387,9 +389,11 @@ Mark text as deleted with tracked changes. Deleting text inside another author's
 - `text` (str | [`SearchResult`](#searchresult)): Text to mark as deleted, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it)
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `text` is a `SearchResult`.
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
-- `note` (str | None, keyword-only): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
+- `note` (str | None): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`/`comment_id`)
+
+**Warns:** [`UnanchoredNoteWarning`](#unanchorednotewarning) if `note=` was given but the edit created no revision to anchor it on — the edit still applies.
 
 **Example:**
 
@@ -409,9 +413,11 @@ Insert text after anchor with tracked changes. An anchor inside another author's
 - `text` (str): Text to insert after the anchor
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `anchor` is a `SearchResult`.
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
-- `note` (str | None, keyword-only): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
+- `note` (str | None): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`/`comment_id`)
+
+**Warns:** [`UnanchoredNoteWarning`](#unanchorednotewarning) if `note=` was given but the edit created no revision to anchor it on — the edit still applies.
 
 **Example:**
 
@@ -431,9 +437,11 @@ Insert text before anchor with tracked changes. Foreign pending insertions are t
 - `text` (str): Text to insert before the anchor
 - `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `anchor` is a `SearchResult`.
 - `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
-- `note` (str | None, keyword-only): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
+- `note` (str | None): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`/`comment_id`)
+
+**Warns:** [`UnanchoredNoteWarning`](#unanchorednotewarning) if `note=` was given but the edit created no revision to anchor it on — the edit still applies.
 
 **Example:**
 
@@ -468,8 +476,9 @@ document sees the change and its rationale together. Five rules govern it.
    is a single call — two separate `replace(note="X")` calls are two proposals
    at two moments, so two comments.
 
-2. **The note does not outlive the revision it explains.** When the last
-   revision a note covers is resolved, the comment is deleted — on **accept**
+2. **The note does not outlive the revision it explains** (within the session
+   that made it — see rule 5). When the last revision a note covers is
+   resolved, the comment is deleted — on **accept**
    as well as on **reject**, and through every verb: `accept_revision`,
    `reject_revision`, `accept_group`, `reject_group`, `accept_changeset`,
    `reject_changeset`, `accept_all`, `reject_all`. A pipeline that calls
@@ -485,8 +494,10 @@ document sees the change and its rationale together. Five rules govern it.
    whose revisions survive it untouched.
 
    When only part of a shared note's edits is resolved, the comment stays and
-   its range moves onto a redline that is still pending, so the rationale never
-   points at text nobody changed.
+   the whole thread's range — replies included — moves onto a redline that is
+   still pending, so the rationale never points at text nobody changed. If no
+   surviving edit can carry a comment marker, the note goes with the anchor it
+   lost.
 
    For rationale that must survive resolution, use
    [`add_comment()`](#add_commentanchor_text-comment-paragraphnone-occurrencenone)
@@ -534,8 +545,7 @@ reports the offending row.
 **Example:**
 
 ```python
-import warnings
-from docx_editor import EditOperation, UnanchoredNoteWarning
+from docx_editor import EditOperation
 
 result = doc.replace(
     "30 days", "60 days",
@@ -594,9 +604,11 @@ resolve them as a unit with [`accept_group()`](#accept_groupgroup_id) /
 
 - `ref` (str): Paragraph reference from `list_paragraphs()`
 - `new_text` (str): Desired paragraph text
-- `note` (str | None, keyword-only): Rationale for the rewrite, anchored as one comment spanning its first through last revision — see [Rationale notes](#rationale-notes)
+- `note` (str | None): Rationale for the rewrite, anchored as one comment spanning its first through last revision — see [Rationale notes](#rationale-notes)
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`; `group_id` is `None` when `new_text` equals the current text, or when every change landed inside your own pending insertions and amended them in place — undo those by rejecting the group of the amended insertion; `comment_id` carries a `note=`'s comment)
+
+**Warns:** [`UnanchoredNoteWarning`](#unanchorednotewarning) if `note=` was given but the edit created no revision to anchor it on — the edit still applies.
 
 **Example:**
 
@@ -617,6 +629,8 @@ stale, the entire batch is rejected before any edits are applied.
 - `dry_run` (bool): If True, validate every operation without applying any edits and return one [`EditValidationResult`](#editvalidationresult) per operation, in input order; the document is left unchanged. Each operation is validated independently against the current document — sequential effects between multiple operations on the same paragraph are **not** simulated. Defaults to False.
 
 **Returns:** Updated paragraph references in input order (list of [`EditResult`](#editresult)) — each operation that creates revisions gets its own revision group, so one op can be accepted and another rejected (`group_id` is `None` for an op that created no new revisions, e.g. text spliced into one of your own pending insertions); with `dry_run=True`, a list of [`EditValidationResult`](#editvalidationresult) instead. Operations carrying `note=` also carry the resulting `comment_id`; operations of one call sharing the same note text share one comment.
+
+**Warns:** [`UnanchoredNoteWarning`](#unanchorednotewarning) if `note=` was given but the edit created no revision to anchor it on — the edit still applies.
 
 **Raises:** [`BatchOperationError`](#batchoperationerror) — the only exception a non-dry-run batch raises for a failing operation, whatever the underlying cause (stale hash, malformed ref, missing text, ambiguous target). `operation_index` names the failing op; `original` (also `__cause__`) holds the underlying typed exception. The batch is atomic: nothing is applied on failure.
 
@@ -802,6 +816,8 @@ Accept a revision by ID.
 
 **Returns:** True if accepted, False if not found (bool)
 
+**Note:** any `note=` rationale left with no live revision to explain is deleted with it, replies included — see [Rationale notes](#rationale-notes).
+
 **Example:**
 
 ```python
@@ -821,6 +837,8 @@ Reject a revision by ID.
 - `revision_id` (int): ID of the revision to reject
 
 **Returns:** True if rejected, False if not found (bool)
+
+**Note:** any `note=` rationale left with no live revision to explain is deleted with it, replies included — see [Rationale notes](#rationale-notes).
 
 **Example:**
 
@@ -879,6 +897,8 @@ Document stays open and revision ids are preserved).
 
 **Raises:** [`RevisionError`](#revisionerror) if the group id is unknown to this open Document.
 
+**Note:** any `note=` rationale left with no live revision to explain is deleted with it, replies included — see [Rationale notes](#rationale-notes).
+
 **Example:**
 
 ```python
@@ -901,6 +921,8 @@ recorded vs inferred groups and per-open renumbering.
 **Returns:** Number of revisions rejected (int). Members already resolved individually are skipped (and not counted).
 
 **Raises:** [`RevisionError`](#revisionerror) if the group id is unknown.
+
+**Note:** any `note=` rationale left with no live revision to explain is deleted with it, replies included — see [Rationale notes](#rationale-notes).
 
 **Example:**
 
@@ -946,6 +968,8 @@ resolves fine.
 
 **Raises:** [`RevisionError`](#revisionerror) if the changeset id is unknown to this open Document.
 
+**Note:** any `note=` rationale left with no live revision to explain is deleted with it, replies included — see [Rationale notes](#rationale-notes).
+
 **Example:**
 
 ```python
@@ -968,6 +992,8 @@ vs inferred changesets and per-open renumbering.
 **Returns:** Number of revisions rejected across the changeset's groups (int). Members already resolved individually are skipped (and not counted).
 
 **Raises:** [`RevisionError`](#revisionerror) if the changeset id is unknown to this open Document.
+
+**Note:** any `note=` rationale left with no live revision to explain is deleted with it, replies included — see [Rationale notes](#rationale-notes).
 
 **Example:**
 
@@ -999,6 +1025,8 @@ number of revisions accepted, carrying `.unhandled` and `.unhandled_types`.
 **Warns:** [`UnhandledRevisionWarning`](#unhandledrevisionwarning) if
 `.unhandled` is nonzero.
 
+**Note:** any `note=` rationale left with no live revision to explain is deleted with it, replies included — see [Rationale notes](#rationale-notes).
+
 **Example:**
 
 ```python
@@ -1025,6 +1053,8 @@ number of revisions rejected, carrying `.unhandled` and `.unhandled_types`.
 
 **Warns:** [`UnhandledRevisionWarning`](#unhandledrevisionwarning) if
 `.unhandled` is nonzero.
+
+**Note:** any `note=` rationale left with no live revision to explain is deleted with it, replies included — see [Rationale notes](#rationale-notes).
 
 **Example:**
 
@@ -1280,7 +1310,7 @@ from docx_editor import EditResult
 | `changeset_id` | int or None | Changeset (one whole call) this edit's group belongs to, for [`accept_changeset()`](#accept_changesetchangeset_id) / [`reject_changeset()`](#reject_changesetchangeset_id). Every `EditResult` from one `batch_edit`/`batch_rewrite` shares it; None iff `group_id` is None. Per-open-`Document`, like `group_id`. |
 | `revision_ids` | tuple[int, ...] | The `w:id`s of the group's member revisions, in creation order; `()` when `group_id` is None |
 | `refs` | tuple[str, ...] | Every resulting paragraph ref, in document order. `(str(self),)` for a normal edit; for a `\n` paragraph split it carries the first paragraph (== the string value) plus one ref per new paragraph the split created. A split shifts later indexes, so re-resolve stale refs before reuse. |
-| `comment_id` | int or None | Id of the comment holding this edit's `note=` rationale, anchored on the revisions above — a live comment id, usable with `reply_to_comment()`/`delete_comment()`. `None` when no `note=` was given, and `None` with an `UnanchoredNoteWarning` when a note was given but there was nothing to anchor it on. See [Rationale notes](#rationale-notes). |
+| `comment_id` | int or None | Id of the comment holding this edit's `note=` rationale, anchored on the revisions above — a live comment id, usable with `reply_to_comment()`/`delete_comment()`. `None` when no `note=` was given, and `None` with an `UnanchoredNoteWarning` when a note was given but there was nothing to anchor it on — unless a sibling operation of the same call recorded that same note text, in which case this carries the shared id and nothing warns. See [Rationale notes](#rationale-notes). |
 
 ### Example
 

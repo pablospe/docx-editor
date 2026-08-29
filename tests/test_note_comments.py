@@ -381,6 +381,83 @@ class TestResolutionRemovesTheNote:
         assert doc.list_comments() == []
         assert _marker_counts(doc) == (0, 0, 0)
 
+    def test_a_deleted_note_is_never_resurrected(self, doc):
+        """delete_comment() on a note ends it: re-placing markers for a comment
+        with no body left would make the file unreadable."""
+        refs = [find_ref(doc, "quick brown"), find_ref(doc, "sample document")]
+        results = doc.batch_edit([
+            EditOperation.replace("quick", "swift", paragraph=refs[0], note="house style"),
+            EditOperation.replace("sample", "example", paragraph=refs[1], note="house style"),
+        ])
+        assert doc.delete_comment(results[0].comment_id) is True
+        assert _marker_counts(doc) == (0, 0, 0)
+
+        doc.reject_group(results[0].group_id)
+
+        assert doc.list_comments() == []
+        assert _marker_counts(doc) == (0, 0, 0)
+        doc.reject_group(results[1].group_id)
+        assert _marker_counts(doc) == (0, 0, 0)
+
+    def test_re_anchoring_moves_the_whole_thread(self, doc):
+        """A reply's markers are seated on its parent's, so they move with it."""
+        refs = [find_ref(doc, "quick brown"), find_ref(doc, "sample document")]
+        results = doc.batch_edit([
+            EditOperation.replace("quick", "swift", paragraph=refs[0], note="house style"),
+            EditOperation.replace("sample", "example", paragraph=refs[1], note="house style"),
+        ])
+        reply_id = doc.reply_to_comment(results[0].comment_id, "agreed")
+
+        doc.reject_group(results[0].group_id)
+
+        for comment_id in (results[0].comment_id, reply_id):
+            start, end = _markers(doc, comment_id)
+            assert _paragraph_index(doc, start) == 3
+            assert _paragraph_index(doc, end) == 3
+        assert [r.text for r in doc.list_comments()[0].replies] == ["agreed"]
+
+    def test_a_paragraph_mark_only_op_shares_the_note_without_extending_its_life(self, doc):
+        """A pure split cannot host a comment marker, so it inherits the shared
+        id but is not registered as a group keeping the comment alive."""
+        refs = [find_ref(doc, "quick brown"), find_ref(doc, "sample document")]
+        results = doc.batch_edit([
+            EditOperation.replace("quick", "swift", paragraph=refs[0], note="house style"),
+            EditOperation.insert_after("document", "\n", paragraph=refs[1], note="house style"),
+        ])
+        assert results[0].comment_id == results[1].comment_id
+
+        doc.reject_group(results[0].group_id)
+
+        assert doc.list_comments() == []
+        assert _marker_counts(doc) == (0, 0, 0)
+        # The split itself is untouched — only its rationale went.
+        assert doc.list_revisions() != []
+
+    def test_a_shared_note_dies_when_no_survivor_can_hold_the_anchor(self, doc):
+        """A registered group can still be whittled down to a paragraph mark.
+
+        The second operation is anchorable when the note lands, so it is
+        registered; amending its inserted text away leaves it live but with
+        nothing a marker can bracket. Resolving the anchor then has nowhere
+        honest to move to.
+        """
+        refs = [find_ref(doc, "quick brown"), find_ref(doc, "sample document")]
+        results = doc.batch_edit([
+            EditOperation.replace("quick", "swift", paragraph=refs[0], note="house style"),
+            EditOperation.insert_after("document", "\nNew line", paragraph=refs[1], note="house style"),
+        ])
+        assert results[0].comment_id == results[1].comment_id
+
+        # Amend the inserted text away: the group keeps only its paragraph mark.
+        doc.delete("New line", paragraph=results[1].refs[1])
+        assert [c.text for c in doc.list_comments()] == ["house style"]
+
+        doc.reject_group(results[0].group_id)
+
+        assert doc.list_comments() == []
+        assert _marker_counts(doc) == (0, 0, 0)
+        assert doc.list_revisions() != []  # the split is still pending
+
     def test_a_shared_note_stays_put_when_its_own_anchor_survives(self, doc):
         """Only a dead anchor moves: resolving the other operation is not a
         reason to churn the markers."""
@@ -673,6 +750,17 @@ class TestNotesAndOrdinaryComments:
         """A reply outliving its parent points at a paraId nothing still holds."""
         annotated = doc.replace("quick", "swift", paragraph=find_ref(doc, "quick brown"), note="tone")
         doc.reply_to_comment(annotated.comment_id, "agreed")
+
+        doc.accept_group(annotated.group_id)
+
+        assert doc.list_comments() == []
+        assert _marker_counts(doc) == (0, 0, 0)
+
+    def test_reaping_a_note_takes_a_nested_reply_too(self, doc):
+        """A reply to a reply is still part of the thread the note started."""
+        annotated = doc.replace("quick", "swift", paragraph=find_ref(doc, "quick brown"), note="tone")
+        reply_id = doc.reply_to_comment(annotated.comment_id, "agreed")
+        doc.reply_to_comment(reply_id, "and here too")
 
         doc.accept_group(annotated.group_id)
 

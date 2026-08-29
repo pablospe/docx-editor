@@ -189,7 +189,7 @@ class CommentManager:
         One rule for the two element-or-text anchored bodies — ``add_comment``'s
         ``comment_text`` and ``add_comment_on_elements``' — so they cannot
         drift: it must be a string, and must carry no control characters
-        (``\n`` included: a comment body is a single ``<w:t>``, where a literal
+        (``\\n`` included: a comment body is a single ``<w:t>``, where a literal
         newline is an invisible, unreviewable artifact). ``reply_to_comment``
         keeps its own check because a reply may not be empty and reports a
         wrong type as ``ValueError``, not ``CommentError``.
@@ -518,14 +518,16 @@ class CommentManager:
             tag="w:commentReference", attrs={"w:id": str(parent_comment_id)}
         )
 
-        # Add reply markers after parent markers
-        self.document_editor.insert_after(parent_start_elem, self._comment_range_start_xml(comment_id))
-
-        parent_ref_run = parent_ref_elem.parentNode
-        self.document_editor.insert_after(parent_ref_run, f'<w:commentRangeEnd w:id="{comment_id}"/>')
-        self.document_editor.insert_after(parent_ref_run, self._comment_ref_run_xml(comment_id))
+        self._place_reply_markers(comment_id, parent_start_elem, parent_ref_elem)
 
         return self._commit_comment(comment_id, reply_text, parent_para_id=parent_info["para_id"])
+
+    def _place_reply_markers(self, comment_id: int, parent_start, parent_ref) -> None:
+        """Seat a reply's markers around its parent's, where Word expects them."""
+        self.document_editor.insert_after(parent_start, self._comment_range_start_xml(comment_id))
+        parent_ref_run = parent_ref.parentNode
+        self.document_editor.insert_after(parent_ref_run, f'<w:commentRangeEnd w:id="{comment_id}"/>')
+        self.document_editor.insert_after(parent_ref_run, self._comment_ref_run_xml(comment_id))
 
     def list_comments(self, author: str | None = None) -> list[Comment]:
         """List all comments in the document.
@@ -661,6 +663,8 @@ class CommentManager:
         # Remove from commentsIds.xml, keeping the durable id it holds — that
         # entry is the only place the two ids are linked, so the extensible
         # part can only be found before this element goes.
+        # A comment authored elsewhere whose commentsIds.xml row is missing
+        # leaves no way to reach its extensible entry; that orphan stays.
         durable_id = None
         if self.comments_ids_path.exists():
             editor = self._get_editor(self.comments_ids_path)
@@ -708,15 +712,25 @@ class CommentManager:
     def move_comment_markers(self, comment_id: int, first: Element, last: Element) -> None:
         """Re-anchor an existing comment's range on the span ``first``..``last``.
 
-        The comment body, id and any replies are untouched — only the range
-        markers and the reference run move. Used when the revisions a note
-        comment was anchored on are resolved while other revisions it explains
-        are still pending: leaving the range behind would point the rationale
-        at text nobody changed.
+        The comment bodies and ids are untouched; the whole thread's range
+        markers move together, because a reply's markers are seated relative to
+        its parent's and would otherwise be stranded at the old anchor. Used
+        when the revisions a note comment was anchored on are resolved while
+        other revisions it explains are still pending: leaving the range behind
+        would point the rationale at text nobody changed.
         """
+        replies = self.reply_ids(comment_id)
+        for reply_id in replies:
+            self._remove_range_markers(reply_id)
         self._remove_range_markers(comment_id)
         self.document_editor.insert_before(first, self._comment_range_start_xml(comment_id))
         self.document_editor.insert_after(last, self._comment_range_end_xml(comment_id))
+        if not replies:
+            return
+        start = self.document_editor.get_node(tag="w:commentRangeStart", attrs={"w:id": str(comment_id)})
+        ref = self.document_editor.get_node(tag="w:commentReference", attrs={"w:id": str(comment_id)})
+        for reply_id in replies:
+            self._place_reply_markers(reply_id, start, ref)
 
     def reply_ids(self, comment_id: int) -> list[int]:
         """Ids of every comment threaded under ``comment_id``, descendants included.

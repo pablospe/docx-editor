@@ -7,7 +7,7 @@ and comments.
 import html
 import shutil
 import warnings
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Literal, overload
 from xml.dom.minidom import Attr, Element
@@ -669,7 +669,10 @@ class Document:
             # Recorded — by this operation or by a sibling sharing its text.
             # Either way the rationale is in the document, so no warning.
             results[i] = comment_id
-            if gid is not None:
+            # Only a group the markers could sit on is registered: one with no
+            # span (a pure paragraph-mark split) can neither host the anchor if
+            # the current one is resolved nor honestly keep the comment alive.
+            if gid in spans:
                 self._note_comments[gid] = comment_id
                 self._note_groups.setdefault(comment_id, set()).add(gid)
         return results
@@ -712,33 +715,46 @@ class Document:
         if not dead:
             return
         for comment_id in {self._note_comments[g] for g in dead}:
+            # Every registered comment still exists: delete_comment() forgets
+            # the ones a caller removes, so nothing here can re-anchor a comment
+            # with no body — which would make the file unreadable.
             groups = self._note_groups[comment_id]
-            for group_id in groups & dead:
-                del self._note_comments[group_id]
             live = groups - dead
-            if not live:
-                # Nothing left to explain: the note goes, and so does any reply
-                # threaded under it — a reply left behind would point at a
-                # paraId no part of the document still holds.
-                for reply_id in self._comment_manager.reply_ids(comment_id):
-                    self._comment_manager.delete_comment(reply_id)
-                self._comment_manager.delete_comment(comment_id)
-                del self._note_groups[comment_id]
-                del self._note_anchors[comment_id]
-                continue
-            # Part of a shared note's edit was resolved. The rest is still
-            # pending, so the comment stays — but if the markers were on one of
-            # the resolved groups they now bracket text nobody changed, so move
-            # them onto a redline that is still there.
-            self._note_groups[comment_id] = live
-            if self._note_anchors[comment_id] not in dead:
-                continue
-            spans = self._revision_manager.group_spans(live)
-            for group_id in sorted(live):
-                if group_id in spans:
-                    self._comment_manager.move_comment_markers(comment_id, *spans[group_id])
-                    self._note_anchors[comment_id] = group_id
-                    break
+            if live:
+                # Part of a shared note's edit was resolved. The rest is still
+                # pending, so the comment stays — but if the markers were on one
+                # of the resolved groups they now bracket text nobody changed,
+                # so move the thread onto a redline that is still there.
+                for group_id in groups & dead:
+                    del self._note_comments[group_id]
+                self._note_groups[comment_id] = live
+                if self._note_anchors[comment_id] not in dead:
+                    continue
+                spans = self._revision_manager.group_spans(live)
+                anchor = next((gid for gid in sorted(live) if gid in spans), None)
+                if anchor is not None:
+                    self._comment_manager.move_comment_markers(comment_id, *spans[anchor])
+                    self._note_anchors[comment_id] = anchor
+                    continue
+                # Every surviving group has been whittled down to something a
+                # marker cannot bracket, so there is nowhere honest left to
+                # point: the note goes with the anchor it lost.
+                groups = live
+            # Nothing left to explain: the note goes, and so does any reply
+            # threaded under it — a reply left behind would point at a paraId
+            # no part of the document still holds.
+            for reply_id in self._comment_manager.reply_ids(comment_id):
+                self._comment_manager.delete_comment(reply_id)
+            self._comment_manager.delete_comment(comment_id)
+            self._forget_note_comment(comment_id, groups)
+
+    def _forget_note_comment(self, comment_id: int, groups: Iterable[int]) -> None:
+        """Drop every trace of one note comment from the three note maps."""
+        self._note_groups.pop(comment_id, None)
+        self._note_anchors.pop(comment_id, None)
+        for group_id in groups:
+            if self._note_comments.get(group_id) == comment_id:
+                del self._note_comments[group_id]
 
     def _resulting_refs(
         self,
@@ -1549,7 +1565,7 @@ class Document:
         Warns:
             UnanchoredNoteWarning: If ``note`` was given but the call created
                 no revision a comment can bracket — an amendment to your own
-                pending insertion, or a bare ``"\n"`` whose only revision is
+                pending insertion, or a bare ``"\\n"`` whose only revision is
                 the paragraph mark. The edit still applies; the note is
                 dropped and ``comment_id`` is None.
 
@@ -1617,7 +1633,7 @@ class Document:
         Warns:
             UnanchoredNoteWarning: If ``note`` was given but the call created
                 no revision a comment can bracket — an amendment to your own
-                pending insertion, or a bare ``"\n"`` whose only revision is
+                pending insertion, or a bare ``"\\n"`` whose only revision is
                 the paragraph mark. The edit still applies; the note is
                 dropped and ``comment_id`` is None.
 
@@ -2024,11 +2040,20 @@ class Document:
         Raises:
             ValueError: If ``comment_id`` is not an integer (bool included).
 
+        Note:
+            Deleting a ``note=`` rationale by its ``EditResult.comment_id`` is
+            allowed and final: the note stops tracking the revisions it
+            explained, so resolving them later neither resurrects nor re-anchors
+            it.
+
         Example:
             doc.delete_comment(0)
         """
         self._ensure_open()
-        return self._comment_manager.delete_comment(comment_id)
+        deleted = self._comment_manager.delete_comment(comment_id)
+        if deleted:
+            self._forget_note_comment(comment_id, list(self._note_groups.get(comment_id, ())))
+        return deleted
 
     # ==================== Revision Management API ====================
 

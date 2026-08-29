@@ -11,6 +11,7 @@ Pure Python library for Word document track changes and comments, without requir
 - **Paragraph Rewrite**: rewrite a paragraph and generate tracked changes from the diff
 - **Track Changes**: Replace, delete, and insert text with revision tracking
 - **Comments**: Add, reply, resolve, and delete comments
+- **Rationale Notes**: `note=` on an edit anchors a comment explaining the redline on exactly the revisions it creates — and deletes it when they are resolved
 - **Revision Management**: Accept/reject tracked changes at three granularities — individual revisions, groups (one logical edit), and changesets (one whole `batch_edit`/`batch_rewrite` call)
 - **Cross-Boundary Editing**: Find and replace text spanning multiple XML elements
 - **Cross-Platform**: Works on Linux, macOS, and Windows

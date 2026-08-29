@@ -245,10 +245,13 @@ new_refs = doc.batch_edit([
 doc.reject_changeset(new_refs[0].changeset_id)  # undo the whole batch in one call
 ```
 
+Every `Revision` also carries `group_id`/`group_source` and `changeset_id`/`changeset_source` — the source is `"recorded"` for edits made in this session and `"inferred"` for revisions reconstructed when an existing document is reopened. Group and changeset ids are renumbered each time the document is opened, so always resolve them with an id from the current session's `EditResult` or `list_revisions()`.
+
 ### Explain a Redline
 
-Pass `note=` to any edit method and the rationale is anchored as a comment on
-exactly the revisions that edit created — the reviewer sees the change and the
+Pass `note=` to `replace`, `delete`, `insert_after`, `insert_before`,
+`rewrite_paragraph`, or any `EditOperation` of a `batch_edit`, and the rationale
+is anchored as a comment on exactly the revisions that edit created — the reviewer sees the change and the
 reason for it together:
 
 ```python
@@ -266,10 +269,9 @@ The note comment is **revision-scoped**: it is deleted as soon as the revisions
 it explains are resolved — on `accept_all()` just as on a reject, so a pipeline
 that accepts everything ships a clean document rather than one full of agent
 rationale. Operations of one `batch_edit` sharing the same note text share one
-comment. For rationale that must outlive the revision, use `add_comment()`
-instead. See [Rationale notes](api.md#rationale-notes).
-
-Every `Revision` also carries `group_id`/`group_source` and `changeset_id`/`changeset_source` — the source is `"recorded"` for edits made in this session and `"inferred"` for revisions reconstructed when an existing document is reopened. Group and changeset ids are renumbered each time the document is opened, so always resolve them with an id from the current session's `EditResult` or `list_revisions()`.
+comment, whose range follows a redline that is still pending when only part of
+it is resolved. For rationale that must outlive the revision, use
+`add_comment()` instead. See [Rationale notes](api.md#rationale-notes).
 
 ### Accept or Reject All
 
