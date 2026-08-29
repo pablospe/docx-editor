@@ -32,8 +32,9 @@ repair prompt" that runs on a CI box. Two facts about soffice shape them:
 its exit code is 0 even when it refuses a file (the signal is an "Error:"
 line and a missing output file), and it prints nothing at all for an element
 it does not recognize — it silently drops it on re-save (ISSUES.md #66, PR #77).
-So each stage fails on any Error:/Warning: line soffice prints, and
-lo_roundtrip additionally reopens the re-saved file and checks that our
+So each stage fails on any Error:/Warning: line soffice prints and on a
+missing output (a nonzero exit after a good output is also a failure, though
+never the signal relied on), and lo_roundtrip additionally reopens the re-saved file and checks that our
 w:trackRevisions flag and our own insertion/deletion are still there. Where
 LibreOffice's own model cannot hold our redline (inside a field result,
 inside a foreign move), the manifest records a ``survival_waiver`` with the
@@ -75,6 +76,7 @@ RESULTS_PATH = HERE / "results.json"
 PER_FILE_TIMEOUT = 60  # seconds, library stages
 PDF_TIMEOUT = 60  # seconds, soffice pdf conversion
 LO_TIMEOUT = 60  # seconds, soffice docx re-save
+DRAIN_TIMEOUT = 10  # seconds, draining soffice's pipes after a timeout kill
 
 # Lines soffice prints that say nothing about the document. oosplash prints
 # one of two javaldx warnings on every run of a machine without a JRE (a
@@ -281,7 +283,8 @@ def run_census_only(only: str | None) -> int:
 
 AUTHOR = "CorpusHarness"
 EDIT_MARKER = "-EDITED"
-CHECKED = "checked"  # the lo_roundtrip record's ``survival`` / ``flag`` value when the assertion ran
+CHECKED = "checked"  # the lo_roundtrip record's survival/flag value when the assertion ran
+NO_EDIT = "skipped (no edit)"  # its survival value when the edit stage was skipped
 
 # The survival assertions a manifest ``survival_waiver`` may cover. Only the
 # one where LibreOffice's model kept our text but not our revision: a dropped
@@ -338,16 +341,21 @@ def soffice_convert(soffice: str, src: Path, convert_to: str, outdir: Path, time
         str(outdir),
         str(src),
     ]
+    # errors="replace": soffice's output is diagnostics, and a stray byte in
+    # it must not raise past the timeout handling below.
     with subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace", start_new_session=True
     ) as proc:
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)  # the session leader's pgid is its pid
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)  # the session leader's pgid is its pid
+            except OSError:
+                proc.kill()  # no group to kill; the direct child at least must not be waited on alive
             try:
                 # Drain the pipes; a descendant that left the session could still hold them.
-                proc.communicate(timeout=10)
+                proc.communicate(timeout=DRAIN_TIMEOUT)
             except subprocess.TimeoutExpired:
                 pass
             proc.wait()  # the direct child is SIGKILLed: reaping it cannot block
@@ -400,7 +408,9 @@ def survival_check(out1: Path, roundtrip: Path, work: Path, author: str) -> dict
     runs, so counts are not compared. Returns a failure record, or a pass
     record whose ``flag`` says whether the flag check applied: when the
     edited file's flag is not on (a producer wrote ``w:val="false"`` and the
-    library preserved it) there is nothing for LibreOffice to drop.
+    library preserved it), or the file has no settings part at all (the
+    library saves such a document without adding one), there is nothing for
+    LibreOffice to drop.
     """
     flag_on = track_revisions_on(out1)
     if flag_on:
@@ -435,11 +445,19 @@ def survival_check(out1: Path, roundtrip: Path, work: Path, author: str) -> dict
     return {"status": "pass", "survival": CHECKED, "flag": flag}
 
 
+# Error types: ``Lo*`` names are LibreOffice-process failures shared by both
+# stages (LoMessage, LoNonzeroExit, SofficeSpawnFailed); ``LoRoundtrip*`` and
+# ``Pdf*`` names are stage-specific.
+
+
 def run_lo_roundtrip(out1: Path, edited: bool, soffice: str | None, work: Path) -> dict:
     """Stage lo_roundtrip: re-save the edited output through LibreOffice and check survival."""
     if soffice is None:
         return {"status": "skip", "reason": "soffice not found"}
-    run = soffice_convert(soffice, out1, "docx:MS Word 2007 XML", LO_DIR, LO_TIMEOUT)
+    try:
+        run = soffice_convert(soffice, out1, "docx:MS Word 2007 XML", LO_DIR, LO_TIMEOUT)
+    except OSError as e:  # a soffice on PATH that cannot be started (half-removed install)
+        return assert_fail("SofficeSpawnFailed", str(e)[:400])
     if run.timed_out:
         return assert_fail("LoRoundtripTimeout", "")
     if run.messages:
@@ -447,13 +465,13 @@ def run_lo_roundtrip(out1: Path, edited: bool, soffice: str | None, work: Path) 
     if run.output is None:
         return assert_fail("LoLoadRefused", run.raw or "no docx produced")
     if run.returncode != 0:
-        return assert_fail("LoNonzeroExit", run.raw or f"exit {run.returncode} after writing the docx")
+        return assert_fail("LoNonzeroExit", nonzero_exit_message(run, "docx"))
     v = validate_docx(run.output)
     if not v["ok"]:
         # LibreOffice's output, not ours: named apart from save1/save2's OutputValidation.
         return assert_fail("LoOutputInvalid:" + v["error_type"], v["error"][:400])
     if not edited:
-        return {"status": "pass", "survival": "skipped (no edit)"}
+        return {"status": "pass", "survival": NO_EDIT}
     try:
         return survival_check(out1, run.output, work, AUTHOR)
     except Exception as e:
@@ -464,7 +482,10 @@ def run_pdf(out2: Path, soffice: str | None) -> dict:
     """Stage pdf: render the final output with LibreOffice."""
     if soffice is None:
         return {"status": "skip", "reason": "soffice not found"}
-    run = soffice_convert(soffice, out2, "pdf", PDF_DIR, PDF_TIMEOUT)
+    try:
+        run = soffice_convert(soffice, out2, "pdf", PDF_DIR, PDF_TIMEOUT)
+    except OSError as e:
+        return assert_fail("SofficeSpawnFailed", str(e)[:400])
     if run.timed_out:
         return assert_fail("PdfConversionTimeout", "")
     if run.messages:
@@ -472,8 +493,13 @@ def run_pdf(out2: Path, soffice: str | None) -> dict:
     if run.output is None:
         return assert_fail("PdfConversionFailed", run.raw or "no pdf produced")
     if run.returncode != 0:
-        return assert_fail("LoNonzeroExit", run.raw or f"exit {run.returncode} after writing the pdf")
+        return assert_fail("LoNonzeroExit", nonzero_exit_message(run, "pdf"))
     return {"status": "pass"}
+
+
+def nonzero_exit_message(run: SofficeRun, ext: str) -> str:
+    """The exit code is this failure's only signal, so it is always in the message."""
+    return (f"exit {run.returncode} after writing the {ext}" + (f": {run.raw}" if run.raw else ""))[:400]
 
 
 # --------------------------------------------------------------------------
@@ -694,8 +720,8 @@ def apply_manifest_expectations(rec: dict) -> None:
     reason — never as a pass — and a waiver that turns out to be unnecessary
     (everything survived) is itself a failure, so the manifest cannot quietly
     outlive the LibreOffice behavior it describes. Only ``WAIVABLE_ASSERTIONS``
-    are waived: a refused load, an Error: line, a dropped w:trackRevisions
-    flag, or a vanished edit marker still fails.
+    are waived: a refused load, an Error: line, a nonzero exit, a dropped
+    w:trackRevisions flag, or a vanished edit marker still fails.
     """
     prov = rec["provenance"]
     stages = rec["stages"]
@@ -755,9 +781,11 @@ def run_all(only: str | None, do_soffice: bool) -> int:
             print(f"no corpus files in {FILES_DIR} — run build_corpus.py first", file=sys.stderr)
         return 1
 
-    # Slack over the stage timeouts, so a child whose last stage timed out can
-    # still report that stage instead of being killed mid-report.
-    timeout = PER_FILE_TIMEOUT + (LO_TIMEOUT + PDF_TIMEOUT if do_soffice else 0) + 10
+    # Budget every stage timeout plus the drain after each soffice kill, with
+    # slack, so a child whose last stage timed out still reports that stage
+    # instead of being killed mid-report.
+    soffice_budget = LO_TIMEOUT + PDF_TIMEOUT + 2 * DRAIN_TIMEOUT if do_soffice else 0
+    timeout = PER_FILE_TIMEOUT + soffice_budget + 10
     results = []
     for i, f in enumerate(files, 1):
         t0 = time.time()
@@ -862,7 +890,7 @@ def print_survival_summary(results: list[dict]) -> None:
     lo = [r["stages"].get("lo_roundtrip", {}) for r in results]
     checked = [s for s in lo if s.get("survival") == CHECKED]
     flag_na = sum(1 for s in checked if s.get("flag") != CHECKED)
-    no_edit = sum(1 for s in lo if s.get("survival") == "skipped (no edit)")
+    no_edit = sum(1 for s in lo if s.get("survival") == NO_EDIT)
     waived = sum(1 for s in lo if s.get("status") == "skip" and "dropped" in s)
     if checked or no_edit or waived:
         print(

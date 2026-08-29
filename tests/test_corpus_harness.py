@@ -58,7 +58,7 @@ if mode == "hang":
     beat = os.environ["FAKE_SOFFICE_HEARTBEAT"]
     code = (
         "import time, pathlib\\n"
-        "for _ in range(1200):\\n"
+        "for _ in range(1200):\\n"  # ~60s bound: a leaked grandchild cannot spin forever if the group kill regresses
         f"    pathlib.Path({{beat!r}}).write_text(str(time.time()))\\n"
         "    time.sleep(0.05)"
     )
@@ -198,6 +198,15 @@ def test_survival_check_says_when_the_flag_check_did_not_apply(edited: Path, tmp
     assert record["flag"] == "not applicable (not on in the edited file)"
 
 
+def test_survival_check_says_when_the_edited_file_has_no_settings_part(edited: Path, tmp_path: Path):
+    # The library saves a document with no settings part without adding one.
+    no_settings = tmp_path / "no_settings_edited.docx"
+    replace_docx_parts(edited, no_settings, {"word/settings.xml": None})
+    record = harness.survival_check(no_settings, no_settings, tmp_path / "work", harness.AUTHOR)
+    assert record["status"] == "pass"
+    assert record["flag"] == "not applicable (no settings part in the edited file)"
+
+
 def test_survival_check_detects_a_dropped_track_revisions_flag(edited: Path, tmp_path: Path):
     roundtrip = rewrite_part(
         edited,
@@ -312,7 +321,10 @@ def test_run_lo_roundtrip_skips_without_soffice(edited: Path, tmp_path: Path):
         # soffice exits 0 after refusing a file: the missing output is the signal.
         (harness.SofficeRun(output=None, messages=[], returncode=0, timed_out=False, raw=""), "LoLoadRefused"),
         # A crash after writing good output is still a failure, named apart from a refused load.
-        (harness.SofficeRun(output=SIMPLE, messages=[], returncode=1, timed_out=False, raw=""), "LoNonzeroExit"),
+        (
+            harness.SofficeRun(output=SIMPLE, messages=[], returncode=1, timed_out=False, raw="convert x"),
+            "LoNonzeroExit",
+        ),
     ],
 )
 def test_run_lo_roundtrip_reads_soffice_the_only_way_it_can_be_read(
@@ -322,6 +334,19 @@ def test_run_lo_roundtrip_reads_soffice_the_only_way_it_can_be_read(
     record = harness.run_lo_roundtrip(edited, True, "soffice", tmp_path / "work")
     assert record["status"] == "fail"
     assert record["error_type"] == error_type
+    if error_type == "LoNonzeroExit":
+        assert record["error"] == "exit 1 after writing the docx: convert x"
+
+
+def test_run_lo_roundtrip_names_a_soffice_that_cannot_be_started(edited: Path, tmp_path: Path):
+    # shutil.which() happily returns a half-removed install; that is a stage
+    # failure with a name, not a crash that discards the file's other stages.
+    broken = tmp_path / "soffice"
+    broken.write_text("#!/nonexistent/interpreter\n")
+    broken.chmod(0o755)
+    record = harness.run_lo_roundtrip(edited, True, str(broken), tmp_path / "work")
+    assert record["status"] == "fail"
+    assert record["error_type"] == "SofficeSpawnFailed"
 
 
 def test_run_lo_roundtrip_fails_on_an_unparseable_output(edited: Path, tmp_path: Path, monkeypatch):

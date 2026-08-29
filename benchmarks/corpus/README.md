@@ -50,8 +50,9 @@ So the stages are:
   may legally merge a deletion that spanned several runs). The survival part
   is skipped when `edit` was skipped, and the record's `flag` field says
   whether the flag check applied: a producer that wrote
-  `<w:trackRevisions w:val="false"/>` (the library preserves it) leaves
-  nothing for LibreOffice to drop. The run summary prints how many files
+  `<w:trackRevisions w:val="false"/>` (the library preserves it), or a
+  document with no settings part at all (the library saves it without adding
+  one), leaves nothing for LibreOffice to drop. The run summary prints how many files
   were actually checked, skipped, or waived. LibreOffice also rewrites or
   drops some *foreign* revision types on re-save; that is its behavior, not
   ours, and is not asserted on.
@@ -199,9 +200,9 @@ lists.
   `lo_roundtrip` survival assertion is then reported as a **skip** carrying
   the reason (never as a pass). Only `AssertOwnRevisionsDropped` — our text
   is there but no longer a revision — can be waived; a refused load, an
-  `Error:` line, an unparseable output, a dropped `w:trackRevisions` flag, or
-  a vanished edit marker still fails. A
-  waiver that turns out to be unnecessary fails the file with
+  `Error:` line, a nonzero exit, an unparseable output, a dropped
+  `w:trackRevisions` flag, or a vanished edit marker still fails. A waiver
+  that turns out to be unnecessary fails the file with
   `StaleSurvivalWaiver`, so the manifest cannot quietly outlive the behavior
   it documents. Two files carry one today, both verified by dumping
   LibreOffice's import as flat ODT:
