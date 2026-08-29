@@ -8,22 +8,62 @@ core, and Open-Xml-PowerTools).
 Each file goes through the stages:
 
 ```
-input_validate → open → read → edit → save1 → reopen → save2 → pdf
+input_validate → open → read → edit → save1 → reopen → save2 → lo_roundtrip → pdf
 ```
 
 `edit` performs a tracked replace of the first word and asserts it added
 revisions (at least a del/ins pair; text spanning several runs legally yields
 one `w:del` per run — see ISSUES.md #37); `reopen` asserts the edit marker
 survived, that the revision count is unchanged by the save/reopen round-trip,
-and that `accept_all()` accepts and keeps the edit. `pdf` converts the final
-output with LibreOffice as an external can-other-tools-read-it check.
+and that `accept_all()` accepts and keeps the edit. The last two stages hand
+the outputs to LibreOffice, a real renderer — see below.
+
+## LibreOffice stages
+
+The contract this library cares about is "opens in Word with zero repair
+prompts". A schema validator cannot predict that (deliberately out of scope);
+a real renderer can approximate it, and LibreOffice is the one that runs on a
+CI box. Two facts about `soffice --headless --convert-to` shape both stages,
+both verified on LibreOffice 24.2 with `SAL_LOG=+WARN`:
+
+- **Its exit code is 0 even when it refuses a file.** A truncated zip or a
+  malformed `document.xml` prints `Error: source file could not be loaded`
+  and writes nothing — the exit code says success. So each stage fails on any
+  `Error:`/`Warning:` line soffice prints (the JRE-absent `javaldx` warning
+  is the one allow-listed noise line) and on a missing output file, never on
+  the exit code alone.
+- **It prints nothing for an element it does not recognize** — it drops it
+  on re-save, silently. That is how ISSUES.md #66's first cut of the
+  track-changes switch was caught (PR #77): a hand round-trip through
+  LibreOffice, not any message.
+
+So the stages are:
+
+- `lo_roundtrip` re-saves the **edited** output (`out/<name>_edited.docx`:
+  our pending redline plus the `w:trackRevisions` flag) as docx into
+  `out/lo/`, validates the result as a zip/XML, and then reopens it with the
+  library and asserts that what we wrote survived: the flag is still on when
+  it was on before, the edit marker is still visible, and there is still an
+  insertion and a deletion by our author (existence, not counts — LibreOffice
+  may legally merge a deletion that spanned several runs). The survival part
+  is skipped when `edit` was skipped. LibreOffice also rewrites or drops some
+  *foreign* revision types on re-save; that is its behavior, not ours, and is
+  not asserted on.
+- `pdf` renders the **final** output (after `accept_all`) as PDF, the
+  can-other-tools-read-it check.
+
+Both stages skip together with `--no-soffice` or when `soffice` is not on
+`PATH`. The pure helpers (`soffice_messages`, `track_revisions_on`,
+`survival_check`, the stage function) are unit-tested in
+`tests/test_corpus_harness.py` without LibreOffice, plus one real-`soffice`
+test that skips where it is not installed.
 
 ## Running
 
 ```bash
-make corpus-check                                    # assemble + full run (incl. PDF stage)
+make corpus-check                                    # assemble + full run (incl. LibreOffice stages)
 uv run python benchmarks/corpus/build_corpus.py      # assemble corpus into files/
-uv run python benchmarks/corpus/corpus_harness.py --no-pdf   # skip the PDF stage
+uv run python benchmarks/corpus/corpus_harness.py --no-soffice   # skip the LibreOffice stages (--no-pdf is an alias)
 uv run python benchmarks/corpus/corpus_harness.py --only mammoth  # filter by substring
 uv run python benchmarks/corpus/corpus_harness.py --census   # revision census only
 ```
@@ -36,7 +76,7 @@ cannot kill the run. Results are written to `results.json` and a summary table
 is printed. Row marks: `.` pass, `F` fail, `s` skip, `r` rejected, `-` not run.
 
 A weekly GitHub Actions workflow (`.github/workflows/corpus.yml`) runs the full
-corpus — including the PDF stage — with LibreOffice and pandoc installed;
+corpus — including the LibreOffice stages — with LibreOffice and pandoc installed;
 trigger it manually with `workflow_dispatch` after changes.
 
 ## Revision census
@@ -44,27 +84,50 @@ trigger it manually with `workflow_dispatch` after changes.
 Every run also counts revision-bearing elements by tag across each file's
 `word/*.xml` parts (recorded as `rec["census"]` in `results.json`). It is
 informational — never a stage, never a failure — and exists to answer which
-revision types real-world producers actually emit. Observed 2026-08-28 over the
-56-file corpus:
+revision types real-world producers actually emit. Observed 2026-08-29 over the
+77-file corpus:
 
 ```text
 tag                               elements  files  producers
- w:ins                                   9      3  LibreOffice (docx re-save), LibreOffice core ooxmlexport fix
- w:del                                   8      2  LibreOffice (docx re-save), docx-editor test fixture
-*w:moveFrom                              8      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
-*w:moveTo                                8      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
-*w:pPrChange                             2      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
-*w:moveFromRangeEnd                      1      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
-*w:moveFromRangeStart                    1      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
-*w:moveToRangeEnd                        1      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
-*w:moveToRangeStart                      1      1  LibreOffice core ooxmlexport fixture (Word/LO mixed)
+ w:ins                                 162     10  LibreOffice (docx re-save), LibreOffice core ooxmlexport fix
+ w:del                                 136     11  LibreOffice (docx re-save), Open-Xml-PowerTools test fixture
+*w:tcPrChange                           36      6  Open-Xml-PowerTools test fixture (Word)
+*w:moveFrom                             27      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+*w:moveTo                               27      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+*w:pPrChange                            11      5  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+*w:cellMerge                             6      1  Open-Xml-PowerTools test fixture (Word)
+*w:tblGridChange                         6      6  Open-Xml-PowerTools test fixture (Word)
+*w:cellDel                               4      1  Open-Xml-PowerTools test fixture (Word)
+*w:cellIns                               4      1  Open-Xml-PowerTools test fixture (Word)
+*w:moveFromRangeEnd                      4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+*w:moveFromRangeStart                    4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+*w:moveToRangeEnd                        4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+*w:moveToRangeStart                      4      4  LibreOffice core ooxmlexport fixture (Word/LO mixed), Open-X
+*w:tblPrChange                           4      4  Open-Xml-PowerTools test fixture (Word)
+*w:rPrChange                             3      2  Open-Xml-PowerTools test fixture (Word)
+*w:tblPrExChange                         3      2  Open-Xml-PowerTools test fixture (Word)
+*w:trPrChange                            3      2  Open-Xml-PowerTools test fixture (Word)
+*w:customXmlDelRangeEnd                  2      1  Open-Xml-PowerTools test fixture (Word)
+*w:customXmlDelRangeStart                2      1  Open-Xml-PowerTools test fixture (Word)
+*w:customXmlInsRangeEnd                  2      1  Open-Xml-PowerTools test fixture (Word)
+*w:customXmlInsRangeStart                2      1  Open-Xml-PowerTools test fixture (Word)
+*w:customXmlMoveFromRangeEnd             2      1  Open-Xml-PowerTools test fixture (Word)
+*w:customXmlMoveFromRangeStart           2      1  Open-Xml-PowerTools test fixture (Word)
+*w:customXmlMoveToRangeEnd               2      1  Open-Xml-PowerTools test fixture (Word)
+*w:customXmlMoveToRangeStart             2      1  Open-Xml-PowerTools test fixture (Word)
+*w:numberingChange                       2      1  Open-Xml-PowerTools test fixture (Word)
+*w:sectPrChange                          1      1  Open-Xml-PowerTools test fixture (Word)
 
-5/56 files carry at least one revision element
-* = not resolved by accept_all/reject_all (22 element(s), ISSUES.md #68)
+26/77 files carry at least one revision element
+* = not resolved by accept_all/reject_all (169 element(s), ISSUES.md #68)
 
 w:ins/w:del by parent element (structural markers vs content revisions):
-  w:p                               16
-  w:rPr                              1  <- paragraph-mark ins/del, or a change record's rPr
+  w:rPr                            172  <- paragraph-mark ins/del, or a change record's rPr
+  w:p                               73
+  w:trPr                            22  <- table-row ins/del
+  w:moveFrom                        15
+  w:moveTo                          15
+  m:r                                1
 
 1 XML part(s) across 1 file(s) could not be censused:
   - poi_ExternalEntityInText.docx [word/document.xml]: EntitiesForbidden: ...
@@ -72,26 +135,38 @@ w:ins/w:del by parent element (structural markers vs content revisions):
 
 Read as evidence for ISSUES.md #68:
 
-- **Moves are the largest unhandled family**, and they are real, not synthetic:
-  `locore_TC-table-DnD-move.docx` (a LibreOffice-core ooxmlexport fixture of a
-  Word drag-and-drop move) carries all 20 move marks. `accept_all()` on it
-  resolves 0 and leaves the whole redline pending.
-- **Property changes occur too**: `locore_UnknownStyleInRedline.docx` carries
-  2 `w:pPrChange` and likewise resolves to 0.
-- **No corpus file uses** `w:rPrChange`, `w:sectPrChange`, `w:numberingChange`,
-  any table-structure revision (`w:cellIns`/`w:cellDel`/`w:cellMerge`, the
-  `*PrChange` family) or any custom-XML range mark. Reported as a gap rather
-  than padded: the provenance policy requires corpus files to represent real
-  producers, so hand-authored XML for those types lives in
-  `tests/test_unhandled_revisions.py` instead.
-- **The structural `w:ins`/`w:del` cases are rare but present**: one
-  paragraph-mark marker (`w:pPr/w:rPr/w:ins`, in `locore_cell-sdt-redline.docx`
-  — checked individually, since a change record's recorded `w:rPrChange/w:rPr`
-  would share the `w:rPr` row) against 16 ordinary content revisions, and no
-  `w:trPr` row markers at all.
-  These resolve *approximately* today — the marker is dropped without merging
-  the paragraph or removing the row — which is why the context breakdown is
-  tracked separately from the unhandled count.
+- **Every unhandled type now has genuine Word output behind it.** The 21
+  `oxpt_RP*` files were authored in Word (see Provenance) and between them
+  emit all 26 tags in `UNHANDLED_REVISION_TAGS`. Before they were added, the
+  five revision-bearing files were almost all LibreOffice-produced and only
+  moves and `w:pPrChange` had any real-producer evidence; the rest was
+  hand-authored XML in `tests/test_unhandled_revisions.py` (still there, for
+  the edge shapes).
+- **Moves are the largest unhandled family** (27 + 27 + range marks) and they
+  are real, not synthetic: `locore_TC-table-DnD-move.docx` (a Word
+  drag-and-drop move re-exported by LibreOffice core) and the Word-native
+  `oxpt_RP015-MoveFrom-MoveTo.docx` / `oxpt_RP018-MoveFrom-MoveTo-CC.docx`
+  (the latter inside a content control, with `customXmlMove*` marks).
+  `accept_all()` resolves none of them and leaves the whole redline pending.
+- **Property changes are the next family**: `w:pPrChange` in five files
+  (Word: `oxpt_RP022`, `RP025`, `RP037`, plus the kitchen-sink `RP001`),
+  `w:rPrChange` on a run (`oxpt_RP037`) and on a paragraph mark
+  (`oxpt_RP024`), `w:sectPrChange` (`oxpt_RP027`), `w:numberingChange`
+  (`oxpt_RP026`), and the whole table family — `w:tblPrChange`,
+  `w:tblPrExChange`, `w:trPrChange`, `w:tcPrChange`, `w:tblGridChange`
+  (`oxpt_RP028`, `RP033`, `RP001`).
+- **Table-structure revisions exist in the wild**: `w:cellIns` (`oxpt_RP035`),
+  `w:cellDel` (`oxpt_RP034`), `w:cellMerge` (`oxpt_RP036`), each alongside the
+  `w:ins`/`w:del` Word writes for the cells' content.
+- **The structural `w:ins`/`w:del` contexts are now the majority row**: 172
+  paragraph-mark markers (`w:pPr/w:rPr/w:ins|del`; the kitchen-sink file alone
+  has 160) and 22 table-row markers (`w:trPr`, from `oxpt_RP009`/`RP010` and
+  `RP001`), against 73 ordinary content revisions. These resolve
+  *approximately* today — the marker is dropped without merging the paragraph
+  or removing the row — which is why the context breakdown is tracked
+  separately from the unhandled count. The `m:r` row is a deletion inside a
+  math run (`oxpt_RP013`), and the `w:moveFrom`/`w:moveTo` rows are Word's
+  own paragraph-mark markers inside the kitchen-sink file's moved paragraphs.
 
 The `*`-marked tags are exactly `UNHANDLED_REVISION_TAGS`
 (`docx_editor/track_changes.py`), which is also what `accept_all()` /
@@ -109,10 +184,28 @@ lists.
   This pins the rejection of `poi_ExternalEntityInText.docx`, so a parser
   regression that starts expanding entities cannot slip through as "one more
   passing file".
+- A manifest entry can set `"survival_waiver": "<reason>"` when LibreOffice's
+  own document model cannot hold our redline in that file. The
+  `lo_roundtrip` survival assertion is then reported as a **skip** carrying
+  the reason (never as a pass), while the opens-clean part of the stage — a
+  refused load, an `Error:` line, an unparseable output — still fails. A
+  waiver that turns out to be unnecessary fails the file with
+  `StaleSurvivalWaiver`, so the manifest cannot quietly outlive the behavior
+  it documents. Two files carry one today, both verified by dumping
+  LibreOffice's import as flat ODT:
+  - `poi_FieldCodes.docx` — the first paragraph is an `AUTHOR` field result;
+    Writer fields carry no redlines, so LibreOffice flattens our del/ins into
+    the result text (`ANTONIANTONI-EDITED`).
+  - `locore_TC-table-DnD-move.docx` — the first paragraph sits inside a
+    foreign `w:moveFrom` (moved-away text); LibreOffice folds our deletion
+    into the move's own deletion region and only the insertion comes back.
+    (That the library edits inside `w:moveFrom` content at all — text that is
+    deleted at its source — is a finding for ISSUES.md #68, not for the gate.)
 - The harness exits nonzero if any file has a real failure (failed stage or
   harness error), and if the corpus directory is empty or a `--only` filter
   matches nothing (a run that tested nothing must not look green).
-  Baseline: 55 clean + 1 rejected → exit 0.
+  Baseline: 76 clean (2 of them with a waived survival check) + 1 rejected
+  → exit 0.
 
 ## Provenance policy
 

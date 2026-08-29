@@ -242,7 +242,8 @@
     "producer": "Apache POI test fixture (Word, bug reports)",
     "source": "https://raw.githubusercontent.com/apache/poi/63eda92cc63b39d4e8956e7775ccddb1f0d925cf/test-data/document/FieldCodes.docx",
     "size": 17034,
-    "sha256": "9247f85ab90b15f1"
+    "sha256": "9247f85ab90b15f1",
+    "survival_waiver": "the edited paragraph is an AUTHOR field result; Writer fields carry no redlines, so LibreOffice flattens ours into the result text on import"
   },
   "poi_ExternalEntityInText.docx": {
     "kind": "download",
@@ -362,7 +363,8 @@
     "producer": "LibreOffice core ooxmlexport fixture (Word/LO mixed)",
     "source": "https://raw.githubusercontent.com/LibreOffice/core/1c29ec6c2b2ec1f343545915ba66b7e9718b3792/sw/qa/extras/ooxmlexport/data/TC-table-DnD-move.docx",
     "size": 12977,
-    "sha256": "32419eb1c66dc5ca"
+    "sha256": "32419eb1c66dc5ca",
+    "survival_waiver": "the edited paragraph sits inside a foreign w:moveFrom (moved-away text); LibreOffice folds our deletion into the move's own deletion region on import"
   },
   "locore_99_Fields.docx": {
     "kind": "download",
