@@ -23,14 +23,38 @@ import defusedxml.sax
 from .exceptions import MultipleNodesFoundError, NodeNotFoundError
 
 
+def is_tab_node(node) -> bool:
+    """True when ``node`` is a ``<w:tab/>`` tab *mark* — a run-level child.
+
+    The same tag under ``w:pPr/w:tabs`` is a tab *stop* definition, not a
+    character, so the parent must be a ``w:r``. ``w:ptab`` (absolute-position
+    tab) is not a character in the text map either.
+    """
+    if getattr(node, "tagName", "") != "w:tab":
+        return False
+    parent = node.parentNode
+    return parent is not None and getattr(parent, "tagName", "") == "w:r"
+
+
 @dataclass
 class TextPosition:
-    """A single character's position in the source XML."""
+    """A single character's position in the source XML.
 
-    node: object  # The <w:t> element
-    offset_in_node: int  # Character offset within the node's text
+    ``node`` is the ``<w:t>`` (or, in the original view, ``<w:delText>``)
+    element holding the character, or a run-level ``<w:tab/>`` mark. A tab
+    occupies exactly one character (``"\\t"``) at ``offset_in_node == 0`` —
+    there is no mid-tab offset to land on, so a tab is atomic by construction.
+    """
+
+    node: object  # The <w:t>/<w:delText> element, or a <w:tab/> mark
+    offset_in_node: int  # Character offset within the node's text (0 for a tab)
     is_inside_ins: bool  # Inside <w:ins>?
     is_inside_del: bool  # Inside <w:del>?
+
+    @property
+    def is_tab(self) -> bool:
+        """True when this character is a ``<w:tab/>`` mark."""
+        return is_tab_node(self.node)
 
 
 @dataclass
@@ -113,16 +137,25 @@ _REJECTED_CONTROL_CHARS = frozenset(chr(c) for c in range(0x20) if c != 0x0A) | 
 _TEXTBOX_CONTENT = "w:txbxContent"
 
 
-def _reject_control_chars(value: str, *, field: str, ctx: str = "", allow_newline: bool = False) -> None:
+def _reject_control_chars(
+    value: str, *, field: str, ctx: str = "", allow_newline: bool = False, allow_tab: bool = False
+) -> None:
     """Reject control characters that would corrupt the document text.
 
-    Tab, carriage return, and the other C0/DEL control characters would enter
-    a ``<w:t>`` as an invisible, unreviewable literal — a redline nobody can
-    see, and ``get_visible_text().splitlines()`` would break on it. ``\\n`` is
-    special: it means a *tracked paragraph split*, allowed in content inputs
-    (``allow_newline=True``) and rejected everywhere else (search/anchor and
-    comment text, where real paragraph text is never multi-line, so a ``\\n``
-    is always a caller bug that would otherwise fail as TextNotFoundError).
+    Carriage return and the other C0/DEL control characters would enter a
+    ``<w:t>`` as an invisible, unreviewable literal — a redline nobody can see
+    (and CR/VT/FF would additionally break ``get_visible_text().splitlines()``).
+    Two characters are special:
+
+    - ``\\n`` means a *tracked paragraph split*, allowed in content inputs
+      (``allow_newline=True``) and rejected everywhere else (search/anchor and
+      comment text, where real paragraph text is never multi-line, so a
+      ``\\n`` is always a caller bug that would otherwise fail as
+      TextNotFoundError).
+    - ``\\t`` is how a ``<w:tab/>`` mark appears in the text map. Search and
+      anchor inputs accept it (``allow_tab=True``) so a tab can be matched;
+      content inputs reject it, because no path writes a tracked tab
+      (ISSUES.md #6).
 
     Non-str values are left for the caller's own type check.
     """
@@ -134,11 +167,18 @@ def _reject_control_chars(value: str, *, field: str, ctx: str = "", allow_newlin
             f"multi-line, so it can never match. Target text within a single paragraph."
         )
     for char in value:
+        if char == "\t" and allow_tab:
+            continue
         if char in _REJECTED_CONTROL_CHARS:
+            if char == "\t":
+                raise ValueError(
+                    f"{ctx}{field} must not contain control character '\\t' — a tab can be searched "
+                    f"and matched but not written: tracked tab insertion is not supported (ISSUES.md #6)."
+                )
             raise ValueError(
                 f"{ctx}{field} must not contain control character {char!r} — it would become an "
                 f"invisible, unreviewable literal in the document. Use '\\n' for a tracked "
-                f"paragraph split; a real tab ('\\t') is deferred to the tabs feature (ISSUES.md #6)."
+                f"paragraph split."
             )
 
 
@@ -908,7 +948,12 @@ def get_text_node_data(elem) -> str:
     return "".join(c.data for c in elem.childNodes if c.nodeType == c.TEXT_NODE)
 
 
-def rebuild_run_fragments(run, rPr_xml: str, render_wt: Callable[[Element], list[str]]) -> list[str]:
+def rebuild_run_fragments(
+    run,
+    rPr_xml: str,
+    render_wt: Callable[[Element], list[str]],
+    render_other: Callable[[Element], list[str]] | None = None,
+) -> list[str]:
     """Rebuild ``run``'s children as XML fragments, preserving document order.
 
     Iterates *direct* children of ``run`` (not descendants, so ``w:t`` nodes
@@ -916,7 +961,10 @@ def rebuild_run_fragments(run, rPr_xml: str, render_wt: Callable[[Element], list
 
     - ``w:rPr`` is skipped — callers bake ``rPr_xml`` into every fragment.
     - Non-text children (``w:tab``, ``w:br``, ``w:drawing``, field chars, …)
-      are preserved in place, each wrapped in its own run carrying ``rPr_xml``.
+      are replaced by ``render_other(child)``'s fragments when given; by
+      default each is preserved in place, wrapped in its own run carrying
+      ``rPr_xml``. Callers that need to land content beside a ``<w:tab/>``
+      (a text-map character) pass ``render_other``.
     - Each direct ``w:t`` child is replaced by ``render_wt(wt)``'s fragments.
     """
     fragments: list[str] = []
@@ -927,7 +975,10 @@ def rebuild_run_fragments(run, rPr_xml: str, render_wt: Callable[[Element], list
         if tag == "w:rPr":
             continue
         if tag != "w:t":
-            fragments.append(f"<w:r>{rPr_xml}{child.toxml()}</w:r>")
+            if render_other is not None:
+                fragments.extend(render_other(child))
+            else:
+                fragments.append(f"<w:r>{rPr_xml}{child.toxml()}</w:r>")
             continue
         fragments.extend(render_wt(child))
     return fragments
@@ -981,6 +1032,12 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
       are excluded, <w:delText> is included, and text inside <w:del> or
       <w:moveFrom> is flagged with is_inside_del=True.
 
+    A run-level ``<w:tab/>`` mark is one ``"\\t"`` character in both views,
+    following the same inclusion rules as the text around it (see
+    :func:`is_tab_node`; a ``w:pPr/w:tabs/w:tab`` stop and ``w:ptab`` are not
+    characters). Its position carries the ``w:tab`` element itself with
+    ``offset_in_node == 0``.
+
     Both views exclude text-box content: a ``w:t`` under a descendant
     ``w:txbxContent`` belongs to the box, not to the host paragraph (see
     :func:`body_paragraphs`). The exclusion is bounded by ``paragraph``, so
@@ -998,7 +1055,12 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
     positions: list[TextPosition] = []
 
     if view == "accepted":
-        for node in paragraph.getElementsByTagName("w:t"):
+        # One preorder walk (document order) picks up w:t and run-level w:tab.
+        for node in paragraph.getElementsByTagName("*"):
+            is_tab = is_tab_node(node)
+            if node.tagName != "w:t" and not is_tab:
+                continue
+
             # Skip w:t inside w:del (deleted text uses w:delText, but be safe)
             if _is_inside_element(node, "w:del"):
                 continue
@@ -1008,7 +1070,7 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
                 continue
 
             inside_ins = _is_inside_element(node, "w:ins")
-            node_text = get_text_node_data(node)
+            node_text = "\t" if is_tab else get_text_node_data(node)
 
             for i, char in enumerate(node_text):
                 text_chars.append(char)
@@ -1031,8 +1093,8 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
                 continue
             if child.tagName == _TEXTBOX_CONTENT:
                 continue
-            if child.tagName in ("w:t", "w:delText"):
-                node_text = get_text_node_data(child)
+            if child.tagName in ("w:t", "w:delText") or is_tab_node(child):
+                node_text = "\t" if child.tagName == "w:tab" else get_text_node_data(child)
                 for i, char in enumerate(node_text):
                     text_chars.append(char)
                     positions.append(

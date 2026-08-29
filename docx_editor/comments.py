@@ -171,9 +171,17 @@ class CommentManager:
         # an invisible, unreviewable literal.
         self._validate_comment_text(comment_text, field="comment_text", ctx="add_comment(): ")
         try:
-            _reject_control_chars(anchor_text, field="anchor_text", ctx="add_comment(): ", allow_newline=False)
+            _reject_control_chars(anchor_text, field="anchor_text", ctx="add_comment(): ", allow_tab=True)
         except ValueError as e:
             raise CommentError(str(e)) from e
+        # A tab is one text-map character, so an anchor may span one; the range
+        # markers, however, are placed by splitting w:t nodes, so an anchor
+        # that starts or ends on a <w:tab/> has no w:t edge to split.
+        if anchor_text[0] == "\t" or anchor_text[-1] == "\t":
+            raise CommentError(
+                "add_comment(): anchor_text must not start or end with a tab ('\\t') — anchor on the "
+                "text beside the tab instead; a tab inside the anchor is fine (ISSUES.md #6)."
+            )
         _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id

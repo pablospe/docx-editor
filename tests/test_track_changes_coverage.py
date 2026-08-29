@@ -226,13 +226,13 @@ class TestRemoveFromInsertionMultiNodeNoBeforeNoAfter:
         assert "ABCDEF" not in text
 
 
-class TestGetWtNodesInAncestorNone:
-    """Line 618: _get_wt_nodes_in_ancestor returns [] for None ancestor."""
+class TestContentNodesInAncestorNone:
+    """_content_nodes_in_ancestor returns [] for None ancestor."""
 
     def test_none_ancestor(self, temp_xml):
         xml_path = temp_xml("<w:p><w:r><w:t>x</w:t></w:r></w:p>")
         mgr = _make_manager(xml_path)
-        assert mgr._get_wt_nodes_in_ancestor(None) == []
+        assert mgr._content_nodes_in_ancestor(None) == []
 
 
 class TestDeleteRegularSegmentUnmatchedWt:

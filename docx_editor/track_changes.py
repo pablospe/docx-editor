@@ -43,6 +43,7 @@ from .xml_editor import (
     find_in_text_map,
     get_rPr_xml,
     get_text_node_data,
+    is_tab_node,
     rebuild_run_fragments,
     render_plain_wt,
 )
@@ -50,6 +51,22 @@ from .xml_editor import (
 # Provenance of a revision group: created by an edit through this open
 # Document ("recorded") vs reconstructed at parse time ("inferred").
 GroupSource = Literal["recorded", "inferred"]
+
+
+def _reject_tab_in_edit_target(value: str, *, field: str, ctx: str) -> None:
+    """Refuse a replace/delete target that would consume a ``<w:tab/>``.
+
+    A tab is searchable (it is a ``"\\t"`` in the text map) and an insertion
+    may land on either side of it, but deleting or replacing one would have to
+    remove the ``<w:tab/>`` element under tracking, which no edit path supports
+    yet (ISSUES.md #6). Exact by construction: ``replace_with`` can never hold
+    a tab, so affix trimming cannot narrow a tab-free target onto a tab.
+    """
+    if isinstance(value, str) and "\t" in value:
+        raise ValueError(
+            f"{ctx}{field} contains a tab ('\\t') — tabs can be searched and matched but not deleted "
+            f"or replaced yet; target the text on either side of the tab instead (ISSUES.md #6)."
+        )
 
 
 def _validate_note(note: str | None, *, ctx: str) -> None:
@@ -190,7 +207,8 @@ class EditOperation:
                 f"EditOperation.replace(): 'replace_with' must be a string (empty string is allowed), "
                 f"got {replace_with!r}"
             )
-        _reject_control_chars(find, field="'find'", ctx="EditOperation.replace(): ", allow_newline=False)
+        _reject_control_chars(find, field="'find'", ctx="EditOperation.replace(): ", allow_tab=True)
+        _reject_tab_in_edit_target(find, field="'find'", ctx="EditOperation.replace(): ")
         _reject_control_chars(replace_with, field="'replace_with'", ctx="EditOperation.replace(): ", allow_newline=True)
         _validate_note(note, ctx="EditOperation.replace(): ")
         return cls(
@@ -240,7 +258,8 @@ class EditOperation:
             raise ValueError(
                 f"EditOperation.delete(): 'text' must be a non-empty string — the text to mark as deleted, got {text!r}"
             )
-        _reject_control_chars(text, field="'text'", ctx="EditOperation.delete(): ", allow_newline=False)
+        _reject_control_chars(text, field="'text'", ctx="EditOperation.delete(): ", allow_tab=True)
+        _reject_tab_in_edit_target(text, field="'text'", ctx="EditOperation.delete(): ")
         _validate_note(note, ctx="EditOperation.delete(): ")
         return cls(action="delete", paragraph=paragraph, text=text, occurrence=occurrence, note=note)
 
@@ -267,7 +286,7 @@ class EditOperation:
             raise ValueError(
                 f"EditOperation.{action}(): 'text' must be a string (empty string is allowed), got {text!r}"
             )
-        _reject_control_chars(anchor, field="'anchor'", ctx=f"EditOperation.{action}(): ", allow_newline=False)
+        _reject_control_chars(anchor, field="'anchor'", ctx=f"EditOperation.{action}(): ", allow_tab=True)
         _reject_control_chars(text, field="'text'", ctx=f"EditOperation.{action}(): ", allow_newline=True)
         _validate_note(note, ctx=f"EditOperation.{action}(): ")
         return cls(action=action, paragraph=paragraph, anchor=anchor, text=text, occurrence=occurrence, note=note)
@@ -1055,11 +1074,14 @@ def _revision_elements(root) -> list[Element]:
 
 
 def _insertion_text_nodes(elem) -> list:
-    """All <w:t>/<w:delText> descendants of a <w:ins>, in document order.
+    """All <w:t>/<w:delText> descendants and run-level <w:tab/> marks of a
+    <w:ins>, in document order.
 
     Including <w:delText> means a host insertion whose content was later
     deleted by a nested <w:del> still reports the full text it originally
     inserted (plain <w:delText> never appears under <w:ins> otherwise).
+    Tabs are included so ``Revision.text`` spells the same ``"\\t"`` the text
+    map does and the revision's ``occurrence`` keeps resolving.
 
     Text inside a drawing's text box is skipped: an insertion wrapping a run
     that carries a box reports the text it inserted, not the box's content,
@@ -1073,12 +1095,39 @@ def _insertion_text_nodes(elem) -> list:
                 continue
             if child.tagName == _TEXTBOX_CONTENT:
                 continue
-            if child.tagName in ("w:t", "w:delText"):
+            if child.tagName in ("w:t", "w:delText") or is_tab_node(child):
                 nodes.append(child)
             else:
                 walk(child)
 
     walk(elem)
+    return nodes
+
+
+def _deletion_text_nodes(elem) -> list:
+    """All <w:delText> descendants and run-level <w:tab/> marks of a <w:del>,
+    in document order.
+
+    Box content is excluded the same way the insertion walk excludes it: a
+    w:del wrapping a run that carries a drawing reports the body text it
+    deleted, not the box's. Bounded by ``elem``, so a w:del living *inside* a
+    box still reports its own text.
+
+    Deliberate interop fallback: nonconforming producers may leave plain w:t
+    inside w:del. Fires only when the w:del has no w:delText at all; mixed
+    content reads only w:delText.
+    """
+
+    def collect(text_tag: str) -> list:
+        return [
+            n
+            for n in elem.getElementsByTagName("*")
+            if (n.tagName == text_tag or is_tab_node(n)) and not _inside_textbox(n, elem)
+        ]
+
+    nodes = collect("w:delText")
+    if not any(n.tagName == "w:delText" for n in nodes):
+        nodes = collect("w:t")
     return nodes
 
 
@@ -1125,6 +1174,14 @@ def _first_child_element(parent, tag: str) -> Element | None:
     """The first *direct* child of ``parent`` with tag name ``tag``, or None."""
     for child in parent.childNodes:
         if child.nodeType == child.ELEMENT_NODE and getattr(child, "tagName", "") == tag:
+            return child
+    return None
+
+
+def _first_content_child(run) -> Element | None:
+    """First element child of ``run`` that is not its ``w:rPr``."""
+    for child in run.childNodes:
+        if child.nodeType == child.ELEMENT_NODE and child.tagName != "w:rPr":
             return child
     return None
 
@@ -1897,18 +1954,20 @@ class RevisionManager:
         if op.action == "replace":
             if not op.find or not isinstance(op.replace_with, str):
                 raise ValueError("replace requires 'find' and a string 'replace_with'")
-            _reject_control_chars(op.find, field="'find'", ctx="replace(): ", allow_newline=False)
+            _reject_control_chars(op.find, field="'find'", ctx="replace(): ", allow_tab=True)
+            _reject_tab_in_edit_target(op.find, field="'find'", ctx="replace(): ")
             _reject_control_chars(op.replace_with, field="'replace_with'", ctx="replace(): ", allow_newline=True)
             return op.find
         elif op.action == "delete":
             if not op.text:
                 raise ValueError("delete requires 'text'")
-            _reject_control_chars(op.text, field="'text'", ctx="delete(): ", allow_newline=False)
+            _reject_control_chars(op.text, field="'text'", ctx="delete(): ", allow_tab=True)
+            _reject_tab_in_edit_target(op.text, field="'text'", ctx="delete(): ")
             return op.text
         elif op.action in ("insert_after", "insert_before"):
             if not op.anchor or not isinstance(op.text, str):
                 raise ValueError(f"{op.action} requires 'anchor' and a string 'text'")
-            _reject_control_chars(op.anchor, field="'anchor'", ctx=f"{op.action}(): ", allow_newline=False)
+            _reject_control_chars(op.anchor, field="'anchor'", ctx=f"{op.action}(): ", allow_tab=True)
             _reject_control_chars(op.text, field="'text'", ctx=f"{op.action}(): ", allow_newline=True)
             return op.anchor
         else:
@@ -2153,7 +2212,12 @@ class RevisionManager:
                 f"rewrite_paragraph(): 'new_text' must be a string "
                 f"(empty string is allowed — it deletes all text), got {new_text!r}"
             )
-        _reject_control_chars(new_text, field="'new_text'", ctx="rewrite_paragraph(): ", allow_newline=True)
+        # A tab is allowed only where the paragraph already has one — the diff
+        # in _rewrite_paragraph_inner refuses any hunk that would add, remove
+        # or move a tab (ISSUES.md #6).
+        _reject_control_chars(
+            new_text, field="'new_text'", ctx="rewrite_paragraph(): ", allow_newline=True, allow_tab=True
+        )
         with self._changeset(), self._grouped() as capture:
             self._rewrite_paragraph_inner(ref_str, new_text, paragraphs)
         return capture.group_id
@@ -2175,7 +2239,12 @@ class RevisionManager:
         old_tokens = _tokenize_words(old_text)
         new_tokens = _tokenize_words(new_text)
 
-        sm = difflib.SequenceMatcher(None, old_tokens, new_tokens)
+        # In a paragraph of 200+ tokens SequenceMatcher's autojunk heuristic
+        # would treat a frequent "\t" as junk, so a kept tab whose neighbours
+        # both changed could not seed a match and would land inside a replace
+        # hunk — a false refusal below. Exact matching for tab-bearing
+        # paragraphs only; tab-free paragraphs keep the default alignment.
+        sm = difflib.SequenceMatcher(None, old_tokens, new_tokens, autojunk="\t" not in old_text)
         opcodes = sm.get_opcodes()
 
         # Convert token indices to character offsets in old_text
@@ -2206,6 +2275,18 @@ class RevisionManager:
             new_fragment = "".join(new_tokens[j1:j2])
 
             hunks.append((tag, old_char_start, old_char_end, new_fragment))
+
+        # Tabs may only be kept in place: a hunk whose old side holds one would
+        # delete or move a <w:tab/>, and a hunk whose new side holds one would
+        # write a tracked tab. Neither is supported yet (ISSUES.md #6).
+        # Refused before any mutation, like the split preflight below.
+        for tag, old_char_start, old_char_end, new_fragment in hunks:
+            if "\t" in old_text[old_char_start:old_char_end] or (tag != "delete" and "\t" in new_fragment):
+                raise ValueError(
+                    "rewrite_paragraph(): 'new_text' can keep the paragraph's tabs but not add, remove or "
+                    "move them — keep each '\\t' exactly where the paragraph has it, or use replace()/"
+                    "delete() on the text beside the tab (ISSUES.md #6)."
+                )
 
         # Preflight the split (\n) hunks against the pre-mutation state: the
         # reversed hunk loop below has no rollback, so anything that can't split
@@ -2318,13 +2399,14 @@ class RevisionManager:
             # author's insertion gets our own sibling <w:ins> instead
             ins_ancestor = self._find_ancestor(run, "w:ins")
             if ins_ancestor:
-                if self._owns_ins(ins_ancestor):
-                    node_text = self._get_node_text(last_pos.node)
+                node_text = self._get_node_text(last_pos.node)
+                if not self._owns_ins(ins_ancestor):
+                    self._insert_own_ins_within_foreign_ins(ins_ancestor, last_pos.node, len(node_text), text, rPr_xml)
+                elif last_pos.is_tab:
+                    self._insert_into_run(run, rPr_xml, last_pos.node, 1, self._plain_run_xml(rPr_xml, text))
+                else:
                     self._set_node_text(last_pos.node, node_text + text)
                     _set_xml_space_preserve(last_pos.node)
-                else:
-                    node_text = self._get_node_text(last_pos.node)
-                    self._insert_own_ins_within_foreign_ins(ins_ancestor, last_pos.node, len(node_text), text, rPr_xml)
                 return
 
             ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
@@ -2341,30 +2423,21 @@ class RevisionManager:
         # insertion gets our own sibling <w:ins> (splitting theirs mid-content)
         ins_ancestor = self._find_ancestor(run, "w:ins")
         if ins_ancestor:
-            if self._owns_ins(ins_ancestor):
+            if not self._owns_ins(ins_ancestor):
+                self._insert_own_ins_within_foreign_ins(ins_ancestor, pos.node, pos.offset_in_node, text, rPr_xml)
+            elif pos.is_tab:
+                self._insert_into_run(run, rPr_xml, pos.node, 0, self._plain_run_xml(rPr_xml, text))
+            else:
                 node_text = self._get_node_text(pos.node)
                 offset = pos.offset_in_node
                 self._set_node_text(pos.node, node_text[:offset] + text + node_text[offset:])
                 _set_xml_space_preserve(pos.node)
-            else:
-                self._insert_own_ins_within_foreign_ins(ins_ancestor, pos.node, pos.offset_in_node, text, rPr_xml)
             return
 
-        # Split the run at the offset and insert <w:ins> between
-        node_text = self._get_node_text(pos.node)
-        offset = pos.offset_in_node
-        before_text = node_text[:offset]
-        after_text = node_text[offset:]
-
-        xml_parts = []
-        if before_text:
-            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before_text)}</w:t></w:r>")
-        xml_parts.append(f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>")
-        if after_text:
-            xml_parts.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r>")
-
-        new_xml = "".join(xml_parts)
-        self.editor.replace_node(run, new_xml)
+        # Split the run at the offset and insert <w:ins> between; the run's
+        # other children (sibling w:t, w:tab, w:br, …) keep their places.
+        ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
+        self._insert_into_run(run, rPr_xml, pos.node, pos.offset_in_node, ins_xml)
 
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.
@@ -2586,7 +2659,8 @@ class RevisionManager:
         """
         if not isinstance(replace_with, str):
             raise ValueError(f"'replace_with' must be a string (empty string is allowed), got {replace_with!r}")
-        _reject_control_chars(find, field="'find'", ctx="replace(): ", allow_newline=False)
+        _reject_control_chars(find, field="'find'", ctx="replace(): ", allow_tab=True)
+        _reject_tab_in_edit_target(find, field="'find'", ctx="replace(): ")
         _reject_control_chars(replace_with, field="'replace_with'", ctx="replace(): ", allow_newline=True)
         with self._changeset(), self._grouped():
             if paragraph is not None:
@@ -2619,7 +2693,8 @@ class RevisionManager:
                 matches more than once in the search scope
             HashMismatchError: If the paragraph hash doesn't match
         """
-        _reject_control_chars(text, field="'text'", ctx="delete(): ", allow_newline=False)
+        _reject_control_chars(text, field="'text'", ctx="delete(): ", allow_tab=True)
+        _reject_tab_in_edit_target(text, field="'text'", ctx="delete(): ")
         with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
@@ -2644,7 +2719,12 @@ class RevisionManager:
 
         Thin wrapper around :func:`get_text_node_data` — kept as a method so
         existing call sites (and external subclasses) don't have to change.
+        A ``<w:tab/>`` mark reads as ``"\\t"``, the one character it occupies
+        in the text map, so offset arithmetic and boundary checks
+        (``offset == len(node_text)``) work unchanged on a tab position.
         """
+        if is_tab_node(node):
+            return "\t"
         return get_text_node_data(node)
 
     def _set_node_text(self, node, text: str) -> None:
@@ -2654,7 +2734,13 @@ class RevisionManager:
         carrying the full content. Necessary because assigning to
         ``firstChild.data`` would leave any sibling text nodes behind,
         corrupting the document when the element holds split text (issue #9).
+
+        A ``<w:tab/>`` holds no text: every tab-adjacent edit must route
+        through the run rebuilders instead, so splicing into one is a bug
+        (it would write ``<w:tab>text</w:tab>``) and fails loudly here.
         """
+        if is_tab_node(node):
+            raise RevisionError("Internal error: attempted to splice text into a <w:tab/> mark (ISSUES.md #6)")
         for child in list(node.childNodes):
             if child.nodeType == child.TEXT_NODE:
                 node.removeChild(child)
@@ -3137,6 +3223,9 @@ class RevisionManager:
         left side of the split point (None when the split point is at the
         very start of the insertion's content).
 
+        Despite the name this is the general run splitter — the paragraph
+        split path (:meth:`_collect_tail_nodes`) uses it on plain runs too.
+
         Group caveat: when the enclosing *foreign* insertion is later split
         into fresh-id halves, those halves are not adopted into the origin's
         inferred group (adoption is deliberately limited to our own
@@ -3152,7 +3241,9 @@ class RevisionManager:
         # per-w:t, and must know which side each child lands on, so it keeps
         # its own direct-children walk instead of rebuild_run_fragments.
         # Non-text children (w:tab, w:br, w:drawing, …) stay in document
-        # order on whichever side of the split point they fall.
+        # order on whichever side of the split point they fall. A w:tab edge
+        # is one character, never sliced: offset 0 puts it on the right,
+        # offset 1 on the left.
         left_parts: list[str] = []
         right_parts: list[str] = []
         side = left_parts
@@ -3161,6 +3252,10 @@ class RevisionManager:
                 continue
             tag = getattr(child, "tagName", "")
             if tag == "w:rPr":
+                continue
+            if child is edge_node and is_tab_node(child):
+                (right_parts if offset == 0 else left_parts).append(f"<w:r>{rPr_xml}{child.toxml()}</w:r>")
+                side = right_parts
                 continue
             if child is edge_node:
                 if node_text[:offset]:
@@ -3205,7 +3300,7 @@ class RevisionManager:
         Returns the new insertion's change id.
         """
         own_ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
-        wt_nodes = self._get_wt_nodes_in_ancestor(ins_elem)
+        wt_nodes = self._content_nodes_in_ancestor(ins_elem)
         node_text = self._get_node_text(edge_node)
 
         if edge_node is wt_nodes[0] and offset == 0:
@@ -3255,7 +3350,7 @@ class RevisionManager:
 
         ins_elem = self._find_ancestor(first_node, "w:ins")
 
-        if not before and not after and len(groups) == len(self._get_wt_nodes_in_ancestor(ins_elem)):
+        if not before and not after and len(groups) == len(self._content_nodes_in_ancestor(ins_elem)):
             # Entire insertion matched -- remove the <w:ins> element
             if ins_elem and ins_elem.parentNode:
                 ins_elem.parentNode.removeChild(ins_elem)
@@ -3268,7 +3363,7 @@ class RevisionManager:
             if not before_text and not after_text:
                 # Entire single node matched
                 if ins_elem and ins_elem.parentNode:
-                    if len(self._get_wt_nodes_in_ancestor(ins_elem)) == 1:
+                    if len(self._content_nodes_in_ancestor(ins_elem)) == 1:
                         # Sole w:t — remove entire <w:ins>
                         ins_elem.parentNode.removeChild(ins_elem)
                     else:
@@ -3327,11 +3422,17 @@ class RevisionManager:
             if not has_content_children:
                 run.parentNode.removeChild(run)
 
-    def _get_wt_nodes_in_ancestor(self, ancestor) -> list:
-        """Get all w:t nodes inside an ancestor element."""
+    def _content_nodes_in_ancestor(self, ancestor) -> list:
+        """Every character-bearing node inside ``ancestor``, in document order:
+        ``w:t`` elements and run-level ``<w:tab/>`` marks.
+
+        Counting tabs keeps the "entire insertion matched → drop the
+        ``<w:ins>``" fast paths honest: a match can never include a tab, so
+        an insertion holding one is never wholly matched.
+        """
         if ancestor is None:
             return []
-        return ancestor.getElementsByTagName("w:t")
+        return [n for n in ancestor.getElementsByTagName("*") if n.tagName == "w:t" or is_tab_node(n)]
 
     def _delete_regular_segment(self, positions: list) -> tuple[int, Element | None]:
         """Wrap matched text in <w:del> in place, run by run.
@@ -3590,7 +3691,7 @@ class RevisionManager:
         """Insert text before or after anchor with tracked changes."""
         if not isinstance(text, str):
             raise ValueError(f"'text' must be a string (empty string is allowed), got {text!r}")
-        _reject_control_chars(anchor, field="'anchor'", ctx=f"insert_{position}(): ", allow_newline=False)
+        _reject_control_chars(anchor, field="'anchor'", ctx=f"insert_{position}(): ", allow_tab=True)
         _reject_control_chars(text, field="'text'", ctx=f"insert_{position}(): ", allow_newline=True)
         with self._changeset(), self._grouped():
             if paragraph is not None:
@@ -3630,39 +3731,63 @@ class RevisionManager:
         # sibling <w:ins>, splitting theirs when the anchor falls mid-content.
         ins_ancestor = self._find_ancestor(run, "w:ins")
         if ins_ancestor:
-            if self._owns_ins(ins_ancestor):
-                node_text = self._get_node_text(edge.node)
-                self._set_node_text(edge.node, node_text[:offset] + text + node_text[offset:])
-                _set_xml_space_preserve(edge.node)
+            if not self._owns_ins(ins_ancestor):
+                return self._insert_own_ins_within_foreign_ins(ins_ancestor, edge.node, offset, text, rPr_xml)
+            if edge.is_tab:
+                # A tab holds no text to splice into: a plain sibling run,
+                # still inside our own <w:ins>, lands the text beside it.
+                self._insert_into_run(run, rPr_xml, edge.node, offset, self._plain_run_xml(rPr_xml, text))
                 return -1
-            return self._insert_own_ins_within_foreign_ins(ins_ancestor, edge.node, offset, text, rPr_xml)
+            node_text = self._get_node_text(edge.node)
+            self._set_node_text(edge.node, node_text[:offset] + text + node_text[offset:])
+            _set_xml_space_preserve(edge.node)
+            return -1
 
-        # Rebuild the edge run: split its w:t at the offset and wrap text in
-        # <w:ins>; non-text children (w:tab, w:br, w:drawing, …) stay in place
+        # Rebuild the edge run: split its w:t at the offset (or land beside a
+        # w:tab edge) and wrap text in <w:ins>; every other child stays in place
         ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
-
-        def render_wt(wt) -> list[str]:
-            fragments: list[str] = []
-            if wt is edge.node:
-                node_text = self._get_node_text(wt)
-                before_text = node_text[:offset]
-                after_text = node_text[offset:]
-                if before_text:
-                    fragments.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(before_text)}</w:t></w:r>")
-                fragments.append(ins_xml)
-                if after_text:
-                    fragments.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(after_text)}</w:t></w:r>")
-            else:
-                # Preserve unmatched sibling w:t
-                fragments.extend(render_plain_wt(wt, rPr_xml))
-            return fragments
-
-        nodes = self.editor.replace_node(run, "".join(rebuild_run_fragments(run, rPr_xml, render_wt)))
+        nodes = self._insert_into_run(run, rPr_xml, edge.node, offset, ins_xml)
 
         for node in nodes:
             if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
                 return int(node.getAttribute("w:id"))
         return -1
+
+    @staticmethod
+    def _plain_run_xml(rPr_xml: str, text: str) -> str:
+        """A bare run carrying ``text`` — for splicing beside a tab inside our
+        own pending insertion, where a nested ``<w:ins>`` would be invalid."""
+        return f"<w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r>"
+
+    def _insert_into_run(self, run, rPr_xml: str, node, offset: int, fragment: str) -> list:
+        """Rebuild ``run`` with ``fragment`` spliced in at (``node``, ``offset``).
+
+        ``node`` is a direct ``w:t`` or ``w:tab`` child of ``run``. A ``w:t``
+        is split around ``offset``; a tab is one character, so the fragment
+        lands before it (``offset == 0``) or after it (``offset == 1``) and the
+        ``<w:tab/>`` is re-emitted intact. Every other child keeps its place
+        in document order. Returns the nodes that replaced ``run``.
+        """
+
+        def render_wt(wt) -> list[str]:
+            if wt is not node:
+                return render_plain_wt(wt, rPr_xml)
+            node_text = self._get_node_text(wt)
+            fragments: list[str] = []
+            if node_text[:offset]:
+                fragments.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(node_text[:offset])}</w:t></w:r>")
+            fragments.append(fragment)
+            if node_text[offset:]:
+                fragments.append(f"<w:r>{rPr_xml}<w:t>{_escape_xml(node_text[offset:])}</w:t></w:r>")
+            return fragments
+
+        def render_other(child) -> list[str]:
+            own = f"<w:r>{rPr_xml}{child.toxml()}</w:r>"
+            if child is not node:
+                return [own]
+            return [fragment, own] if offset == 0 else [own, fragment]
+
+        return self.editor.replace_node(run, "".join(rebuild_run_fragments(run, rPr_xml, render_wt, render_other)))
 
     # ==================== Paragraph splits (\n) ====================
 
@@ -3704,7 +3829,8 @@ class RevisionManager:
         dispatchers so a refused split never leaves a partial mutation (single
         edits have no DOM rollback), and again by ``_collect_tail_nodes`` as the
         backstop for the multi-op rewrite path. End-of-paragraph splits (empty
-        tail) are always fine.
+        tail) are always fine. A boundary on a ``<w:tab/>`` needs no extra
+        check here: ``_collect_tail_nodes`` splits the run around the tab.
         """
         if pos >= len(text_map.text):
             return
@@ -3806,11 +3932,14 @@ class RevisionManager:
     def _collect_tail_nodes(self, p1, pos: int) -> list:
         """Direct children of ``p1`` (in order) holding visible text from ``pos`` on.
 
-        Splits the run at the boundary when ``pos`` falls mid-run. The
-        paragraph properties (``w:pPr``) are never included. Raises
-        RevisionError when the boundary sits inside an existing revision or
-        other inline container (deferred — our own split flows always cut on a
-        run that is a direct child of the paragraph).
+        Splits the run at the boundary when ``pos`` falls mid-run — mid-node,
+        or at the start of a node that is not the run's first content child
+        (``<w:t>foo</w:t><w:tab/><w:t>bar</w:t>`` split at ``bar`` keeps
+        ``foo`` and the tab in the head). The paragraph properties (``w:pPr``)
+        are never included. Raises RevisionError when the boundary sits inside
+        an existing revision or other inline container (deferred — our own
+        split flows always cut on a run that is a direct child of the
+        paragraph).
         """
         text_map = build_text_map(p1)
         if pos >= len(text_map.text):
@@ -3820,12 +3949,14 @@ class RevisionManager:
         run = self._find_ancestor(edge.node, "w:r")
         if run is None:  # pragma: no cover - guarded by _reject_unsplittable_boundary
             return []
-        if edge.offset_in_node == 0:
+        if edge.offset_in_node == 0 and _first_content_child(run) is edge.node:
             first_tail = run
         else:
             # Split the run at the offset; the tail starts at the right half.
+            # A None boundary means nothing preceded the split point, so the
+            # (unchanged) run itself opens the tail.
             boundary = self._split_foreign_ins_at(edge.node, edge.offset_in_node)
-            first_tail = _next_element_sibling(boundary.nextSibling) if boundary is not None else None
+            first_tail = _next_element_sibling(boundary.nextSibling) if boundary is not None else run
         tail: list = []
         node = first_tail
         while node is not None:
@@ -4087,16 +4218,7 @@ class RevisionManager:
         if rev_type == "insertion":
             text_elems = _insertion_text_nodes(elem)
         else:
-            # Box content is excluded the same way the insertion walk excludes
-            # it: a w:del wrapping a run that carries a drawing reports the
-            # body text it deleted, not the box's. Bounded by ``elem``, so a
-            # w:del living *inside* a box still reports its own text.
-            text_elems = [t for t in elem.getElementsByTagName("w:delText") if not _inside_textbox(t, elem)]
-            if not text_elems:
-                # Deliberate interop fallback: nonconforming producers may
-                # leave plain w:t inside w:del. Fires only when the w:del has
-                # no w:delText at all; mixed content reads only w:delText.
-                text_elems = [t for t in elem.getElementsByTagName("w:t") if not _inside_textbox(t, elem)]
+            text_elems = _deletion_text_nodes(elem)
 
         text = "".join(self._get_node_text(t_elem) for t_elem in text_elems)
 
@@ -4674,8 +4796,13 @@ class RevisionManager:
 
 
 def _tokenize_words(text: str) -> list[str]:
-    """Split text into alternating word and whitespace tokens."""
-    return re.findall(r"\S+|\s+", text)
+    """Split text into word and whitespace tokens.
+
+    A tab is always a token of its own (never merged into a whitespace run),
+    so the rewrite diff can align a kept ``<w:tab/>`` as ``equal`` and refuse
+    any hunk that would consume one (ISSUES.md #6).
+    """
+    return re.findall(r"\t|[^\S\t]+|\S+", text)
 
 
 def _trim_replace_affixes(find: str, replace_with: str) -> tuple[int, int]:
