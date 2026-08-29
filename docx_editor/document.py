@@ -290,8 +290,8 @@ class Document:
         without this flag.
 
         Exactly the complement of what ``body_paragraphs`` drops: True means
-        at least one ``w:p`` was excluded, so text the file carries is not
-        reachable from here. Extract it with LibreOffice
+        at least one ``w:p`` was excluded, so any text those paragraphs carry
+        is not reachable from here. Extract it with LibreOffice
         (``soffice --headless --convert-to txt:Text file.docx``) rather than
         reporting the document as empty.
         """
@@ -1008,8 +1008,10 @@ class Document:
         Inserted text is included, deleted text is excluded. Text inside a
         drawing's text box is excluded too — it belongs to the box, not to
         any addressable paragraph. A document whose content lives entirely in
-        text boxes therefore returns ``""``; :attr:`has_textbox_content`
-        tells the two cases apart.
+        text boxes therefore returns nothing but the separators between its
+        host paragraphs, so test it with ``.strip()``;
+        :attr:`has_textbox_content` tells that case from a genuinely empty
+        document.
 
         Returns:
             The visible text content

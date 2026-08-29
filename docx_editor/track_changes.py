@@ -529,10 +529,16 @@ class Revision:
       index space (see ``body_paragraphs``). Such a revision is still
       listed — but Word writes every box twice, so it is listed once per
       copy, and a single ``accept_revision``/``accept_group`` resolves only
-      the copy it lands on, leaving the twins out of step. The copies always
-      share an ``(author, date)`` changeset, so
-      ``accept_changeset``/``reject_changeset`` resolve both, as do
-      ``accept_all``/``reject_all``.
+      the copy it lands on, leaving the twins out of step. Only
+      ``accept_all``/``reject_all`` resolve both unconditionally: Word
+      commonly stamps the same ``w:id`` on both copies, and a duplicated id
+      is ungroupable, so ``group_id`` and ``changeset_id`` are both None and
+      no group- or changeset-keyed call can reach them. When the copies do
+      carry distinct ids and identical ``w:author``/``w:date`` they join one
+      inferred changeset, which ``accept_changeset``/``reject_changeset``
+      resolve — along with every other group that author stamped in the same
+      second, since an inferred changeset is a global ``(author, date)``
+      class.
     - ``occurrence``: 0-based occurrence index of ``text`` within the
       containing paragraph, counted in the view where the revision's text
       lives — the accepted (visible) view for insertions, the original

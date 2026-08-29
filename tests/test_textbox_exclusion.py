@@ -53,6 +53,16 @@ def word_box(inner: str = "<w:p><w:r><w:t>BOXED</w:t></w:r></w:p>", fallback_inn
     )
 
 
+def _boxed_ins(rev_id: int) -> str:
+    """One tracked insertion, as a text box's whole paragraph content."""
+    return (
+        "<w:p>"
+        f'<w:ins w:id="{rev_id}" w:author="Reviewer" w:date="2024-01-01T00:00:00Z">'
+        "<w:r><w:t>BOXADD</w:t></w:r></w:ins>"
+        "</w:p>"
+    )
+
+
 def make_docx(simple_docx: Path, dest: Path, body: str) -> Path:
     """simple.docx with its body replaced by ``body`` (a ``<w:body>`` fragment)."""
     replace_document_xml(simple_docx, dest, f"<w:document {BOX_NS}><w:body>{body}</w:body></w:document>")
@@ -292,16 +302,8 @@ class TestRevisionsInsideABox:
 
     @pytest.fixture
     def boxed_revision_docx(self, simple_docx, temp_dir) -> Path:
-        def boxed_ins(rev_id: int) -> str:
-            return (
-                "<w:p>"
-                f'<w:ins w:id="{rev_id}" w:author="Reviewer" w:date="2024-01-01T00:00:00Z">'
-                "<w:r><w:t>BOXADD</w:t></w:r></w:ins>"
-                "</w:p>"
-            )
-
         body = (
-            f"<w:p><w:r><w:t>Host </w:t>{word_box(boxed_ins(90), boxed_ins(91))}<w:t> tail</w:t></w:r></w:p>"
+            f"<w:p><w:r><w:t>Host </w:t>{word_box(_boxed_ins(90), _boxed_ins(91))}<w:t> tail</w:t></w:r></w:p>"
             "<w:p><w:r><w:t>Second body paragraph</w:t></w:r></w:p>"
         )
         return make_docx(simple_docx, temp_dir / "boxed_revision.docx", body)
@@ -348,27 +350,56 @@ class TestRevisionsInsideABox:
 
         assert saved_document_xml(boxed_revision_docx).count("<w:ins ") == 1
 
-    def test_accept_changeset_resolves_both_copies(self, boxed_revision_docx):
-        """The precise way to resolve a box revision.
+    def test_accept_changeset_resolves_both_copies_when_they_are_groupable(self, simple_docx, temp_dir):
+        """Twins with distinct ids join one inferred changeset.
 
-        The twins are byte-identical apart from their ids, so they always
-        share a ``(w:author, w:date)`` changeset even though they reconstruct
-        into separate groups. Resolving the changeset takes both without
-        touching the rest of the document, which ``accept_all`` would.
+        They share a ``(w:author, w:date)``, so resolving the changeset takes
+        both while another author's edit survives — which ``accept_all()``
+        would not. Note the scope: an inferred changeset is a global
+        ``(author, date)`` class, so it also takes anything the *same* author
+        stamped in that second, box or not.
         """
-        doc = Document.open(boxed_revision_docx)
+        body = (
+            f"<w:p><w:r>{word_box(_boxed_ins(90), _boxed_ins(91))}</w:r></w:p>"
+            '<w:p><w:ins w:id="92" w:author="Someone Else" w:date="2024-06-01T00:00:00Z">'
+            "<w:r><w:t>OTHER</w:t></w:r></w:ins></w:p>"
+        )
+        docx = make_docx(simple_docx, temp_dir / "groupable_twins.docx", body)
+        doc = Document.open(docx)
         try:
-            (changeset_id,) = {r.changeset_id for r in doc.list_revisions()}
+            twins = [r for r in doc.list_revisions() if r.id in (90, 91)]
+            (changeset_id,) = {r.changeset_id for r in twins}
             assert changeset_id is not None
             assert doc.accept_changeset(changeset_id) == 2
-            assert doc.list_revisions() == []
-            doc.save()
+            assert [r.id for r in doc.list_revisions()] == [92]
         finally:
             doc.close()
 
-        xml = saved_document_xml(boxed_revision_docx)
-        assert "<w:ins " not in xml
-        assert xml.count("BOXADD") == 2
+    def test_word_shaped_twins_share_an_id_and_are_ungroupable(self, simple_docx, temp_dir):
+        """Why accept_all is the only unconditional path.
+
+        Word copies the mc:Choice content into mc:Fallback verbatim, ids
+        included. A duplicated id is ungroupable, so group_id and
+        changeset_id are both None and no group- or changeset-keyed call can
+        reach either copy — accept_revision resolves exactly one.
+        """
+        body = f"<w:p><w:r>{word_box(_boxed_ins(90))}</w:r></w:p>"
+        docx = make_docx(simple_docx, temp_dir / "same_id_twins.docx", body)
+        doc = Document.open(docx)
+        try:
+            revisions = doc.list_revisions()
+            assert [(r.id, r.group_id, r.changeset_id) for r in revisions] == [(90, None, None)] * 2
+            assert doc.accept_revision(90) is True
+            assert [r.id for r in doc.list_revisions()] == [90]
+        finally:
+            doc.close()
+
+        doc = Document.open(make_docx(simple_docx, temp_dir / "same_id_twins2.docx", body))
+        try:
+            assert doc.accept_all() == 2
+            assert doc.list_revisions() == []
+        finally:
+            doc.close()
 
     def test_accept_all_still_resolves_it(self, boxed_revision_docx):
         doc = Document.open(boxed_revision_docx)
@@ -496,17 +527,26 @@ class TestHasTextboxContent:
             doc.close()
 
     def test_distinguishes_an_all_box_document_from_an_empty_one(self, simple_docx, temp_dir):
-        """Both read as empty text; only the flag tells them apart."""
+        """Both read as blank text; only the flag tells them apart.
+
+        A real poster anchors each box in its own paragraph, so the visible
+        text is the separators between them — ``"\n\n"``, not ``""``. That
+        is why the documented idiom tests ``.strip()``.
+        """
+        lines = ["ACME REPORT", "Revenue grew 12 percent.", "Q3 2024"]
         boxed = make_docx(
             simple_docx,
             temp_dir / "poster.docx",
-            f"<w:p><w:r>{word_box('<w:p><w:r><w:t>ACME REPORT</w:t></w:r></w:p>')}</w:r></w:p>",
+            "".join(f"<w:p><w:r>{word_box(f'<w:p><w:r><w:t>{line}</w:t></w:r></w:p>')}</w:r></w:p>" for line in lines),
         )
         empty = make_docx(simple_docx, temp_dir / "empty.docx", "<w:p/>")
         poster = Document.open(boxed)
         blank = Document.open(empty)
         try:
-            assert poster.get_visible_text() == blank.get_visible_text() == ""
+            assert poster.get_visible_text() == "\n\n"
+            assert poster.paragraph_count() == 3
+            assert blank.get_visible_text() == ""
+            assert poster.get_visible_text().strip() == blank.get_visible_text().strip() == ""
             assert poster.has_textbox_content is True
             assert blank.has_textbox_content is False
         finally:
