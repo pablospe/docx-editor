@@ -985,7 +985,7 @@ class TestRewriteNewTextValidation:
     tokenizer, and ``batch_rewrite(None)`` silently returned ``[]`` (the
     falsy-input guard swallowed it) — indistinguishable from an empty batch.
 
-    After: new_text must be a str (empty allowed — it deletes all text) at
+    After: new_text must be a str (empty allowed — it deletes all text of a tab-free paragraph) at
     both the single and batch boundaries; the batch check runs in the
     upfront validation loop so atomicity holds; and batch inputs must be a
     real list.

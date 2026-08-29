@@ -17,6 +17,7 @@ from .exceptions import (
     HashMismatchError,
     ParagraphIndexError,
     TextNotFoundError,
+    _truncate_preview,
 )
 from .xml_editor import (
     DocxXMLEditor,
@@ -296,9 +297,7 @@ class CommentManager:
             actual = compute_paragraph_hash(p)
             if actual != ref.hash:
                 tm = build_text_map(p)
-                preview = tm.text[:80]
-                if len(tm.text) > 80:
-                    preview += "..."
+                preview = _truncate_preview(tm.text)
                 raise HashMismatchError(ref.index, ref.hash, actual, preview)
             text_map = build_text_map(p)
             total = count_in_text_map(text_map, anchor_text)

@@ -21,6 +21,7 @@ from .exceptions import (
     HashMismatchError,
     ParagraphIndexError,
     UnanchoredNoteWarning,
+    _truncate_preview,
 )
 from .track_changes import (
     EditOperation,
@@ -1134,9 +1135,7 @@ class Document:
         actual_hash = compute_paragraph_hash(p)
         if actual_hash != parsed.hash:
             tm = build_text_map(p)
-            preview = tm.text[:80]
-            if len(tm.text) > 80:
-                preview += "..."
+            preview = _truncate_preview(tm.text)
             raise HashMismatchError(parsed.index, parsed.hash, actual_hash, preview)
         return parsed.index, paragraphs
 

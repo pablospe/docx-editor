@@ -294,7 +294,7 @@ text = doc.get_original_text()
 
 #### `find_text(text, occurrence=0, paragraph=None)`
 
-Find text in the document, including text spanning XML element boundaries. Text-box content is excluded, as it is from [`paragraph_count()`](#paragraph_count). A tab mark is `\t` in the searchable text: `"Name\tValue"` matches `Name<tab>Value`, while `"NameValue"` does not (`TextNotFoundError.paragraph_preview` shows the `\t`).
+Find text in the document, including text spanning XML element boundaries. Text-box content is excluded, as it is from [`paragraph_count()`](#paragraph_count). A tab mark is `\t` in the searchable text: `"Name\tValue"` matches `Name<tab>Value`, while `"NameValue"` does not (the `TextNotFoundError` message and its `paragraph_preview` spell the tab as the two characters `\t`, so it cannot be mistaken for a space).
 
 **Parameters:**
 
@@ -1657,7 +1657,8 @@ Raised when the specified text is not found in the document, or when an
 explicit `occurrence` is out of range — the error then carries `occurrence`
 and `total_occurrences` and its message reports the actual count instead of
 claiming the text is absent. Other structured fields: `search_text`,
-`paragraph_ref`, `paragraph_preview`.
+`paragraph_ref`, `paragraph_preview` (a tab mark is spelled `\t` in every
+preview, so it cannot pass for a space).
 
 ```python
 from docx_editor.exceptions import TextNotFoundError
@@ -1693,7 +1694,7 @@ Raised when a `paragraph` ref's hash no longer matches the paragraph's current
 content — the paragraph changed (usually by an earlier edit) since the ref was
 listed, so the ref is stale. Structured fields: `paragraph_index` (1-based),
 `expected_hash` (the hash in the stale ref), `actual_hash` (the paragraph's
-current hash), and `paragraph_preview` (the current text). Recover by retrying
+current hash), and `paragraph_preview` (the current text, a tab mark spelled `\t`). Recover by retrying
 with the fresh ref `P{paragraph_index}#{actual_hash}`, or re-list paragraphs.
 
 ```python

@@ -247,7 +247,13 @@ class CommentError(DocxEditError):
 
 
 def _truncate_preview(text: str, limit: int = 80) -> str:
-    """Cap a paragraph preview at ``limit`` characters, adding '...' if truncated."""
+    """Cap a paragraph preview at ``limit`` characters, adding '...' if truncated.
+
+    A tab mark is spelled as the two characters ``\\t``: a raw tab reads like
+    a space, which would make the preview look identical to the very text a
+    caller failed to find (ISSUES.md #6).
+    """
+    text = text.replace("\t", "\\t")
     if len(text) <= limit:
         return text
     return text[:limit] + "..."
@@ -271,7 +277,8 @@ class TextNotFoundError(DocxEditError):
         paragraph_ref: Paragraph reference the search was scoped to, or None
             if the search was document-wide.
         paragraph_preview: Current visible text of the scoped paragraph
-            (truncated to 80 chars with "..." suffix), or None if unscoped.
+            (truncated to 80 chars with "..." suffix; a tab mark is spelled
+            ``\\t``), or None if unscoped.
         occurrence: 0-based occurrence index requested (for nth-match
             lookups), or None otherwise.
         total_occurrences: Actual number of occurrences found, or None for
@@ -325,7 +332,8 @@ class AmbiguousTextError(DocxEditError):
         paragraph_ref: Paragraph reference the search was scoped to, or None
             if the search was document-wide.
         paragraph_preview: Current visible text of the scoped paragraph
-            (truncated to 80 chars with "..." suffix), or None if unscoped.
+            (truncated to 80 chars with "..." suffix; a tab mark is spelled
+            ``\\t``), or None if unscoped.
         total_occurrences: Number of matches found in the search scope.
     """
 

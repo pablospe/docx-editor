@@ -19,6 +19,7 @@ from docx_editor import (
     CommentError,
     Document,
     EditOperation,
+    HashMismatchError,
     RevisionError,
     TextNotFoundError,
 )
@@ -200,8 +201,18 @@ class TestSearch:
         ref = find_ref(tab_doc, "Name")
         with pytest.raises(TextNotFoundError) as exc:
             tab_doc.replace("NameValue", "x", paragraph=ref)
-        # The preview shows the tab, which is the fix the caller needs.
-        assert exc.value.paragraph_preview == "Name\tValue here"
+        # The preview spells the tab out — a raw tab would read like the very
+        # space the caller searched with — and the message carries it too.
+        assert exc.value.paragraph_preview == "Name\\tValue here"
+        assert 'Current content: "Name\\tValue here"' in str(exc.value)
+
+    def test_stale_ref_preview_spells_the_tab(self, tab_doc):
+        ref = find_ref(tab_doc, "Name")
+        tab_doc.replace("Value", "Worth", paragraph=ref)
+        with pytest.raises(HashMismatchError) as exc:
+            tab_doc.replace("Worth", "x", paragraph=ref)
+        assert exc.value.paragraph_preview == "Name\\tWorth here"
+        assert 'Current content: "Name\\tWorth here"' in str(exc.value)
 
     def test_offsets_count_the_tab_as_one_character(self, tab_doc):
         m = match_for(tab_doc, "Value")
@@ -218,6 +229,7 @@ class TestSearch:
             with pytest.raises(AmbiguousTextError) as exc:
                 doc.replace("x", "y", paragraph=ref)
             assert exc.value.total_occurrences == 3
+            assert exc.value.paragraph_preview == "x\\tx x"
             # A SearchResult round-trips into an edit and targets the middle hit.
             doc.replace(match_for(doc, "x", occurrence=1), "y")
             assert doc.get_visible_text().splitlines()[0] == "x\ty x"
