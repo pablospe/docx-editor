@@ -354,9 +354,11 @@ class TestRevisionsInsideABox:
 
         They share a ``(w:author, w:date)``, so resolving the changeset takes
         both while another author's edit survives — which ``accept_all()``
-        would not. Note the scope: an inferred changeset is a global
-        ``(author, date)`` class, so it also takes anything the *same* author
-        stamped in that second, box or not.
+        would not. Note the scope: an inferred changeset is a global class
+        over the author and the *identical raw* ``w:date`` string, so it also
+        takes anything that author stamped with that exact string, box or
+        not — and leaves a revision whose date only means the same instant
+        (``.000Z`` for ``Z``) in a changeset of its own.
         """
         body = (
             f"<w:p><w:r>{word_box(_boxed_ins(90), _boxed_ins(91))}</w:r></w:p>"
@@ -364,6 +366,10 @@ class TestRevisionsInsideABox:
             # joins their changeset: the scope the docstring warns about.
             '<w:p><w:ins w:id="93" w:author="Reviewer" w:date="2024-01-01T00:00:00Z">'
             "<w:r><w:t>SWEPT</w:t></w:r></w:ins></w:p>"
+            # Same author and the same *instant*, but a different raw string —
+            # the key is the string, so this one is a changeset of its own.
+            '<w:p><w:ins w:id="94" w:author="Reviewer" w:date="2024-01-01T00:00:00.000Z">'
+            "<w:r><w:t>KEPT</w:t></w:r></w:ins></w:p>"
             '<w:p><w:ins w:id="92" w:author="Someone Else" w:date="2024-06-01T00:00:00Z">'
             "<w:r><w:t>OTHER</w:t></w:r></w:ins></w:p>"
         )
@@ -373,9 +379,10 @@ class TestRevisionsInsideABox:
             twins = [r for r in doc.list_revisions() if r.id in (90, 91)]
             (changeset_id,) = {r.changeset_id for r in twins}
             assert changeset_id is not None
-            # Both copies plus the unrelated same-(author, date) insertion.
+            # Both copies plus the unrelated insertion with the identical
+            # raw date — but not the one whose date merely parses the same.
             assert doc.accept_changeset(changeset_id) == 3
-            assert [r.id for r in doc.list_revisions()] == [92]
+            assert [r.id for r in doc.list_revisions()] == [92, 94]
         finally:
             doc.close()
 
@@ -393,19 +400,22 @@ class TestRevisionsInsideABox:
         try:
             revisions = doc.list_revisions()
             assert [(r.id, r.group_id, r.changeset_id) for r in revisions] == [(90, None, None)] * 2
-            # Repeating the call takes the twin, then reports nothing left —
-            # the narrowest way to resolve both when no group or changeset can.
+            # Repeating the call happens to reach the twin here, but that is
+            # a property of the duplicated id, not a technique: any third
+            # element sharing the id would absorb one of the calls. accept_all
+            # is what the docs recommend, and it is checked below.
             assert [doc.accept_revision(90) for _ in range(3)] == [True, True, False]
             assert doc.list_revisions() == []
         finally:
             doc.close()
 
-        doc = Document.open(make_docx(simple_docx, temp_dir / "same_id_twins2.docx", body))
-        try:
-            assert doc.accept_all() == 2
-            assert doc.list_revisions() == []
-        finally:
-            doc.close()
+        for name, resolve in (("accept", "accept_all"), ("reject", "reject_all")):
+            doc = Document.open(make_docx(simple_docx, temp_dir / f"same_id_{name}.docx", body))
+            try:
+                assert getattr(doc, resolve)() == 2
+                assert doc.list_revisions() == []
+            finally:
+                doc.close()
 
     def test_accept_all_still_resolves_it(self, boxed_revision_docx):
         doc = Document.open(boxed_revision_docx)
@@ -418,6 +428,44 @@ class TestRevisionsInsideABox:
         xml = saved_document_xml(boxed_revision_docx)
         assert "<w:ins " not in xml
         assert xml.count("BOXADD") == 2
+
+
+class TestSingleCopyBox:
+    """A box stored in one form only is listed once and behaves normally.
+
+    The twin caveats are about how Word stores a box, not about boxes: a bare
+    VML ``w:pict`` has no ``mc:Fallback`` copy, so nothing is duplicated.
+    """
+
+    @pytest.fixture
+    def vml_box_docx(self, simple_docx, temp_dir) -> Path:
+        vml = (
+            "<w:pict><v:shape><v:textbox>"
+            f"<w:txbxContent>{_boxed_ins(90)}</w:txbxContent>"
+            "</v:textbox></v:shape></w:pict>"
+        )
+        return make_docx(simple_docx, temp_dir / "vml_box.docx", f"<w:p><w:r>{vml}</w:r></w:p>")
+
+    def test_text_is_still_excluded(self, vml_box_docx):
+        doc = Document.open(vml_box_docx)
+        try:
+            assert doc.paragraph_count() == 1
+            assert doc.get_visible_text() == ""
+            assert doc.has_textbox_content is True
+        finally:
+            doc.close()
+
+    def test_its_revision_is_listed_once_and_is_groupable(self, vml_box_docx):
+        doc = Document.open(vml_box_docx)
+        try:
+            (revision,) = doc.list_revisions()
+            assert revision.id == 90
+            assert revision.paragraph_ref is None
+            assert revision.group_id is not None
+            assert doc.accept_revision(90) is True
+            assert doc.list_revisions() == []
+        finally:
+            doc.close()
 
 
 class TestHostRevisionsIgnoreBoxText:

@@ -529,19 +529,21 @@ class Revision:
       paragraph — outside any ``<w:p>`` (e.g. ``<w:trPr>`` row markers), or
       inside a drawing's text box, whose paragraphs are excluded from the ref
       index space (see ``body_paragraphs``). Such a revision is still
-      listed — but a box is stored twice, so it is listed once per copy and
-      one ``accept_revision``/``reject_revision`` call resolves only the copy
-      it lands on; calling it again with the same id takes the other and then
-      returns False, which is the narrowest way to resolve both.
-      ``accept_all``/``reject_all`` are the only *single* calls that always
-      do it: when a producer copies the ``mc:Choice`` content into
-      ``mc:Fallback`` verbatim the copies share a ``w:id``, and a duplicated
-      id is ungroupable, so ``group_id`` and ``changeset_id`` are both None
-      and no group- or changeset-keyed call can reach them. Copies that do
-      carry distinct ids and identical ``w:author``/``w:date`` join one
-      inferred changeset, which ``accept_changeset``/``reject_changeset``
-      resolve — along with every other group carrying that author and the
-      identical raw ``w:date`` string.
+      listed, and ``accept_all``/``reject_all`` always resolve it. Anything
+      narrower depends on how the box is stored. Word normally writes a box
+      twice — an ``mc:Choice`` copy and an ``mc:Fallback`` copy — and then
+      the revision is listed once per copy, so one ``accept_revision``/
+      ``accept_group`` call resolves only the copy it lands on and leaves the
+      twins out of step. Copies carrying distinct ids and identical
+      ``w:author``/``w:date`` join one inferred changeset, so
+      ``accept_changeset``/``reject_changeset`` reach both — along with every
+      other group carrying that author and the identical raw ``w:date``
+      string. Copies that share a ``w:id`` (a producer that duplicated the
+      ``mc:Choice`` content verbatim) are ungroupable: ``group_id`` and
+      ``changeset_id`` are both None, so only ``accept_all``/``reject_all``
+      reach them. A box stored in one form only (VML ``w:pict`` with no
+      ``mc:Fallback`` twin) is listed once and behaves like any other
+      revision.
     - ``occurrence``: 0-based occurrence index of ``text`` within the
       containing paragraph, counted in the view where the revision's text
       lives — the accepted (visible) view for insertions, the original
@@ -824,7 +826,8 @@ class UnhandledRevision:
             paragraph (e.g. a ``w:tblPrChange`` in a table's properties, or a
             ``w:sectPrChange`` in a section break), or inside a drawing's text
             box, whose paragraphs are excluded from the ref index space (see
-            ``body_paragraphs``).
+            ``body_paragraphs``). A mark inside a box is listed once per
+            stored copy, exactly as :class:`Revision` is.
     """
 
     tag: str
