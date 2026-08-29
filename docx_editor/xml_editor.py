@@ -1029,7 +1029,9 @@ def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted"
 
     - ``"accepted"`` (default): the visible text — text inside <w:ins> is
       included (with is_inside_ins=True), text inside <w:del>/<w:delText>
-      is excluded. Paragraph hashes and all editing operations use this view.
+      and <w:moveFrom> is excluded (a move's source reads as gone, its
+      <w:moveTo> destination as present). Paragraph hashes and all editing
+      operations use this view.
     - ``"original"``: the pre-revision text — <w:ins> and <w:moveTo> subtrees
       are excluded, <w:delText> is included, and text inside <w:del> or
       <w:moveFrom> is flagged with is_inside_del=True.

@@ -53,15 +53,19 @@ from .xml_editor import (
 GroupSource = Literal["recorded", "inferred"]
 
 
-def _reject_tab_in_edit_target(value: str, *, field: str, ctx: str) -> None:
-    """Refuse a replace/delete target that would consume a ``<w:tab/>``.
+def _validate_edit_target(value: str, *, field: str, ctx: str) -> None:
+    """Validate a replace/delete target: the control-character rule for search
+    text, then refuse a target that would consume a ``<w:tab/>``.
 
-    A tab is searchable (it is a ``"\\t"`` in the text map) and an insertion
-    may land on either side of it, but deleting or replacing one would have to
-    remove the ``<w:tab/>`` element under tracking, which no edit path supports
-    yet (ISSUES.md #6). Exact by construction: ``replace_with`` can never hold
-    a tab, so affix trimming cannot narrow a tab-free target onto a tab.
+    The generic scan lets ``\\t`` through (``allow_tab=True``, as for any
+    search text) so the tab gets its own message here: a tab is searchable
+    (it is a ``"\\t"`` in the text map) and an insertion may land on either
+    side of it, but deleting or replacing one would have to remove the
+    ``<w:tab/>`` element under tracking, which no edit path supports yet
+    (ISSUES.md #6). Exact by construction: ``replace_with`` can never hold a
+    tab, so affix trimming cannot narrow a tab-free target onto a tab.
     """
+    _reject_control_chars(value, field=field, ctx=ctx, allow_tab=True)
     if isinstance(value, str) and "\t" in value:
         raise ValueError(
             f"{ctx}{field} contains a tab ('\\t') — tabs can be searched and matched but not deleted "
@@ -191,7 +195,7 @@ class EditOperation:
             ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
                 is not a non-negative integer, ``find`` is not a non-empty
                 string or contains a tab (``\\t`` — a tab mark can be matched
-                but not replaced yet), ``replace_with`` is not a string,
+                but not replaced yet, ISSUES.md #6), ``replace_with`` is not a string,
                 ``note`` is neither None nor a non-empty control-character-free
                 string, or ``find`` is a SearchResult and
                 ``paragraph``/``occurrence`` was given too.
@@ -209,8 +213,7 @@ class EditOperation:
                 f"EditOperation.replace(): 'replace_with' must be a string (empty string is allowed), "
                 f"got {replace_with!r}"
             )
-        _reject_control_chars(find, field="'find'", ctx="EditOperation.replace(): ", allow_tab=True)
-        _reject_tab_in_edit_target(find, field="'find'", ctx="EditOperation.replace(): ")
+        _validate_edit_target(find, field="'find'", ctx="EditOperation.replace(): ")
         _reject_control_chars(replace_with, field="'replace_with'", ctx="EditOperation.replace(): ", allow_newline=True)
         _validate_note(note, ctx="EditOperation.replace(): ")
         return cls(
@@ -249,7 +252,7 @@ class EditOperation:
             ValueError: If ``paragraph`` is missing or malformed, ``occurrence``
                 is not a non-negative integer, ``text`` is not a non-empty
                 string or contains a tab (``\\t`` — a tab mark can be matched
-                but not deleted yet), ``note`` is neither None nor a non-empty
+                but not deleted yet, ISSUES.md #6), ``note`` is neither None nor a non-empty
                 control-character-free string, or ``text`` is a SearchResult and
                 ``paragraph``/``occurrence`` was given too.
         """
@@ -261,8 +264,7 @@ class EditOperation:
             raise ValueError(
                 f"EditOperation.delete(): 'text' must be a non-empty string — the text to mark as deleted, got {text!r}"
             )
-        _reject_control_chars(text, field="'text'", ctx="EditOperation.delete(): ", allow_tab=True)
-        _reject_tab_in_edit_target(text, field="'text'", ctx="EditOperation.delete(): ")
+        _validate_edit_target(text, field="'text'", ctx="EditOperation.delete(): ")
         _validate_note(note, ctx="EditOperation.delete(): ")
         return cls(action="delete", paragraph=paragraph, text=text, occurrence=occurrence, note=note)
 
@@ -1957,15 +1959,13 @@ class RevisionManager:
         if op.action == "replace":
             if not op.find or not isinstance(op.replace_with, str):
                 raise ValueError("replace requires 'find' and a string 'replace_with'")
-            _reject_control_chars(op.find, field="'find'", ctx="replace(): ", allow_tab=True)
-            _reject_tab_in_edit_target(op.find, field="'find'", ctx="replace(): ")
+            _validate_edit_target(op.find, field="'find'", ctx="replace(): ")
             _reject_control_chars(op.replace_with, field="'replace_with'", ctx="replace(): ", allow_newline=True)
             return op.find
         elif op.action == "delete":
             if not op.text:
                 raise ValueError("delete requires 'text'")
-            _reject_control_chars(op.text, field="'text'", ctx="delete(): ", allow_tab=True)
-            _reject_tab_in_edit_target(op.text, field="'text'", ctx="delete(): ")
+            _validate_edit_target(op.text, field="'text'", ctx="delete(): ")
             return op.text
         elif op.action in ("insert_after", "insert_before"):
             if not op.anchor or not isinstance(op.text, str):
@@ -2206,9 +2206,9 @@ class RevisionManager:
             amending one of those is undone by rejecting *its* group).
 
         Raises:
-            ValueError: If ``new_text`` is not a string, or would add, remove
-                or displace one of the paragraph's tab marks (``\\t``; the
-                existing tabs must all be kept, in order — ISSUES.md #6)
+            ValueError: If ``new_text`` is not a string, or does not hold the
+                same number of tab marks (``\\t``) as the paragraph — a rewrite
+                keeps every tab and changes the text between them (ISSUES.md #6)
             HashMismatchError: If the paragraph hash doesn't match
             IndexError: If paragraph index is out of range
         """
@@ -2241,25 +2241,20 @@ class RevisionManager:
         if old_text == new_text:
             return
 
-        # Tabs may only be kept: a hunk whose old side holds one would delete
-        # or move a <w:tab/>, and a hunk whose new side holds one would write
-        # a tracked tab — neither is supported yet (ISSUES.md #6). In a
-        # paragraph of 200+ tokens SequenceMatcher's autojunk heuristic treats
-        # a frequent "\t" as junk that cannot seed a match, so a kept tab whose
-        # neighbours both changed lands inside a replace hunk; retry with
-        # exact matching before refusing — and only then, since exact matching
-        # is quadratic on a long paragraph of repeated tokens. Refused before
-        # any mutation, like the split preflight below.
-        hunks = _diff_hunks(old_text, new_text, autojunk=True)
-        if "\t" in old_text and any(_hunk_touches_tab(hunk, old_text) for hunk in hunks):
-            hunks = _diff_hunks(old_text, new_text, autojunk=False)
-        if any(_hunk_touches_tab(hunk, old_text) for hunk in hunks):
+        # A rewrite keeps the paragraph's tab marks: nothing writes or removes
+        # a tracked tab (ISSUES.md #6), so new_text must hold the same number
+        # of "\t", and the text between consecutive tabs is diffed segment by
+        # segment. Exact by construction — no hunk ever spans a tab — and
+        # refused before any mutation, like the split preflight below.
+        old_tabs, new_tabs = old_text.count("\t"), new_text.count("\t")
+        if old_tabs != new_tabs:
             raise ValueError(
-                "rewrite_paragraph(): 'new_text' must keep the paragraph's tab marks — the same tabs, in "
-                "the same order, each still recognisable by the text around it — and cannot add or remove "
-                "a '\\t' (nothing writes a tracked tab). Rewrite the words around a tab in smaller steps, "
-                "or use replace()/delete() on the text beside it (ISSUES.md #6)."
+                f"rewrite_paragraph(): 'new_text' must keep the paragraph's tab marks — it has {new_tabs} "
+                f"tab(s) where the paragraph has {old_tabs}, and a rewrite can neither add nor remove a "
+                f"'\\t' (nothing writes a tracked tab). Keep every tab and rewrite the text between them, "
+                f"or use replace()/delete() on the text beside a tab (ISSUES.md #6)."
             )
+        hunks = _diff_hunks(old_text, new_text)
 
         # Preflight the split (\n) hunks against the pre-mutation state: the
         # reversed hunk loop below has no rollback, so anything that can't split
@@ -2625,7 +2620,7 @@ class RevisionManager:
         Raises:
             ValueError: If ``find`` is not a non-empty string or contains a
                 tab (``\\t`` — a tab mark can be matched but not replaced
-                yet), ``replace_with`` is not a string, or ``occurrence`` is
+                yet, ISSUES.md #6), ``replace_with`` is not a string, or ``occurrence`` is
                 negative or not an integer
             TextNotFoundError: If the text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
@@ -2634,8 +2629,7 @@ class RevisionManager:
         """
         if not isinstance(replace_with, str):
             raise ValueError(f"'replace_with' must be a string (empty string is allowed), got {replace_with!r}")
-        _reject_control_chars(find, field="'find'", ctx="replace(): ", allow_tab=True)
-        _reject_tab_in_edit_target(find, field="'find'", ctx="replace(): ")
+        _validate_edit_target(find, field="'find'", ctx="replace(): ")
         _reject_control_chars(replace_with, field="'replace_with'", ctx="replace(): ", allow_newline=True)
         with self._changeset(), self._grouped():
             if paragraph is not None:
@@ -2662,15 +2656,14 @@ class RevisionManager:
 
         Raises:
             ValueError: If ``text`` is not a non-empty string or contains a
-                tab (``\\t`` — a tab mark can be matched but not deleted yet),
+                tab (``\\t`` — a tab mark can be matched but not deleted yet, ISSUES.md #6),
                 or ``occurrence`` is negative or not an integer
             TextNotFoundError: If the text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
                 matches more than once in the search scope
             HashMismatchError: If the paragraph hash doesn't match
         """
-        _reject_control_chars(text, field="'text'", ctx="delete(): ", allow_tab=True)
-        _reject_tab_in_edit_target(text, field="'text'", ctx="delete(): ")
+        _validate_edit_target(text, field="'text'", ctx="delete(): ")
         with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
@@ -4775,49 +4768,38 @@ class RevisionManager:
 
 
 def _tokenize_words(text: str) -> list[str]:
-    """Split text into word and whitespace tokens.
-
-    A tab is always a token of its own (never merged into a whitespace run),
-    so the rewrite diff can align a kept ``<w:tab/>`` as ``equal`` and refuse
-    any hunk that would consume one (ISSUES.md #6).
-    """
-    return re.findall(r"\t|[^\S\t]+|\S+", text)
+    """Split text into alternating word and whitespace tokens."""
+    return re.findall(r"\S+|\s+", text)
 
 
-def _diff_hunks(old_text: str, new_text: str, *, autojunk: bool) -> list[tuple[str, int, int, str]]:
+def _diff_hunks(old_text: str, new_text: str) -> list[tuple[str, int, int, str]]:
     """Word-level diff of ``old_text`` → ``new_text`` as edit hunks.
 
     Each hunk is ``(tag, old_char_start, old_char_end, new_fragment)`` with the
-    character range in ``old_text``; ``equal`` opcodes are dropped. ``autojunk``
-    is passed through to :class:`difflib.SequenceMatcher`.
+    character range in ``old_text``; ``equal`` opcodes are dropped. The texts
+    are diffed segment by segment between their tab marks (the caller has
+    checked both hold the same number of ``"\\t"``), so no hunk ever spans a
+    tab: an insert at a segment's end lands right before the following tab,
+    one at a segment's start right after the preceding tab.
     """
-    old_tokens = _tokenize_words(old_text)
-    new_tokens = _tokenize_words(new_text)
-    opcodes = difflib.SequenceMatcher(None, old_tokens, new_tokens, autojunk=autojunk).get_opcodes()
-
-    old_token_offsets = []
-    pos = 0
-    for tok in old_tokens:
-        old_token_offsets.append(pos)
-        pos += len(tok)
-
     hunks: list[tuple[str, int, int, str]] = []
-    for tag, i1, i2, j1, j2 in opcodes:
-        if tag == "equal":
-            continue
-        old_char_start = old_token_offsets[i1] if i1 < len(old_tokens) else len(old_text)
-        if i2 > 0:
-            old_char_end = old_token_offsets[i2 - 1] + len(old_tokens[i2 - 1])
-        else:
-            old_char_end = old_char_start
-        hunks.append((tag, old_char_start, old_char_end, "".join(new_tokens[j1:j2])))
+    base = 0
+    for old_seg, new_seg in zip(old_text.split("\t"), new_text.split("\t"), strict=True):
+        old_tokens = _tokenize_words(old_seg)
+        new_tokens = _tokenize_words(new_seg)
+        offsets = []
+        pos = 0
+        for tok in old_tokens:
+            offsets.append(pos)
+            pos += len(tok)
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old_tokens, new_tokens).get_opcodes():
+            if tag == "equal":
+                continue
+            start = offsets[i1] if i1 < len(old_tokens) else len(old_seg)
+            end = offsets[i2 - 1] + len(old_tokens[i2 - 1]) if i2 > 0 else start
+            hunks.append((tag, base + start, base + end, "".join(new_tokens[j1:j2])))
+        base += len(old_seg) + 1
     return hunks
-
-
-def _hunk_touches_tab(hunk: tuple[str, int, int, str], old_text: str) -> bool:
-    """True when applying ``hunk`` would remove, move or write a tab mark."""
-    tag, old_char_start, old_char_end, new_fragment = hunk
-    return "\t" in old_text[old_char_start:old_char_end] or (tag != "delete" and "\t" in new_fragment)
 
 
 def _trim_replace_affixes(find: str, replace_with: str) -> tuple[int, int]:

@@ -270,7 +270,7 @@ for ref, loc in doc.list_paragraph_locations():
 
 #### `get_visible_text()`
 
-Get flattened visible document text. Inserted text is included and deleted text is excluded. A tab mark (`<w:tab/>`) renders as one `\t` character — the same coordinate space `find_text()` searches and `SearchResult.start`/`end` index. Text inside a drawing's text box is excluded too — it belongs to the box, not to any addressable paragraph. A document whose content lives entirely in text boxes therefore returns nothing but the separators between its host paragraphs; check [`has_textbox_content`](#has_textbox_content) before reporting it as empty.
+Get flattened visible document text. Inserted text is included and deleted text is excluded. A tab mark (`<w:tab/>`) renders as one `\t` character — the same coordinate space `find_text()` searches and `SearchResult.start`/`end` index. Text a tracked move took away (`w:moveFrom`) is excluded like a deletion; its destination (`w:moveTo`) is included. Text inside a drawing's text box is excluded too — it belongs to the box, not to any addressable paragraph. A document whose content lives entirely in text boxes therefore returns nothing but the separators between its host paragraphs; check [`has_textbox_content`](#has_textbox_content) before reporting it as empty.
 
 **Returns:** Visible text with paragraphs separated by newlines (str)
 
@@ -479,7 +479,9 @@ if match := doc.find_text("Section 6"):
 > [`split_paragraph`](#split_paragraphref-before-occurrencenone) and [`EditResult`](#editresult).
 
 > **Tabs are searchable, not writable.** A `<w:tab/>` mark is one `\t`
-> character in every text view, so search and anchor text may contain `\t`:
+> character in the visible and original text views — hence in search, offsets
+> and hashes; `get_markup_text()` does not render it — so search and anchor
+> text may contain `\t`:
 > `insert_after("Name\t", "x")` lands right after the tab, and a `\n` split
 > may fall on either side of one. Content text (`replace_with`, insert `text`,
 > `note`, comment bodies) still rejects `\t` — nothing writes a tracked tab —
@@ -634,7 +636,7 @@ resolve them as a unit with [`accept_group()`](#accept_groupgroup_id) /
 **Parameters:**
 
 - `ref` (str): Paragraph reference from `list_paragraphs()`
-- `new_text` (str): Desired paragraph text. May contain `\t` only for the paragraph's existing tab marks — the diff keeps those marks, in order, while the text around them changes (so `rewrite_paragraph(ref, info.text.replace(...))` works on tab-bearing paragraphs; a tab's character offset shifts with its surroundings) and raises `ValueError` for a rewrite that would add or remove one, or rewrite so much around a tab that it can no longer be matched (ISSUES.md #6)
+- `new_text` (str): Desired paragraph text. Must hold the same number of `\t` as the paragraph has tab marks: the text between consecutive tabs is rewritten segment by segment, so `rewrite_paragraph(ref, info.text.replace(...))` works on tab-bearing paragraphs and words may move across a tab, while a rewrite that adds or removes a tab raises `ValueError` (ISSUES.md #6)
 - `note` (str | None): Rationale for the rewrite, anchored as one comment spanning its first through last revision — see [Rationale notes](#rationale-notes)
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`; `group_id` is `None` when `new_text` equals the current text, or when every change landed inside your own pending insertions and amended them in place — undo those by rejecting the group of the amended insertion; `comment_id` carries a `note=`'s comment)

@@ -1,10 +1,11 @@
 """A ``<w:tab/>`` mark is one ``"\\t"`` character in the paragraph text map (ISSUES.md #6).
 
-Tabs are searchable and matchable, count as one character in every text view
-and in ``SearchResult`` offsets, and take part in paragraph hashes. Edits may
-touch a tab only at its boundary: insertions land beside it, replace/delete
-targets that contain one are refused, and a rewrite must keep every tab in
-place. Nothing writes a new tab.
+Tabs are searchable and matchable, count as one character in the visible and
+original text views and in ``SearchResult`` offsets, and take part in
+paragraph hashes. Edits may touch a tab only at its boundary: insertions land
+beside it, replace/delete targets that contain one are refused, and a rewrite
+must keep every tab — the same number of them, with the text between tabs
+rewritten segment by segment. Nothing writes a new tab.
 """
 
 from pathlib import Path
@@ -21,7 +22,7 @@ from docx_editor import (
     RevisionError,
     TextNotFoundError,
 )
-from docx_editor.track_changes import RevisionManager, _tokenize_words
+from docx_editor.track_changes import RevisionManager
 from docx_editor.xml_editor import (
     DocxXMLEditor,
     build_text_map,
@@ -447,10 +448,7 @@ class TestSplits:
 
 
 class TestRewrite:
-    def test_tokenizer_isolates_tabs(self):
-        assert _tokenize_words("a \t\tb  c") == ["a", " ", "\t", "\t", "b", "  ", "c"]
-
-    def test_rewrite_keeps_a_tab_in_place(self, temp_xml):
+    def test_rewrite_keeps_a_tab(self, temp_xml):
         mgr = _make_manager(temp_xml(FOO_TAB_BAR))
         mgr.rewrite_paragraph(_first_ref(mgr), "foo\tbaz")
         assert paragraph_tokens(mgr) == ["foo", "TAB", "DEL(bar)", "INS(baz)"]
@@ -468,8 +466,8 @@ class TestRewrite:
 
     @pytest.mark.parametrize(
         "new_text",
-        ["foo bar", "foo\t\tbar", "\tfoo bar", "foobar", ""],
-        ids=["replace-tab", "add-tab", "move-to-front", "drop-tab", "clear"],
+        ["foo bar", "foo\t\tbar", "foobar", ""],
+        ids=["replace-tab", "add-tab", "drop-tab", "clear"],
     )
     def test_rewrite_refuses_to_add_or_remove_a_tab(self, temp_xml, new_text):
         mgr = _make_manager(temp_xml(FOO_TAB_BAR))
@@ -485,6 +483,20 @@ class TestRewrite:
         assert build_text_map(mgr.editor.dom.getElementsByTagName("w:p")[0]).text == "foo bar\tbaz"
         assert len(mgr.editor.dom.getElementsByTagName("w:tab")) == 1
         assert paragraph_tokens(mgr) == ["foo", "INS( bar)", "TAB", "DEL(bar )", "baz"]
+
+    def test_rewrite_moves_words_across_the_tab_segment_by_segment(self, temp_xml):
+        # Each tab-delimited segment is diffed on its own, so text may move
+        # across a tab: the words are redlined, the <w:tab/> stays.
+        mgr = _make_manager(temp_xml(FOO_TAB_BAR))
+        mgr.rewrite_paragraph(_first_ref(mgr), "\tfoo bar")
+        assert build_text_map(mgr.editor.dom.getElementsByTagName("w:p")[0]).text == "\tfoo bar"
+        assert paragraph_tokens(mgr) == ["DEL(foo)", "TAB", "INS(foo )", "bar"]
+
+    def test_rewrite_swaps_words_around_the_tab(self, temp_xml):
+        mgr = _make_manager(temp_xml(FOO_TAB_BAR))
+        mgr.rewrite_paragraph(_first_ref(mgr), "bar\tfoo")
+        assert build_text_map(mgr.editor.dom.getElementsByTagName("w:p")[0]).text == "bar\tfoo"
+        assert len(mgr.editor.dom.getElementsByTagName("w:tab")) == 1
 
     def test_batch_rewrite_applies_the_same_guard(self, tab_doc):
         ref = find_ref(tab_doc, "Name")
@@ -513,9 +525,10 @@ class TestRewrite:
         assert len(mgr.editor.dom.getElementsByTagName("w:tab")) == 150
 
     def test_long_paragraph_keeps_a_tab_whose_neighbours_both_change(self, temp_xml):
-        # With autojunk on, a frequent "\t" is junk and cannot seed a match, so
-        # changing the words on both sides of one tab put the tab inside a
-        # replace hunk and refused an edit that keeps every tab in place.
+        # Diffed as one token stream, a frequent "\t" was autojunk (200+ tokens)
+        # and could not seed a match, so changing the words on both sides of
+        # one tab left the tab inside a replace hunk; segment-wise diffing
+        # cannot put a tab in a hunk at all.
         cells = [f"w{i}" for i in range(150)]
         runs = "".join(f"<w:t>{c} </w:t><w:tab/>" for c in cells) + "<w:t>end</w:t>"
         mgr = _make_manager(temp_xml(f"<w:p><w:r>{runs}</w:r></w:p>"))

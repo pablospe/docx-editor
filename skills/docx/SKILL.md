@@ -955,14 +955,15 @@ applies after any edit.
 text inputs with a teaching `ValueError` (`CommentError` for comment text):
 carriage return (`\r`), NUL, DEL, etc. — they would enter the document as
 invisible literals. Two are special. `\n` means a split. `\t` is how a
-`<w:tab/>` mark reads in every text view, so **search and anchor text may
+`<w:tab/>` mark reads in the visible and original text views (not in
+`get_markup_text()`), so **search and anchor text may
 contain it** (`find_text("Name\tValue")`, `insert_after("Name\t", "x")`,
 `add_comment("a\tb", ...)`), while **content text may not** — nothing writes a
 tracked tab. A `replace`/`delete` target containing `\t` raises `ValueError`
 (a tab can be matched but not removed yet: edit the text beside it), and
-`rewrite_paragraph` accepts `\t` in `new_text` only for the paragraph's
-existing tab marks, kept in order while the text around them changes —
-`rewrite_paragraph(ref, info.text.replace(...))` therefore keeps working on
+`rewrite_paragraph` needs `new_text` to hold the same number of `\t` as the
+paragraph has tab marks — the text between tabs is rewritten segment by
+segment, so `rewrite_paragraph(ref, info.text.replace(...))` keeps working on
 tab-bearing paragraphs. Tabs count in paragraph hashes, so refs of
 tab-bearing paragraphs differ from those computed before tabs were mapped
 (refs are session-scoped anyway).
@@ -1286,7 +1287,7 @@ excluded rather than half-editable, and headers, footers, footnotes and endnotes
 wait for a real demand.
 
 - **Text in shapes/text boxes**: Excluded, deliberately — text boxes are not an editing surface. Text-box content (`w:txbxContent`) appears in no paragraph listing, no text view, no search and no paragraph hash, and no ref addresses it. Word normally stores a box twice (an `mc:Choice` copy and an `mc:Fallback` copy), and a correct edit would have to write both copies, so an addressable box paragraph would let one write update a single copy and desynchronize the pair. The exclusion is uniform either way — a box stored once is excluded too. To read a box's text, go through HTML: `soffice --headless --convert-to html file.docx` then `pandoc file.html -t plain` (pandoc may render a `[ShapeN]` label beside a box's text, from the placeholder LibreOffice exports for a named shape — ignore those). Its `txt:Text` filter and pandoc reading the `.docx` directly both drop text boxes silently, so neither tells you anything is missing. A revision *inside* a box is still listed with `paragraph_ref`/`occurrence` left `None`, and `accept_all()`/`reject_all()` always resolve it. Anything narrower depends on the storage: a twice-stored box lists the revision once per copy, so one `accept_revision()`/`accept_group()` call resolves only one of them; copies with distinct ids and identical author/date share an inferred changeset that `accept_changeset()` resolves, while copies sharing a `w:id` are ungroupable (`group_id` and `changeset_id` both `None`), so no group- or changeset-keyed call reaches them and `accept_all()`/`reject_all()` is the single call that takes both. Because an all-text-box file (a poster, a flyer, a certificate) therefore reads as blank — `get_visible_text()` returns only the separators between its host paragraphs — check `doc.has_textbox_content` before reporting a document as having no text: `if not doc.get_visible_text().strip() and doc.has_textbox_content:`.
-- **Tabs**: A tab mark (`<w:tab/>`) is one `\t` in every text view, search and hash, and edits may land on either side of it — but no edit writes, deletes or replaces one yet: `replace`/`delete` targets containing `\t` are rejected, `rewrite_paragraph` must keep the paragraph's tab marks (in order), and `w:br`/`w:ptab` are not mapped at all (ISSUES.md #6).
+- **Tabs**: A tab mark (`<w:tab/>`) is one `\t` in the visible and original text views, in search and in hashes (`get_markup_text()` does not render it), and edits may land on either side of it — but no edit writes, deletes or replaces one yet: `replace`/`delete` targets containing `\t` are rejected, `rewrite_paragraph` must keep the paragraph's tab marks (same count; the text between them is what changes), and `w:br`/`w:ptab` are not mapped at all (ISSUES.md #6).
 - **Charts**: Text inside charts is embedded in separate XML, not easily editable
 - **Concurrent editing**: Not supported — a second open of the same document raises `WorkspaceLockedError`; use sequential access
 - **Most edits**: Are in paragraphs and tables, which are well supported

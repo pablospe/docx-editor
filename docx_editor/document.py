@@ -1329,7 +1329,9 @@ class Document:
         Returns flattened text with paragraphs separated by newlines.
         Inserted text is included, deleted text is excluded, and a tab mark
         (``<w:tab/>``) is one ``\\t`` — the coordinate space ``find_text()``
-        searches and ``SearchResult`` offsets index. Text inside a
+        searches and ``SearchResult`` offsets index. Text a tracked move took
+        away (``w:moveFrom``) is excluded like a deletion; its destination
+        (``w:moveTo``) is included. Text inside a
         drawing's text box is excluded too — it belongs to the box, not to
         any addressable paragraph. A document whose content lives entirely in
         text boxes therefore returns nothing but the separators between its
@@ -1889,8 +1891,8 @@ class Document:
 
         Raises:
             ValueError: If ``new_text`` is not a string (empty string is
-                allowed — it deletes all text) or would add, remove or displace
-                one of the paragraph's tab marks (``\\t``, ISSUES.md #6),
+                allowed — it deletes all text) or does not hold the same number
+                of tab marks (``\\t``) as the paragraph (ISSUES.md #6),
                 ``note`` is neither None nor a
                 non-empty control-character-free string, or ``ref`` is
                 malformed.
