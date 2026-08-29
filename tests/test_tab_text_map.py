@@ -66,6 +66,11 @@ def _foreign_del(content: str, del_id: int = 2) -> str:
     return f'<w:del w:id="{del_id}" w:author="{OTHER}" w:date="{DATE}">{content}</w:del>'
 
 
+def _own_ins(content: str, ins_id: int = 3) -> str:
+    """A pending insertion by the editing author — edits inside it amend it in place."""
+    return f'<w:ins w:id="{ins_id}" w:author="{AUTHOR}" w:date="{DATE}">{content}</w:ins>'
+
+
 def _first_ref(mgr: RevisionManager) -> str:
     p = mgr.editor.dom.getElementsByTagName("w:p")[0]
     return f"P1#{compute_paragraph_hash(p)}"
@@ -455,6 +460,15 @@ class TestSplits:
         assert self._texts(mgr) == ["", "bar"]
         assert paragraph_tokens(mgr) == ["BR"]
 
+    def test_split_skips_the_run_properties_when_finding_the_first_child(self, temp_xml):
+        # w:rPr precedes the content: it is not the first content child, and
+        # both halves of the split run keep it.
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>foo</w:t><w:tab/><w:t>bar</w:t></w:r></w:p>"))
+        mgr.insert_text_before("bar", "\n")
+        assert self._texts(mgr) == ["foo\t", "bar"]
+        assert paragraph_tokens(mgr) == ["foo", "TAB"]
+        assert len(mgr.editor.dom.getElementsByTagName("w:b")) == 3  # foo run, tab run, bar run
+
 
 # ==================== rewrite_paragraph ====================
 
@@ -509,6 +523,49 @@ class TestRewrite:
         mgr.rewrite_paragraph(_first_ref(mgr), "bar\tfoo")
         assert build_text_map(mgr.editor.dom.getElementsByTagName("w:p")[0]).text == "bar\tfoo"
         assert len(mgr.editor.dom.getElementsByTagName("w:tab")) == 1
+
+    def _text(self, mgr: RevisionManager) -> str:
+        return build_text_map(mgr.editor.dom.getElementsByTagName("w:p")[0]).text
+
+    def test_rewrite_appends_after_a_foreign_insertion_holding_a_tab(self, temp_xml):
+        # The last character sits inside another author's insertion: our text
+        # becomes a sibling <w:ins> after theirs, never spliced into it.
+        body = f"<w:p><w:r><w:t>a </w:t></w:r>{_foreign_ins('<w:r><w:tab/><w:t>b</w:t></w:r>')}</w:p>"
+        mgr = _make_manager(temp_xml(body))
+        mgr.rewrite_paragraph(_first_ref(mgr), "a \tb X")
+        assert self._text(mgr) == "a \tb X"
+        assert paragraph_tokens(mgr) == ["a ", "INS(TAB)", "INS(b)", "INS( X)"]
+        authors = [i.getAttribute("w:author") for i in mgr.editor.dom.getElementsByTagName("w:ins")]
+        assert authors == [OTHER, AUTHOR]
+
+    def test_rewrite_appends_after_a_tab_ending_our_own_insertion(self, temp_xml):
+        # Our own pending insertion ends in a tab: the appended text lands in a
+        # plain sibling run inside that insertion (an amendment, no new w:ins).
+        body = f"<w:p><w:r><w:t>a</w:t></w:r>{_own_ins('<w:r><w:t>b</w:t><w:tab/></w:r>')}</w:p>"
+        mgr = _make_manager(temp_xml(body))
+        mgr.rewrite_paragraph(_first_ref(mgr), "ab\tX")
+        assert self._text(mgr) == "ab\tX"
+        assert paragraph_tokens(mgr) == ["a", "INS(b)", "INS(TAB)", "INS(X)"]
+        assert len(mgr.editor.dom.getElementsByTagName("w:ins")) == 1
+
+    def test_rewrite_inserts_inside_a_foreign_insertion_beside_a_tab(self, temp_xml):
+        # Mid-insertion position in another author's w:ins: theirs is split
+        # into two identity-preserving halves with our own w:ins between.
+        body = f"<w:p><w:r><w:t>a</w:t><w:tab/></w:r>{_foreign_ins('<w:r><w:t>b c</w:t></w:r>')}</w:p>"
+        mgr = _make_manager(temp_xml(body))
+        mgr.rewrite_paragraph(_first_ref(mgr), "a\tb X c")
+        assert self._text(mgr) == "a\tb X c"
+        assert paragraph_tokens(mgr) == ["a", "TAB", "INS(b )", "INS(X )", "INS(c)"]
+        authors = [i.getAttribute("w:author") for i in mgr.editor.dom.getElementsByTagName("w:ins")]
+        assert authors == [OTHER, AUTHOR, OTHER]
+
+    def test_rewrite_inserts_before_a_tab_inside_our_own_insertion(self, temp_xml):
+        body = f"<w:p><w:r><w:t>a</w:t></w:r>{_own_ins('<w:r><w:tab/><w:t>b</w:t></w:r>')}</w:p>"
+        mgr = _make_manager(temp_xml(body))
+        mgr.rewrite_paragraph(_first_ref(mgr), "a X\tb")
+        assert self._text(mgr) == "a X\tb"
+        assert paragraph_tokens(mgr) == ["a", "INS( X)", "INS(TAB)", "INS(b)"]
+        assert len(mgr.editor.dom.getElementsByTagName("w:ins")) == 1
 
     def test_batch_rewrite_applies_the_same_guard(self, tab_doc):
         ref = find_ref(tab_doc, "Name")
@@ -575,6 +632,15 @@ class TestRevisions:
             assert rev.text == "a\tb"
             # Original text is "a\tb a\tb": the live span precedes the deleted one.
             assert rev.occurrence == 1
+
+    def test_deletion_with_plain_wt_still_reports_the_tab(self, simple_docx, tmp_path):
+        # Nonconforming producers leave w:t (not w:delText) inside w:del; the
+        # fallback walk reads those and the tab between them.
+        foreign = _foreign_del("<w:r><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r>", del_id=14)
+        body = f"<w:p><w:r><w:t>x </w:t></w:r>{foreign}</w:p>"
+        with Document.open(_docx_with_body(simple_docx, tmp_path, body), author=AUTHOR) as doc:
+            rev = next(r for r in doc.list_revisions() if r.id == 14)
+            assert rev.text == "a\tb"
 
 
 class TestComments:

@@ -1189,7 +1189,7 @@ def _first_content_child(run) -> Element | None:
     for child in run.childNodes:
         if child.nodeType == child.ELEMENT_NODE and child.tagName != "w:rPr":
             return child
-    return None
+    return None  # pragma: no cover - callers pass the run holding a text-map node, so a content child exists
 
 
 def _next_element_sibling(node) -> Element | None:
@@ -3330,14 +3330,12 @@ class RevisionManager:
             after_text = node_text[last_offset + 1 :]
 
             if not before_text and not after_text:
-                # Entire single node matched
+                # Entire single node matched. A sole content node was taken by
+                # the whole-insertion branch above, so other content (another
+                # w:t, or a tab) remains: remove just this node, and its run
+                # if that empties it.
                 if ins_elem and ins_elem.parentNode:
-                    if len(self._content_nodes_in_ancestor(ins_elem)) == 1:
-                        # Sole w:t — remove entire <w:ins>
-                        ins_elem.parentNode.removeChild(ins_elem)
-                    else:
-                        # Other w:t nodes exist — remove just this w:t (and run if empty)
-                        self._remove_wt_and_maybe_run(first_node)
+                    self._remove_wt_and_maybe_run(first_node)
             elif not before_text:
                 self._set_node_text(first_node, after_text)
                 _set_xml_space_preserve(first_node)
@@ -3718,9 +3716,9 @@ class RevisionManager:
         nodes = self._insert_into_run(run, rPr_xml, edge.node, offset, ins_xml)
 
         for node in nodes:
-            if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":
+            if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
                 return int(node.getAttribute("w:id"))
-        return -1
+        return -1  # pragma: no cover - the fragment always yields a w:ins
 
     @staticmethod
     def _plain_run_xml(rPr_xml: str, text: str) -> str:
