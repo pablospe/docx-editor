@@ -281,6 +281,7 @@ def run_census_only(only: str | None) -> int:
 
 AUTHOR = "CorpusHarness"
 EDIT_MARKER = "-EDITED"
+CHECKED = "checked"  # the lo_roundtrip record's ``survival`` / ``flag`` value when the assertion ran
 
 # The survival assertions a manifest ``survival_waiver`` may cover. Only the
 # one where LibreOffice's model kept our text but not our revision: a dropped
@@ -297,7 +298,7 @@ class SofficeRun:
     none), ``messages`` the ``Error:``/``Warning:`` lines it printed minus
     ``SOFFICE_NOISE``, ``raw`` the combined output minus that noise, trimmed,
     for diagnostics. ``timed_out`` means the process tree was killed at the
-    stage timeout; the other fields are then empty.
+    stage timeout; ``returncode`` is then the kill's and the rest is empty.
     """
 
     output: Path | None
@@ -337,13 +338,20 @@ def soffice_convert(soffice: str, src: Path, convert_to: str, outdir: Path, time
         str(outdir),
         str(src),
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)  # the session leader's pgid is its pid
-        proc.communicate()
-        return SofficeRun(output=None, messages=[], returncode=0, timed_out=True, raw="")
+    with subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)  # the session leader's pgid is its pid
+            try:
+                # Drain the pipes; a descendant that left the session could still hold them.
+                proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            proc.wait()  # the direct child is SIGKILLed: reaping it cannot block
+            return SofficeRun(output=None, messages=[], returncode=proc.returncode, timed_out=True, raw="")
     produced = output if output.exists() and output.stat().st_size > 0 else None
     combined = stdout + "\n" + stderr
     return SofficeRun(
@@ -394,13 +402,16 @@ def survival_check(out1: Path, roundtrip: Path, work: Path, author: str) -> dict
     edited file's flag is not on (a producer wrote ``w:val="false"`` and the
     library preserved it) there is nothing for LibreOffice to drop.
     """
-    if track_revisions_on(out1):
-        flag = "checked"
+    flag_on = track_revisions_on(out1)
+    if flag_on:
+        flag = CHECKED
         if not track_revisions_on(roundtrip):
             return assert_fail(
                 "AssertTrackRevisionsDropped",
                 "w:trackRevisions was on in the edited file but is absent or off after the LibreOffice re-save",
             )
+    elif flag_on is None:
+        flag = "not applicable (no settings part in the edited file)"
     else:
         flag = "not applicable (not on in the edited file)"
     from docx_editor import Document
@@ -421,7 +432,7 @@ def survival_check(out1: Path, roundtrip: Path, work: Path, author: str) -> dict
             )
     finally:
         doc.close(cleanup=True)
-    return {"status": "pass", "survival": "checked", "flag": flag}
+    return {"status": "pass", "survival": CHECKED, "flag": flag}
 
 
 def run_lo_roundtrip(out1: Path, edited: bool, soffice: str | None, work: Path) -> dict:
@@ -433,8 +444,10 @@ def run_lo_roundtrip(out1: Path, edited: bool, soffice: str | None, work: Path) 
         return assert_fail("LoRoundtripTimeout", "")
     if run.messages:
         return assert_fail("LoMessage", "; ".join(run.messages)[:400])
-    if run.output is None or run.returncode != 0:
+    if run.output is None:
         return assert_fail("LoLoadRefused", run.raw or "no docx produced")
+    if run.returncode != 0:
+        return assert_fail("LoNonzeroExit", run.raw or f"exit {run.returncode} after writing the docx")
     v = validate_docx(run.output)
     if not v["ok"]:
         # LibreOffice's output, not ours: named apart from save1/save2's OutputValidation.
@@ -456,8 +469,10 @@ def run_pdf(out2: Path, soffice: str | None) -> dict:
         return assert_fail("PdfConversionTimeout", "")
     if run.messages:
         return assert_fail("LoMessage", "; ".join(run.messages)[:400])
-    if run.output is None or run.returncode != 0:
+    if run.output is None:
         return assert_fail("PdfConversionFailed", run.raw or "no pdf produced")
+    if run.returncode != 0:
+        return assert_fail("LoNonzeroExit", run.raw or f"exit {run.returncode} after writing the pdf")
     return {"status": "pass"}
 
 
@@ -698,7 +713,7 @@ def apply_manifest_expectations(rec: dict) -> None:
             "reason": f"survival waived: {waiver}",
             "dropped": lo["error_type"],
         }
-    elif waiver and lo.get("status") == "pass" and lo.get("survival") == "checked":
+    elif waiver and lo.get("status") == "pass" and lo.get("survival") == CHECKED:
         stages["lo_roundtrip"] = {
             "status": "fail",
             "error_type": "StaleSurvivalWaiver",
@@ -845,10 +860,10 @@ def print_summary(results: list[dict]) -> None:
 def print_survival_summary(results: list[dict]) -> None:
     """How many files the lo_roundtrip survival assertion actually ran on."""
     lo = [r["stages"].get("lo_roundtrip", {}) for r in results]
-    checked = [s for s in lo if s.get("survival") == "checked"]
-    flag_na = sum(1 for s in checked if s.get("flag") != "checked")
+    checked = [s for s in lo if s.get("survival") == CHECKED]
+    flag_na = sum(1 for s in checked if s.get("flag") != CHECKED)
     no_edit = sum(1 for s in lo if s.get("survival") == "skipped (no edit)")
-    waived = sum(1 for s in lo if "dropped" in s)
+    waived = sum(1 for s in lo if s.get("status") == "skip" and "dropped" in s)
     if checked or no_edit or waived:
         print(
             f"lo_roundtrip survival: {len(checked)} checked ({flag_na} with the flag not applicable), "

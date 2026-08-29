@@ -58,7 +58,7 @@ if mode == "hang":
     beat = os.environ["FAKE_SOFFICE_HEARTBEAT"]
     code = (
         "import time, pathlib\\n"
-        "while True:\\n"
+        "for _ in range(1200):\\n"
         f"    pathlib.Path({{beat!r}}).write_text(str(time.time()))\\n"
         "    time.sleep(0.05)"
     )
@@ -77,6 +77,8 @@ else:
 
 @pytest.fixture
 def fake_soffice(tmp_path: Path, monkeypatch) -> Path:
+    if os.name != "posix":
+        pytest.skip("the fake is executed via a shebang and killed as a process group")
     script = tmp_path / "soffice"
     script.write_text(FAKE_SOFFICE)
     script.chmod(0o755)
@@ -204,7 +206,6 @@ def test_survival_check_detects_a_dropped_track_revisions_flag(edited: Path, tmp
         lambda xml: re.sub(r"<w:trackRevisions\b[^>]*/>", "", xml),
     )
     record = harness.survival_check(edited, roundtrip, tmp_path / "work", harness.AUTHOR)
-    assert record is not None
     assert record["status"] == "fail"
     assert record["error_type"] == "AssertTrackRevisionsDropped"
 
@@ -220,7 +221,6 @@ def test_survival_check_detects_a_lost_edit_marker(edited: Path, tmp_path: Path)
         lambda xml: xml.replace(harness.EDIT_MARKER, ""),
     )
     record = harness.survival_check(edited, roundtrip, tmp_path / "work", harness.AUTHOR)
-    assert record is not None
     assert record["error_type"] == "AssertEditMarkerLostInRoundtrip"
 
 
@@ -234,7 +234,6 @@ def test_survival_check_detects_a_dropped_own_revision(edited: Path, tmp_path: P
         lambda xml: re.sub(r"<w:ins\b[^>/]*>(.*?)</w:ins>", r"\1", xml, flags=re.DOTALL),
     )
     record = harness.survival_check(edited, roundtrip, tmp_path / "work", harness.AUTHOR)
-    assert record is not None
     assert record["error_type"] == "AssertOwnRevisionsDropped"
     assert "no insertion" in record["error"]
 
@@ -275,8 +274,8 @@ def test_soffice_convert_timeout_kills_the_whole_process_tree(
     # holding the profile lock. The grandchild's heartbeat must stop.
     monkeypatch.setenv("FAKE_SOFFICE_MODE", "hang")
     heartbeat = tmp_path / "heartbeat"
-    run = harness.soffice_convert(str(fake_soffice), edited, "pdf", tmp_path, 1)
-    assert run.timed_out and run.output is None
+    run = harness.soffice_convert(str(fake_soffice), edited, "pdf", tmp_path, 2)
+    assert run.timed_out and run.output is None and run.returncode < 0
     assert heartbeat.exists(), "the grandchild never started"
     time.sleep(0.3)
     first = os.stat(heartbeat).st_mtime_ns
@@ -312,6 +311,8 @@ def test_run_lo_roundtrip_skips_without_soffice(edited: Path, tmp_path: Path):
         ),
         # soffice exits 0 after refusing a file: the missing output is the signal.
         (harness.SofficeRun(output=None, messages=[], returncode=0, timed_out=False, raw=""), "LoLoadRefused"),
+        # A crash after writing good output is still a failure, named apart from a refused load.
+        (harness.SofficeRun(output=SIMPLE, messages=[], returncode=1, timed_out=False, raw=""), "LoNonzeroExit"),
     ],
 )
 def test_run_lo_roundtrip_reads_soffice_the_only_way_it_can_be_read(

@@ -29,9 +29,11 @@ both verified on LibreOffice 24.2 with `SAL_LOG=+WARN`:
 - **Its exit code is 0 even when it refuses a file.** A truncated zip or a
   malformed `document.xml` prints `Error: source file could not be loaded`
   and writes nothing — the exit code says success. So each stage fails on any
-  `Error:`/`Warning:` line soffice prints (the JRE-absent `javaldx` warning
-  is the one allow-listed noise line) and on a missing output file, never on
-  the exit code alone.
+  `Error:`/`Warning:` line soffice prints (any line mentioning `javaldx` is
+  allow-listed noise: `oosplash` prints one of two such warnings on every run
+  of a machine without a JRE) and on a missing output file. A nonzero exit
+  code is also a failure — a crash after writing good output is worth
+  knowing — but it is never the signal relied on.
 - **It prints nothing for an element it does not recognize** — it drops it
   on re-save, silently. That is how ISSUES.md #66's first cut of the
   track-changes switch was caught (PR #77): a hand round-trip through
@@ -59,10 +61,12 @@ So the stages are:
 Both stages skip together with `--no-soffice` or when `soffice` is not on
 `PATH`. A conversion runs in its own session and is killed as a tree on
 timeout: `soffice` is a wrapper that forks `soffice.bin`, and an orphaned
-`soffice.bin` holds the profile lock and stalls every later conversion. The pure helpers (`soffice_messages`, `track_revisions_on`,
+`soffice.bin` holds the profile lock and stalls every later conversion.
+The pure helpers (`soffice_messages`, `track_revisions_on`,
 `survival_check`, the stage function) are unit-tested in
-`tests/test_corpus_harness.py` without LibreOffice, plus one real-`soffice`
-test that skips where it is not installed.
+`tests/test_corpus_harness.py` without LibreOffice — a fake `soffice`
+stands in for the process-level tests — plus one real-`soffice` test that
+skips where it is not installed.
 
 ## Running
 
