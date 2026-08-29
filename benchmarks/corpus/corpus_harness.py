@@ -31,7 +31,7 @@ The two LibreOffice stages are the closest thing to "opens in Word without a
 repair prompt" that runs on a CI box. Two facts about soffice shape them:
 its exit code is 0 even when it refuses a file (the signal is an "Error:"
 line and a missing output file), and it prints nothing at all for an element
-it does not recognize — it silently drops it on re-save (ISSUES.md #66/#77).
+it does not recognize — it silently drops it on re-save (ISSUES.md #66, PR #77).
 So each stage fails on any Error:/Warning: line soffice prints, and
 lo_roundtrip additionally reopens the re-saved file and checks that our
 w:trackRevisions flag and our own insertion/deletion are still there. Where
@@ -53,7 +53,9 @@ evidence base for handling the ones this library does not resolve
 
 import argparse
 import json
+import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -74,9 +76,10 @@ PER_FILE_TIMEOUT = 60  # seconds, library stages
 PDF_TIMEOUT = 60  # seconds, soffice pdf conversion
 LO_TIMEOUT = 60  # seconds, soffice docx re-save
 
-# Lines soffice prints that say nothing about the document. The javaldx one
-# appears on every run of a machine without a JRE (a plain CI runner).
-SOFFICE_NOISE = ("failed to launch javaldx",)
+# Lines soffice prints that say nothing about the document. oosplash prints
+# one of two javaldx warnings on every run of a machine without a JRE (a
+# plain CI runner); the token covers both.
+SOFFICE_NOISE = ("javaldx",)
 
 STAGES = ["input_validate", "open", "read", "edit", "save1", "reopen", "save2", "lo_roundtrip", "pdf"]
 
@@ -279,10 +282,10 @@ def run_census_only(only: str | None) -> int:
 AUTHOR = "CorpusHarness"
 EDIT_MARKER = "-EDITED"
 
-# The survival assertions a manifest ``survival_waiver`` may cover: the ones
-# about our redline's placement. A dropped w:trackRevisions flag is never
-# about placement, so it is not waivable.
-WAIVABLE_ASSERTIONS = frozenset({"AssertEditMarkerLostInRoundtrip", "AssertOwnRevisionsDropped"})
+# The survival assertions a manifest ``survival_waiver`` may cover. Only the
+# one where LibreOffice's model kept our text but not our revision: a dropped
+# w:trackRevisions flag or a vanished edit marker is a loss, never a waiver.
+WAIVABLE_ASSERTIONS = frozenset({"AssertOwnRevisionsDropped"})
 
 
 @dataclass
@@ -292,7 +295,9 @@ class SofficeRun:
     ``returncode`` is recorded but is not the load signal: soffice exits 0
     after refusing a file. ``output`` is the file it actually wrote (None if
     none), ``messages`` the ``Error:``/``Warning:`` lines it printed minus
-    ``SOFFICE_NOISE``, ``raw`` the trimmed combined output for diagnostics.
+    ``SOFFICE_NOISE``, ``raw`` the combined output minus that noise, trimmed,
+    for diagnostics. ``timed_out`` means the process tree was killed at the
+    stage timeout; the other fields are then empty.
     """
 
     output: Path | None
@@ -302,51 +307,65 @@ class SofficeRun:
     raw: str
 
 
+def soffice_noise(line: str) -> bool:
+    return any(noise in line for noise in SOFFICE_NOISE)
+
+
 def soffice_messages(text: str) -> list[str]:
     """The ``Error:``/``Warning:`` lines in soffice's output, minus known noise."""
-    return [
-        line
-        for line in text.splitlines()
-        if line.startswith(("Error:", "Warning:")) and not any(noise in line for noise in SOFFICE_NOISE)
-    ]
+    return [line for line in text.splitlines() if line.startswith(("Error:", "Warning:")) and not soffice_noise(line)]
 
 
 def soffice_convert(soffice: str, src: Path, convert_to: str, outdir: Path, timeout: int) -> SofficeRun:
-    """Convert ``src`` with LibreOffice into ``outdir``; ``convert_to`` is a soffice filter spec."""
+    """Convert ``src`` with LibreOffice into ``outdir``; ``convert_to`` is a soffice filter spec.
+
+    ``soffice`` is a wrapper that forks ``soffice.bin``, so the conversion
+    runs in its own session and a timeout kills that whole tree: an orphaned
+    ``soffice.bin`` keeps the profile lock and stalls every later conversion.
+    """
     ext = convert_to.split(":", 1)[0]
     output = outdir / f"{src.stem}.{ext}"
     output.unlink(missing_ok=True)  # a stale file from an earlier run must not pass
     cmd = [
         soffice,
         "--headless",
-        f"-env:UserInstallation=file://{LO_PROFILE}",
+        # A real file URL: a space in the path hangs soffice on a bare file://{path}.
+        f"-env:UserInstallation={LO_PROFILE.as_uri()}",
         "--convert-to",
         convert_to,
         "--outdir",
         str(outdir),
         str(src),
     ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)  # the session leader's pgid is its pid
+        proc.communicate()
         return SofficeRun(output=None, messages=[], returncode=0, timed_out=True, raw="")
     produced = output if output.exists() and output.stat().st_size > 0 else None
-    combined = proc.stdout + "\n" + proc.stderr
+    combined = stdout + "\n" + stderr
     return SofficeRun(
         output=produced,
         messages=soffice_messages(combined),
         returncode=proc.returncode,
         timed_out=False,
-        raw=(proc.stderr or proc.stdout).strip()[:400],
+        raw="\n".join(line for line in combined.splitlines() if line.strip() and not soffice_noise(line))[:400],
     )
+
+
+def local_name(qname: str) -> str:
+    return qname.rsplit(":", 1)[-1]
 
 
 def track_revisions_on(path: Path) -> bool | None:
     """Is ``w:trackRevisions`` on in a .docx's settings.xml? None if the part is absent.
 
     A bare ``<w:trackRevisions/>`` is on (that is how Word writes it); an
-    explicit ``w:val`` is read as ST_OnOff. Matched by local name, as the
-    library does when it writes the flag.
+    explicit ``val`` is read as ST_OnOff. Element and attribute are matched
+    by local name, whatever prefix the producer used, as the library does
+    when it writes the flag.
     """
     from defusedxml import minidom as safe_minidom
 
@@ -355,27 +374,35 @@ def track_revisions_on(path: Path) -> bool | None:
             return None
         dom = safe_minidom.parseString(z.read("word/settings.xml"))
     for node in dom.documentElement.childNodes:
-        if node.nodeType == node.ELEMENT_NODE and node.tagName.rsplit(":", 1)[-1] == "trackRevisions":
-            return node.getAttribute("w:val") in ("", "true", "1", "on")
+        if node.nodeType == node.ELEMENT_NODE and local_name(node.tagName) == "trackRevisions":
+            val = next((v for k, v in node.attributes.items() if local_name(k) == "val"), None)
+            return val is None or val.strip().lower() in ("true", "1", "on")
     return False
 
 
-def survival_check(out1: Path, roundtrip: Path, work: Path, author: str) -> dict | None:
+def survival_check(out1: Path, roundtrip: Path, work: Path, author: str) -> dict:
     """Did what the library wrote into ``out1`` survive a LibreOffice re-save?
 
     LibreOffice drops an element it does not recognize without a word — the
-    ISSUES.md #77 defect (an unknown settings element) was found only by a
-    hand round-trip. This is that round-trip, automated: the flag we wrote
-    must still be on, and our own insertion + deletion must still be read
-    back as revisions with our author. Existence checks only — LibreOffice
-    may legally merge a deletion that spanned several runs, so counts are
-    not compared. Returns a failure record, or None when everything survived.
+    ISSUES.md #66 defect (an unknown settings element, found in PR #77) was
+    caught only by a hand round-trip. This is that round-trip, automated:
+    the flag we wrote must still be on, and our own insertion + deletion
+    must still be read back as revisions with our author. Existence checks
+    only — LibreOffice may legally merge a deletion that spanned several
+    runs, so counts are not compared. Returns a failure record, or a pass
+    record whose ``flag`` says whether the flag check applied: when the
+    edited file's flag is not on (a producer wrote ``w:val="false"`` and the
+    library preserved it) there is nothing for LibreOffice to drop.
     """
-    if track_revisions_on(out1) and not track_revisions_on(roundtrip):
-        return assert_fail(
-            "AssertTrackRevisionsDropped",
-            "w:trackRevisions was on in the edited file but is absent or off after the LibreOffice re-save",
-        )
+    if track_revisions_on(out1):
+        flag = "checked"
+        if not track_revisions_on(roundtrip):
+            return assert_fail(
+                "AssertTrackRevisionsDropped",
+                "w:trackRevisions was on in the edited file but is absent or off after the LibreOffice re-save",
+            )
+    else:
+        flag = "not applicable (not on in the edited file)"
     from docx_editor import Document
 
     doc = Document.open(roundtrip, author=author, workspace_dir=work, force_recreate=True)
@@ -394,7 +421,7 @@ def survival_check(out1: Path, roundtrip: Path, work: Path, author: str) -> dict
             )
     finally:
         doc.close(cleanup=True)
-    return None
+    return {"status": "pass", "survival": "checked", "flag": flag}
 
 
 def run_lo_roundtrip(out1: Path, edited: bool, soffice: str | None, work: Path) -> dict:
@@ -410,14 +437,14 @@ def run_lo_roundtrip(out1: Path, edited: bool, soffice: str | None, work: Path) 
         return assert_fail("LoLoadRefused", run.raw or "no docx produced")
     v = validate_docx(run.output)
     if not v["ok"]:
+        # LibreOffice's output, not ours: named apart from save1/save2's OutputValidation.
         return assert_fail("LoOutputInvalid:" + v["error_type"], v["error"][:400])
     if not edited:
         return {"status": "pass", "survival": "skipped (no edit)"}
     try:
-        failure = survival_check(out1, run.output, work, AUTHOR)
+        return survival_check(out1, run.output, work, AUTHOR)
     except Exception as e:
         return err_record(e)
-    return failure or {"status": "pass", "survival": "checked"}
 
 
 def run_pdf(out2: Path, soffice: str | None) -> dict:
@@ -651,9 +678,9 @@ def apply_manifest_expectations(rec: dict) -> None:
     move, ...). The survival assertion is then reported as a skip with that
     reason — never as a pass — and a waiver that turns out to be unnecessary
     (everything survived) is itself a failure, so the manifest cannot quietly
-    outlive the LibreOffice behavior it describes. Only the redline-placement
-    assertions (``WAIVABLE_ASSERTIONS``) are waived: a refused load, an
-    Error: line, or a dropped w:trackRevisions flag still fails.
+    outlive the LibreOffice behavior it describes. Only ``WAIVABLE_ASSERTIONS``
+    are waived: a refused load, an Error: line, a dropped w:trackRevisions
+    flag, or a vanished edit marker still fails.
     """
     prov = rec["provenance"]
     stages = rec["stages"]
@@ -713,7 +740,9 @@ def run_all(only: str | None, do_soffice: bool) -> int:
             print(f"no corpus files in {FILES_DIR} — run build_corpus.py first", file=sys.stderr)
         return 1
 
-    timeout = PER_FILE_TIMEOUT + (LO_TIMEOUT + PDF_TIMEOUT if do_soffice else 0)
+    # Slack over the stage timeouts, so a child whose last stage timed out can
+    # still report that stage instead of being killed mid-report.
+    timeout = PER_FILE_TIMEOUT + (LO_TIMEOUT + PDF_TIMEOUT if do_soffice else 0) + 10
     results = []
     for i, f in enumerate(files, 1):
         t0 = time.time()
@@ -809,7 +838,22 @@ def print_summary(results: list[dict]) -> None:
     print(f"\n{clean}/{len(results)} files fully clean (all stages pass/skip)")
     if rejected:
         print(f"{rejected} rejected (invalid input refused by the library — not a failure)")
+    print_survival_summary(results)
     print_census(results)
+
+
+def print_survival_summary(results: list[dict]) -> None:
+    """How many files the lo_roundtrip survival assertion actually ran on."""
+    lo = [r["stages"].get("lo_roundtrip", {}) for r in results]
+    checked = [s for s in lo if s.get("survival") == "checked"]
+    flag_na = sum(1 for s in checked if s.get("flag") != "checked")
+    no_edit = sum(1 for s in lo if s.get("survival") == "skipped (no edit)")
+    waived = sum(1 for s in lo if "dropped" in s)
+    if checked or no_edit or waived:
+        print(
+            f"lo_roundtrip survival: {len(checked)} checked ({flag_na} with the flag not applicable), "
+            f"{no_edit} skipped (no edit), {waived} waived"
+        )
 
 
 def main() -> None:

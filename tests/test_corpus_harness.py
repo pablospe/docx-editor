@@ -1,17 +1,22 @@
 """Tests for the LibreOffice gate of the corpus harness (benchmarks/corpus/corpus_harness.py).
 
 The harness is a script, not a package, so it is loaded by path. Everything
-here runs without LibreOffice except the last test, which drives the real
-``soffice`` when one is installed and is skipped otherwise.
+here runs without LibreOffice — a fake ``soffice`` script stands in for the
+process-level tests — except the last test, which drives the real ``soffice``
+when one is installed and is skipped otherwise.
 """
 
 import importlib.util
+import os
 import re
 import shutil
+import sys
+import time
 import zipfile
 from pathlib import Path
 
 import pytest
+from conftest import replace_docx_parts
 
 from docx_editor import Document
 
@@ -35,21 +40,50 @@ harness = _load_harness()
 
 def rewrite_part(src: Path, dst: Path, part: str, transform) -> Path:
     """Copy ``src`` to ``dst`` with one zip part rewritten (``transform(text) -> text``)."""
-    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-            if item.filename == part:
-                data = transform(data.decode("utf-8")).encode("utf-8")
-            zout.writestr(item, data)
+    with zipfile.ZipFile(src) as z:
+        text = z.read(part).decode("utf-8")
+    replace_docx_parts(src, dst, {part: transform(text)})
     return dst
 
 
-def drop_part(src: Path, dst: Path, part: str) -> Path:
-    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            if item.filename != part:
-                zout.writestr(item, zin.read(item.filename))
-    return dst
+FAKE_SOFFICE = f"""#!{sys.executable}
+# Stands in for soffice: records argv, prints the javaldx noise, then either
+# converts (copies src to outdir with the target extension), refuses, or
+# hangs with a grandchild that heartbeats — like oosplash forking soffice.bin.
+import os, pathlib, shutil, subprocess, sys
+pathlib.Path(os.environ["FAKE_SOFFICE_ARGV"]).write_text("\\n".join(sys.argv[1:]))
+print("Warning: failed to launch javaldx - java may not function correctly", file=sys.stderr, flush=True)
+mode = os.environ.get("FAKE_SOFFICE_MODE", "convert")
+if mode == "hang":
+    beat = os.environ["FAKE_SOFFICE_HEARTBEAT"]
+    code = (
+        "import time, pathlib\\n"
+        "while True:\\n"
+        f"    pathlib.Path({{beat!r}}).write_text(str(time.time()))\\n"
+        "    time.sleep(0.05)"
+    )
+    subprocess.Popen([sys.executable, "-c", code]).wait()
+elif mode == "refuse":
+    print("Error: source file could not be loaded", file=sys.stderr)
+else:
+    args = sys.argv[1:]
+    src = pathlib.Path(args[-1])
+    outdir = pathlib.Path(args[args.index("--outdir") + 1])
+    ext = args[args.index("--convert-to") + 1].split(":")[0]
+    shutil.copy(src, outdir / f"{{src.stem}}.{{ext}}")
+    print(f"convert {{src}} -> {{outdir}} using filter : fake")
+"""
+
+
+@pytest.fixture
+def fake_soffice(tmp_path: Path, monkeypatch) -> Path:
+    script = tmp_path / "soffice"
+    script.write_text(FAKE_SOFFICE)
+    script.chmod(0o755)
+    monkeypatch.setenv("FAKE_SOFFICE_ARGV", str(tmp_path / "argv.txt"))
+    monkeypatch.setenv("FAKE_SOFFICE_HEARTBEAT", str(tmp_path / "heartbeat"))
+    monkeypatch.setattr(harness, "LO_PROFILE", tmp_path / "lo profile")  # the space is the point
+    return script
 
 
 @pytest.fixture
@@ -101,8 +135,14 @@ def test_soffice_messages_is_empty_for_a_clean_run():
         ('<w:trackRevisions w:val="true"/>', True),
         ('<w:trackRevisions w:val="1"/>', True),
         ('<w:trackRevisions w:val="on"/>', True),
+        ('<w:trackRevisions w:val="TRUE"/>', True),
         ('<w:trackRevisions w:val="false"/>', False),
         ('<w:trackRevisions w:val="0"/>', False),
+        # Another prefix for the same namespace: element and attribute are read by local name.
+        (
+            '<x:trackRevisions xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main" x:val="false"/>',
+            False,
+        ),
         ("", False),
     ],
 )
@@ -116,7 +156,8 @@ def test_track_revisions_on(tmp_path: Path, element: str, expected: bool):
 
 
 def test_track_revisions_on_is_none_without_settings_part(tmp_path: Path):
-    path = drop_part(SIMPLE, tmp_path / "no_settings.docx", "word/settings.xml")
+    path = tmp_path / "no_settings.docx"
+    replace_docx_parts(SIMPLE, path, {"word/settings.xml": None})
     assert harness.track_revisions_on(path) is None
 
 
@@ -132,7 +173,27 @@ def test_edited_file_carries_the_flag_and_a_redline(edited: Path):
 
 
 def test_survival_check_passes_when_nothing_was_dropped(edited: Path, tmp_path: Path):
-    assert harness.survival_check(edited, edited, tmp_path / "work", harness.AUTHOR) is None
+    assert harness.survival_check(edited, edited, tmp_path / "work", harness.AUTHOR) == {
+        "status": "pass",
+        "survival": "checked",
+        "flag": "checked",
+    }
+
+
+def test_survival_check_says_when_the_flag_check_did_not_apply(edited: Path, tmp_path: Path):
+    # A producer wrote w:val="false" and the library preserved it: LibreOffice
+    # dropping that element loses nothing, and the record must not claim the
+    # flag was checked.
+    off = rewrite_part(
+        edited,
+        tmp_path / "flag_off.docx",
+        "word/settings.xml",
+        lambda xml: re.sub(r"<w:trackRevisions\b[^>]*/>", '<w:trackRevisions w:val="false"/>', xml),
+    )
+    assert harness.track_revisions_on(off) is False
+    record = harness.survival_check(off, off, tmp_path / "work", harness.AUTHOR)
+    assert record["status"] == "pass"
+    assert record["flag"] == "not applicable (not on in the edited file)"
 
 
 def test_survival_check_detects_a_dropped_track_revisions_flag(edited: Path, tmp_path: Path):
@@ -176,6 +237,51 @@ def test_survival_check_detects_a_dropped_own_revision(edited: Path, tmp_path: P
     assert record is not None
     assert record["error_type"] == "AssertOwnRevisionsDropped"
     assert "no insertion" in record["error"]
+
+
+# --------------------------------------------------------------------------
+# soffice_convert, against the fake soffice
+# --------------------------------------------------------------------------
+
+
+def test_soffice_convert_passes_a_real_file_url_and_reports_noise_free_diagnostics(
+    fake_soffice: Path, edited: Path, tmp_path: Path
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    run = harness.soffice_convert(str(fake_soffice), edited, "docx:MS Word 2007 XML", out, 10)
+    assert run.output == out / edited.name and not run.timed_out and run.messages == []
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    # A space in the profile path hangs soffice unless the URL is percent-encoded.
+    assert argv[1] == f"-env:UserInstallation={(tmp_path / 'lo profile').as_uri()}"
+    assert "%20" in argv[1]
+    assert "javaldx" not in run.raw and run.raw.startswith("convert ")
+
+
+def test_soffice_convert_refused_load_keeps_the_error_line_without_noise(
+    fake_soffice: Path, edited: Path, tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("FAKE_SOFFICE_MODE", "refuse")
+    run = harness.soffice_convert(str(fake_soffice), edited, "pdf", tmp_path, 10)
+    assert run.output is None and run.returncode == 0
+    assert run.messages == ["Error: source file could not be loaded"]
+    assert run.raw == "Error: source file could not be loaded"
+
+
+def test_soffice_convert_timeout_kills_the_whole_process_tree(
+    fake_soffice: Path, edited: Path, tmp_path: Path, monkeypatch
+):
+    # soffice forks soffice.bin; killing only the wrapper leaves an orphan
+    # holding the profile lock. The grandchild's heartbeat must stop.
+    monkeypatch.setenv("FAKE_SOFFICE_MODE", "hang")
+    heartbeat = tmp_path / "heartbeat"
+    run = harness.soffice_convert(str(fake_soffice), edited, "pdf", tmp_path, 1)
+    assert run.timed_out and run.output is None
+    assert heartbeat.exists(), "the grandchild never started"
+    time.sleep(0.3)
+    first = os.stat(heartbeat).st_mtime_ns
+    time.sleep(0.3)
+    assert os.stat(heartbeat).st_mtime_ns == first, "the grandchild outlived the timeout"
 
 
 # --------------------------------------------------------------------------
@@ -269,15 +375,13 @@ def test_survival_waiver_does_not_cover_a_refused_load():
     assert harness.file_failed(rec)
 
 
-def test_survival_waiver_does_not_cover_a_dropped_track_revisions_flag():
-    # The waiver reasons are about where our redline sits; a dropped flag is
-    # the #77 class and must fail on a waived file like on any other.
-    rec = _record(
-        {"status": "fail", "error_type": "AssertTrackRevisionsDropped", "error": "..."},
-        {"survival_waiver": "field result"},
-    )
+@pytest.mark.parametrize("error_type", ["AssertTrackRevisionsDropped", "AssertEditMarkerLostInRoundtrip"])
+def test_survival_waiver_covers_only_a_dropped_own_revision(error_type: str):
+    # A waiver says LibreOffice kept our text but not our revision. A dropped
+    # flag (the #66/#77 class) or a vanished marker is a loss on any file.
+    rec = _record({"status": "fail", "error_type": error_type, "error": "..."}, {"survival_waiver": "field result"})
     harness.apply_manifest_expectations(rec)
-    assert rec["stages"]["lo_roundtrip"]["error_type"] == "AssertTrackRevisionsDropped"
+    assert rec["stages"]["lo_roundtrip"]["error_type"] == error_type
     assert harness.file_failed(rec)
 
 
@@ -314,5 +418,5 @@ def test_run_lo_roundtrip_against_real_libreoffice(edited: Path, tmp_path: Path,
     monkeypatch.setattr(harness, "LO_DIR", lo_dir)
     monkeypatch.setattr(harness, "LO_PROFILE", tmp_path / "profile")
     record = harness.run_lo_roundtrip(edited, True, shutil.which("soffice"), tmp_path / "work")
-    assert record == {"status": "pass", "survival": "checked"}
+    assert record == {"status": "pass", "survival": "checked", "flag": "checked"}
     assert (lo_dir / edited.name).exists()

@@ -46,14 +46,20 @@ So the stages are:
   it was on before, the edit marker is still visible, and there is still an
   insertion and a deletion by our author (existence, not counts — LibreOffice
   may legally merge a deletion that spanned several runs). The survival part
-  is skipped when `edit` was skipped. LibreOffice also rewrites or drops some
-  *foreign* revision types on re-save; that is its behavior, not ours, and is
-  not asserted on.
+  is skipped when `edit` was skipped, and the record's `flag` field says
+  whether the flag check applied: a producer that wrote
+  `<w:trackRevisions w:val="false"/>` (the library preserves it) leaves
+  nothing for LibreOffice to drop. The run summary prints how many files
+  were actually checked, skipped, or waived. LibreOffice also rewrites or
+  drops some *foreign* revision types on re-save; that is its behavior, not
+  ours, and is not asserted on.
 - `pdf` renders the **final** output (after `accept_all`) as PDF, the
   can-other-tools-read-it check.
 
 Both stages skip together with `--no-soffice` or when `soffice` is not on
-`PATH`. The pure helpers (`soffice_messages`, `track_revisions_on`,
+`PATH`. A conversion runs in its own session and is killed as a tree on
+timeout: `soffice` is a wrapper that forks `soffice.bin`, and an orphaned
+`soffice.bin` holds the profile lock and stalls every later conversion. The pure helpers (`soffice_messages`, `track_revisions_on`,
 `survival_check`, the stage function) are unit-tested in
 `tests/test_corpus_harness.py` without LibreOffice, plus one real-`soffice`
 test that skips where it is not installed.
@@ -187,10 +193,10 @@ lists.
 - A manifest entry can set `"survival_waiver": "<reason>"` when LibreOffice's
   own document model cannot hold our redline in that file. The
   `lo_roundtrip` survival assertion is then reported as a **skip** carrying
-  the reason (never as a pass), while the opens-clean part of the stage — a
-  refused load, an `Error:` line, an unparseable output — still fails, and so
-  does a dropped `w:trackRevisions` flag (the waiver covers where our redline
-  sits, not the flag). A
+  the reason (never as a pass). Only `AssertOwnRevisionsDropped` — our text
+  is there but no longer a revision — can be waived; a refused load, an
+  `Error:` line, an unparseable output, a dropped `w:trackRevisions` flag, or
+  a vanished edit marker still fails. A
   waiver that turns out to be unnecessary fails the file with
   `StaleSurvivalWaiver`, so the manifest cannot quietly outlive the behavior
   it documents. Two files carry one today, both verified by dumping
@@ -206,8 +212,10 @@ lists.
 - The harness exits nonzero if any file has a real failure (failed stage or
   harness error), and if the corpus directory is empty or a `--only` filter
   matches nothing (a run that tested nothing must not look green).
-  Baseline: 76 clean (2 of them with a waived survival check) + 1 rejected
-  → exit 0.
+  Baseline: 76 clean + 1 rejected → exit 0. Of the 76, the `lo_roundtrip`
+  survival assertion ran on 68 (1 of them with the flag check not
+  applicable, `onlyoffice_sample.docx`), was skipped on 6 with no editable
+  paragraph, and was waived on 2.
 
 ## Provenance policy
 
@@ -242,6 +250,8 @@ lists.
    raw.githubusercontent.com URL pinned to a full commit SHA), `size`, and the
    truncated sha256 of the content — or add a generation recipe in
    `build_corpus.py` plus a source file in `srcgen/`. Add `"must_reject": true`
-   for an intentionally invalid file the library must refuse.
+   for an intentionally invalid file the library must refuse, and
+   `"survival_waiver": "<reason>"` if LibreOffice's own model cannot hold the
+   redline `lo_roundtrip` writes into it (see Failure semantics).
 2. Keep files ≤ 2MB.
 3. Re-run `uv run python benchmarks/corpus/build_corpus.py`.
