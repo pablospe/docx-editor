@@ -385,6 +385,153 @@
     "size": 16348,
     "sha256": "428f189fb7afbd60"
   },
+  "oxpt_RP001-Tracked-Revisions-01.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP001-Tracked-Revisions-01.docx",
+    "size": 52247,
+    "sha256": "3ad34dd0480f3a2a"
+  },
+  "oxpt_RP005-Deleted-Paragraph-Mark.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP005-Deleted-Paragraph-Mark.docx",
+    "size": 12682,
+    "sha256": "49af7e0109a4959a"
+  },
+  "oxpt_RP009-Deleted-Table-Row.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP009-Deleted-Table-Row.docx",
+    "size": 12663,
+    "sha256": "64518a70ea1df91c"
+  },
+  "oxpt_RP010-Inserted-Table-Row.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP010-Inserted-Table-Row.docx",
+    "size": 12627,
+    "sha256": "55a20bf1d6f7dc91"
+  },
+  "oxpt_RP013-Deleted-Math-Control-Char.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP013-Deleted-Math-Control-Char.docx",
+    "size": 12480,
+    "sha256": "11a31570249f8a4a"
+  },
+  "oxpt_RP015-MoveFrom-MoveTo.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP015-MoveFrom-MoveTo.docx",
+    "size": 12745,
+    "sha256": "0046e12f3a66e48d"
+  },
+  "oxpt_RP016-Deleted-CC.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP016-Deleted-CC.docx",
+    "size": 18956,
+    "sha256": "f8b611a213cf7818"
+  },
+  "oxpt_RP017-Inserted-CC.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP017-Inserted-CC.docx",
+    "size": 18926,
+    "sha256": "48473ffce0fc4783"
+  },
+  "oxpt_RP018-MoveFrom-MoveTo-CC.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP018-MoveFrom-MoveTo-CC.docx",
+    "size": 19503,
+    "sha256": "32789c606ccda122"
+  },
+  "oxpt_RP022-NumberingChange.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP022-NumberingChange.docx",
+    "size": 13978,
+    "sha256": "e63f62e5ab738907"
+  },
+  "oxpt_RP024-ParagraphMark-rPr-Change.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP024-ParagraphMark-rPr-Change.docx",
+    "size": 12685,
+    "sha256": "03cad098a512d808"
+  },
+  "oxpt_RP025-Paragraph-Props-Change.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP025-Paragraph-Props-Change.docx",
+    "size": 12687,
+    "sha256": "5e4bfa02bd1743c2"
+  },
+  "oxpt_RP026-NumberingChange.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP026-NumberingChange.docx",
+    "size": 13553,
+    "sha256": "fb23130a407e1a19"
+  },
+  "oxpt_RP027-Change-Section.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP027-Change-Section.docx",
+    "size": 12890,
+    "sha256": "8572eaf443e9c601"
+  },
+  "oxpt_RP028-Table-Grid-Change.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP028-Table-Grid-Change.docx",
+    "size": 12942,
+    "sha256": "48382e915e28847d"
+  },
+  "oxpt_RP033-Table-Prop-Ex-Change.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP033-Table-Prop-Ex-Change.docx",
+    "size": 13166,
+    "sha256": "d99bd3ba14f819ca"
+  },
+  "oxpt_RP034-Deleted-Cells.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP034-Deleted-Cells.docx",
+    "size": 12821,
+    "sha256": "9368b3b09ffc23da"
+  },
+  "oxpt_RP035-Inserted-Cells.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP035-Inserted-Cells.docx",
+    "size": 12718,
+    "sha256": "4c03e2afd4ce4397"
+  },
+  "oxpt_RP036-Vert-Merged-Cells.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP036-Vert-Merged-Cells.docx",
+    "size": 12797,
+    "sha256": "0fa869656c26bba6"
+  },
+  "oxpt_RP037-Changed-Style-Para-Props.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP037-Changed-Style-Para-Props.docx",
+    "size": 13109,
+    "sha256": "28b43104eceffe81"
+  },
+  "oxpt_RP050-Deleted-Footnote.docx": {
+    "kind": "download",
+    "producer": "Open-Xml-PowerTools test fixture (Word)",
+    "source": "https://raw.githubusercontent.com/OpenXmlDev/Open-Xml-PowerTools/3891c2e52ea86de357a850354134b6c3333d21cc/TestFiles/RP/RP050-Deleted-Footnote.docx",
+    "size": 15757,
+    "sha256": "ff9b28d2f0bc6c53"
+  },
   "onlyoffice_sample.docx": {
     "kind": "download",
     "producer": "ONLYOFFICE sample template",

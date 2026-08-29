@@ -6,9 +6,11 @@ as "there was nothing to accept" rather than "nothing here could be accepted".
 These tests pin that the count is now accompanied by ``.unhandled`` /
 ``.unhandled_types``, a warning, and a ``list_unhandled_revisions()`` listing.
 
-The corpus makes the case concrete: of 56 real-world files, ``TC-table-DnD-move``
+The corpus makes the case concrete: of 77 real-world files, ``TC-table-DnD-move``
 (LibreOffice core's ooxmlexport fixtures) carries 20 move marks and
-``UnknownStyleInRedline`` carries 2 ``w:pPrChange`` — both returned a silent 0.
+``UnknownStyleInRedline`` carries 2 ``w:pPrChange`` — both returned a silent 0 —
+and the Word-authored ``oxpt_RP*`` fixtures (Open-Xml-PowerTools) carry every
+type in ``UNHANDLED_REVISION_TAGS`` straight from Word.
 
 Fixtures are hand-authored ``word/document.xml`` swapped into ``simple.docx``
 (``replace_document_xml``), one per revision family, because
