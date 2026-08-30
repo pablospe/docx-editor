@@ -34,7 +34,8 @@ jobs:
         # Two runners per version: the hosted runner has 2 vCPUs, so more
         # xdist workers cannot help; a second machine halves the wall time.
         # Shards are balanced by .test_durations (pytest-split); refresh it
-        # with `pytest --store-durations` when the split drifts.
+        # with `pytest --store-durations` when the split drifts, then run
+        # `make check` (pytest-split writes the file without a final newline).
         shard: [1, 2]
       fail-fast: false
     defaults:
