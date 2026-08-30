@@ -1576,6 +1576,18 @@ class DocxXMLEditor(XMLEditor):
         """
         self._fold_revision_ids(self.dom)
 
+    def _reload_dom_from_bytes(self, xml_bytes: bytes) -> None:
+        """Restore a snapshot and recompute ``holds_move_range_marks`` for it.
+
+        The id counter is deliberately not re-seeded (see __init__), but the
+        flag describes the DOM's current content, so it follows the DOM: one
+        walk, on the rare rollback path only.
+        """
+        super()._reload_dom_from_bytes(xml_bytes)
+        from .track_changes import MOVE_RANGE_TAGS, iter_revision_elements
+
+        self.holds_move_range_marks = next(iter_revision_elements(self.dom, MOVE_RANGE_TAGS), None) is not None
+
     def _get_next_change_id(self) -> int:
         """Get the next available change ID.
 

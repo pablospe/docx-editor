@@ -113,6 +113,26 @@ def test_run_single_save2_accepts_what_accept_all_reported_as_unhandled(tmp_path
     assert result["stages"]["save2"]["census"] == {"w:moveFrom": 1}
 
 
+def test_run_single_save2_lets_range_marks_wait_for_a_reported_move(tmp_path: Path, monkeypatch):
+    """Range marks are swept with their move; while the move itself is
+    reported as unhandled (here: no w:id), its marks may stay too."""
+    monkeypatch.setattr(harness, "OUT_DIR", tmp_path / "out")
+    monkeypatch.setattr(harness, "WORK_DIR", tmp_path / "work")
+    body = IDLESS_MOVE_BODY.replace(
+        '<w:p><w:moveFrom w:author="Ann"',
+        '<w:p><w:moveFromRangeStart w:id="10" w:author="Ann" w:date="2026-01-29T16:55:00Z" w:name="m"/>'
+        '<w:moveFrom w:author="Ann"',
+    ).replace("</w:moveFrom></w:p>", '</w:moveFrom><w:moveFromRangeEnd w:id="10"/></w:p>')
+    src = tmp_path / "idless_move_with_marks.docx"
+    replace_docx_parts(SIMPLE, src, {"word/document.xml": body})
+
+    with pytest.warns(UnhandledRevisionWarning):
+        result = harness.run_single(src, do_soffice=False)
+
+    assert result["stages"]["save2"]["status"] == "pass"
+    assert result["stages"]["save2"]["census"] == {"w:moveFromRangeStart": 1, "w:moveFrom": 1, "w:moveFromRangeEnd": 1}
+
+
 def test_run_single_fails_save2_when_a_resolvable_element_survives_unreported(tmp_path: Path, monkeypatch):
     """The save2 post-condition proper: an element accept_all neither resolved
     nor reported. Simulated by a census that finds a w:ins accept_all's own

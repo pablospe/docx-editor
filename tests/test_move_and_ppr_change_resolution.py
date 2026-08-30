@@ -516,6 +516,16 @@ class TestBulkResolutionSweepsOnce:
             assert doc.accept_all() == 0
         assert len(calls) == n  # nothing left to sweep, so no walk
 
+    def test_restoring_a_snapshot_recomputes_the_flag(self, make_docx):
+        """A rolled-back batch replaces the DOM wholesale; the flag follows it."""
+        with _open(make_docx(LONE_MOVE_FROM)) as doc:
+            editor = doc._document_editor
+            assert not editor.holds_move_range_marks
+            editor._reload_dom_from_bytes(INLINE_MOVE.encode("utf-8"))
+            assert editor.holds_move_range_marks
+            editor._reload_dom_from_bytes(LONE_MOVE_FROM.encode("utf-8"))
+            assert not editor.holds_move_range_marks
+
     def test_changeset_resolution_sweeps_once_too(self, make_docx, monkeypatch):
         calls: list[int] = []
         original = RevisionManager._sweep_move_range_marks
