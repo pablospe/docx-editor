@@ -45,6 +45,7 @@ dev = [
     "pytest-xdist>=3.8.0",
     "jupyter-client>=8.6",
     "ipykernel>=6.29",
+    "pytest-split>=0.10",
 ]
 
 [build-system]
