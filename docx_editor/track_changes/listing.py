@@ -272,7 +272,7 @@ class _ListingMixin(_RevisionManagerBase):
             changeset_source=self._changeset_sources.get(changeset_id) if changeset_id is not None else None,
         )
 
-    def _revision_element_index(self) -> dict[str, list[Element]]:
+    def _revision_element_index(self, author: str | None = None) -> dict[str, list[Element]]:
         """Map ``w:id`` -> its handled revision elements, in one recursive walk.
 
         ``HANDLED_REVISION_TAGS`` only: these are the revision elements
@@ -292,10 +292,17 @@ class _ListingMixin(_RevisionManagerBase):
         changeset members never collide (``_reconstruct_groups`` bars every
         duplicated id from every inferred group, and our own allocator keeps
         recorded ids unique), so for those callers every list holds exactly one
-        element. Whole-document resolution (``_resolve_all``) is where the
-        duplicates live: keeping them all lets one index serve every same-id
-        element, so they resolve within a single pass instead of costing a
-        rebuilt index and a whole extra pass each.
+        element. Unfiltered whole-document resolution (``_resolve_all`` with no
+        author) is where the duplicates live: keeping them all lets one index
+        serve every same-id element, so they resolve within a single pass
+        instead of costing a rebuilt index and a whole extra pass each.
+
+        ``author`` scopes the index to that author's elements, which is what
+        makes an author-filtered ``_resolve_all`` unable to reach another
+        author's same-id revision: the lookup has no other candidate to
+        return. The author test is ``list_revisions``'/``_unhandled_elements``'
+        — a missing ``w:author`` reads as ``"Unknown"`` — so the index and the
+        listing cannot disagree about who owns an element.
 
         Each id's list is in document order — the same order the fresh scan
         in ``_find_revision_element`` uses, so a duplicated id resolves the
@@ -303,6 +310,8 @@ class _ListingMixin(_RevisionManagerBase):
         """
         element_index: dict[str, list[Element]] = {}
         for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
+            if author is not None and (elem.getAttribute("w:author") or "Unknown") != author:
+                continue
             element_index.setdefault(elem.getAttribute("w:id"), []).append(elem)
         return element_index
 
@@ -337,7 +346,10 @@ class _ListingMixin(_RevisionManagerBase):
         Returning the *first still-attached* candidate (rather than a single
         remembered element) is what lets duplicate ids resolve from one index:
         once an element is detached its successor becomes the answer, so N
-        same-id revisions resolve in one pass rather than N.
+        same-id revisions resolve in one pass rather than N. Which elements are
+        candidates at all is the index's business: an author-scoped index
+        (``_revision_element_index(author)``) holds only that author's, so a
+        filtered call cannot land on another author's same-id revision.
         """
         if element_index is None:
             wanted = str(revision_id)
