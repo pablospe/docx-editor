@@ -1499,6 +1499,11 @@ class DocxXMLEditor(XMLEditor):
         # deliberately does not re-seed: the mark must stay monotonic across
         # a rolled-back batch too.
         self._max_change_id = -1
+        # True while the document holds a move range mark (set by the same
+        # walk that seeds the id counter, cleared by the range-mark sweep once
+        # none remain): lets RevisionManager skip the sweep — a full-document
+        # walk — on the overwhelmingly common move-free document.
+        self.holds_move_range_marks = False
         self._seed_max_change_id()
         self._tracked_change_collector: list[Element] | None = None
         self._frozen_timestamp: str | None = None
@@ -1542,12 +1547,17 @@ class DocxXMLEditor(XMLEditor):
         group undoing our edit would resolve their move instead.
         """
         # Imported here: track_changes imports this module at load time.
-        from .track_changes import ALL_REVISION_TAGS, iter_revision_elements
+        from .track_changes import ALL_REVISION_TAGS, MOVE_RANGE_TAGS, iter_revision_elements
+
+        def fold(elem) -> None:
+            self._fold_change_id(elem.getAttribute("w:id"))
+            if elem.tagName in MOVE_RANGE_TAGS:
+                self.holds_move_range_marks = True
 
         if node.nodeType == node.ELEMENT_NODE and node.tagName in ALL_REVISION_TAGS:
-            self._fold_change_id(node.getAttribute("w:id"))
+            fold(node)
         for elem in iter_revision_elements(node, ALL_REVISION_TAGS):
-            self._fold_change_id(elem.getAttribute("w:id"))
+            fold(elem)
 
     def _seed_max_change_id(self) -> None:
         """Fold every revision mark's w:id already in the document into the mark.

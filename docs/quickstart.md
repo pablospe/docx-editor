@@ -216,14 +216,22 @@ my_revisions = doc.list_revisions(author="Legal Team")
 ### Accept or Reject a Revision
 
 ```python
-# For insertions, accept keeps the inserted content.
-# For deletions, accept permanently removes the deleted content.
+# Accept keeps an insertion's content, permanently removes a deletion's,
+# keeps a move_to's text at its destination, removes a move_from's text
+# from its source, and drops a property_change's record of the old
+# properties.
 doc.accept_revision(revision_id=1)
 
-# For insertions, reject removes the inserted content.
-# For deletions, reject restores the deleted content.
+# Reject removes an insertion's content, restores a deletion's, removes a
+# move_to's text from its destination (including any edit of your own made
+# inside it — edit after resolving the move), restores a move_from's text at
+# its source, and puts a property_change's recorded properties back.
 doc.reject_revision(revision_id=1)
 ```
+
+The two halves of a move share an inferred changeset; resolve them together
+(`accept_all()`, or `accept_changeset()` on that changeset) so the text ends up
+in exactly one place.
 
 ### Accept or Reject a Group or Changeset
 

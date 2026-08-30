@@ -23,9 +23,10 @@ Stages per file:
   reopen          reopen saved file, assert the edit survived and the revision
                   count is coherent, then accept_all
   save2           save to out/<name>_final.docx + zip/XML validation, then
-                  assert the saved word/document.xml holds only revision types
-                  accept_all does not resolve (UNHANDLED_REVISION_TAGS): an
-                  ins/del/move/pPrChange element left behind is a failure
+                  assert the saved word/document.xml holds only what
+                  accept_all itself reported as unhandled: an ins/del/move/
+                  pPrChange element or move range mark left behind unreported
+                  is a failure
   lo_roundtrip    soffice --headless --convert-to docx on the *edited* output,
                   then assert that what we wrote survived the re-save
   pdf             soffice --headless --convert-to pdf on the final output
@@ -40,8 +41,8 @@ missing output (a nonzero exit after a good output is also a failure, though
 never the signal relied on), and lo_roundtrip additionally reopens the
 re-saved file and checks that our w:trackRevisions flag and our own
 insertion/deletion are still there. Where
-LibreOffice's own model cannot hold our redline (inside a field result,
-inside a foreign move), the manifest records a ``survival_waiver`` with the
+LibreOffice's own model cannot hold our redline (inside a field result),
+the manifest records a ``survival_waiver`` with the
 reason; see apply_manifest_expectations.
 
 An input that fails input_validate and is then refused by Document.open is
@@ -674,7 +675,7 @@ def run_single(path: Path, do_soffice: bool) -> dict:
         # Stage 6: save2 + validate + post-condition: after accept_all, the
         # saved file may hold only revision types the library never resolves.
         try:
-            from docx_editor.track_changes import UNHANDLED_REVISION_TAGS
+            from docx_editor.track_changes import MOVE_RANGE_TAGS, UNHANDLED_REVISION_TAGS
 
             doc2.save(out2)
             v = validate_docx(out2)
@@ -689,13 +690,27 @@ def run_single(path: Path, do_soffice: bool) -> dict:
             # word/document.xml only: the part accept_all reads (ISSUES.md #30).
             # A redline in styles.xml or footnotes.xml is visible in the
             # per-part census but is not something accept_all claimed to do.
+            # Measured against accept_all's own report, not a static tag set:
+            # a handled-type mark it could not reach (no numeric w:id) is
+            # reported in unhandled_types and may stay; only what it left
+            # behind *unreported* is a failure. Range marks are scaffolding
+            # swept with their move, so they may remain only while a move
+            # element of their family is still reported as unhandled.
             final_census = census_file(out2)
             body_tags = final_census.get("parts", {}).get("word/document.xml", {}).get("by_tag", {})
-            leftover = {tag: n for tag, n in body_tags.items() if tag not in UNHANDLED_REVISION_TAGS}
+            reported = accepted.unhandled_types
+            leftover = {
+                tag: n - reported.get(tag, 0)
+                for tag, n in body_tags.items()
+                if tag not in UNHANDLED_REVISION_TAGS and tag not in MOVE_RANGE_TAGS and n > reported.get(tag, 0)
+            }
+            for tag, n in body_tags.items():
+                if tag in MOVE_RANGE_TAGS and not reported.get("w:" + tag[len("w:") : tag.index("Range")], 0):
+                    leftover[tag] = n
             if leftover:
                 stages["save2"] = assert_fail(
                     "AssertResolvedTypesRemain",
-                    f"accept_all() left resolvable revision elements in the saved file: {leftover}",
+                    f"accept_all() left unreported revision elements in the saved file: {leftover}",
                 )
                 fail_rest("save2")
                 return result
@@ -739,8 +754,8 @@ def apply_manifest_expectations(rec: dict) -> None:
     counts as failed and keeps its own diagnostics.
 
     ``survival_waiver``: a documented reason why LibreOffice cannot keep our
-    redline in *this* file (a redline inside a field result, inside a foreign
-    move, ...). The survival assertion is then reported as a skip with that
+    redline in *this* file (a redline inside a field result, ...). The
+    survival assertion is then reported as a skip with that
     reason — never as a pass — and a waiver that turns out to be unnecessary
     (everything survived) is itself a failure, so the manifest cannot quietly
     outlive the LibreOffice behavior it describes. Only ``WAIVABLE_ASSERTIONS``

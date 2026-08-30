@@ -489,6 +489,33 @@ class TestBulkResolutionSweepsOnce:
         # _resolve_all_reporting.
         assert len(calls) <= 2
 
+    def test_move_free_documents_never_sweep(self, make_docx, monkeypatch):
+        """No range marks at open: the sweep — a full-document walk — is
+        skipped on every path, not merely deferred."""
+        calls: list[int] = []
+        monkeypatch.setattr(RevisionManager, "_sweep_move_range_marks", lambda self: calls.append(1))
+        with _open(make_docx(LONE_MOVE_FROM)) as doc:
+            assert not doc._document_editor.holds_move_range_marks
+            assert doc.accept_revision(11)
+            assert doc.accept_all() == 0
+        assert calls == []
+
+    def test_sweeping_the_last_marks_switches_the_sweep_off(self, make_docx, monkeypatch):
+        calls: list[int] = []
+        original = RevisionManager._sweep_move_range_marks
+        monkeypatch.setattr(RevisionManager, "_sweep_move_range_marks", lambda self: (calls.append(1), original(self)))
+        with _open(make_docx(INLINE_MOVE)) as doc:
+            editor = doc._document_editor
+            assert editor.holds_move_range_marks
+            assert doc.accept_revision(11)  # From half: its pair is swept
+            assert editor.holds_move_range_marks  # the To pair is still there
+            assert doc.accept_revision(13)
+            assert not editor.holds_move_range_marks
+            assert _census(doc) == {}
+            n = len(calls)
+            assert doc.accept_all() == 0
+        assert len(calls) == n  # nothing left to sweep, so no walk
+
     def test_changeset_resolution_sweeps_once_too(self, make_docx, monkeypatch):
         calls: list[int] = []
         original = RevisionManager._sweep_move_range_marks

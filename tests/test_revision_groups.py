@@ -1615,11 +1615,12 @@ class TestAcceptPathIndex:
             walks = count_dom_walks(monkeypatch)
             recursive = count_revision_walks(monkeypatch)
             assert getattr(doc, method)(changeset_id) == 6
-            # No per-tag getElementsByTagName, and a constant number of
-            # recursive document walks — the index build and the deferred
-            # range-mark sweep — not one scan per member per pass.
+            # No per-tag getElementsByTagName, and exactly one recursive
+            # document walk — the index build (a move-free document never
+            # pays for the range-mark sweep) — not one scan per member per
+            # pass.
             assert walks == []
-            assert len(recursive) == 2
+            assert len(recursive) == 1
             assert doc.list_revisions() == []
 
     @pytest.mark.parametrize("method", ["accept_group", "reject_group"])
@@ -1632,7 +1633,7 @@ class TestAcceptPathIndex:
             recursive = count_revision_walks(monkeypatch)
             assert getattr(doc, method)(result.group_id) == 2
             assert walks == []
-            assert len(recursive) == 2  # index build + deferred range-mark sweep
+            assert len(recursive) == 1  # the index build; no sweep without range marks
             assert doc.list_revisions() == []
 
     @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
@@ -1668,10 +1669,10 @@ class TestAcceptPathIndex:
         assert counts["large"][2] > counts["small"][2]
         assert counts["small"][0] == counts["large"][0] == 0
         assert counts["small"][1] == counts["large"][1]
-        # Index build, two listing passes (the second finds nothing), the
-        # deferred range-mark sweep, the unconditional one and the
-        # honesty-floor census.
-        assert counts["small"][1] == 6
+        # Index build, two listing passes (the second finds nothing) and the
+        # honesty-floor census; the range-mark sweep is skipped on a document
+        # that holds no range marks.
+        assert counts["small"][1] == 4
 
     def test_reject_group_with_nested_member_counts_once(self, temp_xml):
         # Rejecting the host insertion removes its whole subtree; the nested

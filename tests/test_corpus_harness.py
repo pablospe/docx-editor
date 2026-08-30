@@ -88,30 +88,56 @@ def fake_soffice(tmp_path: Path, monkeypatch) -> Path:
     return script
 
 
-def test_run_single_fails_save2_when_a_resolvable_type_survives_accept_all(tmp_path: Path, monkeypatch):
-    """The save2 post-condition: after accept_all, word/document.xml may hold
-    only tags accept_all never resolves. A w:moveFrom with no w:id is exactly
-    that — a resolvable *type* the library cannot reach by id."""
+IDLESS_MOVE_BODY = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+    "<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"
+    '<w:p><w:moveFrom w:author="Ann" w:date="2026-01-29T16:55:00Z"><w:r><w:t>gone</w:t></w:r></w:moveFrom></w:p>'
+    "</w:body></w:document>"
+)
+
+
+def test_run_single_save2_accepts_what_accept_all_reported_as_unhandled(tmp_path: Path, monkeypatch):
+    """A w:moveFrom with no w:id cannot be reached by id; accept_all reports
+    it as unhandled, so its survival is not a save2 failure."""
     monkeypatch.setattr(harness, "OUT_DIR", tmp_path / "out")
     monkeypatch.setattr(harness, "WORK_DIR", tmp_path / "work")
-    body = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
-        "<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"
-        '<w:p><w:moveFrom w:author="Ann" w:date="2026-01-29T16:55:00Z"><w:r><w:t>gone</w:t></w:r></w:moveFrom></w:p>'
-        "</w:body></w:document>"
-    )
     src = tmp_path / "idless_move.docx"
-    replace_docx_parts(SIMPLE, src, {"word/document.xml": body})
+    replace_docx_parts(SIMPLE, src, {"word/document.xml": IDLESS_MOVE_BODY})
 
-    with pytest.warns(UnhandledRevisionWarning):  # the reopen stage's accept_all reports it too
+    with pytest.warns(UnhandledRevisionWarning):  # the reopen stage's accept_all reports it
         result = harness.run_single(src, do_soffice=False)
+
+    assert result["stages"]["reopen"]["unhandled"] == {"w:moveFrom": 1}
+    assert result["stages"]["save2"]["status"] == "pass"
+    assert result["stages"]["save2"]["census"] == {"w:moveFrom": 1}
+
+
+def test_run_single_fails_save2_when_a_resolvable_element_survives_unreported(tmp_path: Path, monkeypatch):
+    """The save2 post-condition proper: an element accept_all neither resolved
+    nor reported. Simulated by a census that finds a w:ins accept_all's own
+    report does not account for."""
+    monkeypatch.setattr(harness, "OUT_DIR", tmp_path / "out")
+    monkeypatch.setattr(harness, "WORK_DIR", tmp_path / "work")
+    real_census = harness.census_file
+
+    def census_with_a_phantom_ins(path: Path) -> dict:
+        census = real_census(path)
+        if path.name.endswith("_final.docx"):
+            part = census["parts"].setdefault("word/document.xml", {"by_tag": {}, "ins_del_contexts": {}})
+            part["by_tag"]["w:ins"] = part["by_tag"].get("w:ins", 0) + 1
+        return census
+
+    monkeypatch.setattr(harness, "census_file", census_with_a_phantom_ins)
+    src = tmp_path / "plain.docx"
+    shutil.copy(SIMPLE, src)
+
+    result = harness.run_single(src, do_soffice=False)
 
     save2 = result["stages"]["save2"]
     assert save2["status"] == "fail"
     assert save2["error_type"] == "AssertResolvedTypesRemain"
-    assert "'w:moveFrom': 1" in save2["error"]
-    assert result["stages"]["reopen"]["unhandled"] == {"w:moveFrom": 1}
+    assert "'w:ins': 1" in save2["error"]
 
 
 @pytest.fixture

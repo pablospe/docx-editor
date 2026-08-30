@@ -825,7 +825,7 @@ _REVISION_TYPE_BY_TAG: dict[str, RevisionType] = {
 _RUN_TRACK_CHANGE_TAGS: tuple[str, ...] = ("w:ins", "w:del", "w:moveFrom", "w:moveTo")
 
 # Tag -> the bracket kind ``get_markup_text`` renders it with.
-_MARKUP_KINDS: dict[str, str] = {
+_MARKUP_KIND_BY_TAG: dict[str, str] = {
     "w:ins": "ins",
     "w:del": "del",
     "w:moveFrom": "moveFrom",
@@ -4235,8 +4235,8 @@ class RevisionManager:
             for child in node.childNodes:
                 if child.nodeType != child.ELEMENT_NODE:
                     continue
-                if child.tagName in _MARKUP_KINDS:
-                    kind = _MARKUP_KINDS[child.tagName]
+                if child.tagName in _MARKUP_KIND_BY_TAG:
+                    kind = _MARKUP_KIND_BY_TAG[child.tagName]
                     rev_id = child.getAttribute("w:id") or "?"
                     rev_author = child.getAttribute("w:author") or "Unknown"
                     parts.append(f"[{kind}#{rev_id}:{rev_author}]{render(child)}[/{kind}]")
@@ -4770,12 +4770,12 @@ class RevisionManager:
         inside a rejected insertion's subtree correctly does not appear, and
         the number always answers "what did this call leave behind".
 
-        Move range marks are swept unconditionally afterwards, so a document
-        holding only stray marks (no move content at all) still comes out
-        clean.
+        Move range marks are swept afterwards whatever was resolved, so a
+        document holding only stray marks (no move content at all) still
+        comes out clean.
         """
         count = self._resolve_all(author, resolve)
-        self._sweep_move_range_marks()
+        self._sweep_after_move()
         unhandled_types: dict[str, int] = {}
         for elem in self._unhandled_elements(author):
             unhandled_types[elem.tagName] = unhandled_types.get(elem.tagName, 0) + 1
@@ -4827,8 +4827,16 @@ class RevisionManager:
         or moved paragraph mark (``w:pPr/w:rPr/w:del``, ``.../w:moveFrom``,
         ``.../w:moveTo``) should merge or split paragraphs, and ``w:trPr`` row
         markers should add or drop the table row — today only the marker is
-        removed. A document's exposure is visible via
+        removed. So accepting a moved *table* leaves its source behind as a
+        table of empty cells (the moved text is at the destination exactly
+        once; the rows are not). A document's exposure is visible via
         ``docx_editor.track_changes.count_revision_elements`` (``ins_del_contexts``).
+
+        A listed revision can also leave the document inside another one's
+        resolution rather than through its own — a ``w:pPrChange`` on the tail
+        paragraph of a rejected tracked split goes with that paragraph's
+        ``w:pPr`` (see ``_rejoin_paragraph``) — and is then counted neither
+        as resolved nor as unhandled.
 
         Args:
             author: If provided, only accept revisions by this author
@@ -4901,6 +4909,12 @@ class RevisionManager:
             # rather than rewrite whatever parent this is.
             self._remove_element(ppr_change)
             return
+        # The live w:pPr's tail — its paragraph-mark w:rPr (which may itself
+        # carry a pending mark revision), section mark and the record — is
+        # kept; everything before it is the base being replaced. The same
+        # tags are skipped on the recorded side because CT_PPrBase cannot
+        # hold them: a nonconforming record's copies are dropped, not
+        # restored over the live ones.
         tail_tags = ("w:rPr", "w:sectPr", "w:pPrChange")
         for child in list(ppr.childNodes):
             if child.nodeType == child.ELEMENT_NODE and child.tagName not in tail_tags:
@@ -4919,7 +4933,14 @@ class RevisionManager:
         self._remove_element(ppr_change)
 
     def _sweep_after_move(self) -> None:
-        """Sweep range marks now, or note that a deferred bulk sweep is owed."""
+        """Sweep range marks now, or note that a deferred bulk sweep is owed.
+
+        Nothing to do — no walk at all — unless the document holds a move
+        range mark (``DocxXMLEditor.holds_move_range_marks``): the sweep only
+        ever removes those, and nearly every document has none.
+        """
+        if not self.editor.holds_move_range_marks:
+            return
         if self._defer_range_sweep:
             self._range_sweep_pending = True
         else:
@@ -4969,9 +4990,13 @@ class RevisionManager:
         unpaired: dict[str, list[Element]] = {"From": [], "To": []}
         content_seen: dict[str, bool] = {"From": False, "To": False}
         tags = MOVE_RANGE_TAGS + ("w:moveFrom", "w:moveTo")
+        marks_seen = 0
+        removed: list[Element] = []
         for elem in list(iter_revision_elements(self.editor.dom, tags)):
             tag = elem.tagName
             family = "From" if tag.startswith("w:moveFrom") else "To"
+            if tag in MOVE_RANGE_TAGS:
+                marks_seen += 1
             if tag in ("w:moveFrom", "w:moveTo"):
                 content_seen[family] = True
                 for entry in open_starts[family].values():
@@ -4990,36 +5015,39 @@ class RevisionManager:
                 if entry is None:
                     unpaired[family].append(elem)
                 elif not entry[1]:
-                    self._remove_element(entry[0])
-                    self._remove_element(elem)
+                    removed += [entry[0], elem]
         for family in ("From", "To"):
             if content_seen[family]:
                 continue
-            for entry in open_starts[family].values():
-                self._remove_element(entry[0])
-            for elem in unpaired[family]:
-                self._remove_element(elem)
+            removed += [entry[0] for entry in open_starts[family].values()]
+            removed += unpaired[family]
+        for elem in removed:
+            self._remove_element(elem)
+        # No marks left: later resolutions skip the walk entirely.
+        self.editor.holds_move_range_marks = marks_seen > len(removed)
 
     def _restore_deletion(self, del_elem) -> None:
         """Restore deleted content by converting w:delText back to w:t.
 
-        ``del_elem`` is a ``w:del`` or a ``w:moveFrom``. A ``w:del`` nested
-        inside it is a separate, still-pending revision: its runs keep
-        ``w:delText`` and ``w:rsidDel``, and it is left wrapped for its own
-        accept/reject.
+        ``del_elem`` is a ``w:del`` or a ``w:moveFrom``. A ``w:del`` or
+        ``w:moveFrom`` nested inside it is a separate, still-pending revision:
+        it is left wrapped for its own accept/reject, its runs keep
+        ``w:rsidDel``, and under a nested ``w:del`` they keep ``w:delText``.
         """
 
-        def inside_nested_del(node) -> bool:
+        def inside_nested(node, tags: tuple[str, ...]) -> bool:
             parent = node.parentNode
             while parent is not None and parent is not del_elem:
-                if getattr(parent, "tagName", "") == "w:del":
+                if getattr(parent, "tagName", "") in tags:
                     return True
                 parent = parent.parentNode
             return False
 
-        # Convert all w:delText to w:t
+        # Convert all w:delText to w:t — except under a nested w:del. (A
+        # nested w:moveFrom gets the conversion: plain w:t is the form Word
+        # writes inside one anyway.)
         for del_text in list(del_elem.getElementsByTagName("w:delText")):
-            if inside_nested_del(del_text):
+            if inside_nested(del_text, ("w:del",)):
                 continue
             t_elem = self.editor.dom.createElement("w:t")
             # Copy content
@@ -5032,8 +5060,10 @@ class RevisionManager:
             del_text.parentNode.replaceChild(t_elem, del_text)
 
         # Update run attributes: w:rsidDel back to w:rsidR
+        # Update run attributes: w:rsidDel back to w:rsidR — a run inside a
+        # nested, still-pending w:del or w:moveFrom keeps its rsidDel.
         for run in del_elem.getElementsByTagName("w:r"):
-            if run.hasAttribute("w:rsidDel") and not inside_nested_del(run):
+            if run.hasAttribute("w:rsidDel") and not inside_nested(run, ("w:del", "w:moveFrom")):
                 run.setAttribute("w:rsidR", run.getAttribute("w:rsidDel"))
                 run.removeAttribute("w:rsidDel")
 

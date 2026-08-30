@@ -685,9 +685,13 @@ what keeps the text in exactly one place. Resolving one half by id is allowed
 but is your call: accepting the `move_to` and rejecting the `move_from`
 duplicates the text, the inverse loses it. A lone half in a damaged file
 behaves as what it structurally is (`move_from` alone = deletion, `move_to`
-alone = insertion). Rejecting a `property_change` restores the paragraph's
-recorded previous properties — a record with none clears them, and a recorded
-style id is restored verbatim even when the document defines no such style.
+alone = insertion). Editing inside a foreign `move_to` is not protected the
+way editing inside a foreign insertion is: the moved-in text looks like
+ordinary content to the editor, so if that move is later rejected your edit
+goes with it — resolve or reject the foreign move first, or edit outside it.
+Rejecting a `property_change` restores the paragraph's recorded previous
+properties — a record with none clears them, and a recorded style id is
+restored verbatim even when the document defines no such style.
 
 Predict the outcome, then verify with `get_markup_text()`.
 

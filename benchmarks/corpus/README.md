@@ -97,9 +97,10 @@ Every run also counts revision-bearing elements by tag across each file's
 informational — never a stage, never a failure — and exists to answer which
 revision types real-world producers actually emit. The `save2` stage adds the
 one hard check derived from it: after `accept_all()`, the saved
-`word/document.xml` may hold only tags in `UNHANDLED_REVISION_TAGS` (a leftover
-`w:ins`, `w:moveFrom` or `w:pPrChange` fails the file with
-`AssertResolvedTypesRemain`). Observed 2026-08-30 over the 77-file corpus:
+`word/document.xml` may hold only what `accept_all()` itself reported as
+unhandled — a `w:ins`, `w:moveFrom`, `w:pPrChange` or move range mark left
+behind unreported fails the file with `AssertResolvedTypesRemain`. Observed
+2026-08-30 over the 77-file corpus:
 
 ```text
 tag                               elements  files  producers
@@ -169,7 +170,10 @@ Read as evidence:
   DnD file's move elements are paragraph-mark markers
   (`w:pPr/w:rPr/w:moveFrom`, one per moved cell); like a deleted paragraph
   mark these resolve *approximately* — the marker is dropped without merging
-  or splitting paragraphs — which on that shape is also the exact result.
+  or splitting paragraphs — so the moved text ends up at its destination
+  exactly once, but the source table survives as a 2×2 table of empty cells
+  (the four leading empty lines in the fixture's expected visible text),
+  where Word would remove it.
   Both shapes are mirrored by hand-authored fixtures in
   `tests/test_move_and_ppr_change_resolution.py` and run against the real
   files by `tests/test_corpus_fixtures.py` when the corpus is built.
