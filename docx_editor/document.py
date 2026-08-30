@@ -32,11 +32,9 @@ from .track_changes import (
     RevisionManager,
     SearchResult,
     UnhandledRevision,
-    _ancestor_paragraph,
-    _paragraph_hint,
-    _resolve_search_target,
-    _validate_note,
 )
+from .track_changes.dom import _ancestor_paragraph
+from .track_changes.models import _paragraph_hint, _resolve_search_target, _validate_note
 from .workspace import Workspace
 from .xml_editor import (
     _TEXTBOX_CONTENT,

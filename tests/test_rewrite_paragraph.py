@@ -8,7 +8,7 @@ import pytest
 from conftest import count_dom_walks
 
 from docx_editor import BatchOperationError, Document, HashMismatchError
-from docx_editor.track_changes import _tokenize_words
+from docx_editor.track_changes.diff import _tokenize_words
 
 
 @pytest.fixture

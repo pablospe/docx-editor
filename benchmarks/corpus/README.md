@@ -207,7 +207,7 @@ Read as evidence:
   own paragraph-mark markers inside the kitchen-sink file's moved paragraphs.
 
 The `*`-marked tags are `UNHANDLED_REVISION_TAGS`
-(`docx_editor/track_changes.py`), which is what `accept_all()` /
+(`docx_editor/track_changes/models.py`), which is what `accept_all()` /
 `reject_all()` report as `.unhandled` and what `list_unhandled_revisions()`
 lists — plus, in a document a nonconforming producer wrote, any handled-type
 mark with no numeric `w:id` (nothing id-keyed can resolve it; none in this

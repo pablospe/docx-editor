@@ -9,8 +9,9 @@ import pytest
 from conftest import find_ref, match_for
 
 from docx_editor import Document, HashMismatchError, TextNotFoundError
-from docx_editor.track_changes import Revision, RevisionManager, _escape_xml, _trim_replace_affixes
-from docx_editor.xml_editor import DocxXMLEditor, build_text_map
+from docx_editor.track_changes import Revision, RevisionManager
+from docx_editor.track_changes.diff import _trim_replace_affixes
+from docx_editor.xml_editor import DocxXMLEditor, _escape_xml, build_text_map
 
 
 class TestTrackedReplace:

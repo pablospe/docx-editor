@@ -7,8 +7,8 @@ import pytest
 from conftest import find_ref, replace_document_xml
 
 from docx_editor import Document
-from docx_editor.track_changes import RevisionManager, _escape_xml
-from docx_editor.xml_editor import DocxXMLEditor, build_text_map
+from docx_editor.track_changes import RevisionManager
+from docx_editor.xml_editor import DocxXMLEditor, _escape_xml, build_text_map
 
 NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 

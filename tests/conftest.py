@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+import sys
 import tempfile
 import warnings
 import zipfile
@@ -151,6 +152,12 @@ def count_revision_walks(monkeypatch) -> list[int]:
     honesty-floor census, range-mark sweep). Each entry is the number of tags
     that walk looked for. Subtree walks (an element root) are not counted:
     they are the per-revision work, not a document scan.
+
+    ``track_changes`` is a package: each submodule binds its own copy of the
+    name at import time, so the patch has to land on every loaded module of
+    the package that holds the original (``models`` for the census, ``manager``
+    for the index, listing and sweeps) and on the package itself, which is
+    where ``xml_editor``'s lazy import reads it.
     """
     import docx_editor.track_changes as track_changes
 
@@ -163,7 +170,10 @@ def count_revision_walks(monkeypatch) -> list[int]:
             walks.append(len(tags))
         return original(root, tags, **kwargs)
 
-    monkeypatch.setattr(track_changes, "iter_revision_elements", counting)
+    for name, mod in list(sys.modules.items()):
+        if name == "docx_editor.track_changes" or name.startswith("docx_editor.track_changes."):
+            if getattr(mod, "iter_revision_elements", None) is original:
+                monkeypatch.setattr(mod, "iter_revision_elements", counting)
     return walks
 
 
