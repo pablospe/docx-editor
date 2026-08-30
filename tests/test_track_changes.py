@@ -1295,6 +1295,31 @@ class TestNestedForeignRevisions:
 
         assert manager.accept_all(author="B") == listed == 1
 
+    def test_author_filter_holds_when_ids_collide_only_after_normalizing(self):
+        """Test that author scoping holds for ids that are equal only once parsed.
+
+        ``w:id="007"`` and ``w:id="7"`` are distinct raw attributes that share
+        one index key, so normalizing the key widened the duplicate-id class
+        this fix guards. The author scoping has to cover the widened class too.
+        """
+        manager = _make_revision_manager(
+            """
+        <w:ins w:id="007" w:author="B"><w:r><w:t>BEE</w:t></w:r></w:ins>
+        <w:del w:id="7" w:author="A"><w:r><w:delText>AYE</w:delText></w:r></w:del>"""
+        )
+        dom = manager.editor.dom
+
+        assert manager.reject_all(author="A") == 1
+
+        # B's insertion is untouched: still pending, still wrapped.
+        remaining = manager.list_revisions(author="B")
+        assert len(remaining) == 1
+        assert remaining[0].type == "insertion"
+        ins = dom.getElementsByTagName("w:ins")
+        assert len(ins) == 1
+        assert ins[0].getAttribute("w:author") == "B"
+        assert [t.firstChild.data for t in dom.getElementsByTagName("w:t")] == ["BEE", "AYE"]
+
     @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
     def test_unattributed_revision_resolves_under_the_unknown_author(self, method):
         """Test that author="Unknown" resolves a revision whose w:author is absent.
@@ -1316,6 +1341,15 @@ class TestNestedForeignRevisions:
         assert manager.list_revisions(author="Unknown") == []
         # A's attributed revision is untouched.
         assert [rev.id for rev in manager.list_revisions()] == [8]
+
+
+class TestRevisionIdNormalization:
+    """The w:id half of index/listing agreement (ROADMAP.md #75).
+
+    ``list_revisions`` reports ``int(w:id)`` and every lookup asks for
+    ``str(int)``, so the index and the fresh scan must read an id the same way
+    or a nonconforming ``w:id`` is listed but reachable by nothing.
+    """
 
     @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
     def test_non_canonical_id_resolves_through_the_index(self, method):
@@ -1359,6 +1393,27 @@ class TestNestedForeignRevisions:
         assert manager._revision_element_index() == {}
         assert manager.list_revisions() == []
         assert [u.tag for u in manager.list_unhandled_revisions()] == ["w:ins"]
+
+    @pytest.mark.parametrize("method", ["accept_revision", "reject_revision"])
+    def test_none_id_resolves_nothing(self, method):
+        """Test that resolving id None is a no-op, not a match on the first unreachable mark.
+
+        ``list_unhandled_revisions()`` reports ``id=None`` for a mark with no
+        numeric ``w:id``, so None is a value callers really do hold. The fresh
+        scan compares parsed ids, and ``_adjudicable_id`` is None for exactly
+        those marks — unguarded, None would match the first of them and
+        resolve what the honesty floor just called unresolvable.
+        """
+        manager = _make_revision_manager('<w:ins w:id="abc" w:author="A"><w:r><w:t>KEEP</w:t></w:r></w:ins>')
+        (row,) = manager.list_unhandled_revisions()
+        assert row.id is None
+
+        assert getattr(manager, method)(row.id) is False
+
+        # The mark and its text are untouched.
+        assert [u.tag for u in manager.list_unhandled_revisions()] == ["w:ins"]
+        texts = [t.firstChild.data for t in manager.editor.dom.getElementsByTagName("w:t")]
+        assert texts == ["KEEP"]
 
 
 class TestRestoreDeletionAttributeCopying:

@@ -71,9 +71,13 @@ class _ListingMixin(_RevisionManagerBase):
         Counts *pending* revisions only — accepting or rejecting one removes
         it from the DOM, so a document we edited and then fully accepted
         answers False, which is the honest answer: it carries no redline.
-        Ownership is the same test the rest of this class uses, ``w:author``
-        equal to the editor's author, so a foreign redline by someone whose
-        author string happens to match ours reads as ours.
+        Ownership is ``w:author`` equal to the editor's author, so a foreign
+        redline by someone whose author string happens to match ours reads as
+        ours. Deliberately the raw attribute, not ``_revision_author``: the
+        listing's ``"Unknown"`` fallback exists so an unattributed mark can be
+        *named* in a filter, and folding it in here would hand every
+        unattributed mark in the file to an editor who happens to be called
+        "Unknown".
 
         Returns:
             True on the first ``w:ins``/``w:del`` we authored, False if there
@@ -183,7 +187,11 @@ class _ListingMixin(_RevisionManagerBase):
                     continue
                 if child.tagName in _MARKUP_KIND_BY_TAG:
                     kind = _MARKUP_KIND_BY_TAG[child.tagName]
-                    rev_id = child.getAttribute("w:id") or "?"
+                    # The adjudicable id, not the raw attribute: this view
+                    # names the id ``accept_revision`` takes, and "?" marks
+                    # one it cannot take at all.
+                    parsed_id = _adjudicable_id(child)
+                    rev_id = "?" if parsed_id is None else str(parsed_id)
                     rev_author = _revision_author(child)
                     parts.append(f"[{kind}#{rev_id}:{rev_author}]{render(child)}[/{kind}]")
                 elif child.tagName in ("w:t", "w:delText"):
@@ -365,6 +373,13 @@ class _ListingMixin(_RevisionManagerBase):
         filtered call cannot land on another author's same-id revision.
         """
         if element_index is None:
+            if revision_id is None:
+                # _adjudicable_id is None for exactly the marks no id-keyed
+                # call can reach, so an unguarded == would match the first of
+                # them — and None is what list_unhandled_revisions() reports
+                # for such a row. The index path misses (no "None" key); this
+                # keeps the two paths agreeing on unreachable.
+                return None
             for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
                 if _adjudicable_id(elem) == revision_id:
                     return elem
