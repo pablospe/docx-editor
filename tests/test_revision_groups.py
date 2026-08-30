@@ -1701,9 +1701,7 @@ class TestGroupResolutionWithDuplicateIds:
     # B's insertion and A's deletion share w:id="7"; id 9 is a normal,
     # single-author revision alongside them.
     DUPLICATE_ID_BODY = (
-        f'<w:p><w:ins w:id="7" w:author="{AUTHOR_B}" w:date="{DATE_B}"><w:r><w:t>BEE</w:t></w:r></w:ins>'
-        f'<w:del w:id="7" w:author="{AUTHOR_A}" w:date="{DATE_A}">'
-        "<w:r><w:delText>AYE</w:delText></w:r></w:del></w:p>"
+        f"<w:p>{_ins_xml(7, 'BEE', author=AUTHOR_B, date=DATE_B)}{_del_xml(7, 'AYE')}</w:p>"
         f"<w:p>{_ins_xml(9, 'solo')}</w:p>"
     )
 
@@ -1742,12 +1740,18 @@ class TestGroupResolutionWithDuplicateIds:
         assert sorted(rev.id for rev in manager.list_revisions()) == [7, 7]
 
     @pytest.mark.parametrize("method", ["accept_group", "reject_group", "accept_changeset", "reject_changeset"])
-    def test_unknown_id_still_raises(self, temp_xml, method):
+    def test_unknown_group_or_changeset_id_still_raises(self, temp_xml, method):
         manager = _make_manager(temp_xml(self.DUPLICATE_ID_BODY))
 
-        # A duplicated w:id is not a group or changeset id either.
+        # Group and changeset ids come from their own counters, a namespace
+        # apart from w:id -- so this asks for one that was never allocated,
+        # not for the duplicated revision id (which would raise for the
+        # unrelated reason that this fixture's counters never reach it).
+        (solo,) = [rev for rev in manager.list_revisions() if rev.id == 9]
+        allocated = solo.group_id if "group" in method else solo.changeset_id
+        assert allocated is not None
         with pytest.raises(RevisionError):
-            getattr(manager, method)(7)
+            getattr(manager, method)(allocated + 1000)
 
 
 class TestAcceptPathIndex:
