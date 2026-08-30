@@ -20,7 +20,7 @@ from typing import Literal
 from xml.dom.minidom import Element
 
 from ..xml_editor import DocxXMLEditor, ParagraphRef, TextMap, TextMapMatch, TextPosition
-from .models import GroupSource, _GroupCapture, _RegistrySnapshot
+from .models import GroupSource, Revision, _GroupCapture, _RegistrySnapshot
 
 
 class _RevisionManagerBase:
@@ -144,4 +144,30 @@ class _RevisionManagerBase:
         raise NotImplementedError
 
     def changeset_id_of(self, group_id: int) -> int | None:
+        raise NotImplementedError
+
+    def _find_revision_element(
+        self, revision_id: int, element_index: dict[str, list[Element]] | None
+    ) -> Element | None:
+        raise NotImplementedError
+
+    def list_revisions(
+        self,
+        author: str | None = None,
+        paragraph: str | None = None,
+        *,
+        with_location: bool = True,
+    ) -> list[Revision]:
+        raise NotImplementedError
+
+    def _unhandled_elements(self, author: str | None = None) -> list[Element]:
+        raise NotImplementedError
+
+    def group_revisions(self, group_id: int) -> tuple[int, ...]:
+        raise NotImplementedError
+
+    def changeset_groups(self, changeset_id: int) -> tuple[int, ...]:
+        raise NotImplementedError
+
+    def _paragraph_mark_rPr(self, p1) -> Element:
         raise NotImplementedError
