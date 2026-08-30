@@ -1066,6 +1066,17 @@ class TestNestedForeignRevisions:
             </w:del>
         </w:ins>"""
 
+    # The ROADMAP.md #75 shape: B's insertion carries the same w:id as A's
+    # deletion and comes *first* in document order, so an unscoped id lookup
+    # hands B's element to every one of A's passes.
+    DUPLICATE_ID_ACROSS_AUTHORS = """
+        <w:ins w:id="7" w:author="B" w:date="2026-01-02T00:00:00Z">
+            <w:r><w:t>BEE</w:t></w:r>
+        </w:ins>
+        <w:del w:id="7" w:author="A" w:date="2026-01-01T00:00:00Z">
+            <w:r><w:delText>AYE</w:delText></w:r>
+        </w:del>"""
+
     def test_accept_all_stops_when_no_revision_can_be_resolved(self):
         """The no-progress guard in _resolve_all: listed but unresolvable stops.
 
@@ -1140,11 +1151,11 @@ class TestNestedForeignRevisions:
         assert dom.getElementsByTagName("w:t") == []
         assert dom.getElementsByTagName("w:delText") == []
 
-    def test_accept_all_author_filter_duplicate_ids_converges(self):
-        """Test that accept_all(author=...) converges when w:id values collide across authors."""
-        # Word does not guarantee unique w:id across w:ins/w:del. The per-id
-        # lookup checks w:ins first, so accepting B's deletion by id hits A's
-        # insertion instead; only re-listing until no progress resolves B.
+    def test_accept_all_author_filter_leaves_other_authors_same_id_revision(self):
+        """Test that accept_all(author=...) skips another author's revision sharing its w:id."""
+        # Word does not guarantee unique w:id across w:ins/w:del. Resolution is
+        # still keyed on the id, but the id lookup is scoped to the author being
+        # resolved, so A's same-id insertion is not a candidate for B's pass.
         body = """
         <w:ins w:id="7" w:author="A" w:date="2026-01-01T00:00:00Z">
             <w:r><w:t>alpha</w:t></w:r>
@@ -1157,13 +1168,17 @@ class TestNestedForeignRevisions:
 
         count = manager.accept_all(author="B")
 
-        # Documented side effect of id-based matching: pass 1 accepts A's
-        # same-id insertion (collateral), pass 2 accepts B's deletion.
-        assert count == 2
-        assert manager.list_revisions() == []
-        texts = [t.firstChild.data for t in dom.getElementsByTagName("w:t")]
-        assert texts == ["alpha"]
+        # Only B's deletion: the count equals the number of B's listed rows.
+        assert count == 1
+        assert manager.list_revisions(author="B") == []
         assert dom.getElementsByTagName("w:delText") == []
+        # A's insertion is untouched — still pending, still wrapped in w:ins.
+        remaining = manager.list_revisions(author="A")
+        assert len(remaining) == 1
+        assert remaining[0].type == "insertion"
+        ins = dom.getElementsByTagName("w:ins")
+        assert len(ins) == 1
+        assert [t.firstChild.data for t in ins[0].getElementsByTagName("w:t")] == ["alpha"]
 
     def test_accept_all_author_filter_terminates_with_foreign_revisions(self):
         """Test that accept_all(author=...) terminates while other authors' revisions remain."""
@@ -1192,6 +1207,115 @@ class TestNestedForeignRevisions:
         # B's rejected deletion restored its text inside A's insertion.
         texts = [t.firstChild.data for t in dom.getElementsByTagName("w:t")]
         assert texts == ["kept", "gone"]
+
+    def test_reject_all_author_filter_spares_other_authors_same_id_insertion(self):
+        """Test that reject_all(author=...) does not destroy another author's same-id insertion.
+
+        The data-loss case of ROADMAP.md #75: rejecting A's deletion once
+        reached B's earlier same-id insertion and removed its text outright.
+        """
+        manager = _make_revision_manager(self.DUPLICATE_ID_ACROSS_AUTHORS)
+        dom = manager.editor.dom
+
+        count = manager.reject_all(author="A")
+
+        assert count == 1
+        assert manager.list_revisions(author="A") == []
+        # A's rejected deletion put its text back as plain text.
+        assert dom.getElementsByTagName("w:delText") == []
+        # B's insertion survives, still pending and still wrapped in its w:ins.
+        remaining = manager.list_revisions(author="B")
+        assert len(remaining) == 1
+        assert remaining[0].type == "insertion"
+        assert remaining[0].id == 7
+        ins = dom.getElementsByTagName("w:ins")
+        assert len(ins) == 1
+        assert ins[0].getAttribute("w:author") == "B"
+        assert [t.firstChild.data for t in ins[0].getElementsByTagName("w:t")] == ["BEE"]
+        assert [t.firstChild.data for t in dom.getElementsByTagName("w:t")] == ["BEE", "AYE"]
+
+    def test_accept_all_author_filter_leaves_other_authors_same_id_insertion_pending(self):
+        """Test that accept_all(author=...) does not make another author's same-id insertion permanent."""
+        manager = _make_revision_manager(self.DUPLICATE_ID_ACROSS_AUTHORS)
+        dom = manager.editor.dom
+
+        count = manager.accept_all(author="A")
+
+        assert count == 1
+        assert manager.list_revisions(author="A") == []
+        # A's deletion applied: its text is gone.
+        assert dom.getElementsByTagName("w:delText") == []
+        # B's insertion is still an unadjudicated insertion, not plain text.
+        remaining = manager.list_revisions(author="B")
+        assert len(remaining) == 1
+        assert remaining[0].type == "insertion"
+        ins = dom.getElementsByTagName("w:ins")
+        assert len(ins) == 1
+        assert ins[0].getAttribute("w:author") == "B"
+        assert [t.firstChild.data for t in dom.getElementsByTagName("w:t")] == ["BEE"]
+
+    def test_reject_all_unfiltered_still_resolves_both_same_id_revisions(self):
+        """Test that reject_all() with no author still resolves every same-id revision in one call."""
+        manager = _make_revision_manager(self.DUPLICATE_ID_ACROSS_AUTHORS)
+        dom = manager.editor.dom
+
+        count = manager.reject_all()
+
+        # The author scoping must not narrow the unfiltered path: both
+        # duplicate-id revisions still resolve.
+        assert count == 2
+        assert manager.list_revisions() == []
+        assert dom.getElementsByTagName("w:ins") == []
+        assert dom.getElementsByTagName("w:delText") == []
+        assert [t.firstChild.data for t in dom.getElementsByTagName("w:t")] == ["AYE"]
+
+    def test_accept_all_unfiltered_still_resolves_both_same_id_revisions(self):
+        """Test that accept_all() with no author still resolves every same-id revision in one call."""
+        manager = _make_revision_manager(self.DUPLICATE_ID_ACROSS_AUTHORS)
+        dom = manager.editor.dom
+
+        count = manager.accept_all()
+
+        assert count == 2
+        assert manager.list_revisions() == []
+        assert dom.getElementsByTagName("w:ins") == []
+        assert dom.getElementsByTagName("w:delText") == []
+        assert [t.firstChild.data for t in dom.getElementsByTagName("w:t")] == ["BEE"]
+
+    def test_accept_all_author_filter_resolves_the_rows_it_listed(self):
+        """Test that a filtered call's count equals the number of that author's listed rows.
+
+        Index and listing must agree on ownership: if the index used a
+        different author expression, the filtered pass would list rows it
+        could not resolve and exit on the no-progress guard — a silent no-op.
+        """
+        manager = _make_revision_manager(self.DUPLICATE_ID_ACROSS_AUTHORS)
+
+        listed = len(manager.list_revisions(author="B"))
+
+        assert manager.accept_all(author="B") == listed == 1
+
+    @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
+    def test_unattributed_revision_resolves_under_the_unknown_author(self, method):
+        """Test that author="Unknown" resolves a revision whose w:author is absent.
+
+        The index and the listing must read a missing ``w:author`` the same
+        way. ``list_revisions`` reports such a mark as ``"Unknown"``, so an
+        index keyed on the raw attribute would list a row it could not
+        resolve: the pass would exit on the no-progress guard, returning 0
+        with the revision still pending and no warning raised.
+        """
+        manager = _make_revision_manager(
+            """
+        <w:ins w:id="7"><w:r><w:t>BEE</w:t></w:r></w:ins>
+        <w:del w:id="8" w:author="A"><w:r><w:delText>AYE</w:delText></w:r></w:del>"""
+        )
+
+        assert getattr(manager, method)(author="Unknown") == 1
+
+        assert manager.list_revisions(author="Unknown") == []
+        # A's attributed revision is untouched.
+        assert [rev.id for rev in manager.list_revisions()] == [8]
 
 
 class TestRestoreDeletionAttributeCopying:

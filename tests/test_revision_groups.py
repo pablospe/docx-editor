@@ -1687,6 +1687,69 @@ class TestChangesetTier:
             assert all(len(keys) == 1 for keys in by_cs.values())
 
 
+class TestGroupResolutionWithDuplicateIds:
+    """Why group/changeset resolution needs no author scoping (ROADMAP.md #75).
+
+    ``accept_all(author=...)`` scopes its w:id -> element index to the author,
+    because a whole-document pass can meet the same id twice. ``_resolve_ids``
+    (the group/changeset path) does not, and these pin the two reasons: a
+    duplicated id is never a group or changeset member (``_reconstruct_groups``
+    bars every occurrence), and our own allocator cannot mint a colliding id
+    (``_seed_max_change_id`` folds every id in the file into a high-water mark).
+    """
+
+    # B's insertion and A's deletion share w:id="7"; id 9 is a normal,
+    # single-author revision alongside them.
+    DUPLICATE_ID_BODY = (
+        f'<w:p><w:ins w:id="7" w:author="{AUTHOR_B}" w:date="{DATE_B}"><w:r><w:t>BEE</w:t></w:r></w:ins>'
+        f'<w:del w:id="7" w:author="{AUTHOR_A}" w:date="{DATE_A}">'
+        "<w:r><w:delText>AYE</w:delText></w:r></w:del></w:p>"
+        f"<w:p>{_ins_xml(9, 'solo')}</w:p>"
+    )
+
+    def test_duplicated_id_is_never_a_group_or_changeset_member(self, temp_xml):
+        manager = _make_manager(temp_xml(self.DUPLICATE_ID_BODY))
+
+        duplicates = [rev for rev in manager.list_revisions() if rev.id == 7]
+        assert len(duplicates) == 2
+        assert {rev.author for rev in duplicates} == {AUTHOR_A, AUTHOR_B}
+        for rev in duplicates:
+            assert rev.group_id is None and rev.changeset_id is None
+        # The neighbouring single-author revision groups normally.
+        (solo,) = [rev for rev in manager.list_revisions() if rev.id == 9]
+        assert solo.group_id is not None and solo.changeset_id is not None
+
+    @pytest.mark.parametrize("method", ["accept_group", "reject_group"])
+    def test_group_resolution_leaves_both_duplicate_occurrences_pending(self, temp_xml, method):
+        manager = _make_manager(temp_xml(self.DUPLICATE_ID_BODY))
+        (solo,) = [rev for rev in manager.list_revisions() if rev.id == 9]
+        assert solo.group_id is not None
+
+        assert getattr(manager, method)(solo.group_id) == 1
+
+        # Only the group's own member resolved; neither id-7 element was a
+        # candidate, so no author check was needed to spare them.
+        assert sorted(rev.id for rev in manager.list_revisions()) == [7, 7]
+
+    @pytest.mark.parametrize("method", ["accept_changeset", "reject_changeset"])
+    def test_changeset_resolution_leaves_both_duplicate_occurrences_pending(self, temp_xml, method):
+        manager = _make_manager(temp_xml(self.DUPLICATE_ID_BODY))
+        (solo,) = [rev for rev in manager.list_revisions() if rev.id == 9]
+        assert solo.changeset_id is not None
+
+        assert getattr(manager, method)(solo.changeset_id) == 1
+
+        assert sorted(rev.id for rev in manager.list_revisions()) == [7, 7]
+
+    @pytest.mark.parametrize("method", ["accept_group", "reject_group", "accept_changeset", "reject_changeset"])
+    def test_unknown_id_still_raises(self, temp_xml, method):
+        manager = _make_manager(temp_xml(self.DUPLICATE_ID_BODY))
+
+        # A duplicated w:id is not a group or changeset id either.
+        with pytest.raises(RevisionError):
+            getattr(manager, method)(7)
+
+
 class TestAcceptPathIndex:
     """The group/changeset accept path builds one w:id->element index per call
     instead of scanning the whole document per member (ISSUES.md #57).
