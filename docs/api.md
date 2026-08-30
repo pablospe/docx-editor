@@ -867,6 +867,14 @@ accepting the `move_to` and rejecting the `move_from` duplicates the text, the
 inverse loses it. A lone half in a damaged file behaves as what it structurally
 is: a `move_from` alone is a deletion, a `move_to` alone an insertion.
 
+**Duplicate ids are ambiguous here.** A producer may reuse one `w:id` across
+authors, and this call takes only the id: handed a duplicated one it resolves
+whichever element comes first in the document, which may be another author's.
+Groups are no way around it — a duplicated id is barred from grouping, so both
+rows carry `group_id=None`. Two rows sharing an id in `list_revisions()` is the
+signal; resolve them with `accept_all(author=…)`/`reject_all(author=…)`, which
+is author-exact.
+
 **Parameters:**
 
 - `revision_id` (int): ID of the revision to accept
@@ -892,7 +900,8 @@ Reject a revision by ID.
 - For `property_change`: restores the paragraph's recorded previous properties. A record with none (LibreOffice writes a self-closing `w:pPrChange` for "previously no properties") clears them; the recorded style id is restored verbatim even when the document defines no such style (Word falls back to Normal for it)
 - Nested revisions: rejecting an insertion removes everything inside it — deletions another author nested inside it disappear with it
 
-Resolve both halves of a move together — see `accept_revision()`.
+Resolve both halves of a move together — see `accept_revision()`, whose
+duplicate-`w:id` caveat applies here too.
 
 **Parameters:**
 
@@ -1080,6 +1089,11 @@ marker is dropped without merging or splitting paragraphs.
 Only `word/document.xml` is inspected; headers, footers and footnotes are the
 container-parts epic (ROADMAP.md #30).
 
+An `author=` call resolves that author's own elements and no one else's, even
+where a producer repeats one `w:id` across authors (LibreOffice does): the id
+lookup is scoped to the author being resolved, so another author's same-id
+revision is never a candidate.
+
 **Parameters:**
 
 - `author` (str, optional): If provided, only accept revisions by this author
@@ -1109,7 +1123,8 @@ Reject every listed revision.
 Resolves insertions, deletions, content moves (both halves as a unit — the
 text is back at its source exactly once) and paragraph-property changes (the
 recorded previous properties are restored); every other revision type is left
-pending and reported exactly as in `accept_all()`.
+pending and reported exactly as in `accept_all()`. `author=` is author-exact in
+the same way, duplicate `w:id`s across authors included.
 
 **Parameters:**
 
