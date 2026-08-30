@@ -398,4 +398,3 @@ The method SHALL:
 - **GIVEN** a document with 10 paragraphs
 - **WHEN** `list_paragraphs()` is called once, and refs are used in a single `batch_rewrite()` call
 - **THEN** all rewrites succeed without needing to re-read paragraph hashes between rewrites
-
