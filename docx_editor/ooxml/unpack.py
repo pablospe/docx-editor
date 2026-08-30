@@ -81,6 +81,16 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
     On failure after extraction has started, the output directory is removed
     if this call created it; a pre-existing directory is left in place.
 
+    The symlink rule for the output directory: the path itself must not be a
+    link, nothing already inside it may be a link, and the nearest existing
+    ancestor of a path that does not exist yet must not be a link — that is
+    exactly what ``mkdir(parents=True)`` would create through. A real
+    directory reached through an OS-level link higher up (``/var`` on macOS,
+    a symlinked home) is accepted, since nothing this call creates goes
+    through the link; but when the link *is* the nearest existing ancestor
+    (``/tmp/<new>/out`` on macOS, where ``/tmp`` is a link) the call is
+    refused — create the parent first.
+
     Args:
         input_file: Path to the .docx file to unpack
         output_dir: Directory to extract contents to
@@ -97,14 +107,6 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
             refused for security (DTD entity/external declarations), or the
             output directory is, contains, or would be created through a
             symlink, or is an existing non-directory.
-
-    The symlink rule for the output directory: the path itself must not be a
-    link, nothing already inside it may be a link, and the nearest existing
-    ancestor of a path that does not exist yet must not be a link — that is
-    exactly what ``mkdir(parents=True)`` would create through. A real
-    directory reached through an OS-level link higher up (``/var`` on macOS,
-    a symlinked home) is accepted, since nothing this call creates goes
-    through the link.
     """
     input_path = Path(input_file)
     output_path = Path(output_dir)

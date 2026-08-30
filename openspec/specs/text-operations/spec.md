@@ -155,7 +155,7 @@ The `ParagraphRef` SHALL:
 The system SHALL provide a `list_paragraphs()` method on `Document` that returns hash-tagged paragraph previews.
 
 The listing SHALL:
-- Return a list of strings in the format `P{index}#{hash}| {preview_text}`
+- Return a list of strings in the format `P{index}#{hash}| {preview_text}`, at most `limit` entries (default 200; `limit=None` for all) starting at 1-based `start` (default 1); when paragraphs remain beyond the window, the last entry is a notice line starting with `...` (e.g. `... 50 more paragraphs; use start=201 or limit=None`) rather than a paragraph
 - Use 1-based paragraph indexing
 - Truncate preview text to `max_chars` (default 80) with `...` suffix when truncated
 - Include empty paragraphs (with empty preview text)
@@ -248,14 +248,14 @@ The system SHALL:
 - Validate ALL paragraph hashes upfront before applying any edits
 - Reject the entire batch with `HashMismatchError` if any hash is stale (no edits applied)
 - Apply edits in reverse paragraph order (highest index first) so that earlier paragraphs' hashes remain valid
-- Return a list of change IDs corresponding to each operation
+- Return a list of `EditResult` objects, one per operation, in operation order (`list[EditValidationResult]` when `dry_run=True`)
 
 #### Scenario: Batch of edits to different paragraphs
 
 - **GIVEN** a document with paragraphs P1 through P10
 - **WHEN** `batch_edit()` is called with 3 edits targeting P3, P7, and P9
 - **THEN** all 3 edits succeed
-- **AND** a list of 3 change IDs is returned
+- **AND** a list of 3 `EditResult` objects is returned
 - **AND** edits are applied in order P9, P7, P3 (reverse)
 
 #### Scenario: Batch rejected on stale hash
