@@ -201,7 +201,9 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
         _pid_file(connection_file).unlink(missing_ok=True)
         raise
     finally:
-        if kc is not None:
+        # ``kc`` is None only when ``_client`` raised, and that exception always
+        # propagates: the false arm never reaches the ``return`` below.
+        if kc is not None:  # pragma: no branch
             kc.stop_channels()
     return proc.pid
 
