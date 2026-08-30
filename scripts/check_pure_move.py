@@ -12,7 +12,9 @@ Three checks, all of which must pass:
    narrow allowlist: blank lines, module docstrings, column-0 ``import``/
    ``from`` lines and the ``    Name,`` entries of their parenthesised blocks,
    ``__all__`` blocks, bare ``(``/``)``/``]`` lines, column-0 ``class``
-   headers (a mixin changes a base list) and column-0 ``#`` comments.
+   headers — single-line, or wrapped over a base-list block ending in ``):``
+   when the joined form would exceed the line length (a mixin changes a base
+   list) — and column-0 ``#`` comments.
    Indented comments and every function/method line must match, count for
    count. ``base.py`` is exempt here and covered by check 3.
 2. **AST identity.** Every method of ``RevisionManager`` (old) maps to the same
@@ -49,6 +51,8 @@ _IMPORT_ENTRY = re.compile(r"^    [A-Za-z_][A-Za-z0-9_]*,$")
 _ALL_OPEN = re.compile(r"^__all__ = \[$")
 _ALL_ENTRY = re.compile(r'^    "[A-Za-z_][A-Za-z0-9_]*",$')
 _CLASS_HEADER = re.compile(r"^class [A-Za-z_][A-Za-z0-9_]*(\(.*\))?:$")
+_CLASS_OPEN = re.compile(r"^class [A-Za-z_][A-Za-z0-9_]*\($")
+_CLASS_BASE_ENTRY = re.compile(r"^    [A-Za-z_][A-Za-z0-9_]*(, [A-Za-z_][A-Za-z0-9_]*)*,?$")
 _ATTR_ANNOTATION = re.compile(r"^    [A-Za-z_][A-Za-z0-9_]*: .+$")
 _NOT_IMPLEMENTED = re.compile(r"^\s+raise NotImplementedError$")
 
@@ -81,12 +85,12 @@ def content_lines(src: str) -> list[str]:
     """The lines of ``src`` that a pure move must preserve verbatim."""
     skip = _docstring_lines(src)
     kept: list[str] = []
-    block: re.Pattern[str] | None = None  # entry pattern while inside an import/__all__ block
+    block: re.Pattern[str] | None = None  # entry pattern while inside an import/__all__/class-header block
     for lineno, line in enumerate(src.splitlines(), start=1):
         if lineno in skip or not line.strip():
             continue
         if block is not None:
-            if line in (")", "]"):
+            if line in (")", "]", "):"):
                 block = None
                 continue
             if block.match(line):
@@ -97,6 +101,9 @@ def content_lines(src: str) -> list[str]:
             continue
         if _ALL_OPEN.match(line):
             block = _ALL_ENTRY
+            continue
+        if _CLASS_OPEN.match(line):
+            block = _CLASS_BASE_ENTRY
             continue
         if _IMPORT_LINE.match(line) or line in ("(", ")", "]"):
             continue

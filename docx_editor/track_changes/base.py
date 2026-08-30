@@ -142,3 +142,6 @@ class _RevisionManagerBase:
 
     def _split_foreign_ins_at(self, edge_node, offset: int) -> Element | None:
         raise NotImplementedError
+
+    def changeset_id_of(self, group_id: int) -> int | None:
+        raise NotImplementedError
