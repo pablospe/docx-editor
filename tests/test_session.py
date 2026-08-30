@@ -2,13 +2,16 @@
 
 import io
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
-import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from queue import Empty
 
 import pytest
 
@@ -17,9 +20,15 @@ pytest.importorskip("ipykernel")
 
 from conftest import sweep_leaked_kernels  # noqa: E402
 
+import docx_editor.session as session_mod  # noqa: E402
 from docx_editor.exceptions import SessionDeadError, SessionError  # noqa: E402
 from docx_editor.session import (  # noqa: E402
+    EXIT_ERROR,
+    START_TIMEOUT_ENV,
     ExecResult,
+    _client,
+    _kernel_alive,
+    _start_timeout,
     eval_code,
     exec_code,
     is_session_running,
@@ -28,11 +37,75 @@ from docx_editor.session import (  # noqa: E402
     start_session,
     stop_session,
 )
+from docx_editor.workspace import _pid_alive  # noqa: E402
+
+# Every wait in this module is bounded by the kernel start budget, so a loaded
+# machine raises them all through DOCX_SESSION_START_TIMEOUT (CI sets 120).
+START_BUDGET = _start_timeout()
+# For the one behaviour that is inherently wall-clock — "my own code overran":
+# an idle kernel must dequeue a request within this long. 2 s locally, 12 s on CI.
+OVERRUN_TIMEOUT = max(2.0, START_BUDGET / 10)
+
+
+@contextmanager
+def _occupied(conn: Path, code: str):
+    """Kernel at ``conn`` is provably executing ``code`` for the whole block.
+
+    The hog is sent on a throwaway client and the block starts only once the
+    kernel has broadcast ``execute_input`` for it — the same "left the queue"
+    signal ``exec_code`` uses for ``started``. A sleep in its place encodes a
+    guess about dequeue latency that a loaded machine falsifies: the next
+    request may be dequeued first, or the kernel may not be busy yet.
+    """
+    hog = _client(conn)
+    try:
+        # Control round trip first (as exec_code does): the reply proves the
+        # client's sockets are connected, so the iopub broadcast is not missed.
+        assert _kernel_alive(hog, timeout=START_BUDGET), "kernel stopped answering"
+        msg_id = hog.execute(code)
+        deadline = time.monotonic() + START_BUDGET
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                pytest.fail(f"kernel never began executing the hog within {START_BUDGET}s")
+            try:
+                msg = hog.get_iopub_msg(timeout=min(remaining, 1.0))
+            except Empty:
+                continue
+            if msg["msg_type"] == "execute_input" and msg["parent_header"].get("msg_id") == msg_id:
+                break
+        yield hog
+    finally:
+        hog.stop_channels()
+
+
+def _wait_for_reply(hog) -> None:
+    """Block until the hog's execute_reply lands — its code has finished.
+
+    The hog client sent exactly one shell request, so the first execute_reply
+    on its shell channel is that one's.
+    """
+    deadline = time.monotonic() + START_BUDGET
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            pytest.fail(f"hog never finished within {START_BUDGET}s")
+        try:
+            msg = hog.get_shell_msg(timeout=min(remaining, 1.0))
+        except Empty:
+            continue
+        if msg["msg_type"] == "execute_reply":
+            return
 
 
 @pytest.fixture(scope="module")
 def session_conn(tmp_path_factory):
-    """One kernel shared by the read-only tests in this module."""
+    """One kernel shared by the read-only tests in this module.
+
+    Deliberately no retry: pytest re-raises a failed module fixture for every
+    later test in the module, and a start that exhausts the budget explains
+    itself in that error. Retrying would hide the diagnosis.
+    """
     conn = tmp_path_factory.mktemp("session") / "kernel.json"
     start_session(conn)
     yield conn
@@ -105,7 +178,8 @@ def test_exec_timeout(tmp_path):
     conn = tmp_path / "kernel.json"
     start_session(conn)
     try:
-        res = exec_code("import time; time.sleep(30)", connection_file=conn, timeout=2.0)
+        code = f"import time; time.sleep({OVERRUN_TIMEOUT + 30})"
+        res = exec_code(code, connection_file=conn, timeout=OVERRUN_TIMEOUT)
         assert res.status == "timeout"
         assert res.started is True  # our own code ran and overran
     finally:
@@ -128,21 +202,15 @@ def test_exec_timeout_while_queued_reports_not_started(tmp_path):
     Own kernel, occupied by a fire-and-forget sleep sent on a separate client,
     so our request cannot leave the queue before the clock runs out.
     """
-    from docx_editor.session import _client
-
     conn = tmp_path / "kernel.json"
     start_session(conn)
-    hog = _client(conn)
     try:
-        hog.execute("import time; time.sleep(30)")  # never waited on
-        time.sleep(1.0)  # let the kernel pick it up and go busy
-
-        res = exec_code("1 + 1", connection_file=conn, timeout=2.0)
-        assert res.status == "timeout"
-        assert res.started is False  # never left the queue
-        assert res.result is None
+        with _occupied(conn, "import time; time.sleep(30)"):
+            res = exec_code("1 + 1", connection_file=conn, timeout=2.0)
+            assert res.status == "timeout"
+            assert res.started is False  # never left the queue
+            assert res.result is None
     finally:
-        hog.stop_channels()
         stop_session(conn)
 
 
@@ -153,10 +221,14 @@ def test_cli_distinguishes_the_two_timeouts(tmp_path, capsys):
     conn = tmp_path / "kernel.json"
     start_session(conn)
     try:
-        code = main(["exec", "import time; time.sleep(30)", "--session-file", str(conn), "--timeout", "2"])
+        # Own code overran: an idle kernel dequeues it within the scaled timeout.
+        sleep = f"import time; time.sleep({OVERRUN_TIMEOUT + 30})"
+        code = main(["exec", sleep, "--session-file", str(conn), "--timeout", str(OVERRUN_TIMEOUT)])
         assert code == EXIT_TIMEOUT
         assert "kernel still running" in capsys.readouterr().err
 
+        # Still queued: "kernel still running" above proved the sleep is
+        # executing and it outlasts this call, so the request cannot dequeue.
         code = main(["exec", "1 + 1", "--session-file", str(conn), "--timeout", "2"])
         assert code == EXIT_TIMEOUT
         err = capsys.readouterr().err
@@ -174,66 +246,50 @@ def test_request_discarded_behind_a_raising_command(tmp_path):
     having done nothing. Without ``started`` that is indistinguishable from a
     successful silent statement — the caller would believe its edit applied.
     """
-    from docx_editor.session import _client
-
     conn = tmp_path / "kernel.json"
     start_session(conn)
-    hog = _client(conn)
     try:
-        hog.execute("import time; time.sleep(3); raise RuntimeError('boom')")
-        time.sleep(0.5)  # let the kernel pick it up and go busy
+        with _occupied(conn, "import time; time.sleep(3); raise RuntimeError('boom')") as hog:
+            res = exec_code("discarded = 'I RAN'", connection_file=conn, timeout=30)
+            assert res.status == "ok"
+            assert res.started is False  # the tell: never dequeued
+            assert res.stdout == ""
 
-        res = exec_code("discarded = 'I RAN'", connection_file=conn, timeout=30)
-        assert res.status == "ok"
-        assert res.started is False  # the tell: never dequeued
-        assert res.stdout == ""
-
-        time.sleep(4)  # let the failing command finish and the kernel settle
+            _wait_for_reply(hog)  # the failing command is done; the kernel is idle
         assert eval_code("globals().get('discarded')", connection_file=conn).value is None
     finally:
-        hog.stop_channels()
         stop_session(conn)
 
 
 def test_cli_warns_when_the_kernel_discards_the_request(tmp_path, capsys):
     """Exit code stays 0 (contract), so the warning has to carry the signal."""
-    from docx_editor.session import EXIT_OK, _client
+    from docx_editor.session import EXIT_OK
 
     conn = tmp_path / "kernel.json"
     start_session(conn)
-    hog = _client(conn)
     try:
-        hog.execute("import time; time.sleep(3); raise RuntimeError('boom')")
-        time.sleep(0.5)
-
-        code = main(["exec", "discarded = 1", "--session-file", str(conn), "--timeout", "30"])
-        assert code == EXIT_OK
-        assert "discarded this request" in capsys.readouterr().err
+        with _occupied(conn, "import time; time.sleep(3); raise RuntimeError('boom')"):
+            code = main(["exec", "discarded = 1", "--session-file", str(conn), "--timeout", "30"])
+            assert code == EXIT_OK
+            assert "discarded this request" in capsys.readouterr().err
     finally:
-        hog.stop_channels()
         stop_session(conn)
 
 
 def test_eval_names_the_discard_instead_of_blaming_the_transport(tmp_path, capsys):
     """A discarded eval has no reply to decode — but that is not a transport
     fault, and saying so sends the caller debugging the wrong thing."""
-    from docx_editor.session import EXIT_ERROR, _client
-
     conn = tmp_path / "kernel.json"
     start_session(conn)
-    hog = _client(conn)
     try:
-        hog.execute("import time; time.sleep(3); raise RuntimeError('boom')")
-        time.sleep(0.5)
-
-        code = main(["eval", "1 + 1", "--session-file", str(conn), "--timeout", "30"])
-        captured = capsys.readouterr()
-        assert code == EXIT_ERROR
-        assert "discarded this request" in captured.err
-        assert "transport failed" not in captured.err
-        assert captured.out == ""  # no envelope: nothing was evaluated
+        with _occupied(conn, "import time; time.sleep(3); raise RuntimeError('boom')"):
+            code = main(["eval", "1 + 1", "--session-file", str(conn), "--timeout", "30"])
+            captured = capsys.readouterr()
+            assert code == EXIT_ERROR
+            assert "discarded this request" in captured.err
+            assert "transport failed" not in captured.err
+            assert captured.out == ""  # no envelope: nothing was evaluated
     finally:
-        hog.stop_channels()
         stop_session(conn)
 
 
@@ -599,12 +655,12 @@ class TestBusyKernel:
     def busy_conn(self, tmp_path):
         conn = tmp_path / "kernel.json"
         start_session(conn)
-        # Fire an execution and leave it running for the duration of the test.
-        t = threading.Thread(target=exec_code, args=("import time; time.sleep(10)", conn), daemon=True)
-        t.start()
-        time.sleep(1.5)  # let the kernel actually enter the busy state
         try:
-            yield conn
+            # The kernel is executing the sleep for the whole test (10 s: long
+            # enough to outlast every probe, short enough for the queued exec
+            # below to complete); stop_session then shuts it down while busy.
+            with _occupied(conn, "import time; time.sleep(10)"):
+                yield conn
         finally:
             stop_session(conn)
 
@@ -617,7 +673,8 @@ class TestBusyKernel:
 
     def test_exec_queues_behind_busy_kernel(self, busy_conn):
         # Must not raise "Kernel didn't respond in 10 seconds" — it queues instead.
-        res = exec_code("1 + 1", connection_file=busy_conn, timeout=30.0)
+        # The hog sleeps 10 s; the budget on top covers a loaded machine's dequeue.
+        res = exec_code("1 + 1", connection_file=busy_conn, timeout=10 + START_BUDGET)
         assert res.status == "ok"
         assert res.result == "2"
 
@@ -758,18 +815,35 @@ def test_exec_stdin_does_not_wedge_session(tmp_path):
         stop_session(conn)
 
 
-def test_stop_session_is_prompt(tmp_path):
+def test_stop_session_honours_the_shutdown_ack(tmp_path, monkeypatch):
     """Graceful shutdown must be acknowledged, not silently dropped.
 
     The old code fired shutdown() then tore the socket down before it flushed, so
-    every stop fell through to the 5s SIGTERM fallback.
+    every stop fell through to the SIGTERM fallback. Wall-clock cannot tell that
+    apart from a loaded machine; what can is the pair "no signal was ever sent"
+    and "the kernel is gone anyway" — a dropped request leaves it alive, and
+    the fallback would have to signal it.
     """
     conn = tmp_path / "kernel.json"
-    start_session(conn)
-    elapsed = time.monotonic()
-    assert stop_session(conn) is True
-    elapsed = time.monotonic() - elapsed
-    assert elapsed < 3.0, f"stop_session took {elapsed:.2f}s — shutdown ack was not honored"
+    pid = start_session(conn)
+    signalled: list[tuple[int, int]] = []
+    real_kill = os.kill
+
+    def spying_kill(target: int, sig: int) -> None:
+        if sig != 0:  # _pid_alive probes with signal 0; only real signals count
+            signalled.append((target, sig))
+        real_kill(target, sig)
+
+    monkeypatch.setattr(os, "kill", spying_kill)
+    try:
+        assert stop_session(conn, timeout=START_BUDGET) is True
+        assert signalled == [], "graceful shutdown fell through to a signal"
+        assert not _pid_alive(pid, reap=True), "kernel outlived an acknowledged shutdown"
+    finally:
+        # stop_session has unlinked the connection file, so a kernel a regression
+        # leaves behind is invisible to the reaper — kill it here.
+        if _pid_alive(pid, reap=True):
+            real_kill(pid, signal.SIGKILL)
 
 
 def test_stop_session_survives_corrupt_pid_file(tmp_path):
@@ -819,6 +893,98 @@ def test_module_entrypoint_runs():
     assert "exec" in proc.stdout
 
 
+# A kernel that binds its sockets and writes the connection file but never
+# serves the control channel: the exact shape of every start failure in the
+# ROADMAP.md #72 CI logs (ipykernel writes kernel.json before importing IPython
+# and wiring the control dispatcher). Ports 1-5 are unserved on loopback; ZMQ
+# retries the connect silently, so the kernel_info request simply gets no reply.
+_FAKE_KERNEL_SRC = """\
+import json, os, sys, time
+path = sys.argv[sys.argv.index("-f") + 1]
+info = {
+    "transport": "tcp", "ip": "127.0.0.1", "key": "", "signature_scheme": "hmac-sha256",
+    "shell_port": 1, "iopub_port": 2, "stdin_port": 3, "control_port": 4, "hb_port": 5,
+}
+with open(path + ".tmp", "w") as f:
+    json.dump(info, f)
+os.replace(path + ".tmp", path)
+print("fake kernel: sockets bound, never served", file=sys.stderr, flush=True)
+time.sleep(60)
+"""
+
+
+class TestStartFailureDiagnosis:
+    """A start that exhausts its budget must say why, and the budget must be
+    tunable for loaded machines (ROADMAP.md #72).
+
+    The CI failures behind #72 all read "Kernel did not become ready within
+    30s" — the connection file had appeared but the control channel never
+    answered — with nothing to tell a slow runner from a broken one.
+    """
+
+    @pytest.fixture
+    def fake_kernel(self, monkeypatch):
+        monkeypatch.setattr(session_mod, "_KERNEL_COMMAND", (sys.executable, "-c", _FAKE_KERNEL_SRC))
+
+    def test_start_timeout_explains_itself(self, tmp_path, fake_kernel):
+        conn = tmp_path / "kernel.json"
+        with pytest.raises(SessionError) as excinfo:
+            start_session(conn, timeout=2.0)
+        message = str(excinfo.value)
+
+        assert "did not become ready within 2.0s" in message
+        assert "kernel.json appeared after" in message
+        assert "no kernel_info reply on the control channel" in message
+        assert "still alive at the timeout" in message
+        assert "fake kernel: sockets bound, never served" in message
+        assert "tcp 127.0.0.1, shell=1 control=4" in message
+        assert START_TIMEOUT_ENV in message
+
+        # Nothing left behind: no state files, and the fake is dead.
+        assert not conn.exists()
+        assert not conn.with_suffix(".pid").exists()
+        pid_match = re.search(r"Kernel pid (\d+)", message)
+        assert pid_match is not None, message
+        assert not _pid_alive(int(pid_match.group(1)), reap=True)
+
+    def test_start_budget_comes_from_env(self, tmp_path, fake_kernel, monkeypatch):
+        monkeypatch.setenv(START_TIMEOUT_ENV, "2")
+        with pytest.raises(SessionError, match="did not become ready within 2.0s"):
+            start_session(tmp_path / "kernel.json")
+
+    def test_explicit_timeout_beats_env(self, tmp_path, fake_kernel, monkeypatch):
+        monkeypatch.setenv(START_TIMEOUT_ENV, "2")
+        with pytest.raises(SessionError, match="did not become ready within 1.0s"):
+            start_session(tmp_path / "kernel.json", timeout=1.0)
+
+    @pytest.mark.parametrize("value", ["soon", "0", "-5", "nan"])
+    def test_invalid_start_budget_raises(self, tmp_path, monkeypatch, value):
+        monkeypatch.setenv(START_TIMEOUT_ENV, value)
+        # Were a kernel spawned anyway, this exits at once with a distinct error.
+        monkeypatch.setattr(session_mod, "_KERNEL_COMMAND", (sys.executable, "-c", "raise SystemExit(99)"))
+        conn = tmp_path / "kernel.json"
+        with pytest.raises(SessionError, match=f"{START_TIMEOUT_ENV} must be a positive number") as excinfo:
+            start_session(conn)
+        assert repr(value) in str(excinfo.value)
+        assert "exited during startup" not in str(excinfo.value)
+        assert not conn.exists()
+        assert not conn.with_suffix(".pid").exists()
+
+    def test_blank_env_means_default(self, monkeypatch):
+        monkeypatch.setenv(START_TIMEOUT_ENV, "  ")
+        assert _start_timeout() == session_mod.DEFAULT_START_TIMEOUT
+
+    def test_main_start_prints_the_diagnosis(self, tmp_path, fake_kernel, monkeypatch, capsys):
+        """`docx-session start` on a loaded runner used to exit 1 with only
+        "did not become ready" to show for it; the CLI must carry the report."""
+        monkeypatch.setenv(START_TIMEOUT_ENV, "2")
+        assert main(["start", "--session-file", str(tmp_path / "kernel.json")]) == EXIT_ERROR
+        err = capsys.readouterr().err
+        assert "did not become ready within 2.0s" in err
+        assert "fake kernel: sockets bound, never served" in err
+        assert START_TIMEOUT_ENV in err
+
+
 class TestKernelReaping:
     """ISSUES.md #62: a kernel must not survive the test that started it.
 
@@ -849,7 +1015,8 @@ class TestKernelReaping:
             text=True,
         )
         try:
-            deadline = time.monotonic() + 60
+            # The helper's start_session honours the env budget; allow for it.
+            deadline = time.monotonic() + START_BUDGET + 10
             while time.monotonic() < deadline:
                 if proc.poll() is not None:
                     stderr = proc.stderr.read() if proc.stderr else ""
@@ -858,7 +1025,7 @@ class TestKernelReaping:
                     break
                 time.sleep(0.2)
             else:
-                raise AssertionError("kernel never became ready within 60s")
+                raise AssertionError(f"kernel never became ready within {START_BUDGET + 10}s")
 
             # Kill the owner outright — no teardown, no stop_session.
             proc.kill()

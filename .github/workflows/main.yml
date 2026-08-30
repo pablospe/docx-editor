@@ -53,6 +53,13 @@ jobs:
       # Coverage tracing only where the report is uploaded (3.11); the other
       # versions run the plain suite.
       - name: Run tests
+        env:
+          # A kernel start on this runner (2 vCPUs, two xdist workers each
+          # spawning kernels, coverage tracing on 3.11) can take well over the
+          # 30 s library default. A start that needs more than this is a broken
+          # runner and should fail loudly — the error explains which phase
+          # timed out — rather than be retried.
+          DOCX_SESSION_START_TIMEOUT: "120"
         run: >-
           uv run python -m pytest tests -n auto
           --splits 2 --group ${{ matrix.shard }}

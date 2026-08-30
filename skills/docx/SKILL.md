@@ -1176,6 +1176,8 @@ scripts. The document (and all your variables) stays open between commands:
 ```bash
 # Requires: pip install "docx-editor[session]"
 docx-session start
+# On a loaded machine (CI, parallel workers) set DOCX_SESSION_START_TIMEOUT=120
+# to raise the 30 s budget `start` gives the kernel to answer.
 
 # Use ABSOLUTE paths: the kernel keeps the cwd it was started in, which is not
 # necessarily the cwd of a later exec. `start` prints the cwd it captured.

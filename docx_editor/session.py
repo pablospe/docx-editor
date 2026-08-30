@@ -31,6 +31,21 @@ if TYPE_CHECKING:
 
 DEFAULT_CONNECTION_FILE = Path.home() / ".cache" / "docx-editor" / "kernel.json"
 
+# start_session's default budget, and the environment variable that overrides
+# it. A kernel start is a fresh interpreter importing ipykernel + IPython; on a
+# loaded machine (a 2-vCPU CI runner with parallel test workers, coverage
+# tracing on) that import alone can take longer than the unloaded 30 s default.
+DEFAULT_START_TIMEOUT = 30.0
+START_TIMEOUT_ENV = "DOCX_SESSION_START_TIMEOUT"
+
+# How the kernel is launched. Tests substitute a stand-in kernel here to
+# exercise the start-failure paths deterministically; the "-f <file>" argument
+# is appended by start_session.
+_KERNEL_COMMAND = (sys.executable, "-m", "ipykernel_launcher")
+
+# Bytes of kernel stderr kept in a start-failure diagnostic.
+_STDERR_TAIL_BYTES = 4096
+
 _EXTRA_HINT = "Session mode requires extra dependencies: pip install 'docx-editor[session]'"
 
 
@@ -131,20 +146,102 @@ def _read_pid(connection_file: Path) -> int | None:
         return None
 
 
-def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: float = 30.0) -> int:
+def _start_timeout() -> float:
+    """start_session's budget: DOCX_SESSION_START_TIMEOUT, else the 30 s default.
+
+    Raises:
+        SessionError: If the variable is set to anything but a positive number.
+    """
+    raw = os.environ.get(START_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_START_TIMEOUT
+    try:
+        value = float(raw)
+        if not value > 0:  # also rejects nan
+            raise ValueError
+    except ValueError:
+        raise SessionError(f"{START_TIMEOUT_ENV} must be a positive number of seconds, got {raw!r}") from None
+    return value
+
+
+def _drain_stderr(proc: "subprocess.Popen[bytes]") -> str:
+    """Tail of what a (killed and reaped) kernel wrote to stderr, without blocking.
+
+    The pipe is switched to non-blocking first: every writer is dead, so the
+    read hits EOF at once — but if a grandchild ever inherited the write end,
+    EAGAIN ends the loop instead of hanging a diagnostic that exists to explain
+    a hang.
+    """
+    if proc.stderr is None:
+        return ""
+    fd = proc.stderr.fileno()
+    if os.name == "posix":
+        os.set_blocking(fd, False)
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunk = os.read(fd, 65536)
+        except OSError:  # EAGAIN: a writer still holds the pipe open
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)[-_STDERR_TAIL_BYTES:].decode(errors="replace").strip()
+
+
+def _describe_connection_file(connection_file: Path) -> str:
+    """One line on what the kernel managed to write before the budget ran out."""
+    try:
+        size = connection_file.stat().st_size
+    except OSError:
+        return "Connection file: absent."
+    try:
+        info = json.loads(connection_file.read_text(encoding="utf-8"))
+        return (
+            f"Connection file: {size} bytes, {info['transport']} {info['ip']}, "
+            f"shell={info['shell_port']} control={info['control_port']}."
+        )
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return f"Connection file: {size} bytes, unreadable: {e}."
+
+
+def _load_average() -> str:
+    """Suffix "; load average N.NN" where the platform reports one, else ""."""
+    if not hasattr(os, "getloadavg"):  # Windows
+        return ""
+    try:
+        return f"; load average {os.getloadavg()[0]:.2f}"
+    except OSError:
+        return ""
+
+
+def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: float | None = None) -> int:
     """Start a detached IPython kernel and wait until it answers.
 
     Args:
         connection_file: Where to write the kernel connection file
-        timeout: Seconds to wait for the kernel to become ready
+        timeout: Seconds to wait for the kernel to become ready. ``None`` (the
+            default) reads ``DOCX_SESSION_START_TIMEOUT`` and falls back to
+            30 s when it is unset or blank; an explicit argument always wins.
+            The variable exists for loaded machines — CI runners, parallel
+            test workers — where a fresh interpreter importing IPython takes
+            far longer than it does interactively. ``docx-session start``
+            has no flag for it and reaches the variable through this default.
 
     Returns:
         PID of the kernel process.
 
     Raises:
-        SessionError: If a session is already running or the kernel fails to start.
+        SessionError: If a session is already running, the kernel fails to
+            start, or ``DOCX_SESSION_START_TIMEOUT`` is not a positive number.
+            A start that runs out of budget explains itself: which phase
+            timed out (connection file vs. control-channel reply), whether
+            the kernel was still alive, the load average, what it wrote to
+            stderr, and the variable to raise.
         ImportError: If the [session] extra is not installed.
     """
+    if timeout is None:
+        timeout = _start_timeout()
     if is_session_running(connection_file):
         raise SessionError(f"Session already running (connection file: {connection_file})")
 
@@ -152,7 +249,7 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
     connection_file.unlink(missing_ok=True)
 
     proc = subprocess.Popen(
-        [sys.executable, "-m", "ipykernel_launcher", "-f", str(connection_file)],
+        [*_KERNEL_COMMAND, "-f", str(connection_file)],
         stdout=subprocess.DEVNULL,
         # Keep stderr so a failed start (e.g. missing ipykernel) can explain itself.
         stderr=subprocess.PIPE,
@@ -161,14 +258,32 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
     )
     _pid_file(connection_file).write_text(str(proc.pid), encoding="utf-8")
 
-    def _abort(message: str) -> SessionError:
+    def _abort(summary: str) -> SessionError:
+        # Sampled before the kill so the report says what the kernel was doing
+        # at the timeout, not what the kill did to it.
+        exit_code = proc.poll()
         proc.kill()
         proc.wait()
+        kernel = "was still alive at the timeout" if exit_code is None else f"had exited with code {exit_code}"
+        stderr = _drain_stderr(proc)
+        report = "\n".join([
+            summary,
+            f"Kernel pid {proc.pid} {kernel}{_load_average()}.",
+            _describe_connection_file(connection_file),
+            "Kernel stderr:",
+            "\n".join(f"  {line}" for line in stderr.splitlines()) if stderr else "  (empty)",
+            f"Set {START_TIMEOUT_ENV} to raise the budget on a loaded machine.",
+        ])
         connection_file.unlink(missing_ok=True)
         _pid_file(connection_file).unlink(missing_ok=True)
-        return SessionError(message)
+        return SessionError(report)
 
-    deadline = time.monotonic() + timeout
+    # Two phases share one budget. The connection file is written as soon as
+    # the sockets are bound — *before* ipykernel imports IPython and wires the
+    # control channel — so its appearance is an early signal, and the second
+    # phase gets whatever is left (floored at 1 s).
+    t0 = time.monotonic()
+    deadline = t0 + timeout
     while not (connection_file.exists() and connection_file.stat().st_size > 0):
         if proc.poll() is not None:
             stderr = proc.stderr.read().decode(errors="replace").strip() if proc.stderr else ""
@@ -177,13 +292,20 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
             detail = f"\n{stderr}" if stderr else ""
             raise SessionError(f"Kernel process exited during startup (code {proc.returncode}). {hint}{detail}".strip())
         if time.monotonic() > deadline:
-            raise _abort(f"Kernel did not start within {timeout}s")
+            raise _abort(
+                f"Kernel did not start within {timeout}s: no connection file after {time.monotonic() - t0:.1f}s."
+            )
         time.sleep(0.1)
+    t_file = time.monotonic() - t0
+    remaining = max(1.0, deadline - time.monotonic())
 
     kc = _client(connection_file)
     try:
-        if not _kernel_alive(kc, timeout=max(1.0, deadline - time.monotonic())):
-            raise _abort(f"Kernel did not become ready within {timeout}s")
+        if not _kernel_alive(kc, timeout=remaining):
+            raise _abort(
+                f"Kernel did not become ready within {timeout}s: kernel.json appeared after {t_file:.1f}s, "
+                f"then no kernel_info reply on the control channel in the remaining {remaining:.1f}s."
+            )
     except BaseException:
         # Never leave a half-started kernel behind with no way to reach it.
         if proc.poll() is None:
