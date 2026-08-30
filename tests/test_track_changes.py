@@ -1282,12 +1282,14 @@ class TestNestedForeignRevisions:
         assert dom.getElementsByTagName("w:delText") == []
         assert [t.firstChild.data for t in dom.getElementsByTagName("w:t")] == ["BEE"]
 
-    def test_accept_all_author_filter_resolves_the_rows_it_listed(self):
-        """Test that a filtered call's count equals the number of that author's listed rows.
+    def test_accept_all_author_filter_resolves_every_row_it_listed(self):
+        """Test that a filtered call resolves every one of that author's listed rows.
 
         Index and listing must agree on ownership: if the index used a
         different author expression, the filtered pass would list rows it
         could not resolve and exit on the no-progress guard — a silent no-op.
+        Equality holds here because none of these rows is nested; a listed row
+        inside a rejected insertion goes with its host and is not counted.
         """
         manager = _make_revision_manager(self.DUPLICATE_ID_ACROSS_AUTHORS)
 
@@ -1302,16 +1304,18 @@ class TestNestedForeignRevisions:
         one index key, so normalizing the key widened the duplicate-id class
         this fix guards. The author scoping has to cover the widened class too.
         """
+        # B's non-canonical id comes *second*: an unscoped index would hand
+        # back A's element first, so the assertions below need the scoping as
+        # well as the normalization.
         manager = _make_revision_manager(
             """
-        <w:ins w:id="007" w:author="B"><w:r><w:t>BEE</w:t></w:r></w:ins>
-        <w:del w:id="7" w:author="A"><w:r><w:delText>AYE</w:delText></w:r></w:del>"""
+        <w:del w:id="7" w:author="A"><w:r><w:delText>AYE</w:delText></w:r></w:del>
+        <w:ins w:id="007" w:author="B"><w:r><w:t>BEE</w:t></w:r></w:ins>"""
         )
         dom = manager.editor.dom
 
-        # Resolve B, whose id is the non-canonical one: it is reachable only
-        # because the index normalizes, and author-exact only because the
-        # index is scoped -- so this needs both halves to hold.
+        # Resolving B needs both halves: reachable only because the index
+        # normalizes, author-exact only because the index is scoped.
         assert manager.reject_all(author="B") == 1
 
         # A's deletion is untouched: still pending, its text still deleted.
@@ -1401,8 +1405,8 @@ class TestRevisionIdNormalization:
 
         ``list_unhandled_revisions()`` reports ``id=None`` for a mark with no
         numeric ``w:id``, so None is a value callers really do hold. The fresh
-        scan compares parsed ids, and ``_adjudicable_id`` is None for exactly
-        those marks — unguarded, None would match the first of them and
+        scan skips elements whose ``_adjudicable_id`` is None; without that
+        skip ``str(None) == str(None)`` would match the first such mark and
         resolve what the honesty floor just called unresolvable.
         """
         manager = _make_revision_manager('<w:ins w:id="abc" w:author="A"><w:r><w:t>KEEP</w:t></w:r></w:ins>')

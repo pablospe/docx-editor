@@ -43,6 +43,12 @@ class _ResolutionMixin(_RevisionManagerBase):
         content is all gone are swept (``_sweep_move_range_marks``) — move
         content can leave inside any resolved host, not only a move half.
 
+        A duplicated w:id is ambiguous here: Word does not guarantee w:id is
+        unique, and this call has only the id, so it resolves whichever element
+        carries it first in the document — possibly another author's
+        (ROADMAP.md #84). Two rows sharing an id in ``list_revisions()`` is the
+        signal; ``accept_all(author=...)`` is author-exact where this is not.
+
         Args:
             revision_id: The w:id of the revision to accept
             element_index: Optional pre-built w:id -> element map (see
@@ -98,6 +104,10 @@ class _ResolutionMixin(_RevisionManagerBase):
           properties back (``_restore_paragraph_properties``).
 
         A paragraph-mark move marker is dropped, as on accept.
+
+        A duplicated w:id is ambiguous here in the same way ``accept_revision``
+        describes: with only the id to go on, this resolves whichever element
+        carries it first in the document (ROADMAP.md #84).
 
         Args:
             revision_id: The w:id of the revision to reject
@@ -285,8 +295,9 @@ class _ResolutionMixin(_RevisionManagerBase):
           pass. A filtered call instead indexes only ``author``'s elements
           (``_revision_element_index(author)``), so another author's element
           sharing that id is never a candidate: the listing and the index
-          agree on ownership, and the call resolves exactly the rows it
-          listed.
+          agree on ownership, and the call cannot resolve a row it did not
+          list. It may resolve fewer — a listed row nested inside a rejected
+          insertion goes with its host — but never someone else's.
 
         The index is built once for the whole call, not per pass: resolution
         only ever detaches elements, so a single build stays a valid superset
@@ -357,9 +368,11 @@ class _ResolutionMixin(_RevisionManagerBase):
         ``_resolve_all``, which re-lists on each pass: that fully resolves
         *nested* revisions in Word-authored files (e.g. a w:del inside a
         w:ins) and terminates even when an author filter leaves other authors'
-        revisions in the document. An ``author=`` call resolves only that
+        revisions in the document. An ``author=`` call *targets* only that
         author's own elements even when a producer repeats a w:id across
-        authors: the id lookup is scoped to the author being resolved.
+        authors: the id lookup is scoped to the author being resolved. That is
+        about which elements are targeted, not about what survives — rejecting
+        an insertion still removes whatever another author nested inside it.
 
         A move is resolved as a unit: its ``w:moveFrom`` content is removed and
         its ``w:moveTo`` content unwrapped in the same call, and the range
@@ -407,9 +420,11 @@ class _ResolutionMixin(_RevisionManagerBase):
         ``_resolve_all``, which re-lists on each pass: that fully resolves
         *nested* revisions in Word-authored files (e.g. a w:del inside a
         w:ins) and terminates even when an author filter leaves other authors'
-        revisions in the document. An ``author=`` call resolves only that
+        revisions in the document. An ``author=`` call *targets* only that
         author's own elements even when a producer repeats a w:id across
-        authors: the id lookup is scoped to the author being resolved.
+        authors: the id lookup is scoped to the author being resolved. That is
+        about which elements are targeted, not about what survives — rejecting
+        an insertion still removes whatever another author nested inside it.
 
         A move is undone as a unit: its ``w:moveTo`` content is removed and
         its ``w:moveFrom`` content restored in place, range marks swept — the

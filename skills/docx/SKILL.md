@@ -675,9 +675,11 @@ nested deletion's `nested_under` points back at its host.
 - `accept_all()` / `reject_all()` resolve nesting fully (they re-scan until
   no listed revision remains), and `author=` filters process each author's
   changes independently — including when a producer repeats a `w:id` across
-  authors, where a filtered call still resolves only that author's own
-  elements. Revision types outside `list_revisions()` are not resolved at
-  all — see the `result.unhandled` recipe above.
+  authors, where a filtered call still *targets* only that author's own
+  elements. Targeting, not survival: as above, rejecting an insertion still
+  carries away what another author nested inside it. Revision types outside
+  `list_revisions()` are not resolved at all — see the `result.unhandled`
+  recipe above.
 - That duplicate-`w:id` guarantee is the bulk calls' alone. A producer may
   reuse one `w:id` across authors, and `accept_revision(id)`/
   `reject_revision(id)` take only the id: handed a duplicated one they resolve

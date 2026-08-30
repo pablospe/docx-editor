@@ -164,7 +164,9 @@ class _ListingMixin(_RevisionManagerBase):
         ``[ins#{id}:{author}]...[/ins]`` / ``[del#{id}:{author}]...[/del]``,
         where ``{id}`` is the id ``accept_revision``/``reject_revision`` take
         (so a raw ``w:id="007"`` renders ``#7``) and ``#?`` marks one they
-        cannot reach at all — those are ``list_unhandled_revisions()`` rows —
+        cannot reach at all (outside a change record those are
+        ``list_unhandled_revisions()`` rows; a mark recorded *inside* one
+        renders here but is not listed there — ROADMAP.md #86) —
         nesting included (e.g. ``[ins#1:A]kept [del#9:B]gone[/del][/ins]``).
         The two halves of a content move render the same way as
         ``[moveFrom#{id}:{author}]...[/moveFrom]`` /
@@ -326,8 +328,11 @@ class _ListingMixin(_RevisionManagerBase):
         id-based can reach it, and ``_unhandled_elements`` is what reports it.
 
         Each id's list is in document order — the same order the fresh scan
-        in ``_find_revision_element`` uses, so a duplicated id resolves the
-        same element whichever path finds it.
+        in ``_find_revision_element`` uses, so an *unscoped* index resolves a
+        duplicated id to the same element the scan would. A scoped one
+        deliberately answers differently, which is the whole point of
+        ``author``: the scan would hand back the first element carrying the
+        id, the scoped index the first one this author wrote.
         """
         element_index: dict[str, list[Element]] = {}
         for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
@@ -374,6 +379,11 @@ class _ListingMixin(_RevisionManagerBase):
         candidates at all is the index's business: an author-scoped index
         (``_revision_element_index(author)``) holds only that author's, so a
         filtered call cannot land on another author's same-id revision.
+
+        ``revision_id`` is typed wider than the public verbs' ``int`` because
+        this is where an id is *checked*, not promised: ``UnhandledRevision.id``
+        is ``int | None``, so None reaches here in practice and has to resolve
+        nothing rather than match the first unreachable mark.
 
         Both paths compare ``str`` of the *adjudicable* id, which is what keeps
         them answering alike. Comparing the parsed int on one side and the
