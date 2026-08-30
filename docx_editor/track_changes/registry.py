@@ -7,6 +7,7 @@ from xml.dom.minidom import Element
 from ..exceptions import RevisionError
 from .base import _RevisionManagerBase
 from .dom import (
+    _adjudicable_id,
     _ancestor_paragraph,
     _has_ancestor,
     _is_paragraph_mark_ins,
@@ -106,9 +107,8 @@ class _RegistryMixin(_RevisionManagerBase):
         seen_ids: set[int] = set()
         duplicate_ids: set[int] = set()
         for elem in elements:
-            try:
-                elem_id = int(elem.getAttribute("w:id"))
-            except ValueError:
+            elem_id = _adjudicable_id(elem)
+            if elem_id is None:
                 continue
             if elem_id in seen_ids:
                 duplicate_ids.add(elem_id)
@@ -118,10 +118,7 @@ class _RegistryMixin(_RevisionManagerBase):
             paragraph = _ancestor_paragraph(elem)
             author = elem.getAttribute("w:author")
             date = elem.getAttribute("w:date")
-            try:
-                rev_id = int(elem.getAttribute("w:id"))
-            except ValueError:
-                rev_id = None
+            rev_id = _adjudicable_id(elem)
             if rev_id is not None and _is_paragraph_mark_ins(elem):
                 self._paragraph_mark_ids.add(rev_id)
             if paragraph is None or not author or not date or rev_id is None or rev_id in duplicate_ids:
@@ -196,13 +193,12 @@ class _RegistryMixin(_RevisionManagerBase):
                 continue
             if not _has_ancestor(elem, self.editor.dom):
                 continue
-            try:
-                # Ids we assign are always numeric; a non-numeric one was
-                # copied from a nonconforming producer's element — leave it
-                # ungrouped rather than fail the edit (same tolerance as
-                # _get_next_change_id).
-                rev_id = int(elem.getAttribute("w:id"))
-            except ValueError:
+            # Ids we assign are always numeric; a non-numeric one was copied
+            # from a nonconforming producer's element — leave it ungrouped
+            # rather than fail the edit (same tolerance as
+            # _get_next_change_id).
+            rev_id = _adjudicable_id(elem)
+            if rev_id is None:
                 continue
             if rev_id in self._revision_groups:
                 continue
@@ -410,9 +406,8 @@ class _RegistryMixin(_RevisionManagerBase):
         for elem in _revision_elements(self.editor.dom):
             if _is_paragraph_mark_marker(elem):
                 continue
-            try:
-                rev_id = int(elem.getAttribute("w:id"))
-            except ValueError:  # pragma: no cover - our own ids are always numeric
+            rev_id = _adjudicable_id(elem)
+            if rev_id is None:  # pragma: no cover - our own ids are always numeric
                 continue
             gid = wanted.get(rev_id)
             if gid is not None:
