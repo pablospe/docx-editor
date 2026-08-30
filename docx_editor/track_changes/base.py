@@ -14,10 +14,13 @@ attribute annotation, or ``raise NotImplementedError`` -- so keep the
 explanations in this docstring and the class body bare.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Literal
 from xml.dom.minidom import Element
 
-from ..xml_editor import DocxXMLEditor
-from .models import GroupSource
+from ..xml_editor import DocxXMLEditor, ParagraphRef, TextMap, TextMapMatch
+from .models import GroupSource, _GroupCapture, _RegistrySnapshot
 
 
 class _RevisionManagerBase:
@@ -39,4 +42,67 @@ class _RevisionManagerBase:
         raise NotImplementedError
 
     def _is_in_document(self, elem) -> bool:
+        raise NotImplementedError
+
+    @contextmanager
+    def _grouped(self) -> Iterator[_GroupCapture]:
+        raise NotImplementedError
+
+    @contextmanager
+    def _changeset(self) -> Iterator[None]:
+        raise NotImplementedError
+
+    def _registry_snapshot(self) -> _RegistrySnapshot:
+        raise NotImplementedError
+
+    def _restore_registry(self, snapshot: _RegistrySnapshot) -> None:
+        raise NotImplementedError
+
+    def _resolve_paragraph(self, ref: ParagraphRef, paragraphs: list[Element] | None = None):
+        raise NotImplementedError
+
+    def _locate_in_paragraph(self, paragraph, paragraph_ref: str, text: str, occurrence: int | None) -> TextMapMatch:
+        raise NotImplementedError
+
+    def _get_run_info(self, node) -> tuple[Element | None, str]:
+        raise NotImplementedError
+
+    def _get_node_text(self, node) -> str:
+        raise NotImplementedError
+
+    def _set_node_text(self, node, text: str) -> None:
+        raise NotImplementedError
+
+    def _replace_across_nodes(self, match: TextMapMatch, replace_with: str) -> int:
+        raise NotImplementedError
+
+    def _find_ancestor(self, node, tag_name: str) -> Element | None:
+        raise NotImplementedError
+
+    def _owns_ins(self, ins_elem) -> bool:
+        raise NotImplementedError
+
+    def _insert_own_ins_within_foreign_ins(self, ins_elem, edge_node, offset: int, text: str, rPr_xml: str) -> int:
+        raise NotImplementedError
+
+    def _delete_across_nodes(self, match: TextMapMatch) -> int:
+        raise NotImplementedError
+
+    def _insert_near_match(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:
+        raise NotImplementedError
+
+    @staticmethod
+    def _plain_run_xml(rPr_xml: str, text: str) -> str:
+        raise NotImplementedError
+
+    def _insert_into_run(self, run, rPr_xml: str, node, offset: int, fragment: str) -> list:
+        raise NotImplementedError
+
+    def _ensure_splittable(self, p1) -> None:
+        raise NotImplementedError
+
+    def _reject_unsplittable_boundary(self, paragraph, text_map: TextMap, pos: int) -> None:
+        raise NotImplementedError
+
+    def _apply_paragraph_splits(self, p1, split_pos: int, segments: list[str]) -> int:
         raise NotImplementedError
