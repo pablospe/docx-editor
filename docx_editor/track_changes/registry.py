@@ -278,10 +278,10 @@ class _RegistryMixin(_RevisionManagerBase):
         operation — otherwise rejecting that operation's group would rip a
         leftover piece out of a pre-existing insertion.
         """
-        try:
-            origin_group = self._revision_groups.get(int(original_ins.getAttribute("w:id")))
-        except ValueError:  # pragma: no cover - our own ins always has a numeric id
-            origin_group = None
+        # Our own ins always has a numeric id; a non-numeric one is simply
+        # ungrouped, the same answer .get would give for an unknown id.
+        origin_id = _adjudicable_id(original_ins)
+        origin_group = None if origin_id is None else self._revision_groups.get(origin_id)
         for node in new_nodes:
             if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:ins":  # pragma: no branch
                 tail_id = int(node.getAttribute("w:id"))

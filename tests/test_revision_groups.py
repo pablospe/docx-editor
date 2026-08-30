@@ -942,6 +942,25 @@ class TestGroupLiveness:
         assert manager.groups_are_dead([1, 2]) == {1}
         assert set(manager.group_spans([1, 2])) == {2}
 
+    def test_group_with_a_non_canonical_member_id_reads_as_live(self, temp_xml):
+        """A live group whose member's raw w:id is not str(int) is not dead.
+
+        Liveness is answered through the same w:id index resolution uses. Keyed
+        on the raw attribute, a ``w:id="007"`` member is listed as 7 and found
+        under neither key, so a live group read as dead — and a dead group has
+        nothing left to explain, which is what deletes its ``note=`` comment.
+        """
+        body = '<w:p><w:ins w:id="007" w:author="A" w:date="2026-01-01T00:00:00Z">'
+        body += "<w:r><w:t>one</w:t></w:r></w:ins></w:p>"
+        manager = _make_manager(temp_xml(body))
+        (rev,) = manager.list_revisions()
+        assert rev.id == 7 and rev.group_id is not None
+
+        assert manager.groups_are_dead([rev.group_id]) == set()
+
+        assert manager.accept_group(rev.group_id) == 1
+        assert manager.groups_are_dead([rev.group_id]) == {rev.group_id}
+
     def test_paragraph_mark_only_group_is_live_but_has_no_span(self, temp_xml):
         # A pure tracked split: the group's only member is a paragraph-mark
         # insertion, which cannot hold a comment marker. The group is alive
