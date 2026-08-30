@@ -678,6 +678,12 @@ nested deletion's `nested_under` points back at its host.
   authors, where a filtered call still resolves only that author's own
   elements. Revision types outside `list_revisions()` are not resolved at
   all — see the `result.unhandled` recipe above.
+- That duplicate-`w:id` guarantee is the bulk calls' alone. A producer may
+  reuse one `w:id` across authors, and `accept_revision(id)`/
+  `reject_revision(id)` take only the id: handed a duplicated one they resolve
+  whichever element comes first in the document, which may be the other
+  author's. When a listed revision shares its id with a second row, prefer
+  `accept_all(author=…)` / the row's `group_id`.
 
 **Moves are two rows.** A drag-and-drop move lists as a `move_from` (the
 source, text excluded from the visible view) and a `move_to` (the
