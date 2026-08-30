@@ -160,6 +160,58 @@ class TestUnpack:
             unpack_document(simple_docx, linked)
 
     @pytest.mark.skipif(sys.platform == "win32", reason="symlinks require elevation on Windows")
+    def test_unpack_rejects_symlinked_ancestor_of_output_dir(self, temp_dir, simple_docx):
+        """A missing output_dir must not be created through a symlinked parent (ROADMAP.md #77)."""
+        elsewhere = temp_dir / "elsewhere"
+        elsewhere.mkdir()
+        linked = temp_dir / "intended" / "linked"
+        linked.parent.mkdir()
+        linked.symlink_to(elsewhere, target_is_directory=True)
+
+        with pytest.raises(InvalidDocumentError, match="through a symlink") as excinfo:
+            unpack_document(simple_docx, linked / "out")
+
+        assert excinfo.value.path == linked
+        assert list(elsewhere.iterdir()) == []
+        assert not (linked / "out").exists()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks require elevation on Windows")
+    def test_unpack_rejects_symlinked_ancestor_two_levels_up(self, temp_dir, simple_docx):
+        """The check walks up to the nearest existing ancestor, not just the direct parent."""
+        elsewhere = temp_dir / "elsewhere"
+        elsewhere.mkdir()
+        linked = temp_dir / "linked"
+        linked.symlink_to(elsewhere, target_is_directory=True)
+
+        with pytest.raises(InvalidDocumentError, match="through a symlink"):
+            unpack_document(simple_docx, linked / "a" / "out")
+
+        assert list(elsewhere.iterdir()) == []
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks require elevation on Windows")
+    def test_unpack_rejects_dangling_symlinked_ancestor(self, temp_dir, simple_docx):
+        """A dangling link is still a link mkdir would try to create through."""
+        linked = temp_dir / "linked"
+        linked.symlink_to(temp_dir / "missing", target_is_directory=True)
+
+        with pytest.raises(InvalidDocumentError, match="through a symlink"):
+            unpack_document(simple_docx, linked / "out")
+
+        assert not (temp_dir / "missing").exists()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks require elevation on Windows")
+    def test_unpack_accepts_real_dir_reached_through_a_symlinked_ancestor(self, temp_dir, simple_docx):
+        """An existing real parent is accepted even when a link sits above it (the /var case on macOS)."""
+        real = temp_dir / "real"
+        (real / "existing").mkdir(parents=True)
+        linked = temp_dir / "linked"
+        linked.symlink_to(real, target_is_directory=True)
+
+        unpack_document(simple_docx, linked / "existing" / "out")
+
+        assert (real / "existing" / "out" / "word" / "document.xml").exists()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks require elevation on Windows")
     def test_unpack_rejects_preexisting_symlink_inside_output_dir(self, temp_dir, simple_docx):
         """Refuse to extract when output_dir already contains a symlink."""
         output = temp_dir / "output"

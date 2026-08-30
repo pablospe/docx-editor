@@ -55,21 +55,21 @@ def _markers(doc, comment_id):
     return one("w:commentRangeStart"), one("w:commentRangeEnd")
 
 
+_MARKER_TAGS = ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
+
+
 def _marker_order(doc):
     """Every range marker and reference run in document order, as (tag, id)."""
     dom = doc._document_editor.dom
-    tags = ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
-    nodes = [(n, n.getAttribute("w:id")) for tag in tags for n in dom.getElementsByTagName(tag)]
-    ordered = [n for n in dom.getElementsByTagName("*") if any(n is m for m, _ in nodes)]
-    return [int(n.getAttribute("w:id")) for n in ordered]
+    return [
+        (n.tagName, int(n.getAttribute("w:id"))) for n in dom.getElementsByTagName("*") if n.tagName in _MARKER_TAGS
+    ]
 
 
 def _marker_counts(doc):
     """(range starts, range ends, reference runs) left in document.xml."""
     dom = doc._document_editor.dom
-    return tuple(
-        len(dom.getElementsByTagName(tag)) for tag in ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
-    )
+    return tuple(len(dom.getElementsByTagName(tag)) for tag in _MARKER_TAGS)
 
 
 def _paragraph_index(doc, node):
@@ -454,12 +454,26 @@ class TestResolutionRemovesTheNote:
         child = doc.reply_to_comment(root, "agreed")
         grandchild = doc.reply_to_comment(child, "and here too")
         sibling = doc.reply_to_comment(root, "one more")
-        before = _marker_order(doc)
+        start, end, ref = _MARKER_TAGS
+        layout = [
+            (start, root),
+            (start, sibling),
+            (start, child),
+            (start, grandchild),
+            (end, root),
+            (ref, root),
+            (end, sibling),
+            (ref, sibling),
+            (end, child),
+            (ref, child),
+            (end, grandchild),
+            (ref, grandchild),
+        ]
+        assert _marker_order(doc) == layout
 
         doc.reject_group(results[0].group_id)
 
-        assert _marker_order(doc) == before
-        assert {root, child, grandchild, sibling} == set(before)
+        assert _marker_order(doc) == layout
         for comment_id in (root, child, grandchild, sibling):
             start, end = _markers(doc, comment_id)
             assert _paragraph_index(doc, start) == 3

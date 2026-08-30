@@ -70,6 +70,31 @@ class TestReplyToComment:
 
         doc.close()
 
+    def test_reply_markers_seat_end_before_reference(self, clean_workspace):
+        """A reply's range end precedes its reference run, as the parent's does.
+
+        Two insert_after calls on the same anchor land in reverse order, which
+        put the reply's reference run inside its own range (ROADMAP.md #76).
+        """
+        doc = Document.open(clean_workspace)
+        parent = doc.add_comment("fox", "Original comment")
+        reply = doc.reply_to_comment(parent, "This is a reply")
+
+        markers = ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
+        dom = doc._document_editor.dom
+        order = [
+            (n.tagName, int(n.getAttribute("w:id"))) for n in dom.getElementsByTagName("*") if n.tagName in markers
+        ]
+        assert order == [
+            ("w:commentRangeStart", parent),
+            ("w:commentRangeStart", reply),
+            ("w:commentRangeEnd", parent),
+            ("w:commentReference", parent),
+            ("w:commentRangeEnd", reply),
+            ("w:commentReference", reply),
+        ]
+        doc.close()
+
     def test_reply_to_nonexistent_comment(self, clean_workspace):
         """Test replying to a comment that doesn't exist."""
         doc = Document.open(clean_workspace)

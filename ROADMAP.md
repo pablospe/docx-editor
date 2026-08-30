@@ -45,7 +45,7 @@ Ordered by value. Each is one board task and one PR unless noted.
 Plan: turn the module into a package `docx_editor/track_changes/` with one module per cluster; `RevisionManager` stays as the façade so the public API and `from docx_editor.track_changes import …` do not change. Rules: one cluster per PR, each PR a pure move (`git` must show renames, zero logic edits), gates unchanged — the test suite, the walk-count pins, and the corpus harness are the safety net that makes this mechanical. Do this **before** any further edit-site work (#6, #63c); it is what lets a fix land once instead of six times.
 
 Progress and decisions (2026-08-30):
-- **Step 1 merged** (PR #83): `track_changes.py` → package `track_changes/` with `models.py` (dataclasses, tag constants, validators), `dom.py` (minidom helpers), `diff.py` (tokenize/hunks/affix trimming), `manager.py` (`RevisionManager`, unchanged); `__init__.py` re-exports the public API. `scripts/check_pure_move.py --base main` is the gate for every step: line-multiset equality minus import plumbing, AST identity of every method, and `base.py` may hold only verbatim copies.
+- **Steps 1–5 merged** (PRs #83, #84 registry, #85 locate, #87 batch/rewrite, #89 replace sites; each ~1 h approval-to-merge). Step 1 (PR #83): `track_changes.py` → package `track_changes/` with `models.py` (dataclasses, tag constants, validators), `dom.py` (minidom helpers), `diff.py` (tokenize/hunks/affix trimming), `manager.py` (`RevisionManager`, unchanged); `__init__.py` re-exports the public API. `scripts/check_pure_move.py --base main` is the gate for every step: line-multiset equality minus import plumbing, AST identity of every method, and `base.py` may hold only verbatim copies.
 - **Mixins and `ty`**: a method in one mixin that touches an attribute or method defined elsewhere fails `ty`'s `unresolved-attribute`. Decision: a typed `_RevisionManagerBase` in `base.py` declaring the instance attributes and one verbatim-copied stub per cross-cluster callee (`raise NotImplementedError`) — not a package-wide `[[tool.ty.overrides]]`, which would turn every `self.*` into `Unknown`.
 - **Remaining steps, one PR each, in order**: registry → locate → batch → replace → delete → insert (+ paragraph split/rejoin) → listing → resolution. Each moves its methods byte-identically into `<cluster>.py` as `class _<Cluster>Mixin(_RevisionManagerBase)` and adds the mixin to `RevisionManager`'s bases. Gate: pure-move script, ruff/format/ty, full suite (`-n 4`, 16 GB cap), CI; self-review only.
 
@@ -65,25 +65,9 @@ Two `tests/test_session.py` tests failed on single CI jobs in one night and pass
 
 `accept_all(author=A)` / `reject_all(author=A)` list revisions by author but resolve by `w:id`, and the id lookup has no author check. With B's `<w:ins w:id="7">` before A's `<w:del w:id="7">` (duplicate ids across authors occur in real files — the corpus has them from LibreOffice), `reject_all(author="A")` deletes B's inserted text and `accept_all(author="A")` makes it permanent, both reporting 2. The `accept_all` docstring documents this and `tests/test_track_changes.py::…:1143` pins it as expected — it is not acceptable for a data-loss path. Fix: resolve the exact elements selected by the listing (element identity), not their ids; flip the pinning test. Lives in the resolution cluster, so it lands after #73 moves it (found by CodeRabbit on PR #75; verified 2026-08-30).
 
-### 76. Comment reply reference run lands inside its own range
-
-`comments.py` `reply_to_comment` (and `move_comment_markers`) anchor two `insert_after` calls on the same node, so the second lands ahead of the first: `Start0, Start1, End0, Ref0, Ref1, End1`. Every other path uses `_comment_range_end_xml`, which emits end-then-reference. One-line fix plus a test that pins marker order (CodeRabbit, PR #79).
-
-### 77. unpack: a symlinked ancestor of `output_dir` bypasses the symlink refusal
-
-`unpack.py` checks only the leaf; `output_dir = <symlink>/out` with a non-existent leaf passes both guards and `mkdir(parents=True)` creates through the link, so `extractall` writes the document tree elsewhere. Check `(output_path, *output_path.parents)`; add the test shape (CodeRabbit, PR #20).
-
-### 78. `start_session` leaks the kernel when `kernel.json` is unreadable
-
-`session.py`: `_client(connection_file)` sits outside the cleanup guard and the startup loop only waits for `size > 0`, so a mid-write file reaches `load_connection_file()` → raw `ValueError`, the detached kernel keeps running and the `.pid`/connection files stay on disk. Move the call inside the `try` so the caller gets `SessionError` and the kernel is stopped (CodeRabbit, PR #61).
-
 ### 79. Inserted text loses formatting after an empty split segment  [after #73 step 7]
 
 `_apply_paragraph_splits` resets `fallback_rPr = ""` whenever the current paragraph has no runs; a split at a paragraph end yields an empty tail, so the *next* segment drops the surrounding `rPr`: on a bold paragraph `insert_after(…, "A\nC")` keeps bold on `C`, `"A\n\nC"` loses it. The comment above the loop already claims the propagation works — PR #72 merged the comment but not the one-line fix. No test covers it. Lives in the insert/split cluster, so it lands after #73 moves it.
-
-### 80. Docs and spec drift found by the CodeRabbit audit
-
-README lists `batch_edit` among the methods taking `note=` (it does not); `docs/api.md` omits `w:numberingChange` from the unhandled-type list; `ResolveResult.unhandled` is described as document-wide but is author-scoped by design (the prose is wrong, not the code); `openspec/changes/` holds three implemented-but-unarchived proposals (`add-batch-edit`, `add-paragraph-hash-anchors`, `add-rewrite-paragraph`) whose text is stale; `Makefile` `test` has no `ulimit -v` fallback for hosts without a systemd user session.
 
 ### 81. Workspace creation bypasses the unpack symlink guard
 
@@ -117,6 +101,7 @@ CodeRabbit reviews every PR; its inline Critical/Major/Potential-issue comments 
 
 Newest first. Details live in each PR and in the release notes.
 
+- **unreleased, on main**: #76 comment reply marker order, #77 unpack symlink ancestors, #78 session start leak, #80 docs/spec drift ([#88](https://github.com/pablospe/docx-editor/pull/88)); #73 steps 1–5 ([#83](https://github.com/pablospe/docx-editor/pull/83), [#84](https://github.com/pablospe/docx-editor/pull/84), [#85](https://github.com/pablospe/docx-editor/pull/85), [#87](https://github.com/pablospe/docx-editor/pull/87), [#89](https://github.com/pablospe/docx-editor/pull/89)); CI sharded, ~8½ min wall ([#86](https://github.com/pablospe/docx-editor/pull/86))
 - **0.8.1** (2026-08-30): #68 Resolve moves and `w:pPrChange` as revisions ([#82](https://github.com/pablospe/docx-editor/pull/82)); #6a `w:tab` in the paragraph text map ([#81](https://github.com/pablospe/docx-editor/pull/81)); #71 LibreOffice opens-clean gate + real Word redline fixtures ([#80](https://github.com/pablospe/docx-editor/pull/80))
 - **0.8.0** (2026-08-29): #65 Exclude w:txbxContent from the host paragraph text map ([#78](https://github.com/pablospe/docx-editor/pull/78)); #67 Rationale channel ([#79](https://github.com/pablospe/docx-editor/pull/79)); #66 + #70 settings.xml pair + anti-scope statement ([#77](https://github.com/pablospe/docx-editor/pull/77)); #64 Foreign-revision census + accept_all honesty floor ([#76](https://github.com/pablospe/docx-editor/pull/76))
 - **0.7.2** (2026-08-28): #56+#62 Perf follow-ups + test hygiene ([#75](https://github.com/pablospe/docx-editor/pull/75)); #39 (also filed as #31) Site D own-insertion replace ordering ([#74](https://github.com/pablospe/docx-editor/pull/74)); #52+#60 Ergonomics grab-bag ([#73](https://github.com/pablospe/docx-editor/pull/73))

@@ -6,9 +6,12 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
+import textwrap
 import time
+import types
 from contextlib import contextmanager
 from pathlib import Path
 from queue import Empty
@@ -120,6 +123,143 @@ def test_start_session_creates_connection_file(session_conn):
 def test_start_session_twice_raises(session_conn):
     with pytest.raises(SessionError, match="already running"):
         start_session(session_conn)
+
+
+def _launch_fake_kernel(monkeypatch, script: str, *args: str) -> list[subprocess.Popen]:
+    """Make ``start_session`` spawn ``python -c script *args`` in place of ipykernel.
+
+    Patches the module attribute, not ``subprocess.Popen`` itself: conftest's
+    kernel reaper wraps the real class for the whole session. Returns the list
+    the spawned process is appended to; the caller reaps it with ``_reap``.
+    """
+    import docx_editor.session as session_mod
+
+    spawned: list[subprocess.Popen] = []
+
+    def fake_popen(argv, **kwargs):
+        proc = subprocess.Popen([sys.executable, "-c", script, *args], **kwargs)
+        spawned.append(proc)
+        return proc
+
+    fake_subprocess = types.SimpleNamespace(Popen=fake_popen, DEVNULL=subprocess.DEVNULL, PIPE=subprocess.PIPE)
+    monkeypatch.setattr(session_mod, "subprocess", fake_subprocess)
+    return spawned
+
+
+def _reap(spawned: list[subprocess.Popen]) -> None:
+    for proc in spawned:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def _free_ports(n: int) -> list[int]:
+    """``n`` distinct ports nobody is listening on right now."""
+    socks = [socket.socket() for _ in range(n)]
+    for sock in socks:
+        sock.bind(("127.0.0.1", 0))
+    ports = [sock.getsockname()[1] for sock in socks]
+    for sock in socks:
+        sock.close()
+    return ports
+
+
+def test_start_session_unreadable_connection_file_stops_kernel(tmp_path, monkeypatch):
+    """A kernel whose connection file cannot be parsed is killed, not leaked (ROADMAP.md #78).
+
+    jupyter_client writes kernel.json non-atomically, so the startup loop's
+    "exists and non-empty" check can pass on a half-written file. The stand-in
+    kernel writes exactly such a file and then idles like a live kernel would.
+    """
+    conn = tmp_path / "kernel.json"
+    script = "import sys, time; open(sys.argv[1], 'w').write('{\"shell_port\": 1'); time.sleep(60)"
+    spawned = _launch_fake_kernel(monkeypatch, script, str(conn))
+
+    try:
+        with pytest.raises(SessionError, match="unreadable connection file"):
+            start_session(conn, timeout=5.0)
+        assert len(spawned) == 1
+        assert spawned[0].wait(timeout=5) is not None
+        assert not conn.exists()
+        assert not conn.with_suffix(".pid").exists()
+    finally:
+        _reap(spawned)
+
+
+def test_start_session_unreadable_connection_file_kernel_already_exited(tmp_path, monkeypatch):
+    """The cleanup guard must not kill a kernel that has already exited on its own.
+
+    The stand-in writes a truncated connection file, then waits for a "go"
+    file before exiting; a wrapper around ``_client`` creates that file and
+    waits for the exit before the real ``_client`` fails on the truncated
+    JSON. The guard therefore runs with ``proc.poll()`` already set — the arm
+    the idling stand-in above never reaches — and must only remove the files.
+    """
+    import docx_editor.session as session_mod
+
+    conn = tmp_path / "kernel.json"
+    go = tmp_path / "go"
+    script = textwrap.dedent(
+        """
+        import os, sys, time
+        open(sys.argv[1], "w").write('{"shell_port": 1')
+        while not os.path.exists(sys.argv[2]):
+            time.sleep(0.05)
+        """
+    )
+    spawned = _launch_fake_kernel(monkeypatch, script, str(conn), str(go))
+    real_client = session_mod._client
+
+    def client_after_kernel_exit(connection_file):
+        go.touch()
+        spawned[0].wait(timeout=10)
+        return real_client(connection_file)
+
+    monkeypatch.setattr(session_mod, "_client", client_after_kernel_exit)
+
+    try:
+        with pytest.raises(SessionError, match="unreadable connection file"):
+            start_session(conn, timeout=5.0)
+        assert spawned[0].returncode == 0  # exited by itself; the guard did not kill it
+        assert not conn.exists()
+        assert not conn.with_suffix(".pid").exists()
+    finally:
+        _reap(spawned)
+
+
+def test_start_session_kernel_never_ready_stops_kernel(tmp_path, monkeypatch):
+    """A kernel that writes a valid connection file but never answers is killed, not leaked.
+
+    The file names ports nobody listens on: ``_client`` connects (ZeroMQ
+    connects lazily) and ``_kernel_alive`` times out, so ``start_session``
+    must report the kernel as not ready, stop the still-running process and
+    remove both files.
+    """
+    conn = tmp_path / "kernel.json"
+    shell, iopub, stdin, control, hb = _free_ports(5)
+    info = {
+        "transport": "tcp",
+        "ip": "127.0.0.1",
+        "key": "",
+        "signature_scheme": "hmac-sha256",
+        "kernel_name": "",
+        "shell_port": shell,
+        "iopub_port": iopub,
+        "stdin_port": stdin,
+        "control_port": control,
+        "hb_port": hb,
+    }
+    script = "import sys, time; open(sys.argv[1], 'w').write(sys.argv[2]); time.sleep(60)"
+    spawned = _launch_fake_kernel(monkeypatch, script, str(conn), json.dumps(info))
+
+    try:
+        with pytest.raises(SessionError, match="did not become ready"):
+            start_session(conn, timeout=1.0)
+        assert spawned[0].wait(timeout=5) != 0  # killed by the guard, not a natural exit
+        assert not conn.exists()
+        assert not conn.with_suffix(".pid").exists()
+    finally:
+        _reap(spawned)
 
 
 def test_is_session_running_false_without_connection_file(tmp_path):

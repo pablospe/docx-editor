@@ -233,7 +233,8 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
 
     Raises:
         SessionError: If a session is already running, the kernel fails to
-            start, or ``DOCX_SESSION_START_TIMEOUT`` is not a positive number.
+            start, the connection file it wrote is unreadable, or
+            ``DOCX_SESSION_START_TIMEOUT`` is not a positive number.
             A start that runs out of budget explains itself: which phase
             timed out (connection file vs. control-channel reply), whether
             the kernel was still alive, the load average, what it wrote to
@@ -299,8 +300,15 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
     t_file = time.monotonic() - t0
     remaining = max(1.0, deadline - time.monotonic())
 
-    kc = _client(connection_file)
+    kc = None
     try:
+        # Inside the guard: the kernel writes the connection file
+        # non-atomically, so a mid-write read fails to parse and must not
+        # leave the detached kernel running.
+        try:
+            kc = _client(connection_file)
+        except (ValueError, OSError) as e:
+            raise SessionError(f"Kernel wrote an unreadable connection file ({connection_file}): {e}") from e
         if not _kernel_alive(kc, timeout=remaining):
             raise _abort(
                 f"Kernel did not become ready within {timeout}s: kernel.json appeared after {t_file:.1f}s, "
@@ -315,7 +323,10 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
         _pid_file(connection_file).unlink(missing_ok=True)
         raise
     finally:
-        kc.stop_channels()
+        # ``kc`` is None only when ``_client`` raised, and that exception always
+        # propagates: the false arm never reaches the ``return`` below.
+        if kc is not None:  # pragma: no branch
+            kc.stop_channels()
     return proc.pid
 
 

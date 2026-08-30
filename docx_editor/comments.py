@@ -539,9 +539,10 @@ class CommentManager:
     def _place_reply_markers(self, comment_id: int, parent_start, parent_ref) -> None:
         """Seat a reply's markers around its parent's, where Word expects them."""
         self.document_editor.insert_after(parent_start, self._comment_range_start_xml(comment_id))
-        parent_ref_run = parent_ref.parentNode
-        self.document_editor.insert_after(parent_ref_run, f'<w:commentRangeEnd w:id="{comment_id}"/>')
-        self.document_editor.insert_after(parent_ref_run, self._comment_ref_run_xml(comment_id))
+        # One fragment, so the range end precedes the reference run: two
+        # insert_after calls on the same anchor would land the second ahead
+        # of the first and seat the reference run inside its own range.
+        self.document_editor.insert_after(parent_ref.parentNode, self._comment_range_end_xml(comment_id))
 
     def list_comments(self, author: str | None = None) -> list[Comment]:
         """List all comments in the document.
@@ -945,11 +946,7 @@ class CommentManager:
 
     def _comment_range_end_xml(self, comment_id: int) -> str:
         """Generate XML for comment range end with reference run."""
-        return f"""<w:commentRangeEnd w:id="{comment_id}"/>
-<w:r>
-  <w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>
-  <w:commentReference w:id="{comment_id}"/>
-</w:r>"""
+        return f'<w:commentRangeEnd w:id="{comment_id}"/>\n' + self._comment_ref_run_xml(comment_id)
 
     def _comment_ref_run_xml(self, comment_id: int) -> str:
         """Generate XML for comment reference run."""

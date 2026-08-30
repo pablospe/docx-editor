@@ -64,11 +64,32 @@ def _bad_zip_message(input_path: Path) -> str:
     )
 
 
+def _nearest_existing(path: Path) -> Path:
+    """The first of ``path`` and its parents that exists — the one mkdir(parents=True) builds from.
+
+    ``is_symlink()`` is tested before ``exists()`` so a dangling link counts
+    as existing: mkdir would still try to create through it.
+    """
+    candidates = (path, *path.parents)
+    # The last candidate is the filesystem root (or ``.``), which exists.
+    return next((c for c in candidates if c.is_symlink() or c.exists()), candidates[-1])
+
+
 def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
     """Unpack a .docx file to a directory with pretty-printed XML.
 
     On failure after extraction has started, the output directory is removed
     if this call created it; a pre-existing directory is left in place.
+
+    The symlink rule for the output directory: the path itself must not be a
+    link, nothing already inside it may be a link, and the nearest existing
+    ancestor of a path that does not exist yet must not be a link — that is
+    exactly what ``mkdir(parents=True)`` would create through. A real
+    directory reached through an OS-level link higher up (``/var`` on macOS,
+    a symlinked home) is accepted, since nothing this call creates goes
+    through the link; but when the link *is* the nearest existing ancestor
+    (``/tmp/<new>/out`` on macOS, where ``/tmp`` is a link) the call is
+    refused — create the parent first.
 
     Args:
         input_file: Path to the .docx file to unpack
@@ -84,8 +105,8 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
             is missing the required word/document.xml part (rejected before
             extraction), a part contains malformed XML or XML constructs
             refused for security (DTD entity/external declarations), or the
-            output directory is (or contains) a symlink or is an existing
-            non-directory.
+            output directory is, contains, or would be created through a
+            symlink, or is an existing non-directory.
     """
     input_path = Path(input_file)
     output_path = Path(output_dir)
@@ -99,6 +120,9 @@ def unpack_document(input_file: str | Path, output_dir: str | Path) -> str:
     # Reject a symlinked destination so extractall cannot write through it.
     if output_path.is_symlink():
         raise InvalidDocumentError(f"Output directory is a symlink: {output_dir}", path=output_path)
+    ancestor = _nearest_existing(output_path)
+    if ancestor.is_symlink():
+        raise InvalidDocumentError(f"Output directory would be created through a symlink: {ancestor}", path=ancestor)
     if output_path.exists():
         if not output_path.is_dir():
             raise InvalidDocumentError(f"Output path is not a directory: {output_dir}", path=output_path)

@@ -523,3 +523,142 @@ class TestReplaceMixedStateOwnInsOnly:
         assert mgr._replace_mixed_state(match, "NEW") == -1
         comments = [c.data for c in paragraph.childNodes if c.nodeType == c.COMMENT_NODE]
         assert "replace-marker" not in comments
+
+
+def _paragraph_match(mgr, text: str):
+    from docx_editor.xml_editor import body_paragraphs, build_text_map, find_in_text_map
+
+    paragraph = body_paragraphs(mgr.editor.dom)[0]
+    match = find_in_text_map(build_text_map(paragraph), text)
+    assert match is not None
+    return paragraph, match
+
+
+class TestRemoveFromInsertionDetachedIns:
+    """_remove_from_insertion leaves a <w:ins> alone once it is no longer attached."""
+
+    INS_OPEN = '<w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
+
+    def test_whole_insertion_match_is_a_no_op(self, temp_xml):
+        mgr = _make_manager(temp_xml(f"<w:p>{self.INS_OPEN}<w:r><w:t>Hello</w:t></w:r></w:ins></w:p>"))
+        paragraph, match = _paragraph_match(mgr, "Hello")
+        ins = paragraph.removeChild(paragraph.getElementsByTagName("w:ins")[0])
+
+        mgr._remove_from_insertion(match.positions)
+
+        assert ins.parentNode is None
+        assert _wt_texts(ins) == ["Hello"]
+        assert _element_children(paragraph) == []
+
+    def test_whole_node_match_keeps_the_node(self, temp_xml):
+        mgr = _make_manager(
+            temp_xml(f"<w:p>{self.INS_OPEN}<w:r><w:t>abc</w:t></w:r><w:r><w:t>def</w:t></w:r></w:ins></w:p>")
+        )
+        paragraph, match = _paragraph_match(mgr, "abc")
+        ins = paragraph.removeChild(paragraph.getElementsByTagName("w:ins")[0])
+
+        mgr._remove_from_insertion(match.positions)
+
+        assert ins.parentNode is None
+        assert _element_children(ins) == ["w:r", "w:r"]
+        assert _wt_texts(ins) == ["abc", "def"]
+
+
+class TestRemoveFromInsertionRunlessText:
+    """A middle split of a run-less <w:t> truncates it but has no run to clone for the tail."""
+
+    def test_middle_split_without_run_keeps_only_the_head(self, temp_xml):
+        mgr = _make_manager(
+            temp_xml(
+                '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
+                "<w:t>Hello world</w:t></w:ins></w:p>"
+            )
+        )
+        paragraph, match = _paragraph_match(mgr, "lo w")
+
+        mgr._remove_from_insertion(match.positions)
+
+        assert _element_children(paragraph) == ["w:ins"]
+        ins = paragraph.getElementsByTagName("w:ins")[0]
+        assert _element_children(ins) == ["w:t"]
+        assert _wt_texts(ins) == ["Hel"]
+
+
+class TestRemoveWtAndMaybeRunDetached:
+    """_remove_wt_and_maybe_run on a <w:t> that was never attached touches nothing."""
+
+    def test_unattached_wt_is_left_alone(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"))
+        paragraph, _match = _paragraph_match(mgr, "Hello")
+        wt = mgr.editor.dom.createElement("w:t")
+
+        mgr._remove_wt_and_maybe_run(wt)
+
+        assert wt.parentNode is None
+        assert _element_children(paragraph) == ["w:r"]
+        assert _wt_texts(paragraph) == ["Hello"]
+
+
+class TestDeleteRegularSegmentEdges:
+    """_delete_regular_segment on positions whose run is missing or already gone."""
+
+    def test_runless_text_node_is_skipped(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:t>Hello</w:t><w:r><w:t> world</w:t></w:r></w:p>"))
+        paragraph, match = _paragraph_match(mgr, "Hello w")
+        assert len(match.positions) == 7
+
+        del_id, last_del = mgr._delete_regular_segment(match.positions)
+
+        assert _element_children(paragraph) == ["w:t", "w:del", "w:r"]
+        assert last_del is paragraph.getElementsByTagName("w:del")[0]
+        assert del_id == int(last_del.getAttribute("w:id"))
+        assert [dt.firstChild.data for dt in paragraph.getElementsByTagName("w:delText")] == [" w"]
+        assert _wt_texts(paragraph) == ["Hello", "orld"]
+
+    def test_run_detached_by_the_editor_is_not_removed_twice(self, temp_xml, monkeypatch):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"))
+        paragraph, match = _paragraph_match(mgr, "Hello")
+        insert_before = mgr.editor.insert_before
+
+        def insert_and_detach(ref, xml):
+            nodes = insert_before(ref, xml)
+            ref.parentNode.removeChild(ref)
+            return nodes
+
+        monkeypatch.setattr(mgr.editor, "insert_before", insert_and_detach)
+
+        del_id, last_del = mgr._delete_regular_segment(match.positions)
+
+        assert _element_children(paragraph) == ["w:del", "w:r"]
+        assert last_del is paragraph.getElementsByTagName("w:del")[0]
+        assert del_id == int(last_del.getAttribute("w:id"))
+        assert [dt.firstChild.data for dt in paragraph.getElementsByTagName("w:delText")] == ["Hello"]
+        assert _wt_texts(paragraph) == [" world"]
+
+
+class TestDeleteSameContextEdges:
+    """_delete_same_context with a detached matched run, and with an editor yielding no <w:del>."""
+
+    TWO_RUNS = "<w:p><w:r><w:t>AB</w:t></w:r><w:r><w:t>CD</w:t></w:r></w:p>"
+
+    def test_detached_run_is_not_removed_twice(self, temp_xml):
+        mgr = _make_manager(temp_xml(self.TWO_RUNS))
+        paragraph, match = _paragraph_match(mgr, "ABCD")
+        paragraph.removeChild(paragraph.getElementsByTagName("w:r")[1])
+
+        del_id = mgr._delete_same_context(match)
+
+        assert _element_children(paragraph) == ["w:del", "w:del"]
+        dels = paragraph.getElementsByTagName("w:del")
+        assert del_id == int(dels[0].getAttribute("w:id"))
+        assert [dt.firstChild.data for dt in paragraph.getElementsByTagName("w:delText")] == ["AB", "CD"]
+        assert _wt_texts(paragraph) == []
+
+    def test_editor_yielding_no_del_returns_minus_one(self, temp_xml, monkeypatch):
+        # Defensive path: the editor is stubbed to return no nodes at all.
+        mgr = _make_manager(temp_xml(self.TWO_RUNS))
+        paragraph, match = _paragraph_match(mgr, "ABCD")
+        monkeypatch.setattr(mgr.editor, "insert_before", lambda ref, xml: [])
+
+        assert mgr._delete_same_context(match) == -1
+        assert not paragraph.getElementsByTagName("w:del")

@@ -124,3 +124,15 @@ class _RevisionManagerBase:
 
     def _split_replace(self, match: TextMapMatch, replace_with: str) -> int:
         raise NotImplementedError
+
+    def _build_cross_boundary_parts(self, match: TextMapMatch) -> list[tuple[Element, str, str, str, str, int]]:
+        raise NotImplementedError
+
+    def _classify_segments(self, match: TextMapMatch) -> list[tuple[bool | None, list[TextPosition]]]:
+        raise NotImplementedError
+
+    def _ins_identity_attrs(self, ins_elem) -> str:
+        raise NotImplementedError
+
+    def _adopt_split_tail(self, original_ins, new_nodes) -> None:
+        raise NotImplementedError

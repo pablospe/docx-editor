@@ -18,5 +18,5 @@
 
 ## 3. Benchmark Update
 
-- [ ] 3.1 Add batch mode to `benchmarks/hash_anchored_vs_plain.py` — compare N individual calls vs single batch_edit call
-- [ ] 3.2 Measure: time for 10 edits (10x individual vs 1x batch)
+- [x] 3.1 Add batch mode to `benchmarks/hash_anchored_vs_plain.py` — compare N individual calls vs single batch_edit call
+- [x] 3.2 Measure: time for 10 edits (10x individual vs 1x batch)

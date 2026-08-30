@@ -16,7 +16,11 @@ check: ## Run code quality tools.
 .PHONY: test
 test: ## Test the code with pytest (serial, niced, memory-capped — see CLAUDE.md)
 	@echo "🚀 Testing code: Running pytest"
-	@systemd-run --user --scope -p MemoryMax=8G -- nice -n 10 uv run python -m pytest tests -q
+	@if systemd-run --user --scope --quiet -p MemoryMax=8G -- true >/dev/null 2>&1; then \
+		systemd-run --user --scope -p MemoryMax=8G -- nice -n 10 uv run python -m pytest tests -q; \
+	else \
+		( ulimit -v 8388608 || exit 1; nice -n 10 uv run python -m pytest tests -q ); \
+	fi
 
 .PHONY: build
 build: clean-build ## Build wheel file
