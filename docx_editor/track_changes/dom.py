@@ -71,6 +71,18 @@ def _adjudicable_id(elem) -> int | None:
         return None
 
 
+def _revision_author(elem) -> str:
+    """``elem``'s ``w:author``, or ``"Unknown"`` when the attribute is absent.
+
+    The companion to ``_adjudicable_id`` for the other half of a revision's
+    identity, and shared for the same reason: the listing, the honesty floor
+    and the w:id index all filter on author, and an author-filtered
+    ``accept_all``/``reject_all`` resolves nothing at all if the index reads an
+    unattributed mark differently from the listing that selected it.
+    """
+    return elem.getAttribute("w:author") or "Unknown"
+
+
 def _nearest_revision_ancestor_id(elem) -> int | None:
     """id of the closest handled-revision ancestor with a numeric w:id, else None.
 

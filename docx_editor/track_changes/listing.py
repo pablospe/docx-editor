@@ -22,6 +22,7 @@ from .dom import (
     _nearest_revision_ancestor_id,
     _occurrence_in_text_map,
     _parse_w_date,
+    _revision_author,
 )
 from .models import (
     _MARKUP_KIND_BY_TAG,
@@ -183,7 +184,7 @@ class _ListingMixin(_RevisionManagerBase):
                 if child.tagName in _MARKUP_KIND_BY_TAG:
                     kind = _MARKUP_KIND_BY_TAG[child.tagName]
                     rev_id = child.getAttribute("w:id") or "?"
-                    rev_author = child.getAttribute("w:author") or "Unknown"
+                    rev_author = _revision_author(child)
                     parts.append(f"[{kind}#{rev_id}:{rev_author}]{render(child)}[/{kind}]")
                 elif child.tagName in ("w:t", "w:delText"):
                     parts.append(get_text_node_data(child))
@@ -219,7 +220,7 @@ class _ListingMixin(_RevisionManagerBase):
             # ``list_unhandled_revisions`` instead (see ``_unhandled_elements``).
             return None
 
-        author = elem.getAttribute("w:author") or "Unknown"
+        author = _revision_author(elem)
         date = _parse_w_date(elem)
 
         # Extract text content
@@ -300,9 +301,18 @@ class _ListingMixin(_RevisionManagerBase):
         ``author`` scopes the index to that author's elements, which is what
         makes an author-filtered ``_resolve_all`` unable to reach another
         author's same-id revision: the lookup has no other candidate to
-        return. The author test is ``list_revisions``'/``_unhandled_elements``'
-        — a missing ``w:author`` reads as ``"Unknown"`` — so the index and the
-        listing cannot disagree about who owns an element.
+        return. Ownership is ``_revision_author`` — the same test
+        ``list_revisions`` and ``_unhandled_elements`` apply, so the index and
+        the listing cannot disagree about who owns an element.
+
+        Keys are ``_adjudicable_id`` in string form, not the raw attribute,
+        for the matching reason on the other half of a revision's identity:
+        the listing reports ``int(w:id)`` and every lookup asks for
+        ``str(int)``, so a raw key would strand a nonconforming ``w:id="007"``
+        — listed as id 7, unreachable through the index, and silently counted
+        as resolved-nothing by a call that reported the document clean. An
+        element with no numeric id is dropped rather than keyed: nothing
+        id-based can reach it, and ``_unhandled_elements`` is what reports it.
 
         Each id's list is in document order — the same order the fresh scan
         in ``_find_revision_element`` uses, so a duplicated id resolves the
@@ -310,9 +320,12 @@ class _ListingMixin(_RevisionManagerBase):
         """
         element_index: dict[str, list[Element]] = {}
         for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
-            if author is not None and (elem.getAttribute("w:author") or "Unknown") != author:
+            rev_id = _adjudicable_id(elem)
+            if rev_id is None:
                 continue
-            element_index.setdefault(elem.getAttribute("w:id"), []).append(elem)
+            if author is not None and _revision_author(elem) != author:
+                continue
+            element_index.setdefault(str(rev_id), []).append(elem)
         return element_index
 
     def _is_in_document(self, elem) -> bool:
@@ -352,9 +365,8 @@ class _ListingMixin(_RevisionManagerBase):
         filtered call cannot land on another author's same-id revision.
         """
         if element_index is None:
-            wanted = str(revision_id)
             for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
-                if elem.getAttribute("w:id") == wanted:
+                if _adjudicable_id(elem) == revision_id:
                     return elem
             return None
         for elem in element_index.get(str(revision_id), ()):
@@ -391,7 +403,7 @@ class _ListingMixin(_RevisionManagerBase):
         ]
         if author is None:
             return elems
-        return [e for e in elems if (e.getAttribute("w:author") or "Unknown") == author]
+        return [e for e in elems if _revision_author(e) == author]
 
     def list_unhandled_revisions(self, author: str | None = None) -> list[UnhandledRevision]:
         """List the revision elements this library does not accept or reject.
@@ -433,7 +445,7 @@ class _ListingMixin(_RevisionManagerBase):
                 UnhandledRevision(
                     tag=elem.tagName,
                     id=_adjudicable_id(elem),
-                    author=elem.getAttribute("w:author") or "Unknown",
+                    author=_revision_author(elem),
                     date=_parse_w_date(elem),
                     paragraph_ref=ctx.paragraph_ref(paragraph) if paragraph is not None else None,
                 )

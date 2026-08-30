@@ -1317,6 +1317,49 @@ class TestNestedForeignRevisions:
         # A's attributed revision is untouched.
         assert [rev.id for rev in manager.list_revisions()] == [8]
 
+    @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
+    def test_non_canonical_id_resolves_through_the_index(self, method):
+        """Test that a w:id whose raw form is not str(int) still resolves.
+
+        The id half of the same index/listing agreement: the listing reports
+        ``int(w:id)`` and every lookup asks for ``str(int)``, so an index keyed
+        on the raw attribute strands ``w:id="007"`` — listed as id 7, resolved
+        by nothing, and reported as a clean document by a call that left it
+        pending. Nothing warns, because the mark has a numeric id and so is not
+        part of the unhandled honesty floor.
+        """
+        manager = _make_revision_manager('<w:ins w:id="007" w:author="A"><w:r><w:t>zero</w:t></w:r></w:ins>')
+
+        assert [rev.id for rev in manager.list_revisions()] == [7]
+        assert getattr(manager, method)() == 1
+        assert manager.list_revisions() == []
+        assert manager.list_unhandled_revisions() == []
+
+    def test_non_canonical_id_resolves_without_an_index(self):
+        """Test that the fresh-scan path matches a non-canonical w:id too.
+
+        ``accept_revision`` with no pre-built index scans the document itself;
+        it must read the id the same way the index does, or a standalone call
+        would fail on the ids a bulk call resolves.
+        """
+        manager = _make_revision_manager('<w:ins w:id="007" w:author="A"><w:r><w:t>zero</w:t></w:r></w:ins>')
+
+        assert manager.accept_revision(7) is True
+        assert manager.list_revisions() == []
+
+    def test_non_numeric_id_is_left_to_the_honesty_floor(self):
+        """Test that a mark with no numeric w:id is not indexed and is reported.
+
+        ``_adjudicable_id`` is None for it, so nothing id-keyed can reach it:
+        it must stay out of the index (an unreachable key) and out of
+        ``list_revisions``, and surface in ``list_unhandled_revisions``.
+        """
+        manager = _make_revision_manager('<w:ins w:id="abc" w:author="A"><w:r><w:t>x</w:t></w:r></w:ins>')
+
+        assert manager._revision_element_index() == {}
+        assert manager.list_revisions() == []
+        assert [u.tag for u in manager.list_unhandled_revisions()] == ["w:ins"]
+
 
 class TestRestoreDeletionAttributeCopying:
     """Tests for _restore_deletion attribute copying edge cases."""
