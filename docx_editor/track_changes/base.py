@@ -136,3 +136,9 @@ class _RevisionManagerBase:
 
     def _adopt_split_tail(self, original_ins, new_nodes) -> None:
         raise NotImplementedError
+
+    def _rewrite_insert_at(self, paragraph, text_map: TextMap, char_pos: int, text: str) -> None:
+        raise NotImplementedError
+
+    def _split_foreign_ins_at(self, edge_node, offset: int) -> Element | None:
+        raise NotImplementedError
