@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from typing import Literal
 from xml.dom.minidom import Element
 
-from ..xml_editor import DocxXMLEditor, ParagraphRef, TextMap, TextMapMatch
+from ..xml_editor import DocxXMLEditor, ParagraphRef, TextMap, TextMapMatch, TextPosition
 from .models import GroupSource, _GroupCapture, _RegistrySnapshot
 
 
@@ -105,4 +105,22 @@ class _RevisionManagerBase:
         raise NotImplementedError
 
     def _apply_paragraph_splits(self, p1, split_pos: int, segments: list[str]) -> int:
+        raise NotImplementedError
+
+    def _locate_document_wide(self, text: str, occurrence: int | None = None) -> TextMapMatch:
+        raise NotImplementedError
+
+    def _group_positions_by_ins(self, positions: list) -> list[tuple[Element | None, list[TextPosition]]]:
+        raise NotImplementedError
+
+    def _delete_from_ins_positions(self, positions: list) -> tuple[int, Element | None]:
+        raise NotImplementedError
+
+    def _split_ins_after_child(self, ins_elem, child) -> None:
+        raise NotImplementedError
+
+    def _delete_regular_segment(self, positions: list) -> tuple[int, Element | None]:
+        raise NotImplementedError
+
+    def _split_replace(self, match: TextMapMatch, replace_with: str) -> int:
         raise NotImplementedError
