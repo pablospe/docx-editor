@@ -7,3 +7,7 @@ coverage:
       default:
         target: 90%
         threshold: 0.5%
+
+ignore:
+  # Typed base for the RevisionManager mixins: its stub bodies are overridden by construction.
+  - docx_editor/track_changes/base.py
