@@ -235,9 +235,9 @@ def test_start_session_kernel_never_ready_stops_kernel(tmp_path, monkeypatch):
     """A kernel that writes a valid connection file but never answers is killed, not leaked.
 
     The file names ports nobody listens on: ``_client`` connects (ZeroMQ
-    connects lazily) and ``_kernel_alive`` times out, so ``start_session``
-    must report the kernel as not ready, stop the still-running process and
-    remove both files.
+    connects lazily) and ``_kernel_answers_shell`` times out, so
+    ``start_session`` must report the kernel as not ready, stop the
+    still-running process and remove both files.
     """
     conn = tmp_path / "kernel.json"
     shell, iopub, stdin, control, hb = _free_ports(5)
@@ -338,8 +338,9 @@ def test_start_session_ready_when_control_never_answers(tmp_path, monkeypatch):
         assert conn.exists()
         assert conn.with_suffix(".pid").exists()
     finally:
-        # conftest's sweeper reaps through is_session_running, which probes
-        # control — this stand-in is invisible to it, so clean up by hand.
+        # conftest's reaper only records spawns whose argv names
+        # ipykernel_launcher, and _launch_fake_kernel spawns `python -c`, so it
+        # never sees this stand-in at all. Clean up by hand.
         _reap(spawned)
         conn.unlink(missing_ok=True)
         conn.with_suffix(".pid").unlink(missing_ok=True)
@@ -360,21 +361,29 @@ def test_start_session_survives_control_probe_during_init(tmp_path):
 
     def probe_control_at_birth():
         while not stop.is_set():
-            if conn.exists() and conn.stat().st_size > 0:
-                try:
-                    kc = _client(conn)
-                except Exception:
-                    # Half-written connection file: unreadable this instant,
-                    # readable a moment later. Retry rather than give up, or
-                    # the guard silently probes nothing.
+            try:
+                if conn.stat().st_size == 0:
                     time.sleep(0.0005)
                     continue
-                try:
-                    kc.control_channel.send(kc.session.msg("kernel_info_request", {}))
-                finally:
-                    kc.stop_channels()
-                return
-            time.sleep(0.0005)
+                kc = _client(conn)
+            except (OSError, ValueError):
+                # No connection file yet, or a half-written one — the two
+                # states _client documents. Retry: giving up here would leave
+                # the guard silently probing nothing.
+                time.sleep(0.0005)
+                continue
+            try:
+                kc.control_channel.send(kc.session.msg("kernel_info_request", {}))
+                # stop_channels() closes the socket with linger=0, which
+                # discards anything ZMQ has not yet handed to the kernel — and
+                # on loopback the connect handshake is usually still in flight
+                # right after send(). Hold the socket open until the start has
+                # finished, or the probe this test exists to fire never
+                # arrives.
+                stop.wait(timeout=START_BUDGET)
+            finally:
+                kc.stop_channels()
+            return
 
     intruder = threading.Thread(target=probe_control_at_birth, daemon=True)
     intruder.start()
@@ -385,6 +394,7 @@ def test_start_session_survives_control_probe_during_init(tmp_path):
     finally:
         stop.set()
         intruder.join(timeout=5)
+        assert not intruder.is_alive(), "intruder thread did not finish"
         stop_session(conn)
 
 

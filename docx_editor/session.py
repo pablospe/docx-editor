@@ -327,6 +327,13 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
         # initialization finished. A control probe this early can arrive in
         # that window and be dropped by the kernel, costing us the whole
         # remaining budget for the one request we sent (ROADMAP.md #82).
+        #
+        # The ordering is upstream's and pyproject sets no ipykernel ceiling,
+        # so it is named here: verified against 7.3.0, Kernel.start() in
+        # kernelbase.py — control on_recv l.551, _control_lock l.559, shell
+        # on_recv l.564. (l.553's pre-3.10 branch defers the lock to the
+        # control thread and would break this, but requires-python >= 3.10
+        # makes it unreachable.)
         if not _kernel_answers_shell(kc, timeout=remaining):
             raise _abort(
                 f"Kernel did not become ready within {timeout}s: kernel.json appeared after {t_file:.1f}s, "
