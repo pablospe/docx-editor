@@ -180,10 +180,12 @@ def count_revision_walks(monkeypatch) -> list[int]:
 def _connection_file_from_argv(args) -> Path | None:
     """Return the ``-f <path>`` of an ipykernel_launcher command line, else None.
 
-    ``start_session`` always spawns the kernel as
+    ``start_session`` spawns the kernel as
     ``[python, "-m", "ipykernel_launcher", "-f", <connection file>]``, so the
     connection file can be recovered from the argv alone — no cooperation from
-    the code under test required.
+    the code under test required. Tests that substitute a stand-in kernel (via
+    ``session_mod._KERNEL_COMMAND`` or a fake ``subprocess``) are invisible to
+    this reaper and must reap their own processes.
 
     The path is resolved eagerly: cwd is correct now, but two tests chdir
     (``test_workspace.py``, ``test_document.py``), so a relative path stored

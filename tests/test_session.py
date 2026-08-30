@@ -42,8 +42,11 @@ from docx_editor.session import (  # noqa: E402
 )
 from docx_editor.workspace import _pid_alive  # noqa: E402
 
-# Every wait in this module is bounded by the kernel start budget, so a loaded
-# machine raises them all through DOCX_SESSION_START_TIMEOUT (CI sets 120).
+# Start waits and busy-kernel handshakes in this module are bounded by the
+# kernel start budget, so a loaded machine raises them all through
+# DOCX_EDITOR_SESSION_START_TIMEOUT (CI sets 60). A few fixed windows remain
+# where the tested behaviour is itself wall-clock (the 10 s silence probe in
+# TestKernelDeath, the stdin and silent-exec bounds).
 START_BUDGET = _start_timeout()
 # For the one behaviour that is inherently wall-clock — "my own code overran":
 # an idle kernel must dequeue a request within this long. 2 s locally, 12 s on CI.
@@ -395,7 +398,11 @@ def test_request_discarded_behind_a_raising_command(tmp_path):
             assert res.started is False  # the tell: never dequeued
             assert res.stdout == ""
 
-            _wait_for_reply(hog)  # the failing command is done; the kernel is idle
+            # The reply lands just before ipykernel's post-error abort turn
+            # (_abort_queues, one event-loop turn at the default
+            # stop_on_error_timeout of 0); the eval below builds a fresh
+            # client first, which comfortably outlasts it.
+            _wait_for_reply(hog)  # the failing command is done
         assert eval_code("globals().get('discarded')", connection_file=conn).value is None
     finally:
         stop_session(conn)
@@ -970,7 +977,9 @@ def test_stop_session_honours_the_shutdown_ack(tmp_path, monkeypatch):
     real_kill = os.kill
 
     def spying_kill(target: int, sig: int) -> None:
-        if sig != 0:  # _pid_alive probes with signal 0; only real signals count
+        # _pid_alive probes with signal 0, and unrelated components may signal
+        # other pids; only real signals aimed at this kernel count.
+        if sig != 0 and target == pid:
             signalled.append((target, sig))
         real_kill(target, sig)
 
@@ -1053,6 +1062,14 @@ time.sleep(60)
 """
 
 
+def _assert_reported_kernel_dead(report: str) -> None:
+    """The stand-in kernel's argv has no ``ipykernel_launcher``, so conftest's
+    reaper cannot see it: every test must prove ``_abort`` killed it."""
+    pid_match = re.search(r"Kernel pid (\d+)", report)
+    assert pid_match is not None, report
+    assert not _pid_alive(int(pid_match.group(1)), reap=True)
+
+
 class TestStartFailureDiagnosis:
     """A start that exhausts its budget must say why, and the budget must be
     tunable for loaded machines (ROADMAP.md #72).
@@ -1083,21 +1100,21 @@ class TestStartFailureDiagnosis:
         # Nothing left behind: no state files, and the fake is dead.
         assert not conn.exists()
         assert not conn.with_suffix(".pid").exists()
-        pid_match = re.search(r"Kernel pid (\d+)", message)
-        assert pid_match is not None, message
-        assert not _pid_alive(int(pid_match.group(1)), reap=True)
+        _assert_reported_kernel_dead(message)
 
     def test_start_budget_comes_from_env(self, tmp_path, fake_kernel, monkeypatch):
         monkeypatch.setenv(START_TIMEOUT_ENV, "2")
-        with pytest.raises(SessionError, match="did not become ready within 2.0s"):
+        with pytest.raises(SessionError, match="did not become ready within 2.0s") as excinfo:
             start_session(tmp_path / "kernel.json")
+        _assert_reported_kernel_dead(str(excinfo.value))
 
     def test_explicit_timeout_beats_env(self, tmp_path, fake_kernel, monkeypatch):
         monkeypatch.setenv(START_TIMEOUT_ENV, "2")
-        with pytest.raises(SessionError, match="did not become ready within 1.0s"):
+        with pytest.raises(SessionError, match="did not become ready within 1.0s") as excinfo:
             start_session(tmp_path / "kernel.json", timeout=1.0)
+        _assert_reported_kernel_dead(str(excinfo.value))
 
-    @pytest.mark.parametrize("value", ["soon", "0", "-5", "nan"])
+    @pytest.mark.parametrize("value", ["soon", "0", "-5", "nan", "inf"])
     def test_invalid_start_budget_raises(self, tmp_path, monkeypatch, value):
         monkeypatch.setenv(START_TIMEOUT_ENV, value)
         # Were a kernel spawned anyway, this exits at once with a distinct error.
@@ -1123,6 +1140,7 @@ class TestStartFailureDiagnosis:
         assert "did not become ready within 2.0s" in err
         assert "fake kernel: sockets bound, never served" in err
         assert START_TIMEOUT_ENV in err
+        _assert_reported_kernel_dead(err)
 
 
 class TestKernelReaping:

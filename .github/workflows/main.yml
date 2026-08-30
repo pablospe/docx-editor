@@ -27,6 +27,9 @@ jobs:
 
   tests-and-type-check:
     runs-on: ubuntu-latest
+    # A wedged runner must fail in bounded time: with every kernel start
+    # timing out, the session tests alone would otherwise grind for hours.
+    timeout-minutes: 45
     name: tests-and-type-check (${{ matrix.python-version }}, shard ${{ matrix.shard }})
     strategy:
       matrix:
@@ -56,10 +59,12 @@ jobs:
         env:
           # A kernel start on this runner (2 vCPUs, two xdist workers each
           # spawning kernels, coverage tracing on 3.11) can take well over the
-          # 30 s library default. A start that needs more than this is a broken
-          # runner and should fail loudly — the error explains which phase
-          # timed out — rather than be retried.
-          DOCX_SESSION_START_TIMEOUT: "120"
+          # 30 s library default. Doubling covers that; going higher only
+          # multiplies the wall time of a broken runner, where every start in
+          # the module times out in sequence. A start that needs more than
+          # this should fail loudly — the error explains which phase timed
+          # out — rather than be retried.
+          DOCX_EDITOR_SESSION_START_TIMEOUT: "60"
         run: >-
           uv run python -m pytest tests -n auto
           --splits 2 --group ${{ matrix.shard }}

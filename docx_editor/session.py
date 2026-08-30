@@ -12,6 +12,7 @@ CLI (see main()):
 import argparse
 import ast
 import json
+import math
 import os
 import re
 import signal
@@ -36,7 +37,7 @@ DEFAULT_CONNECTION_FILE = Path.home() / ".cache" / "docx-editor" / "kernel.json"
 # loaded machine (a 2-vCPU CI runner with parallel test workers, coverage
 # tracing on) that import alone can take longer than the unloaded 30 s default.
 DEFAULT_START_TIMEOUT = 30.0
-START_TIMEOUT_ENV = "DOCX_SESSION_START_TIMEOUT"
+START_TIMEOUT_ENV = "DOCX_EDITOR_SESSION_START_TIMEOUT"
 
 # How the kernel is launched. Tests substitute a stand-in kernel here to
 # exercise the start-failure paths deterministically; the "-f <file>" argument
@@ -147,7 +148,7 @@ def _read_pid(connection_file: Path) -> int | None:
 
 
 def _start_timeout() -> float:
-    """start_session's budget: DOCX_SESSION_START_TIMEOUT, else the 30 s default.
+    """start_session's budget: DOCX_EDITOR_SESSION_START_TIMEOUT, else the 30 s default.
 
     Raises:
         SessionError: If the variable is set to anything but a positive number.
@@ -157,15 +158,20 @@ def _start_timeout() -> float:
         return DEFAULT_START_TIMEOUT
     try:
         value = float(raw)
-        if not value > 0:  # also rejects nan
+        if not (math.isfinite(value) and value > 0):  # rejects nan and inf too
             raise ValueError
     except ValueError:
         raise SessionError(f"{START_TIMEOUT_ENV} must be a positive number of seconds, got {raw!r}") from None
     return value
 
 
-def _drain_stderr(proc: "subprocess.Popen[bytes]") -> str:
+def _drain_stderr(proc: subprocess.Popen[bytes]) -> str:
     """Tail of what a (killed and reaped) kernel wrote to stderr, without blocking.
+
+    Invariant: nothing may read ``proc.stderr`` before this runs — the raw-fd
+    read below bypasses the ``BufferedReader``, so any bytes already buffered
+    there would be silently dropped. (Today the only other reader, the
+    exited-during-startup path, always raises without reaching ``_abort``.)
 
     The pipe is switched to non-blocking first: every writer is dead, so the
     read hits EOF at once — but if a grandchild ever inherited the write end,
@@ -221,7 +227,7 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
     Args:
         connection_file: Where to write the kernel connection file
         timeout: Seconds to wait for the kernel to become ready. ``None`` (the
-            default) reads ``DOCX_SESSION_START_TIMEOUT`` and falls back to
+            default) reads ``DOCX_EDITOR_SESSION_START_TIMEOUT`` and falls back to
             30 s when it is unset or blank; an explicit argument always wins.
             The variable exists for loaded machines — CI runners, parallel
             test workers — where a fresh interpreter importing IPython takes
@@ -234,7 +240,7 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
     Raises:
         SessionError: If a session is already running, the kernel fails to
             start, the connection file it wrote is unreadable, or
-            ``DOCX_SESSION_START_TIMEOUT`` is not a positive number.
+            ``DOCX_EDITOR_SESSION_START_TIMEOUT`` is not a positive number.
             A start that runs out of budget explains itself: which phase
             timed out (connection file vs. control-channel reply), whether
             the kernel was still alive, the load average, what it wrote to
@@ -298,7 +304,6 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
             )
         time.sleep(0.1)
     t_file = time.monotonic() - t0
-    remaining = max(1.0, deadline - time.monotonic())
 
     kc = None
     try:
@@ -309,6 +314,7 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
             kc = _client(connection_file)
         except (ValueError, OSError) as e:
             raise SessionError(f"Kernel wrote an unreadable connection file ({connection_file}): {e}") from e
+        remaining = max(1.0, deadline - time.monotonic())
         if not _kernel_alive(kc, timeout=remaining):
             raise _abort(
                 f"Kernel did not become ready within {timeout}s: kernel.json appeared after {t_file:.1f}s, "
