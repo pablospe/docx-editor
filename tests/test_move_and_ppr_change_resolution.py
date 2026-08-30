@@ -32,7 +32,7 @@ import pytest
 from conftest import find_ref, replace_document_xml
 
 from docx_editor import Document, UnhandledRevisionWarning
-from docx_editor.track_changes import MOVE_RANGE_TAGS, count_revision_elements
+from docx_editor.track_changes import MOVE_RANGE_TAGS, RevisionManager, count_revision_elements
 
 _W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 _ANN = 'w:author="Ann" w:date="2026-01-29T16:55:00Z"'
@@ -145,6 +145,37 @@ STRAY_MARKS_ONLY = _document(
     "<w:r><w:t>Nothing moved</w:t></w:r>"
     "</w:p>"
 )
+
+
+# A foreign deletion nested inside the *source* half — or inside a plain
+# deletion: rejecting the host must leave the nested, still-pending w:del alone.
+def _host_with_nested_del(host_tag: str) -> str:
+    return _document(
+        "<w:p>"
+        f'<{host_tag} w:id="11" {_ANN}><w:r><w:t xml:space="preserve">kept </w:t></w:r>'
+        f'<w:del w:id="20" {_BOB}><w:r w:rsidDel="00AB1234"><w:delText>gone</w:delText></w:r></w:del></{host_tag}>'
+        "</w:p>"
+    )
+
+
+# Range marks a producer wrote badly: two From-Starts sharing an id, and an
+# id-less To-Start, each still bracketing pending content.
+COLLIDING_RANGE_IDS = _document(
+    "<w:p>"
+    f'<w:moveFromRangeStart w:id="10" {_ANN} w:name="m1"/>'
+    f'<w:moveFrom w:id="11" {_ANN}><w:r><w:delText>one</w:delText></w:r></w:moveFrom>'
+    f'<w:moveFromRangeStart w:id="10" {_ANN} w:name="m2"/>'
+    f'<w:moveFrom w:id="12" {_ANN}><w:r><w:delText>two</w:delText></w:r></w:moveFrom>'
+    '<w:moveFromRangeEnd w:id="10"/>'
+    "</w:p>"
+    "<w:p>"
+    f'<w:moveToRangeStart {_ANN} w:name="m1"/>'
+    f'<w:moveTo w:id="14" {_ANN}><w:r><w:t>one</w:t></w:r></w:moveTo>'
+    '<w:moveToRangeEnd w:id="13"/>'
+    f'<w:moveTo w:id="15" {_ANN}><w:r><w:t>two</w:t></w:r></w:moveTo>'
+    "</w:p>"
+)
+
 
 # A foreign deletion nested inside the destination half of a move.
 DEL_INSIDE_MOVE_TO = _document(
@@ -423,6 +454,53 @@ class TestInlineMove:
             assert _census(doc) == {}
 
 
+class TestNestedDeletionInsideAHost:
+    @pytest.mark.parametrize("host_tag", ["w:moveFrom", "w:del"])
+    def test_rejecting_the_host_keeps_the_nested_deletion_pending(self, make_docx, host_tag):
+        with _open(make_docx(_host_with_nested_del(host_tag))) as doc:
+            assert doc.reject_revision(11)
+
+            xml = doc._revision_manager.editor.dom.toxml()
+            assert "<w:delText>gone</w:delText>" in xml  # not converted to w:t
+            assert 'w:rsidDel="00AB1234"' in xml  # run attributes untouched
+            assert [(r.id, r.type, r.text) for r in doc.list_revisions()] == [(20, "deletion", "gone")]
+            assert doc.get_visible_text() == "kept "
+            assert doc.reject_revision(20)
+            assert doc.get_visible_text() == "kept gone"
+
+
+class TestBulkResolutionSweepsOnce:
+    @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
+    def test_accept_all_walks_the_document_a_constant_number_of_times(self, make_docx, monkeypatch, method):
+        """The range-mark sweep is a full-document walk; bulk resolution must
+        not pay for it once per move half (16 halves here)."""
+        calls: list[int] = []
+        original = RevisionManager._sweep_move_range_marks
+
+        def counting(self):
+            calls.append(1)
+            original(self)
+
+        monkeypatch.setattr(RevisionManager, "_sweep_move_range_marks", counting)
+        with _open(make_docx(TABLE_MOVE)) as doc:
+            assert getattr(doc, method)() == 16
+            assert _census(doc) == {}
+        # One deferred sweep at the end of the loop, one unconditional sweep in
+        # _resolve_all_reporting.
+        assert len(calls) <= 2
+
+    def test_changeset_resolution_sweeps_once_too(self, make_docx, monkeypatch):
+        calls: list[int] = []
+        original = RevisionManager._sweep_move_range_marks
+        monkeypatch.setattr(RevisionManager, "_sweep_move_range_marks", lambda self: (calls.append(1), original(self)))
+        with _open(make_docx(TABLE_MOVE)) as doc:
+            changeset_id = doc.list_revisions()[0].changeset_id
+            assert changeset_id is not None
+            assert doc.accept_changeset(changeset_id) == 16
+            assert _census(doc) == {}
+        assert len(calls) == 1
+
+
 class TestDamagedFiles:
     @pytest.mark.parametrize(
         "body,accepted,rejected",
@@ -447,6 +525,20 @@ class TestDamagedFiles:
         with _open(make_docx(body)) as doc:
             assert getattr(doc, method)() == 2
             assert _census(doc) == {}
+
+    def test_colliding_or_missing_range_ids_never_pair_across_ranges(self, make_docx):
+        """A duplicated Start id and an id-less Start each fall under the
+        unpaired rule: nothing is swept while their family has content, and
+        everything goes once it is gone — in one accept_revision call."""
+        with _open(make_docx(COLLIDING_RANGE_IDS)) as doc:
+            assert doc.accept_revision(11)  # "one" leaves its source
+            census = _census(doc)
+            assert census["w:moveFromRangeStart"] == 2  # both Starts still there
+            assert census["w:moveFromRangeEnd"] == 1
+            assert doc.accept_revision(12)  # last From content
+            assert doc.accept_revision(14) and doc.accept_revision(15)
+            assert _census(doc) == {}
+            assert doc.get_visible_text() == "\nonetwo"
 
     def test_stray_marks_with_no_content_are_swept_and_never_counted(self, make_docx):
         with _open(make_docx(STRAY_MARKS_ONLY)) as doc:

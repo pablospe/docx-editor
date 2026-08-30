@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from conftest import replace_docx_parts
 
-from docx_editor import Document
+from docx_editor import Document, UnhandledRevisionWarning
 
 REPO = Path(__file__).resolve().parents[1]
 HARNESS_PATH = REPO / "benchmarks" / "corpus" / "corpus_harness.py"
@@ -86,6 +86,32 @@ def fake_soffice(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setenv("FAKE_SOFFICE_HEARTBEAT", str(tmp_path / "heartbeat"))
     monkeypatch.setattr(harness, "LO_PROFILE", tmp_path / "lo profile")  # the space is the point
     return script
+
+
+def test_run_single_fails_save2_when_a_resolvable_type_survives_accept_all(tmp_path: Path, monkeypatch):
+    """The save2 post-condition: after accept_all, word/document.xml may hold
+    only tags accept_all never resolves. A w:moveFrom with no w:id is exactly
+    that — a resolvable *type* the library cannot reach by id."""
+    monkeypatch.setattr(harness, "OUT_DIR", tmp_path / "out")
+    monkeypatch.setattr(harness, "WORK_DIR", tmp_path / "work")
+    body = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+        "<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"
+        '<w:p><w:moveFrom w:author="Ann" w:date="2026-01-29T16:55:00Z"><w:r><w:t>gone</w:t></w:r></w:moveFrom></w:p>'
+        "</w:body></w:document>"
+    )
+    src = tmp_path / "idless_move.docx"
+    replace_docx_parts(SIMPLE, src, {"word/document.xml": body})
+
+    with pytest.warns(UnhandledRevisionWarning):  # the reopen stage's accept_all reports it too
+        result = harness.run_single(src, do_soffice=False)
+
+    save2 = result["stages"]["save2"]
+    assert save2["status"] == "fail"
+    assert save2["error_type"] == "AssertResolvedTypesRemain"
+    assert "'w:moveFrom': 1" in save2["error"]
+    assert result["stages"]["reopen"]["unhandled"] == {"w:moveFrom": 1}
 
 
 @pytest.fixture

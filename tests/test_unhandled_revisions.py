@@ -454,13 +454,34 @@ class TestListUnhandledRevisions:
         assert len(sect) == 1
         assert sect[0].paragraph_ref is None
 
-    def test_mark_without_w_id_reports_id_none(self, make_docx):
-        """cellIns/cellDel/cellMerge are id-bearing here, but a mark can lack one."""
-        body = _document(f"<w:p><w:r><w:rPr><w:rPrChange {_ANN}><w:rPr/></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p>")
+    @pytest.mark.parametrize(
+        ("body", "tag"),
+        [
+            (
+                _document(
+                    f"<w:p><w:r><w:rPr><w:rPrChange {_ANN}><w:rPr/></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p>"
+                ),
+                "w:rPrChange",
+            ),
+            (
+                _document(
+                    f"<w:p><w:pPr><w:pPrChange {_ANN}><w:pPr/></w:pPrChange></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"
+                ),
+                "w:pPrChange",
+            ),
+        ],
+        ids=["unhandled-tag", "handled-tag"],
+    )
+    def test_mark_without_w_id_reports_id_none(self, make_docx, body, tag):
+        """A mark can lack a w:id — whether its tag is unhandled or handled.
+
+        A handled tag with no id is unreachable by ``accept_revision`` and
+        omitted by ``list_revisions``, so it must surface here instead.
+        """
         path = make_docx(body, "no_id")
         with _open(path) as doc:
             rows = doc.list_unhandled_revisions()
-        assert [(r.tag, r.id) for r in rows] == [("w:rPrChange", None)]
+        assert [(r.tag, r.id) for r in rows] == [(tag, None)]
 
     def test_mark_without_author_reads_as_unknown(self, make_docx):
         """The range *End marks carry only w:id, exactly as Word writes them."""
@@ -658,3 +679,54 @@ def test_tag_constants_are_disjoint_and_complete():
     assert set(ALL_REVISION_TAGS) == handled | ranges | unhandled
     assert len(ALL_REVISION_TAGS) == len(set(ALL_REVISION_TAGS))
     assert handled == {"w:ins", "w:del", "w:moveFrom", "w:moveTo", "w:pPrChange"}
+
+
+# A handled-type mark that no id-keyed operation can reach: missing or
+# non-numeric w:id. list_revisions() omits it (Revision.id is an int), so the
+# honesty floor must report it — otherwise accept_all() claims a clean
+# document while the mark stays, and for a w:moveFrom its text stays hidden.
+IDLESS_PPR_CHANGE = _document(
+    f'<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:pPrChange {_ANN}><w:pPr/></w:pPrChange></w:pPr>'
+    "<w:r><w:t>Heading</w:t></w:r></w:p>"
+)
+IDLESS_MOVE = _document(
+    f"<w:p><w:moveFrom {_ANN}><w:r><w:t>gone</w:t></w:r></w:moveFrom>"
+    '<w:r><w:t xml:space="preserve"> tail</w:t></w:r></w:p>'
+    f"<w:p><w:moveTo {_ANN}><w:r><w:t>gone</w:t></w:r></w:moveTo></w:p>"
+)
+NON_NUMERIC_MOVE_ID = _document(
+    f'<w:p><w:moveFrom w:id="m1" {_ANN}><w:r><w:t>gone</w:t></w:r></w:moveFrom>'
+    '<w:r><w:t xml:space="preserve"> tail</w:t></w:r></w:p>'
+)
+
+
+class TestHandledTagsWithoutAnAdjudicableId:
+    @pytest.mark.parametrize(
+        ("body", "expected"),
+        [
+            (IDLESS_PPR_CHANGE, [("w:pPrChange", None)]),
+            (IDLESS_MOVE, [("w:moveFrom", None), ("w:moveTo", None)]),
+            (NON_NUMERIC_MOVE_ID, [("w:moveFrom", None)]),
+        ],
+        ids=["idless-pPrChange", "idless-move", "non-numeric-move-id"],
+    )
+    def test_listed_as_unhandled_and_counted_by_accept_all(self, make_docx, body, expected):
+        path = make_docx(body, "no_adjudicable_id")
+        with _open(path) as doc:
+            assert doc.list_revisions() == []
+            assert [(r.tag, r.id) for r in doc.list_unhandled_revisions()] == expected
+            with pytest.warns(UnhandledRevisionWarning):
+                result = doc.accept_all()
+            assert result == 0
+            assert result.unhandled == len(expected)
+            assert result.unhandled_types == {tag: sum(1 for t, _ in expected if t == tag) for tag, _ in expected}
+            # Still in the document: nothing could resolve it.
+            assert set(count_revision_elements(doc._revision_manager.editor.dom).by_tag) == {t for t, _ in expected}
+
+    def test_idless_move_from_text_is_hidden_and_reported(self, make_docx):
+        """The moved-away text is invisible (deleted at its source) yet pending."""
+        path = make_docx(IDLESS_MOVE, "idless_move_text")
+        with _open(path) as doc:
+            assert doc.get_visible_text() == " tail\ngone"
+            assert [r.tag for r in doc.list_unhandled_revisions(author="Ann")] == ["w:moveFrom", "w:moveTo"]
+            assert doc.list_unhandled_revisions(author="Bob") == []

@@ -270,7 +270,7 @@ for ref, loc in doc.list_paragraph_locations():
 
 #### `get_visible_text()`
 
-Get flattened visible document text. Inserted text is included and deleted text is excluded. A tab mark (`<w:tab/>`) renders as one `\t` character — the same coordinate space `find_text()` searches and `SearchResult.start`/`end` index. Text a tracked move took away (`w:moveFrom`) is excluded like a deletion; its destination (`w:moveTo`) is included. Text inside a drawing's text box is excluded too — it belongs to the box, not to any addressable paragraph. A document whose content lives entirely in text boxes therefore returns nothing but the separators between its host paragraphs; check [`has_textbox_content`](#has_textbox_content) before reporting it as empty.
+Get flattened visible document text. Inserted text is included and deleted text is excluded. A tab mark (`<w:tab/>`) renders as one `\t` character — the same coordinate space `find_text()` searches and `SearchResult.start`/`end` index. A pending move counts like an insertion at its destination and a deletion at its source: its `w:moveTo` text is included and its `w:moveFrom` text excluded, so paragraph hashes and the refs built on them reflect the moved text at its destination only. Text inside a drawing's text box is excluded too — it belongs to the box, not to any addressable paragraph. A document whose content lives entirely in text boxes therefore returns nothing but the separators between its host paragraphs; check [`has_textbox_content`](#has_textbox_content) before reporting it as empty.
 
 **Returns:** Visible text with paragraphs separated by newlines (str)
 
@@ -282,7 +282,7 @@ text = doc.get_visible_text()
 
 #### `get_original_text()`
 
-Get flattened original (pre-revision) document text. Deleted text is included and inserted text is excluded — the inverse of `get_visible_text()`. For intra-paragraph revisions this equals what `get_visible_text()` would return after `reject_all()`, without modifying the document (paragraph-level revisions such as inserted paragraph marks only affect line boundaries). Text inside a drawing's text box is excluded, exactly as in `get_visible_text()`. Read-only: paragraph references and editing operations keep working on the visible view.
+Get flattened original (pre-revision) document text. Deleted text is included and inserted text is excluded — the inverse of `get_visible_text()` — and a pending move's text appears at its source (`w:moveFrom`) only. For intra-paragraph revisions this equals what `get_visible_text()` would return after `reject_all()`, without modifying the document (paragraph-level revisions such as inserted paragraph marks only affect line boundaries). Text inside a drawing's text box is excluded, exactly as in `get_visible_text()`. Read-only: paragraph references and editing operations keep working on the visible view.
 
 **Returns:** Original text with paragraphs separated by newlines (str)
 
@@ -1141,7 +1141,7 @@ section and table property changes (`w:rPrChange`, `w:sectPrChange`, the table
 `w:cellMerge`), `w:numberingChange` and the custom-XML range marks. These
 survive open/edit/save unchanged and are left pending by
 `accept_all()`/`reject_all()`. A move's range marks are never listed here:
-they are swept with the move they bracket.
+they are swept with the move they bracket. A handled-type mark that carries no numeric `w:id` (a nonconforming producer) is listed here rather than omitted: nothing id-keyed can resolve it, and it must not vanish from both listings.
 
 Call this before telling a human "all changes accepted": on a run-format-only
 redline `accept_all()` returns 0 because there was nothing it *could* accept,

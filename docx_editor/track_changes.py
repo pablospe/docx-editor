@@ -1,6 +1,7 @@
 """Track changes management for docx_editor.
 
-Provides RevisionManager for creating and managing tracked changes (insertions/deletions).
+Provides RevisionManager for creating and managing tracked changes
+(insertions, deletions, moves, paragraph-property changes).
 """
 
 import difflib
@@ -759,7 +760,7 @@ class Revision:
 #
 # HANDLED are the tags this library adjudicates by id: accept_revision /
 # reject_revision / accept_all / reject_all / list_revisions all walk exactly
-# these. Insertions and deletions, the two halves of a content move, and a
+# these: insertions and deletions, the two halves of a content move, and a
 # paragraph-property change (ISSUES.md #68 — the two foreign families the
 # corpus census actually found in the wild, see benchmarks/corpus/README.md).
 #
@@ -969,7 +970,10 @@ class UnhandledRevision:
     ``accept_revision()`` could only fail — see ``list_unhandled_revisions``.
 
     Attributes:
-        tag: the element's tag, one of ``UNHANDLED_REVISION_TAGS``
+        tag: the element's tag — one of ``UNHANDLED_REVISION_TAGS``, or a
+            ``HANDLED_REVISION_TAGS`` tag whose element carries no numeric
+            ``w:id`` (nothing id-keyed can resolve it, so it is reported here
+            rather than omitted from both listings)
             (e.g. ``"w:rPrChange"``).
         id: the element's ``w:id``, or None when it carries none or a
             non-numeric one. Unlike :class:`Revision`, an id-less mark is still
@@ -1014,8 +1018,10 @@ class ResolveResult(int):
     - ``unhandled``: how many revision elements the document still holds that
       this library never resolves — run/section/table property changes,
       table-structure revisions, ``w:numberingChange``, custom-XML range
-      marks (see ``UNHANDLED_REVISION_TAGS``). ``0`` on a redline made of
-      insertions, deletions, moves and paragraph-property changes.
+      marks (see ``UNHANDLED_REVISION_TAGS``) — plus any handled-type mark
+      whose ``w:id`` is missing or non-numeric, which no id-keyed call can
+      reach. ``0`` on a redline made of insertions, deletions, moves and
+      paragraph-property changes.
     - ``unhandled_types``: tag -> count for those elements, e.g.
       ``{"w:rPrChange": 3, "w:cellIns": 1}``. Empty when ``unhandled`` is 0.
 
@@ -1093,6 +1099,24 @@ def _addressable_paragraph(elem) -> Element | None:
     return paragraph
 
 
+def _adjudicable_id(elem) -> int | None:
+    """``elem``'s ``w:id`` as an int, or None when it is missing or non-numeric.
+
+    ``Revision.id`` is an int and every id-keyed operation targets ints, so a
+    mark without a numeric id is unreachable by ``accept_revision``/
+    ``reject_revision`` however handled its tag is. Nonconforming producers
+    only; the one definition is shared by the listing (which omits such a
+    mark) and the honesty floor (which reports it) so the two cannot drift.
+    """
+    raw_id = elem.getAttribute("w:id")
+    if not raw_id:
+        return None
+    try:
+        return int(raw_id)
+    except ValueError:
+        return None
+
+
 def _nearest_revision_ancestor_id(elem) -> int | None:
     """id of the closest handled-revision ancestor carrying a w:id, else None."""
     node = elem.parentNode
@@ -1127,13 +1151,16 @@ def _revision_elements(root) -> list[Element]:
 
 def _insertion_text_nodes(elem) -> list:
     """All <w:t>/<w:delText> descendants and run-level <w:tab/> marks of a
-    <w:ins>, in document order.
+    <w:ins>, <w:moveFrom> or <w:moveTo>, in document order.
 
     Including <w:delText> means a host insertion whose content was later
     deleted by a nested <w:del> still reports the full text it originally
     inserted (plain <w:delText> never appears under <w:ins> otherwise).
     Tabs are included so ``Revision.text`` spells the same ``"\\t"`` the text
-    map does and the revision's ``occurrence`` keeps resolving.
+    map does and the revision's ``occurrence`` keeps resolving. The same walk
+    serves both move halves: Word writes plain <w:t> inside a <w:moveFrom>, a
+    hand-authored one may use <w:delText>, and either way the moved text is
+    what the row should report.
 
     Text inside a drawing's text box is skipped: an insertion wrapping a run
     that carries a box reports the text it inserted, not the box's content,
@@ -1390,6 +1417,10 @@ class RevisionManager:
         # inferred alike. Lets split_count() answer without a DOM walk, so
         # result-ref building stays cheap for the common no-split edit.
         self._paragraph_mark_ids: set[int] = set()
+        # Bulk resolution (``_resolve_all``/``_resolve_ids``) defers the move
+        # range-mark sweep to one walk at the end instead of one per move half.
+        self._defer_range_sweep = False
+        self._range_sweep_pending = False
         self._reconstruct_groups()
 
     def _reconstruct_groups(self) -> None:
@@ -1780,7 +1811,7 @@ class RevisionManager:
             return {}
         members: dict[int, list[Element]] = {}
         for elem in _revision_elements(self.editor.dom):
-            if _is_paragraph_mark_ins(elem):
+            if _is_paragraph_mark_marker(elem):
                 continue
             try:
                 rev_id = int(elem.getAttribute("w:id"))
@@ -4229,15 +4260,10 @@ class RevisionManager:
             ctx: Per-call location cache from list_revisions. None (detached
                 elements, unit tests) leaves paragraph_ref/occurrence unset.
         """
-        rev_id = elem.getAttribute("w:id")
-        if not rev_id:
-            return None
-        try:
-            rev_id_int = int(rev_id)
-        except ValueError:
-            # Nonconforming producer: Revision.id is an int and every
-            # id-keyed operation targets ints, so a non-numeric w:id is
-            # unrepresentable — omit it rather than crash the listing.
+        rev_id_int = _adjudicable_id(elem)
+        if rev_id_int is None:
+            # Nonconforming producer: unrepresentable here, reported by
+            # ``list_unhandled_revisions`` instead (see ``_unhandled_elements``).
             return None
 
         author = elem.getAttribute("w:author") or "Unknown"
@@ -4414,11 +4440,11 @@ class RevisionManager:
         elif tag == "w:moveTo" and not _is_paragraph_mark_marker(elem):
             # Accept the destination half: the moved text stays.
             self._unwrap_element(elem)
-            self._sweep_move_range_marks()
+            self._sweep_after_move()
         else:  # w:moveFrom, or a paragraph-mark marker of either half
             # Accept the source half: the moved-away text goes.
             self._remove_element(elem)
-            self._sweep_move_range_marks()
+            self._sweep_after_move()
         return True
 
     def reject_revision(self, revision_id: int, element_index: dict[str, list[Element]] | None = None) -> bool:
@@ -4470,11 +4496,11 @@ class RevisionManager:
         elif tag == "w:moveFrom" and not _is_paragraph_mark_marker(elem):
             # Reject the source half: the text stays where it was.
             self._restore_deletion(elem)
-            self._sweep_move_range_marks()
+            self._sweep_after_move()
         else:  # w:moveTo, or a paragraph-mark marker of either half
             # Reject the destination half: the moved-in text goes.
             self._remove_element(elem)
-            self._sweep_move_range_marks()
+            self._sweep_after_move()
         return True
 
     def _resolve_ids(
@@ -4504,14 +4530,15 @@ class RevisionManager:
         members = list(members)
         element_index = self._revision_element_index()
         count = 0
-        while True:
-            progressed = False
-            for rev_id in sorted(members, reverse=True):
-                if resolve(rev_id, element_index):
-                    count += 1
-                    progressed = True
-            if not progressed:
-                return count
+        with self._deferred_range_sweep():
+            while True:
+                progressed = False
+                for rev_id in sorted(members, reverse=True):
+                    if resolve(rev_id, element_index):
+                        count += 1
+                        progressed = True
+                if not progressed:
+                    return count
 
     def _resolve_group(self, group_id: int, resolve: Callable[[int, dict[str, list[Element]] | None], bool]) -> int:
         """Apply ``resolve`` to every member revision of a group."""
@@ -4626,20 +4653,28 @@ class RevisionManager:
         """
         count = 0
         element_index = self._revision_element_index()
-        while True:
-            revisions = self.list_revisions(author=author, with_location=False)
-            if not revisions:
-                return count
-            progressed = False
-            for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
-                if resolve(rev.id, element_index):
-                    count += 1
-                    progressed = True
-            if not progressed:
-                return count
+        with self._deferred_range_sweep():
+            while True:
+                revisions = self.list_revisions(author=author, with_location=False)
+                if not revisions:
+                    return count
+                progressed = False
+                for rev in sorted(revisions, key=lambda r: r.id, reverse=True):
+                    if resolve(rev.id, element_index):
+                        count += 1
+                        progressed = True
+                if not progressed:
+                    return count
 
     def _unhandled_elements(self, author: str | None = None) -> list[Element]:
-        """Pending elements whose tag is in ``UNHANDLED_REVISION_TAGS``, document order.
+        """Pending elements this library cannot resolve, in document order.
+
+        Every ``UNHANDLED_REVISION_TAGS`` element, plus any
+        ``HANDLED_REVISION_TAGS`` element with no numeric ``w:id``
+        (``_adjudicable_id``): ``list_revisions`` omits such a mark because
+        nothing id-keyed could target it, so without this it would vanish
+        from both listings and ``accept_all`` would claim a clean document
+        while the mark — and, for a ``w:moveFrom``, its hidden text — stays.
 
         Pending, not merely present: the recorded subtree of a change record is
         skipped (``skip_change_records``), so a ``w:cellIns`` inside a
@@ -4650,7 +4685,14 @@ class RevisionManager:
         reads as ``"Unknown"``, so an unattributed mark is matched only by
         ``author="Unknown"`` and excluded from every other filtered scan.
         """
-        elems = list(iter_revision_elements(self.editor.dom, UNHANDLED_REVISION_TAGS, skip_change_records=True))
+        unhandled = frozenset(UNHANDLED_REVISION_TAGS)
+        elems = [
+            e
+            for e in iter_revision_elements(
+                self.editor.dom, UNHANDLED_REVISION_TAGS + HANDLED_REVISION_TAGS, skip_change_records=True
+            )
+            if e.tagName in unhandled or _adjudicable_id(e) is None
+        ]
         if author is None:
             return elems
         return [e for e in elems if (e.getAttribute("w:author") or "Unknown") == author]
@@ -4663,7 +4705,10 @@ class RevisionManager:
         run/section/table property changes, table-structure revisions,
         ``w:numberingChange``, custom-XML range marks (see
         ``UNHANDLED_REVISION_TAGS``). They survive open/edit/save unchanged and
-        are left pending by ``accept_all``/``reject_all``.
+        are left pending by ``accept_all``/``reject_all``. A handled-type mark
+        with no numeric ``w:id`` is listed here too: ``list_revisions`` cannot
+        represent it, and a mark that appears in neither listing would let
+        ``accept_all`` claim a clean document it did not deliver.
 
         A separate method rather than extra rows from ``list_revisions``: these
         carry nothing ``accept_revision(rev.id)`` could act on, so mixing them
@@ -4687,16 +4732,11 @@ class RevisionManager:
         ctx = _RevisionLocationContext(self.editor.dom)
         rows: list[UnhandledRevision] = []
         for elem in elems:
-            raw_id = elem.getAttribute("w:id")
-            try:
-                elem_id = int(raw_id) if raw_id else None
-            except ValueError:
-                elem_id = None
             paragraph = _addressable_paragraph(elem)
             rows.append(
                 UnhandledRevision(
                     tag=elem.tagName,
-                    id=elem_id,
+                    id=_adjudicable_id(elem),
                     author=elem.getAttribute("w:author") or "Unknown",
                     date=_parse_w_date(elem),
                     paragraph_ref=ctx.paragraph_ref(paragraph) if paragraph is not None else None,
@@ -4864,6 +4904,33 @@ class RevisionManager:
                     ppr.insertBefore(child, anchor)
         self._remove_element(ppr_change)
 
+    def _sweep_after_move(self) -> None:
+        """Sweep range marks now, or note that a deferred bulk sweep is owed."""
+        if self._defer_range_sweep:
+            self._range_sweep_pending = True
+        else:
+            self._sweep_move_range_marks()
+
+    @contextmanager
+    def _deferred_range_sweep(self) -> Iterator[None]:
+        """Defer ``_sweep_after_move`` to one sweep when the block exits.
+
+        The sweep is a full-document walk; ``_resolve_all``/``_resolve_ids``
+        resolve many move halves per call and would otherwise walk the
+        document once per half — quadratic in the number of moves. Range
+        marks are only ever *removed* by the sweep, so sweeping once at the
+        end sees exactly the same content state as sweeping after each half.
+        """
+        previous = (self._defer_range_sweep, self._range_sweep_pending)
+        self._defer_range_sweep, self._range_sweep_pending = True, False
+        try:
+            yield
+        finally:
+            pending = self._range_sweep_pending
+            self._defer_range_sweep, self._range_sweep_pending = previous
+            if pending:
+                self._sweep_after_move()
+
     def _sweep_move_range_marks(self) -> None:
         """Remove move range marks whose content has all been resolved.
 
@@ -4872,12 +4939,14 @@ class RevisionManager:
         ``*RangeStart`` is paired with the ``*RangeEnd`` carrying the same
         ``w:id``; the pair is removed when no pending content of its family
         lies between them. Marks left unpaired (a Start with no End or the
-        reverse — a damaged file, or an End that precedes its Start) are
+        reverse — a damaged file, or an End that precedes its Start), marks
+        with no ``w:id`` at all, and a Start whose id a later Start reuses are
         removed once no pending content of their family remains anywhere in
         the document. Never destroys content: only the empty marks go.
 
-        Called after every move resolution and at the end of
-        ``accept_all``/``reject_all``. Word writes the From-range's End at body
+        Called after every move resolution (once per bulk call — see
+        ``_deferred_range_sweep``) and at the end of ``accept_all``/
+        ``reject_all``. Word writes the From-range's End at body
         level for a moved table (outside any paragraph), which is why this is
         a document walk rather than a paragraph-local one.
         """
@@ -4893,7 +4962,14 @@ class RevisionManager:
                 content_seen[family] = True
                 for entry in open_starts[family].values():
                     entry[1] = True
+            elif not elem.getAttribute("w:id"):
+                # Unpairable: an id-less mark could otherwise pair a Start of
+                # one range with the End of another.
+                unpaired[family].append(elem)
             elif tag.endswith("RangeStart"):
+                shadowed = open_starts[family].pop(elem.getAttribute("w:id"), None)
+                if shadowed is not None:
+                    unpaired[family].append(shadowed[0])
                 open_starts[family][elem.getAttribute("w:id")] = [elem, False]
             else:  # *RangeEnd
                 entry = open_starts[family].pop(elem.getAttribute("w:id"), None)
@@ -4911,9 +4987,26 @@ class RevisionManager:
                 self._remove_element(elem)
 
     def _restore_deletion(self, del_elem) -> None:
-        """Restore deleted content by converting w:delText back to w:t."""
+        """Restore deleted content by converting w:delText back to w:t.
+
+        ``del_elem`` is a ``w:del`` or a ``w:moveFrom``. A ``w:del`` nested
+        inside it is a separate, still-pending revision: its runs keep
+        ``w:delText`` and ``w:rsidDel``, and it is left wrapped for its own
+        accept/reject.
+        """
+
+        def inside_nested_del(node) -> bool:
+            parent = node.parentNode
+            while parent is not None and parent is not del_elem:
+                if getattr(parent, "tagName", "") == "w:del":
+                    return True
+                parent = parent.parentNode
+            return False
+
         # Convert all w:delText to w:t
         for del_text in list(del_elem.getElementsByTagName("w:delText")):
+            if inside_nested_del(del_text):
+                continue
             t_elem = self.editor.dom.createElement("w:t")
             # Copy content
             while del_text.firstChild:
@@ -4926,7 +5019,7 @@ class RevisionManager:
 
         # Update run attributes: w:rsidDel back to w:rsidR
         for run in del_elem.getElementsByTagName("w:r"):
-            if run.hasAttribute("w:rsidDel"):
+            if run.hasAttribute("w:rsidDel") and not inside_nested_del(run):
                 run.setAttribute("w:rsidR", run.getAttribute("w:rsidDel"))
                 run.removeAttribute("w:rsidDel")
 

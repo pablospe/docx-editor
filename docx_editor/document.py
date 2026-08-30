@@ -1328,9 +1328,10 @@ class Document:
         Returns flattened text with paragraphs separated by newlines.
         Inserted text is included, deleted text is excluded, and a tab mark
         (``<w:tab/>``) is one ``\\t`` — the coordinate space ``find_text()``
-        searches and ``SearchResult`` offsets index. Text a tracked move took
-        away (``w:moveFrom``) is excluded like a deletion; its destination
-        (``w:moveTo``) is included. Text inside a
+        searches and ``SearchResult`` offsets index. A pending move counts the
+        same way: its ``w:moveTo`` text is included and its ``w:moveFrom``
+        text excluded, so paragraph hashes (and the refs built on them)
+        reflect the moved text at its destination only. Text inside a
         drawing's text box is excluded too — it belongs to the box, not to
         any addressable paragraph. A document whose content lives entirely in
         text boxes therefore returns nothing but the separators between its
@@ -1354,7 +1355,8 @@ class Document:
 
         Returns flattened text with paragraphs separated by newlines.
         Deleted text is included, inserted text is excluded — the inverse
-        of get_visible_text().
+        of get_visible_text() — and a pending move's text appears at its
+        source (``w:moveFrom``) only.
 
         For intra-paragraph revisions this equals what get_visible_text()
         would return after reject_all(), without modifying the document.
@@ -2401,7 +2403,10 @@ class Document:
         ``w:cellMerge``), ``w:numberingChange`` and the custom-XML range
         marks. These survive open/edit/save unchanged and are left pending by
         ``accept_all()``/``reject_all()``. A move's range marks are never
-        listed here: they are swept with the move they bracket.
+        listed here: they are swept with the move they bracket. A handled-type
+        mark that carries no numeric ``w:id`` (a nonconforming producer) is
+        listed here rather than omitted: nothing id-keyed can resolve it, and
+        it must not vanish from both listings.
 
         Call this before telling a human "all changes accepted": on a
         run-format-only redline ``accept_all()`` returns 0 because there was

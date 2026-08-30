@@ -421,13 +421,14 @@ class UnhandledRevisionWarning(UserWarning):
     """Warns that a resolution left revision types this library does not resolve.
 
     Emitted by ``accept_all``/``reject_all`` when the document still holds
-    revision elements outside the ``w:ins``/``w:del`` pair those verbs walk —
-    format changes (``w:pPrChange``, ``w:rPrChange``, ``w:trPrChange``, ...),
-    content moves (``w:moveFrom``/``w:moveTo``), table-structure revisions
-    (``w:cellIns``, ``w:cellDel``, ``w:cellMerge``) and the custom-XML range
-    marks. Without it a
-    ``accept_all()`` returning 0 on a format-only redline reads as "there was
-    nothing to accept" rather than "nothing here could be accepted".
+    revision elements outside the types those verbs resolve (insertions,
+    deletions, moves, paragraph-property changes) — run/section/table
+    property changes (``w:rPrChange``, ``w:sectPrChange``, ``w:trPrChange``,
+    ...), table-structure revisions (``w:cellIns``, ``w:cellDel``,
+    ``w:cellMerge``), ``w:numberingChange`` and the custom-XML range marks.
+    Without it ``accept_all()`` returning 0 on a run-format-only redline reads
+    as "there was nothing to accept" rather than "nothing here could be
+    accepted".
 
     Inspect what remains with ``Document.list_unhandled_revisions()``, or read
     the counts off the returned ``ResolveResult`` (``.unhandled`` /
