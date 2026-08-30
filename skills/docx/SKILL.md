@@ -674,8 +674,10 @@ nested deletion's `nested_under` points back at its host.
   disappear with it.
 - `accept_all()` / `reject_all()` resolve nesting fully (they re-scan until
   no listed revision remains), and `author=` filters process each author's
-  changes independently. Revision types outside `list_revisions()` are not
-  resolved at all — see the `result.unhandled` recipe above.
+  changes independently — including when a producer repeats a `w:id` across
+  authors, where a filtered call still resolves only that author's own
+  elements. Revision types outside `list_revisions()` are not resolved at
+  all — see the `result.unhandled` recipe above.
 
 **Moves are two rows.** A drag-and-drop move lists as a `move_from` (the
 source, text excluded from the visible view) and a `move_to` (the
