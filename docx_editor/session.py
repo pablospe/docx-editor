@@ -71,6 +71,35 @@ def _client(connection_file: Path) -> "BlockingKernelClient":
     return kc
 
 
+def _kernel_info_reply(kc: "BlockingKernelClient", channel: Literal["control", "shell"], timeout: float) -> bool:
+    """True if a kernel_info request on ``channel`` is answered within ``timeout``.
+
+    One request, then poll in 0.5 s slices for a reply whose parent_header names
+    it — replies to anything else (another client, an earlier probe) are
+    skipped, not mistaken for ours.
+    """
+    msg = kc.session.msg("kernel_info_request", {})
+    if channel == "control":
+        kc.control_channel.send(msg)
+        get_msg = kc.get_control_msg
+    else:
+        kc.shell_channel.send(msg)
+        get_msg = kc.get_shell_msg
+    msg_id = msg["header"]["msg_id"]
+
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            reply = get_msg(timeout=min(remaining, 0.5))
+        except Empty:
+            continue
+        if reply.get("parent_header", {}).get("msg_id") == msg_id:
+            return True
+
+
 def _kernel_alive(kc: "BlockingKernelClient", timeout: float = 5.0) -> bool:
     """True if the kernel answers a kernel_info request on the *control* channel.
 
@@ -79,46 +108,22 @@ def _kernel_alive(kc: "BlockingKernelClient", timeout: float = 5.0) -> bool:
     wait_for_ready() uses) is serialized behind the running execute_request, so
     there a busy kernel is indistinguishable from a dead one.
     """
-    msg = kc.session.msg("kernel_info_request", {})
-    kc.control_channel.send(msg)
-    msg_id = msg["header"]["msg_id"]
-
-    deadline = time.monotonic() + timeout
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return False
-        try:
-            reply = kc.get_control_msg(timeout=min(remaining, 0.5))
-        except Empty:
-            continue
-        if reply.get("parent_header", {}).get("msg_id") == msg_id:
-            return True
+    return _kernel_info_reply(kc, "control", timeout)
 
 
-def _kernel_idle(kc: "BlockingKernelClient", timeout: float = 2.0) -> bool:
+def _kernel_answers_shell(kc: "BlockingKernelClient", timeout: float = 2.0) -> bool:
     """True if the kernel answers a kernel_info request on the *shell* channel.
 
-    The shell channel is serialized behind any running execute_request, so a
-    busy kernel leaves this request queued past the window — which is exactly
-    the idle/busy signal. The queued reply eventually lands on this
-    disconnected client's socket and is dropped by ZMQ.
-    """
-    msg = kc.session.msg("kernel_info_request", {})
-    kc.shell_channel.send(msg)
-    msg_id = msg["header"]["msg_id"]
+    Two readings, both used:
 
-    deadline = time.monotonic() + timeout
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return False
-        try:
-            reply = kc.get_shell_msg(timeout=min(remaining, 0.5))
-        except Empty:
-            continue
-        if reply.get("parent_header", {}).get("msg_id") == msg_id:
-            return True
+    - Against a running kernel this is the idle/busy signal. The shell channel
+      is serialized behind any running execute_request, so a busy kernel leaves
+      this request queued past the window. The queued reply eventually lands on
+      this disconnected client's socket and is dropped by ZMQ.
+    - During startup it is the readiness signal, because ipykernel registers the
+      shell handler only after it finishes initializing (ROADMAP.md #82).
+    """
+    return _kernel_info_reply(kc, "shell", timeout)
 
 
 def _kernel_dead(kc: "BlockingKernelClient", connection_file: Path) -> bool:
@@ -242,7 +247,7 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
             start, the connection file it wrote is unreadable, or
             ``DOCX_EDITOR_SESSION_START_TIMEOUT`` is not a positive number.
             A start that runs out of budget explains itself: which phase
-            timed out (connection file vs. control-channel reply), whether
+            timed out (connection file vs. shell-channel reply), whether
             the kernel was still alive, the load average, what it wrote to
             stderr, and the variable to raise.
         ImportError: If the [session] extra is not installed.
@@ -286,8 +291,8 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
         return SessionError(report)
 
     # Two phases share one budget. The connection file is written as soon as
-    # the sockets are bound — *before* ipykernel imports IPython and wires the
-    # control channel — so its appearance is an early signal, and the second
+    # the sockets are bound — *before* ipykernel imports IPython and wires its
+    # message dispatchers — so its appearance is an early signal, and the second
     # phase gets whatever is left (floored at 1 s).
     t0 = time.monotonic()
     deadline = t0 + timeout
@@ -315,10 +320,17 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
         except (ValueError, OSError) as e:
             raise SessionError(f"Kernel wrote an unreadable connection file ({connection_file}): {e}") from e
         remaining = max(1.0, deadline - time.monotonic())
-        if not _kernel_alive(kc, timeout=remaining):
+        # Readiness is probed on *shell*, not control. No execution can be in
+        # flight during a start, so the shell channel's busy-serialization
+        # caveat does not apply here — and ipykernel registers the shell
+        # handler only after it assigns _control_lock, so a shell reply proves
+        # initialization finished. A control probe this early can arrive in
+        # that window and be dropped by the kernel, costing us the whole
+        # remaining budget for the one request we sent (ROADMAP.md #82).
+        if not _kernel_answers_shell(kc, timeout=remaining):
             raise _abort(
                 f"Kernel did not become ready within {timeout}s: kernel.json appeared after {t_file:.1f}s, "
-                f"then no kernel_info reply on the control channel in the remaining {remaining:.1f}s."
+                f"then no kernel_info reply on the shell channel in the remaining {remaining:.1f}s."
             )
     except BaseException:
         # Never leave a half-started kernel behind with no way to reach it.
@@ -447,7 +459,7 @@ def session_status(connection_file: Path = DEFAULT_CONNECTION_FILE) -> SessionSt
     try:
         if not _kernel_alive(kc):
             return SessionStatus(running=False, pid=pid, state=None, connection_file=connection_file, stale=True)
-        state: Literal["idle", "busy"] = "idle" if _kernel_idle(kc) else "busy"
+        state: Literal["idle", "busy"] = "idle" if _kernel_answers_shell(kc) else "busy"
     finally:
         kc.stop_channels()
     return SessionStatus(running=True, pid=pid, state=state, connection_file=connection_file, stale=False)

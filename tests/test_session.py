@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 import types
 from contextlib import contextmanager
@@ -263,6 +264,128 @@ def test_start_session_kernel_never_ready_stops_kernel(tmp_path, monkeypatch):
         assert not conn.with_suffix(".pid").exists()
     finally:
         _reap(spawned)
+
+
+# A kernel stand-in that answers kernel_info on the *shell* channel only. Its
+# control channel is bound but never serviced — exactly what ipykernel looks
+# like to us when it drops a control request that arrived mid-initialization
+# (ROADMAP.md #82). Bind precedes writing the connection file, as in a real
+# kernel; a port collision therefore surfaces as a bind traceback on stderr and
+# a non-zero exit, not as a mystery timeout.
+_SHELL_ONLY_KERNEL = textwrap.dedent(
+    """
+    import json, sys, zmq
+    from jupyter_client.session import Session
+
+    conn_file, info = sys.argv[1], json.loads(sys.argv[2])
+    ctx = zmq.Context()
+    shell = ctx.socket(zmq.ROUTER)
+    shell.bind(f"tcp://127.0.0.1:{info['shell_port']}")
+    control = ctx.socket(zmq.ROUTER)
+    control.bind(f"tcp://127.0.0.1:{info['control_port']}")
+    stdin = ctx.socket(zmq.ROUTER)
+    stdin.bind(f"tcp://127.0.0.1:{info['stdin_port']}")
+    iopub = ctx.socket(zmq.PUB)
+    iopub.bind(f"tcp://127.0.0.1:{info['iopub_port']}")
+
+    with open(conn_file, "w") as fh:
+        json.dump(info, fh)
+
+    session = Session(key=b"")
+    while True:
+        idents, frames = session.feed_identities(shell.recv_multipart())
+        msg = session.deserialize(frames, content=False)
+        if msg["header"]["msg_type"] == "kernel_info_request":
+            session.send(
+                shell,
+                "kernel_info_reply",
+                content={"status": "ok", "protocol_version": "5.3"},
+                parent=msg,
+                ident=idents,
+            )
+    """
+)
+
+
+def test_start_session_ready_when_control_never_answers(tmp_path, monkeypatch):
+    """Readiness is decided on the shell channel, so a silent control channel does not hang it.
+
+    ipykernel registers the control callback before it assigns
+    ``_control_lock``, so a probe sent the instant kernel.json appears can be
+    dropped kernel-side; the one request we sent is then never answered and the
+    whole remaining budget burns (ROADMAP.md #82). The stand-in reproduces that
+    end state deterministically: shell answers, control never does.
+    """
+    conn = tmp_path / "kernel.json"
+    shell, iopub, stdin, control, hb = _free_ports(5)
+    info = {
+        "transport": "tcp",
+        "ip": "127.0.0.1",
+        "key": "",
+        "signature_scheme": "hmac-sha256",
+        "kernel_name": "",
+        "shell_port": shell,
+        "iopub_port": iopub,
+        "stdin_port": stdin,
+        "control_port": control,
+        "hb_port": hb,
+    }
+    spawned = _launch_fake_kernel(monkeypatch, _SHELL_ONLY_KERNEL, str(conn), json.dumps(info))
+
+    try:
+        pid = start_session(conn, timeout=START_BUDGET)
+        assert pid == spawned[0].pid
+        assert conn.exists()
+        assert conn.with_suffix(".pid").exists()
+    finally:
+        # conftest's sweeper reaps through is_session_running, which probes
+        # control — this stand-in is invisible to it, so clean up by hand.
+        _reap(spawned)
+        conn.unlink(missing_ok=True)
+        conn.with_suffix(".pid").unlink(missing_ok=True)
+
+
+def test_start_session_survives_control_probe_during_init(tmp_path):
+    """A real kernel still starts when a control probe lands during its initialization.
+
+    A guard, not a reproduction: the window is a single assignment inside
+    ipykernel, so an intruding probe may well miss it on any given run — the
+    deterministic half is
+    ``test_start_session_ready_when_control_never_answers``. What this pins is
+    that when the window *is* hit, start still succeeds and the kernel is
+    usable afterwards.
+    """
+    conn = tmp_path / "kernel.json"
+    stop = threading.Event()
+
+    def probe_control_at_birth():
+        while not stop.is_set():
+            if conn.exists() and conn.stat().st_size > 0:
+                try:
+                    kc = _client(conn)
+                except Exception:
+                    # Half-written connection file: unreadable this instant,
+                    # readable a moment later. Retry rather than give up, or
+                    # the guard silently probes nothing.
+                    time.sleep(0.0005)
+                    continue
+                try:
+                    kc.control_channel.send(kc.session.msg("kernel_info_request", {}))
+                finally:
+                    kc.stop_channels()
+                return
+            time.sleep(0.0005)
+
+    intruder = threading.Thread(target=probe_control_at_birth, daemon=True)
+    intruder.start()
+    try:
+        assert start_session(conn, timeout=START_BUDGET) > 0
+        assert is_session_running(conn)
+        assert eval_code("1 + 1", conn).value == 2
+    finally:
+        stop.set()
+        intruder.join(timeout=5)
+        stop_session(conn)
 
 
 def test_is_session_running_false_without_connection_file(tmp_path):
@@ -1043,10 +1166,10 @@ def test_module_entrypoint_runs():
 
 
 # A kernel that binds its sockets and writes the connection file but never
-# serves the control channel: the exact shape of every start failure in the
+# serves any channel: the exact shape of every start failure in the
 # ROADMAP.md #72 CI logs (ipykernel writes kernel.json before importing IPython
-# and wiring the control dispatcher). Ports 1-5 are unserved on loopback; ZMQ
-# retries the connect silently, so the kernel_info request simply gets no reply.
+# and wiring its dispatchers). Ports 1-5 are unserved on loopback; ZMQ retries
+# the connect silently, so the kernel_info request simply gets no reply.
 _FAKE_KERNEL_SRC = """\
 import json, os, sys, time
 path = sys.argv[sys.argv.index("-f") + 1]
@@ -1075,8 +1198,8 @@ class TestStartFailureDiagnosis:
     tunable for loaded machines (ROADMAP.md #72).
 
     The CI failures behind #72 all read "Kernel did not become ready within
-    30s" — the connection file had appeared but the control channel never
-    answered — with nothing to tell a slow runner from a broken one.
+    30s" — the connection file had appeared but the readiness probe never got
+    an answer — with nothing to tell a slow runner from a broken one.
     """
 
     @pytest.fixture
@@ -1091,7 +1214,7 @@ class TestStartFailureDiagnosis:
 
         assert "did not become ready within 2.0s" in message
         assert "kernel.json appeared after" in message
-        assert "no kernel_info reply on the control channel" in message
+        assert "no kernel_info reply on the shell channel" in message
         assert "still alive at the timeout" in message
         assert "fake kernel: sockets bound, never served" in message
         assert "tcp 127.0.0.1, shell=1 control=4" in message
