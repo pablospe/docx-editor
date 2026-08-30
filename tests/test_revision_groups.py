@@ -822,6 +822,138 @@ class TestOwnInsertionSplits:
             assert "BETA" in text and "beta" not in text
             assert "alpha" in text and "gamma" in text
 
+    def test_middle_delete_of_dateless_own_insertion_leaves_tail_ungrouped(self, temp_xml):
+        # The origin insertion is ours but carries no w:date, so
+        # reconstruction left it ungrouped. Its split-off tail must then be
+        # registered as *explicitly* ungrouped (None) rather than left
+        # unregistered — otherwise the delete's own capture would claim it,
+        # and rejecting the delete's group would rip a leftover piece out of
+        # a pre-existing insertion.
+        body = (
+            "<w:p><w:r><w:t>Before </w:t></w:r>"
+            f'<w:ins w:id="1" w:author="{AUTHOR_B}"><w:r><w:t>AAA MID BBB</w:t></w:r></w:ins>'
+            "<w:r><w:t> after</w:t></w:r></w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+        assert manager._groups == {}
+        assert manager.group_id_of(1) is None
+
+        manager.suggest_deletion("MID ")
+
+        # No new group: the delete created no revisions of its own, and the
+        # tail it split off did not become a phantom group either.
+        assert manager._groups == {}
+        revisions = manager.list_revisions()
+        assert sorted(rev.id for rev in revisions) == [1, 2]  # truncated head + split-off tail
+        assert all(rev.group_id is None for rev in revisions)
+        assert manager._revision_groups == {2: None}
+
+
+class TestGroupedCaptureFilter:
+    """``_grouped`` keeps only our own, attached, numerically-identified, unseen revisions."""
+
+    def test_capture_skips_foreign_detached_nonconforming_and_repeated_elements(self, temp_xml):
+        # The injector only ever reports elements whose numeric w:id it just
+        # assigned, so the collector is fed directly here: this pins the
+        # filter's contract — (i) not ours, (ii) no longer in the DOM,
+        # (iii) already registered, a non-numeric id, or the same id reported
+        # twice — as the last line of defence, independent of the injector.
+        manager = _make_manager(temp_xml("<w:p><w:r><w:t>text</w:t></w:r></w:p>"))
+        dom = manager.editor.dom
+        paragraph = dom.getElementsByTagName("w:p")[0]
+
+        def make_ins(rev_id, author: str = AUTHOR_B, attached: bool = True):
+            elem = dom.createElement("w:ins")
+            elem.setAttribute("w:id", str(rev_id))
+            elem.setAttribute("w:author", author)
+            elem.setAttribute("w:date", DATE_A)
+            if attached:
+                paragraph.appendChild(elem)
+            return elem
+
+        with manager._grouped() as capture:
+            collected = manager.editor._tracked_change_collector
+            assert collected is not None
+            collected.append(make_ins(10, author=AUTHOR_A))  # a split half of a foreign insertion
+            collected.append(make_ins(11, attached=False))  # create-then-remove churn
+            collected.append(make_ins("oops"))  # nonconforming producer's id
+            collected.append(make_ins(12))
+            collected.append(make_ins(12))  # same id reported twice
+            collected.append(make_ins(13))
+
+        assert capture.group_id == 1
+        assert manager.group_revisions(1) == (12, 13)
+        assert manager.group_id_of(10) is None
+        assert manager.group_id_of(11) is None
+        assert manager._revision_groups == {12: 1, 13: 1}
+
+    def test_capture_with_nothing_kept_allocates_no_group(self, temp_xml):
+        manager = _make_manager(temp_xml("<w:p><w:r><w:t>text</w:t></w:r></w:p>"))
+        paragraph = manager.editor.dom.getElementsByTagName("w:p")[0]
+
+        with manager._grouped() as capture:
+            foreign = manager.editor.dom.createElement("w:ins")
+            foreign.setAttribute("w:id", "10")
+            foreign.setAttribute("w:author", AUTHOR_A)
+            foreign.setAttribute("w:date", DATE_A)
+            paragraph.appendChild(foreign)
+            collected = manager.editor._tracked_change_collector
+            assert collected is not None
+            collected.append(foreign)
+
+        assert capture.group_id is None
+        assert manager._groups == {}
+        assert manager._group_counter == 1
+
+
+class TestGroupLiveness:
+    """``groups_are_dead`` and ``group_spans`` answer from the document, not the registry."""
+
+    def test_empty_and_unknown_queries_answer_without_a_walk(self, temp_xml, monkeypatch):
+        manager = _make_manager(temp_xml(f"<w:p>{_ins_xml(1, 'one')}</w:p>"))
+        # Neither method may build the w:id index or walk the DOM when there
+        # is nothing to look up: the index costs a full-document pass.
+        monkeypatch.setattr(manager, "_revision_element_index", lambda: pytest.fail("built the w:id index"))
+        monkeypatch.setattr(
+            "docx_editor.track_changes.registry._revision_elements", lambda _root: pytest.fail("walked the document")
+        )
+
+        assert manager.groups_are_dead([]) == set()
+        assert manager.groups_are_dead(iter(())) == set()
+        assert manager.group_spans([]) == {}
+        assert manager.group_spans([99]) == {}  # unknown group: no members to look for
+
+    def test_unknown_live_and_resolved_groups(self, temp_xml):
+        body = f"<w:p>{_ins_xml(1, 'one ')}</w:p><w:p>{_ins_xml(2, 'two', date=DATE_B)}</w:p>"
+        manager = _make_manager(temp_xml(body))
+        assert manager._groups == {1: (1,), 2: (2,)}
+
+        # An id this manager never registered reads as dead; live groups do not.
+        assert manager.groups_are_dead([1, 2, 99]) == {99}
+        spans = manager.group_spans([1, 2, 99])
+        assert set(spans) == {1, 2}
+        first, last = spans[1]
+        assert first is last and first.getAttribute("w:id") == "1"
+        # Revisions of groups not asked about are skipped, not reported.
+        assert set(manager.group_spans([2])) == {2}
+
+        manager.accept_group(1)
+
+        assert manager.groups_are_dead([1, 2]) == {1}
+        assert set(manager.group_spans([1, 2])) == {2}
+
+    def test_paragraph_mark_only_group_is_live_but_has_no_span(self, temp_xml):
+        # A pure tracked split: the group's only member is a paragraph-mark
+        # insertion, which cannot hold a comment marker. The group is alive
+        # (something is left to resolve) yet offers no span to anchor on.
+        body = f"<w:p><w:pPr><w:rPr>{_mark_ins_xml(7)}</w:rPr></w:pPr><w:r><w:t>plain</w:t></w:r></w:p>"
+        manager = _make_manager(temp_xml(body))
+        gid = manager.group_id_of(7)
+        assert gid is not None and manager.group_revisions(gid) == (7,)
+
+        assert manager.groups_are_dead([gid]) == set()
+        assert manager.group_spans([gid]) == {}
+
 
 class TestGroupReconstruction:
     """Parse-time inference of groups for revisions already in the file (#46).
