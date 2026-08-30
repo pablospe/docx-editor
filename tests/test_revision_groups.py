@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from conftest import count_dom_walks, find_ref
+from conftest import count_dom_walks, count_revision_walks, find_ref
 
 from docx_editor import Document, EditOperation, EditResult, RevisionError
 from docx_editor.exceptions import BatchOperationError, DocxEditError
@@ -1613,11 +1613,13 @@ class TestAcceptPathIndex:
             assert len(doc.list_revisions()) == 6
 
             walks = count_dom_walks(monkeypatch)
+            recursive = count_revision_walks(monkeypatch)
             assert getattr(doc, method)(changeset_id) == 6
-            # One index build (a single recursive walk over every handled
-            # tag, invisible to count_dom_walks), not one scan per member
-            # per pass — and no per-tag getElementsByTagName either.
+            # No per-tag getElementsByTagName, and a constant number of
+            # recursive document walks — the index build and the deferred
+            # range-mark sweep — not one scan per member per pass.
             assert walks == []
+            assert len(recursive) == 2
             assert doc.list_revisions() == []
 
     @pytest.mark.parametrize("method", ["accept_group", "reject_group"])
@@ -1627,8 +1629,10 @@ class TestAcceptPathIndex:
             result = doc.replace("quick", "speedy", paragraph=ref)  # one group, two revs
 
             walks = count_dom_walks(monkeypatch)
+            recursive = count_revision_walks(monkeypatch)
             assert getattr(doc, method)(result.group_id) == 2
-            assert walks == []  # one recursive walk builds the index
+            assert walks == []
+            assert len(recursive) == 2  # index build + deferred range-mark sweep
             assert doc.list_revisions() == []
 
     @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
@@ -1639,13 +1643,13 @@ class TestAcceptPathIndex:
         element index through every revision in a pass, so the full-DOM walk
         count is a small constant rather than growing with the redline size.
 
-        The ISSUES.md #64 honesty floor adds exactly one *recursive* traversal
-        per call (``iter_revision_elements`` over all ~30 revision tags), which
-        count_dom_walks cannot see because it hooks getElementsByTagName. That
-        is the point of the recursive form: the naive per-tag census would have
-        cost ~28 more getElementsByTagName walks and broken this pin. The
-        index build, listing and range-mark sweep (ISSUES.md #68) use the same
-        recursive form for the same reason.
+        The index build, the per-pass listing, the ISSUES.md #64 honesty-floor
+        census and the ISSUES.md #68 range-mark sweep are all *recursive*
+        traversals (``iter_revision_elements``), which count_dom_walks cannot
+        see because it hooks getElementsByTagName — the naive per-tag form
+        would have cost ~28 more getElementsByTagName walks. So both counters
+        are pinned: no getElementsByTagName at all, and a recursive walk count
+        that is the same small constant whatever the redline size.
         """
         counts = {}
         for label, words in (("small", ["quick"]), ("large", ["quick", "brown", "lazy"])):
@@ -1654,15 +1658,20 @@ class TestAcceptPathIndex:
                 doc.batch_edit([EditOperation.replace(w, w.upper(), paragraph=ref) for w in words])
                 n_revs = len(doc.list_revisions())
                 walks = count_dom_walks(monkeypatch)
+                recursive = count_revision_walks(monkeypatch)
                 assert getattr(doc, method)() == n_revs
-                counts[label] = (len(walks), n_revs)
+                counts[label] = (len(walks), len(recursive), n_revs)
                 monkeypatch.undo()
                 assert doc.list_revisions() == []
 
         # The larger redline really is larger, but costs the same walks.
-        assert counts["large"][1] > counts["small"][1]
-        assert counts["small"][0] == counts["large"][0]
-        assert counts["small"][0] <= 8
+        assert counts["large"][2] > counts["small"][2]
+        assert counts["small"][0] == counts["large"][0] == 0
+        assert counts["small"][1] == counts["large"][1]
+        # Index build, two listing passes (the second finds nothing), the
+        # deferred range-mark sweep, the unconditional one and the
+        # honesty-floor census.
+        assert counts["small"][1] == 6
 
     def test_reject_group_with_nested_member_counts_once(self, temp_xml):
         # Rejecting the host insertion removes its whole subtree; the nested

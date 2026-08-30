@@ -501,6 +501,81 @@ class TestBulkResolutionSweepsOnce:
         assert len(calls) == 1
 
 
+# Move content that leaves the document inside some *other* resolved
+# element: the range marks around it must still be swept.
+MOVE_FROM_INSIDE_DEL = _document(
+    "<w:p>"
+    f'<w:moveFromRangeStart w:id="10" {_ANN} w:name="m"/>'
+    f'<w:del w:id="30" {_BOB}><w:moveFrom w:id="11" {_ANN}><w:r><w:delText>x</w:delText></w:r></w:moveFrom></w:del>'
+    '<w:moveFromRangeEnd w:id="10"/>'
+    "<w:r><w:t>tail</w:t></w:r></w:p>"
+)
+MOVE_TO_INSIDE_INS = _document(
+    "<w:p>"
+    f'<w:moveToRangeStart w:id="13" {_ANN} w:name="m"/>'
+    f'<w:ins w:id="30" {_BOB}><w:moveTo w:id="14" {_ANN}><w:r><w:t>x</w:t></w:r></w:moveTo></w:ins>'
+    '<w:moveToRangeEnd w:id="13"/>'
+    "<w:r><w:t>tail</w:t></w:r></w:p>"
+)
+# A tracked split whose tail paragraph carries a moved paragraph mark: the
+# rejoin drops the tail's w:pPr, marker included.
+SPLIT_BEFORE_MOVED_MARK = _document(
+    f'<w:p><w:pPr><w:rPr><w:ins w:id="30" {_BOB}/></w:rPr></w:pPr><w:r><w:t>head</w:t></w:r></w:p>'
+    f'<w:p><w:pPr><w:rPr><w:moveFrom w:id="11" {_ANN}/></w:rPr></w:pPr>'
+    f'<w:moveFromRangeStart w:id="10" {_ANN} w:name="m"/><w:moveFromRangeEnd w:id="10"/>'
+    "<w:r><w:t>tail</w:t></w:r></w:p>"
+)
+
+
+class TestSweepAfterAnyResolution:
+    @pytest.mark.parametrize(
+        ("body", "resolve"),
+        [
+            (MOVE_FROM_INSIDE_DEL, lambda doc: doc.accept_revision(30)),
+            (MOVE_TO_INSIDE_INS, lambda doc: doc.reject_revision(30)),
+            (SPLIT_BEFORE_MOVED_MARK, lambda doc: doc.reject_revision(30)),
+        ],
+        ids=["moveFrom-inside-accepted-del", "moveTo-inside-rejected-ins", "rejoin-drops-moved-mark"],
+    )
+    def test_range_marks_are_swept_when_their_content_leaves_with_a_host(self, make_docx, body, resolve):
+        with _open(make_docx(body)) as doc:
+            assert resolve(doc)
+            assert doc.list_revisions() == []
+            assert doc.list_unhandled_revisions() == []
+            assert _census(doc) == {}
+
+
+class TestOwnEditInsideAForeignMoveTo:
+    @pytest.mark.xfail(
+        strict=True,
+        reason="known gap: a foreign w:moveTo is not split around this session's own edits the way a "
+        "foreign w:ins is, so rejecting the move carries the own edit away (see reject_revision)",
+    )
+    def test_own_edit_survives_rejecting_the_foreign_move(self, make_docx):
+        with _open(make_docx(INLINE_MOVE)) as doc:
+            result = doc.replace("relocated", "moved", paragraph=find_ref(doc, "relocated clause"))
+            assert result.group_id is not None
+
+            assert doc.reject_all(author="Ann") == 2
+
+            assert doc.get_visible_text() == "tail\nmoved"
+            assert {r.author for r in doc.list_revisions()} == {"Tester"}
+
+    def test_the_gap_is_bounded_to_the_moved_in_text(self, make_docx):
+        """What happens today, pinned so the gap cannot widen silently: the
+        own edit inside the move is lost with it; edits outside survive."""
+        with _open(make_docx(INLINE_MOVE)) as doc:
+            doc.replace("relocated", "moved", paragraph=find_ref(doc, "relocated clause"))
+            outside = doc.replace("tail", "end", paragraph=find_ref(doc, "tail"))
+            assert outside.group_id is not None
+
+            assert doc.reject_all(author="Ann") == 2
+
+            assert doc.get_visible_text() == "relocated clauseend\n"
+            assert sorted(r.type for r in doc.list_revisions() if r.author == "Tester") == ["deletion", "insertion"]
+            assert _census(doc) == {"w:del": 1, "w:ins": 1}
+
+
 class TestDamagedFiles:
     @pytest.mark.parametrize(
         "body,accepted,rejected",

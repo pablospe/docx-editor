@@ -886,7 +886,7 @@ Reject a revision by ID.
 
 - For insertions: removes the inserted content
 - For deletions: restores the deleted content
-- For `move_to`: removes the moved text from its destination
+- For `move_to`: removes the moved text from its destination — including any edit of your own made inside it (a foreign `w:moveTo` is not split around your edits the way a foreign insertion is; a known gap). Edit after resolving the move, or reject it by id first
 - For `move_from`: restores the moved text at its source
 - For `property_change`: restores the paragraph's recorded previous properties. A record with none (LibreOffice writes a self-closing `w:pPrChange` for "previously no properties") clears them; the recorded style id is restored verbatim even when the document defines no such style (Word falls back to Normal for it)
 - Nested revisions: rejecting an insertion removes everything inside it — deletions another author nested inside it disappear with it
@@ -1458,7 +1458,7 @@ from docx_editor import UnhandledRevision
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `tag` | str | The element's tag, e.g. `"w:rPrChange"` |
+| `tag` | str | The element's tag — one of `UNHANDLED_REVISION_TAGS`, or a `HANDLED_REVISION_TAGS` tag whose element carries no numeric `w:id` (nothing id-keyed can resolve it, so it is reported here rather than omitted) — e.g. `"w:rPrChange"` |
 | `id` | int or None | The element's `w:id`, or None when it carries none or a non-numeric one. Unlike `Revision`, an id-less mark is still listed — nothing here is targeted by id. |
 | `author` | str | `w:author`, or `"Unknown"` when the attribute is absent — matching `Revision`. `w:tblGridChange` and the range `*End` marks carry only `w:id` in the schema, so they always read as `"Unknown"`. |
 | `date` | datetime or None | Parsed `w:date`, or None when absent or unparseable |

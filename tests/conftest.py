@@ -143,6 +143,30 @@ def count_dom_walks(monkeypatch) -> list[str]:
     return walks
 
 
+def count_revision_walks(monkeypatch) -> list[int]:
+    """Record every full-document ``iter_revision_elements`` traversal.
+
+    The companion of ``count_dom_walks`` for the recursive walk the revision
+    code uses instead of ``getElementsByTagName`` (index build, listing,
+    honesty-floor census, range-mark sweep). Each entry is the number of tags
+    that walk looked for. Subtree walks (an element root) are not counted:
+    they are the per-revision work, not a document scan.
+    """
+    import docx_editor.track_changes as track_changes
+
+    walks: list[int] = []
+    original = track_changes.iter_revision_elements
+
+    def counting(root, tags, **kwargs):
+        tags = tuple(tags)
+        if root.nodeType == root.DOCUMENT_NODE:
+            walks.append(len(tags))
+        return original(root, tags, **kwargs)
+
+    monkeypatch.setattr(track_changes, "iter_revision_elements", counting)
+    return walks
+
+
 def _connection_file_from_argv(args) -> Path | None:
     """Return the ``-f <path>`` of an ipykernel_launcher command line, else None.
 

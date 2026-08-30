@@ -2207,7 +2207,11 @@ class Document:
 
         - insertion: removes the inserted content.
         - deletion: restores the deleted content.
-        - move_to: removes the moved text from its destination.
+        - move_to: removes the moved text from its destination — including
+          any edit of your own made inside it (a foreign ``w:moveTo`` is not
+          split around your edits the way a foreign insertion is; a known
+          gap). Make your edits after resolving the move, or reject it by
+          id first.
         - move_from: restores the moved text at its source.
         - property_change: restores the paragraph's recorded previous
           properties (a record with none clears them); the recorded style id

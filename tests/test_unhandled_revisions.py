@@ -723,6 +723,36 @@ class TestHandledTagsWithoutAnAdjudicableId:
             # Still in the document: nothing could resolve it.
             assert set(count_revision_elements(doc._revision_manager.editor.dom).by_tag) == {t for t, _ in expected}
 
+    @pytest.mark.parametrize(
+        ("body", "revisions", "unhandled"),
+        [
+            (
+                _document(
+                    f'<w:p><w:moveTo w:id="m1" {_ANN}><w:r><w:t xml:space="preserve">a </w:t></w:r>'
+                    f'<w:del w:id="5" {_BOB}><w:r><w:delText>b</w:delText></w:r></w:del></w:moveTo></w:p>'
+                ),
+                [(5, "deletion", None, ())],
+                [("w:moveTo", None)],
+            ),
+            (
+                _document(
+                    f'<w:p><w:ins w:id="7" {_ANN}><w:r><w:t xml:space="preserve">a </w:t></w:r>'
+                    f'<w:moveFrom w:id="x" {_BOB}><w:r><w:delText>b</w:delText></w:r></w:moveFrom></w:ins></w:p>'
+                ),
+                [(7, "insertion", None, ())],
+                [("w:moveFrom", None)],
+            ),
+        ],
+        ids=["host-without-id", "nested-without-id"],
+    )
+    def test_nesting_skips_marks_without_an_adjudicable_id(self, make_docx, body, revisions, unhandled):
+        """A non-numeric id on a host or a nested mark is not fatal to the
+        listing: it drops out of nested_under/contains_ids and is reported."""
+        path = make_docx(body, "nested_no_id")
+        with _open(path) as doc:
+            assert [(r.id, r.type, r.nested_under, r.contains_ids) for r in doc.list_revisions()] == revisions
+            assert [(u.tag, u.id) for u in doc.list_unhandled_revisions()] == unhandled
+
     def test_idless_move_from_text_is_hidden_and_reported(self, make_docx):
         """The moved-away text is invisible (deleted at its source) yet pending."""
         path = make_docx(IDLESS_MOVE, "idless_move_text")

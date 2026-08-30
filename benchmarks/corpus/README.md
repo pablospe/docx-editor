@@ -202,10 +202,12 @@ Read as evidence:
   math run (`oxpt_RP013`), and the `w:moveFrom`/`w:moveTo` rows are Word's
   own paragraph-mark markers inside the kitchen-sink file's moved paragraphs.
 
-The `*`-marked tags are exactly `UNHANDLED_REVISION_TAGS`
-(`docx_editor/track_changes.py`), which is also what `accept_all()` /
+The `*`-marked tags are `UNHANDLED_REVISION_TAGS`
+(`docx_editor/track_changes.py`), which is what `accept_all()` /
 `reject_all()` report as `.unhandled` and what `list_unhandled_revisions()`
-lists.
+lists — plus, in a document a nonconforming producer wrote, any handled-type
+mark with no numeric `w:id` (nothing id-keyed can resolve it; none in this
+corpus).
 
 ## Failure semantics
 

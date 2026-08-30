@@ -1118,24 +1118,32 @@ def _adjudicable_id(elem) -> int | None:
 
 
 def _nearest_revision_ancestor_id(elem) -> int | None:
-    """id of the closest handled-revision ancestor carrying a w:id, else None."""
+    """id of the closest handled-revision ancestor with a numeric w:id, else None.
+
+    An ancestor without one (``_adjudicable_id`` is None) is skipped, not
+    fatal: it is reported by ``list_unhandled_revisions`` instead.
+    """
     node = elem.parentNode
     while node is not None and node.nodeType == node.ELEMENT_NODE:
         if node.tagName in HANDLED_REVISION_TAGS:
-            rev_id = node.getAttribute("w:id")
-            if rev_id:
-                return int(rev_id)
+            rev_id = _adjudicable_id(node)
+            if rev_id is not None:
+                return rev_id
         node = node.parentNode
     return None
 
 
 def _descendant_revision_ids(elem) -> tuple[int, ...]:
-    """ids of all handled-revision descendants of ``elem``, in document order."""
+    """ids of all handled-revision descendants of ``elem``, in document order.
+
+    Descendants without a numeric w:id are skipped (see
+    ``_nearest_revision_ancestor_id``).
+    """
     ids: list[int] = []
     for child in iter_revision_elements(elem, HANDLED_REVISION_TAGS):
-        rev_id = child.getAttribute("w:id")
-        if rev_id:
-            ids.append(int(rev_id))
+        rev_id = _adjudicable_id(child)
+        if rev_id is not None:
+            ids.append(rev_id)
     return tuple(ids)
 
 
@@ -4413,8 +4421,9 @@ class RevisionManager:
 
         A paragraph-mark move marker (``w:pPr/w:rPr/w:moveFrom``/``w:moveTo``)
         is dropped, the same approximate treatment a deleted paragraph mark
-        gets (see ``accept_all``). After a move half is resolved, range marks
-        whose content is all gone are swept (``_sweep_move_range_marks``).
+        gets (see ``accept_all``). After every resolution, range marks whose
+        content is all gone are swept (``_sweep_move_range_marks``) — move
+        content can leave inside any resolved host, not only a move half.
 
         Args:
             revision_id: The w:id of the revision to accept
@@ -4440,11 +4449,13 @@ class RevisionManager:
         elif tag == "w:moveTo" and not _is_paragraph_mark_marker(elem):
             # Accept the destination half: the moved text stays.
             self._unwrap_element(elem)
-            self._sweep_after_move()
         else:  # w:moveFrom, or a paragraph-mark marker of either half
             # Accept the source half: the moved-away text goes.
             self._remove_element(elem)
-            self._sweep_after_move()
+        # Unconditional: move content can leave with any resolved host (a
+        # w:del wrapping a w:moveFrom, a rejoined paragraph's mark marker),
+        # not only when a move half is the element resolved.
+        self._sweep_after_move()
         return True
 
     def reject_revision(self, revision_id: int, element_index: dict[str, list[Element]] | None = None) -> bool:
@@ -4455,7 +4466,11 @@ class RevisionManager:
         - deletion (``w:del``): removes the wrapper and converts ``w:delText``
           back to ``w:t``.
         - move_to (``w:moveTo``): removes the element — the text leaves its
-          destination.
+          destination, and with it any revision nested inside. Unlike a
+          foreign ``w:ins``, a foreign ``w:moveTo`` is not split around this
+          session's own edits (its text is plain visible text to the editor),
+          so an own edit made inside one is carried away by its rejection —
+          a known gap.
         - move_from (``w:moveFrom``): restores the text at its source exactly
           as a rejected deletion is (``w:delText`` -> ``w:t``, ``w:rsidDel``
           -> ``w:rsidR``, unwrap). Word writes plain ``w:t`` inside a
@@ -4496,11 +4511,10 @@ class RevisionManager:
         elif tag == "w:moveFrom" and not _is_paragraph_mark_marker(elem):
             # Reject the source half: the text stays where it was.
             self._restore_deletion(elem)
-            self._sweep_after_move()
         else:  # w:moveTo, or a paragraph-mark marker of either half
             # Reject the destination half: the moved-in text goes.
             self._remove_element(elem)
-            self._sweep_after_move()
+        self._sweep_after_move()  # unconditional — see accept_revision
         return True
 
     def _resolve_ids(
