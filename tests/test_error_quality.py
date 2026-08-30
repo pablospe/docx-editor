@@ -362,6 +362,38 @@ class TestAmbiguousTextErrorQuality:
         finally:
             doc.close()
 
+    def test_docwide_ambiguous_edit_target_raises_with_totals(self, doc_path):
+        """The manager's document-wide edits (paragraph=None) raise before touching the DOM.
+
+        ``Document`` requires a paragraph ref for every edit, so this mode is
+        reachable only at the ``RevisionManager`` layer.
+        """
+        doc = self._build_doc(doc_path)
+        try:
+            manager = doc._revision_manager
+            calls: list[Callable[[], object]] = [
+                lambda: manager.replace_text("alpha", "x"),
+                lambda: manager.suggest_deletion("alpha"),
+                lambda: manager.insert_text_after("alpha", "x"),
+                lambda: manager.insert_text_before("alpha", "x"),
+            ]
+            for call in calls:
+                with pytest.raises(AmbiguousTextError) as exc:
+                    call()
+                err = exc.value
+                assert err.search_text == "alpha"
+                assert err.total_occurrences == 3
+                assert err.paragraph_ref is None
+                assert err.paragraph_preview is None
+                msg = str(err)
+                assert "matches 3 times" in msg
+                assert "in the document" in msg
+                assert "occurrence=" in msg
+                assert "find_all()" in msg
+            assert doc.list_revisions() == []
+        finally:
+            doc.close()
+
     def test_explicit_occurrence_zero_edits_first_silently(self, doc_path):
         """occurrence=0 is the per-call opt-out: old first-match behavior."""
         doc = self._build_doc(doc_path)
