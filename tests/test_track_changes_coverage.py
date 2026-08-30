@@ -372,3 +372,154 @@ class TestSplitForeignInsAtRunBoundaries:
         cd_wt = mgr.editor.dom.getElementsByTagName("w:ins")[0].getElementsByTagName("w:t")[0]
 
         assert mgr._split_foreign_ins_at(cd_wt, 0) is None
+
+
+def _element_children(node) -> list[str]:
+    return [child.tagName for child in node.childNodes if child.nodeType == child.ELEMENT_NODE]
+
+
+def _wt_texts(node) -> list[str]:
+    return [wt.firstChild.data for wt in node.getElementsByTagName("w:t")]
+
+
+class TestMajorityRPrEmptyParts:
+    """_majority_rPr with nothing to tally falls back to no run properties."""
+
+    def test_empty_parts_returns_empty_string(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"))
+        assert mgr._majority_rPr([]) == ""
+
+
+class TestSetNodeTextKeepsNonTextChildren:
+    """_set_node_text drops only TEXT_NODE children; anything else stays in place."""
+
+    def test_comment_child_survives(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"))
+        dom = mgr.editor.dom
+        wt = dom.getElementsByTagName("w:t")[0]
+        wt.appendChild(dom.createComment("keep"))
+
+        mgr._set_node_text(wt, "Bye")
+
+        assert wt.toxml() == "<w:t><!--keep-->Bye</w:t>"
+        assert [child.data for child in wt.childNodes if child.nodeType == child.TEXT_NODE] == ["Bye"]
+
+
+class TestReplaceWithRunlessTextNode:
+    """A <w:t> directly under <w:p> has no run to anchor on.
+
+    Not valid WordprocessingML, but valid minidom: the replace sites must skip
+    the orphan when building parts and refuse to anchor an insertion on it.
+    """
+
+    @staticmethod
+    def _orphan_match(mgr):
+        from docx_editor.xml_editor import body_paragraphs, build_text_map, find_in_text_map
+
+        paragraph = body_paragraphs(mgr.editor.dom)[0]
+        match = find_in_text_map(build_text_map(paragraph), "Hello w")
+        assert match is not None
+        assert not match.spans_boundary
+        assert len(match.positions) == 7
+        return paragraph, match
+
+    def test_build_parts_skips_orphan(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:t>Hello</w:t><w:r><w:t> world</w:t></w:r></w:p>"))
+        _paragraph, match = self._orphan_match(mgr)
+
+        parts = mgr._build_cross_boundary_parts(match)
+
+        assert [matched for _run, _rPr, _before, matched, _after, _nid in parts] == [" w"]
+
+    def test_mixed_state_without_anchor_returns_minus_one(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:t>Hello</w:t><w:r><w:t> world</w:t></w:r></w:p>"))
+        paragraph, match = self._orphan_match(mgr)
+
+        assert mgr._replace_mixed_state(match, "NEW") == -1
+        assert _element_children(paragraph) == ["w:t", "w:r"]
+
+
+class TestReplaceSameContextDetachedRun:
+    """_replace_same_context tolerates a matched run that is no longer attached."""
+
+    @staticmethod
+    def _two_run_match(mgr):
+        from docx_editor.xml_editor import body_paragraphs, build_text_map, find_in_text_map
+
+        paragraph = body_paragraphs(mgr.editor.dom)[0]
+        match = find_in_text_map(build_text_map(paragraph), "ABCD")
+        assert match is not None
+        return paragraph, match
+
+    def test_detached_run_is_not_removed_twice(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>AB</w:t></w:r><w:r><w:t>CD</w:t></w:r></w:p>"))
+        paragraph, match = self._two_run_match(mgr)
+        paragraph.removeChild(paragraph.getElementsByTagName("w:r")[1])
+
+        ins_id = mgr._replace_same_context(match, "NEW")
+
+        assert ins_id != -1
+        assert _element_children(paragraph) == ["w:del", "w:del", "w:ins"]
+        dels = paragraph.getElementsByTagName("w:del")
+        assert [_wt_texts(d) for d in dels] == [[], []]
+        assert [dt.firstChild.data for dt in paragraph.getElementsByTagName("w:delText")] == ["AB", "CD"]
+        ins = paragraph.getElementsByTagName("w:ins")[0]
+        assert int(ins.getAttribute("w:id")) == ins_id
+        assert _wt_texts(ins) == ["NEW"]
+
+    def test_editor_yielding_no_ins_returns_minus_one(self, temp_xml, monkeypatch):
+        # Defensive path: the editor is stubbed to return no nodes at all.
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>AB</w:t></w:r><w:r><w:t>CD</w:t></w:r></w:p>"))
+        _paragraph, match = self._two_run_match(mgr)
+        monkeypatch.setattr(mgr.editor, "insert_before", lambda ref, xml: [])
+
+        assert mgr._replace_same_context(match, "NEW") == -1
+
+
+class TestReplaceMixedStateOwnInsOnly:
+    """_replace_mixed_state when the match lies entirely inside our own insertion."""
+
+    OWN_INS = (
+        '<w:p><w:ins w:id="1" w:author="Test Author" w:date="2024-01-01T00:00:00Z">'
+        "<w:r><w:t>Hello</w:t></w:r></w:ins><w:r><w:t> world</w:t></w:r></w:p>"
+    )
+
+    @staticmethod
+    def _own_ins_match(mgr):
+        from docx_editor.xml_editor import body_paragraphs, build_text_map, find_in_text_map
+
+        paragraph = body_paragraphs(mgr.editor.dom)[0]
+        match = find_in_text_map(build_text_map(paragraph), "Hello")
+        assert match is not None
+        return paragraph, match
+
+    def test_no_del_inserts_after_marker(self, temp_xml):
+        mgr = _make_manager(temp_xml(self.OWN_INS))
+        paragraph, match = self._own_ins_match(mgr)
+
+        ins_id = mgr._replace_mixed_state(match, "NEW")
+
+        assert ins_id != -1
+        assert not paragraph.getElementsByTagName("w:del")
+        assert _element_children(paragraph) == ["w:ins", "w:r"]
+        ins = paragraph.getElementsByTagName("w:ins")[0]
+        assert int(ins.getAttribute("w:id")) == ins_id
+        assert _wt_texts(ins) == ["NEW"]
+        assert _wt_texts(paragraph) == ["NEW", " world"]
+
+    def test_editor_detaching_marker_and_yielding_no_ins(self, temp_xml, monkeypatch):
+        # Defensive path: the editor is stubbed to consume the reference node
+        # and hand back something other than a <w:ins>.
+        mgr = _make_manager(temp_xml(self.OWN_INS))
+        paragraph, match = self._own_ins_match(mgr)
+        dom = mgr.editor.dom
+
+        def detach_and_return_comment(ref, xml):
+            ref.parentNode.removeChild(ref)
+            return [dom.createComment("not an ins")]
+
+        monkeypatch.setattr(mgr.editor, "insert_after", detach_and_return_comment)
+
+        assert mgr._replace_mixed_state(match, "NEW") == -1
+        comments = [c.data for c in paragraph.childNodes if c.nodeType == c.COMMENT_NODE]
+        assert "replace-marker" not in comments
