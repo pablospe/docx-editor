@@ -662,3 +662,31 @@ class TestDeleteSameContextEdges:
 
         assert mgr._delete_same_context(match) == -1
         assert not paragraph.getElementsByTagName("w:del")
+
+
+class TestInsertNearMatchEmptyPositions:
+    """_insert_near_match refuses a match with no positions, or whose edge <w:t> has no run.
+
+    Both are defensive guards: a located match always carries positions, and
+    a <w:t> directly under <w:p> is not valid WordprocessingML — but valid minidom.
+    """
+
+    def test_match_without_positions_returns_minus_one(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"))
+        from docx_editor.xml_editor import TextMapMatch
+
+        empty_match = TextMapMatch(start=0, end=0, text="", positions=[], spans_boundary=False)
+
+        assert mgr._insert_near_match(empty_match, "X", "after") == -1
+        paragraph = mgr.editor.dom.getElementsByTagName("w:p")[0]
+        assert _element_children(paragraph) == ["w:r"]
+        assert _wt_texts(paragraph) == ["Hello"]
+
+    def test_runless_edge_text_node_returns_minus_one(self, temp_xml):
+        mgr = _make_manager(temp_xml("<w:p><w:t>Hello world</w:t></w:p>"))
+        paragraph, match = _paragraph_match(mgr, "Hello")
+
+        assert mgr._insert_near_match(match, "X", "after") == -1
+        assert _element_children(paragraph) == ["w:t"]
+        assert _wt_texts(paragraph) == ["Hello world"]
+        assert not paragraph.getElementsByTagName("w:ins")
