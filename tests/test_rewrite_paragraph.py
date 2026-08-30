@@ -7,8 +7,9 @@ from pathlib import Path
 import pytest
 from conftest import count_dom_walks
 
-from docx_editor import BatchOperationError, Document, HashMismatchError
+from docx_editor import BatchOperationError, Document, HashMismatchError, RevisionError
 from docx_editor.track_changes.diff import _tokenize_words
+from docx_editor.xml_editor import body_paragraphs, build_text_map
 
 
 @pytest.fixture
@@ -848,6 +849,34 @@ class TestBatchRewrite:
         # Reverse-index order applied P3 first; its rewrite must be rolled back.
         assert doc.get_visible_text() == before
 
+    def test_rollback_failure_surfaces_original_error(self, rewrite_doc, monkeypatch):
+        """If the rollback re-parse itself fails, the original rewrite error
+        must still propagate — not the rollback failure."""
+        doc, _ = rewrite_doc
+        refs = doc.list_paragraphs()
+        before = doc.get_visible_text()
+        mgr = doc._revision_manager
+
+        def boom(xml_bytes):
+            raise RuntimeError("simulated rollback failure")
+
+        def fail(ref_str, new_text, *, paragraphs=None):
+            raise ValueError("simulated apply failure")
+
+        monkeypatch.setattr(doc._document_editor, "_reload_dom_from_bytes", boom)
+        monkeypatch.setattr(mgr, "rewrite_paragraph", fail)
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_rewrite([
+                (refs[0].split("|")[0], "First rewritten."),
+                (refs[2].split("|")[0], "Third rewritten."),
+            ])
+        assert isinstance(exc.value.original, ValueError)
+        # Reverse-index order runs P3 first; that is the call that failed.
+        assert exc.value.operation_index == 1
+        # The failing rewrite raised before any mutation, so the visible text
+        # is unchanged even though the rollback re-parse was swallowed.
+        assert doc.get_visible_text() == before
+
     def test_batch_rejected_on_duplicate(self, rewrite_doc):
         """Duplicate paragraph in batch raises BatchOperationError."""
         doc, _ = rewrite_doc
@@ -865,6 +894,36 @@ class TestBatchRewrite:
         doc, _ = rewrite_doc
         doc.batch_rewrite([])
         assert len(doc.list_revisions()) == 0
+
+
+class TestFindMatchAtPosition:
+    """``_find_match_at_position`` anchors a rewrite hunk to its exact offset."""
+
+    @pytest.fixture
+    def manager_and_map(self, rewrite_doc):
+        doc, _ = rewrite_doc
+        paragraph = body_paragraphs(doc._document_editor.dom)[0]
+        return doc._revision_manager, build_text_map(paragraph)
+
+    def test_match_at_expected_position(self, manager_and_map):
+        mgr, text_map = manager_and_map
+        pos = text_map.text.index("the annual")
+        match = mgr._find_match_at_position(text_map, "the", pos)
+        assert (match.start, match.end, match.text) == (pos, pos + 3, "the")
+        assert len(match.positions) == 3
+        assert match.spans_boundary is False
+
+    def test_later_occurrence_is_not_accepted(self, manager_and_map):
+        """Unlike find_in_text_map, a hit past ``expected_pos`` is a failure."""
+        mgr, text_map = manager_and_map
+        assert text_map.text.find("the", 0) > 0  # only the lowercase one exists
+        with pytest.raises(RevisionError, match="could not locate 'the' at position 0"):
+            mgr._find_match_at_position(text_map, "the", 0)
+
+    def test_empty_search_yields_no_positions(self, manager_and_map):
+        mgr, text_map = manager_and_map
+        match = mgr._find_match_at_position(text_map, "", 5)
+        assert (match.start, match.end, match.positions, match.spans_boundary) == (5, 5, [], False)
 
 
 class TestRewriteInsertEdgeCases:
