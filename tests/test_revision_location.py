@@ -415,6 +415,25 @@ class TestGetMarkupText:
         manager = _make_manager(temp_xml(body))
         assert manager.get_markup_text() == "[ins#?:Unknown]x[/ins]"
 
+    def test_markers_render_the_id_accept_revision_takes(self, temp_xml):
+        """The marker names the adjudicable id, not the raw w:id attribute.
+
+        This view exists so a reader can pick a revision and resolve it, so the
+        id it prints has to be the one ``accept_revision`` takes: a raw
+        ``w:id="007"`` is listed and resolved as 7, and a mark with no numeric
+        id is reachable by no id-keyed call at all — ``#?``, and reported by
+        ``list_unhandled_revisions()``.
+        """
+        body = (
+            '<w:p><w:ins w:id="007" w:author="A"><w:r><w:t>x</w:t></w:r></w:ins>'
+            '<w:del w:id="abc" w:author="A"><w:r><w:delText>y</w:delText></w:r></w:del></w:p>'
+        )
+        manager = _make_manager(temp_xml(body))
+
+        assert manager.get_markup_text() == "[ins#7:A]x[/ins][del#?:A]y[/del]"
+        assert [rev.id for rev in manager.list_revisions()] == [7]
+        assert [u.tag for u in manager.list_unhandled_revisions()] == ["w:del"]
+
     def test_document_wrapper_shows_tracked_edit(self, temp_docx):
         with Document.open(temp_docx, author="Test Editor") as doc:
             ref = doc.list_paragraphs()[0].split("|")[0]

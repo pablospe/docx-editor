@@ -147,7 +147,7 @@ class _RevisionManagerBase:
         raise NotImplementedError
 
     def _find_revision_element(
-        self, revision_id: int, element_index: dict[str, list[Element]] | None
+        self, revision_id: int | None, element_index: dict[str, list[Element]] | None
     ) -> Element | None:
         raise NotImplementedError
 

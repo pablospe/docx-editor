@@ -162,6 +162,9 @@ class _ListingMixin(_RevisionManagerBase):
 
         Each paragraph is one line; tracked changes wrap their content as
         ``[ins#{id}:{author}]...[/ins]`` / ``[del#{id}:{author}]...[/del]``,
+        where ``{id}`` is the id ``accept_revision``/``reject_revision`` take
+        (so a raw ``w:id="007"`` renders ``#7``) and ``#?`` marks one they
+        cannot reach at all — those are ``list_unhandled_revisions()`` rows —
         nesting included (e.g. ``[ins#1:A]kept [del#9:B]gone[/del][/ins]``).
         The two halves of a content move render the same way as
         ``[moveFrom#{id}:{author}]...[/moveFrom]`` /
@@ -355,7 +358,7 @@ class _ListingMixin(_RevisionManagerBase):
         return False
 
     def _find_revision_element(
-        self, revision_id: int, element_index: dict[str, list[Element]] | None
+        self, revision_id: int | None, element_index: dict[str, list[Element]] | None
     ) -> Element | None:
         """Locate the live handled revision element for ``revision_id``.
 
@@ -371,20 +374,25 @@ class _ListingMixin(_RevisionManagerBase):
         candidates at all is the index's business: an author-scoped index
         (``_revision_element_index(author)``) holds only that author's, so a
         filtered call cannot land on another author's same-id revision.
+
+        Both paths compare ``str`` of the *adjudicable* id, which is what keeps
+        them answering alike. Comparing the parsed int on one side and the
+        index's string key on the other would diverge on everything int-equal
+        but not an int: ``True`` matches id 1 through ``==`` (bool subclasses
+        int) but misses ``.get("True")``, and ``None`` — what
+        ``list_unhandled_revisions()`` reports for a mark with no numeric id —
+        matches every unreachable mark through ``==`` while missing the index
+        entirely. Stringifying both sides leaves one answer per id, whichever
+        path a caller reaches it by.
         """
+        wanted = str(revision_id)
         if element_index is None:
-            if revision_id is None:
-                # _adjudicable_id is None for exactly the marks no id-keyed
-                # call can reach, so an unguarded == would match the first of
-                # them — and None is what list_unhandled_revisions() reports
-                # for such a row. The index path misses (no "None" key); this
-                # keeps the two paths agreeing on unreachable.
-                return None
             for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
-                if _adjudicable_id(elem) == revision_id:
+                rev_id = _adjudicable_id(elem)
+                if rev_id is not None and str(rev_id) == wanted:
                     return elem
             return None
-        for elem in element_index.get(str(revision_id), ()):
+        for elem in element_index.get(wanted, ()):
             if self._is_in_document(elem):
                 return elem
         return None

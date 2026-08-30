@@ -1309,16 +1309,17 @@ class TestNestedForeignRevisions:
         )
         dom = manager.editor.dom
 
-        assert manager.reject_all(author="A") == 1
+        # Resolve B, whose id is the non-canonical one: it is reachable only
+        # because the index normalizes, and author-exact only because the
+        # index is scoped -- so this needs both halves to hold.
+        assert manager.reject_all(author="B") == 1
 
-        # B's insertion is untouched: still pending, still wrapped.
-        remaining = manager.list_revisions(author="B")
+        # A's deletion is untouched: still pending, its text still deleted.
+        remaining = manager.list_revisions(author="A")
         assert len(remaining) == 1
-        assert remaining[0].type == "insertion"
-        ins = dom.getElementsByTagName("w:ins")
-        assert len(ins) == 1
-        assert ins[0].getAttribute("w:author") == "B"
-        assert [t.firstChild.data for t in dom.getElementsByTagName("w:t")] == ["BEE", "AYE"]
+        assert remaining[0].type == "deletion"
+        assert dom.getElementsByTagName("w:ins") == []
+        assert [t.firstChild.data for t in dom.getElementsByTagName("w:delText")] == ["AYE"]
 
     @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
     def test_unattributed_revision_resolves_under_the_unknown_author(self, method):
@@ -1414,6 +1415,39 @@ class TestRevisionIdNormalization:
         assert [u.tag for u in manager.list_unhandled_revisions()] == ["w:ins"]
         texts = [t.firstChild.data for t in manager.editor.dom.getElementsByTagName("w:t")]
         assert texts == ["KEEP"]
+
+    @pytest.mark.parametrize("bad_id", [True, 1.0, None])
+    def test_int_equal_non_int_id_matches_on_neither_path(self, bad_id):
+        """Test that the index and the fresh scan agree on ids that are not ints.
+
+        Both paths compare ``str`` of the adjudicable id. Comparing the parsed
+        int on one side and the index's string key on the other would diverge
+        on anything int-equal but not an int: ``True`` matches id 1 through
+        ``==`` (bool subclasses int) while missing ``.get("True")``, so
+        ``accept_revision(True)`` would resolve a revision through one path and
+        nothing through the other.
+        """
+        manager = _make_revision_manager('<w:ins w:id="1" w:author="A"><w:r><w:t>ONE</w:t></w:r></w:ins>')
+        index = manager._revision_element_index()
+
+        assert manager._find_revision_element(bad_id, None) is None
+        assert manager._find_revision_element(bad_id, index) is None
+        assert manager.accept_revision(bad_id) is False
+        assert len(manager.editor.dom.getElementsByTagName("w:ins")) == 1
+
+    def test_str_id_still_matches_on_both_paths(self):
+        """Test that a stringified id resolves, as it did before the id rework.
+
+        Not the documented contract — ``accept_revision`` takes an int — but
+        both paths accepted ``"7"`` before, so narrowing to int only would
+        break a caller that round-trips ids through JSON or a CLI argument for
+        no gain.
+        """
+        manager = _make_revision_manager('<w:ins w:id="7" w:author="A"><w:r><w:t>SEVEN</w:t></w:r></w:ins>')
+        index = manager._revision_element_index()
+
+        assert manager._find_revision_element("7", None) is not None
+        assert manager._find_revision_element("7", index) is not None
 
 
 class TestRestoreDeletionAttributeCopying:
