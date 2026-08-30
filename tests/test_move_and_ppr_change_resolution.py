@@ -219,6 +219,13 @@ PPR_WITH_SECTPR = _document(
     "</w:pPr><w:r><w:t>Last paragraph of a section</w:t></w:r></w:p>"
     "<w:p><w:r><w:t>Next section</w:t></w:r></w:p>"
 )
+# Schema-invalid: CT_PPr is the only legal parent, but the record sits
+# directly under w:p, so there is no live w:pPr to restore the properties into.
+PPR_MISPLACED_RECORD = _document(
+    '<w:p><w:pPr><w:pStyle w:val="Cmsor1"/></w:pPr>'
+    f'<w:pPrChange w:id="9" {_ANN}><w:pPr><w:pStyle w:val="UnknownStyle"/></w:pPr></w:pPrChange>'
+    "<w:r><w:t>Misplaced record</w:t></w:r></w:p>"
+)
 
 
 @pytest.fixture
@@ -769,6 +776,19 @@ class TestParagraphPropertyChange:
             '<w:pPr><w:jc w:val="left"/><w:rPr/><w:sectPr><w:type w:val="nextPage"/></w:sectPr></w:pPr>'
             in _document_xml(out)
         )
+
+    def test_rejecting_a_record_outside_w_pPr_drops_it_and_keeps_the_live_properties(self, make_docx, tmp_path):
+        """No w:pPr parent means nothing to restore into: drop the record only."""
+        out = tmp_path / "misplaced.docx"
+        with _open(make_docx(PPR_MISPLACED_RECORD)) as doc:
+            assert doc.reject_revision(9)
+            assert doc.get_paragraph(1).style == "Cmsor1"
+            assert _census(doc) == {}
+            doc.save(out)
+        xml = _document_xml(out)
+        assert "w:pPrChange" not in xml
+        assert '<w:pPr><w:pStyle w:val="Cmsor1"/></w:pPr>' in xml
+        assert "UnknownStyle" not in xml
 
     def test_resolved_document_reopens_clean(self, make_docx, tmp_path):
         out = tmp_path / "clean.docx"
