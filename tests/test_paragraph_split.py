@@ -12,7 +12,7 @@ import re
 import zipfile
 
 import pytest
-from conftest import find_ref, replace_document_xml
+from conftest import NS, find_ref, replace_document_xml
 
 from docx_editor import Document, EditOperation, RevisionError
 from docx_editor.xml_editor import ParagraphRef
@@ -405,3 +405,114 @@ class TestSplitEmptyFirstSegment:
         doc.replace("dog.", "\nTail after break.", paragraph=ref)
         assert doc.paragraph_count() == before + 1
         assert "Tail after break." in doc.get_visible_text().splitlines()
+
+
+BOLD_RPR = "<w:rPr><w:b/></w:rPr>"
+
+
+def _formatted_docx(simple_docx, temp_dir, rpr: str, name: str):
+    """A one-paragraph document whose single run carries ``rpr`` (may be empty)."""
+    doc_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:document {NS}><w:body><w:p>"
+        f"<w:r>{rpr}<w:t>Original body.</w:t></w:r>"
+        "</w:p></w:body></w:document>"
+    )
+    src = temp_dir / name
+    replace_document_xml(simple_docx, src, doc_xml)
+    return src
+
+
+def _last_paragraph(document: Document):
+    return document._document_editor.dom.getElementsByTagName("w:p")[-1]
+
+
+def _run_text(run) -> str:
+    return "".join(
+        "".join(c.data for c in t.childNodes if c.nodeType == c.TEXT_NODE) for t in run.getElementsByTagName("w:t")
+    )
+
+
+def _assert_single_tail_insert(document, text: str):
+    """Assert the last paragraph holds exactly one inserted run, and return it.
+
+    Runs are read out of the paragraph's ``w:ins`` elements; the inserted
+    paragraph mark lives in ``w:pPr`` and holds no run, so it is not picked up.
+    """
+    runs = [
+        run
+        for ins in _last_paragraph(document).getElementsByTagName("w:ins")
+        for run in ins.getElementsByTagName("w:r")
+    ]
+    assert [_run_text(run) for run in runs] == [text]
+    return runs[0]
+
+
+class TestSplitFormattingAcrossEmptySegments:
+    """A runless paragraph left by an empty segment carries no formatting of its
+    own, so the split loop keeps the last known boundary rPr instead of resetting
+    it — otherwise every segment after an empty one drops to document default
+    (ROADMAP.md #79).
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        ["A\nC", "A\n\nC", "A\n\n\nC"],
+        ids=["no-empty-segment", "one-empty-segment", "two-empty-segments"],
+    )
+    def test_insert_after_keeps_bold_past_empty_segments(self, simple_docx, temp_dir, text):
+        src = _formatted_docx(simple_docx, temp_dir, BOLD_RPR, "bold.docx")
+        with Document.open(src) as doc:
+            doc.insert_after("body.", text, paragraph=find_ref(doc, "Original body."))
+            assert len(_assert_single_tail_insert(doc, "C").getElementsByTagName("w:b")) == 1
+
+    def test_replace_keeps_bold_past_empty_segment(self, simple_docx, temp_dir):
+        src = _formatted_docx(simple_docx, temp_dir, BOLD_RPR, "bold_replace.docx")
+        with Document.open(src) as doc:
+            doc.replace("body.", "A\n\nC", paragraph=find_ref(doc, "Original body."))
+            assert len(_assert_single_tail_insert(doc, "C").getElementsByTagName("w:b")) == 1
+
+    def test_rewrite_paragraph_keeps_bold_past_empty_segment(self, simple_docx, temp_dir):
+        # The third entry point into _apply_paragraph_splits (rewrite opcodes).
+        src = _formatted_docx(simple_docx, temp_dir, BOLD_RPR, "bold_rewrite.docx")
+        with Document.open(src) as doc:
+            ref = find_ref(doc, "Original body.")
+            doc.rewrite_paragraph(ref, "Original body.\n\nC")
+            assert len(_assert_single_tail_insert(doc, "C").getElementsByTagName("w:b")) == 1
+
+    def test_unformatted_source_stays_unformatted(self, simple_docx, temp_dir):
+        # Guards the opposite over-reach: the fallback follows the *presence of
+        # runs*, not a non-empty rPr, so a plain boundary stays plain.
+        src = _formatted_docx(simple_docx, temp_dir, "", "plain.docx")
+        with Document.open(src) as doc:
+            doc.insert_after("body.", "A\n\nC", paragraph=find_ref(doc, "Original body."))
+            assert _assert_single_tail_insert(doc, "C").getElementsByTagName("w:rPr") == []
+
+    def test_reject_group_rejoins_after_empty_segments(self, simple_docx, temp_dir):
+        src = _formatted_docx(simple_docx, temp_dir, BOLD_RPR, "bold_reject.docx")
+        with Document.open(src) as doc:
+            original = doc.get_visible_text()
+            before = doc.paragraph_count()
+
+            result = doc.insert_after("body.", "A\n\n\nC", paragraph=find_ref(doc, "Original body."))
+            assert doc.paragraph_count() == before + 3
+            assert result.group_id is not None
+
+            doc.reject_group(result.group_id)
+
+            assert doc.paragraph_count() == before
+            assert doc.get_visible_text() == original
+            assert doc.list_revisions() == []
+
+    def test_accept_group_keeps_bold_after_empty_segment(self, simple_docx, temp_dir):
+        src = _formatted_docx(simple_docx, temp_dir, BOLD_RPR, "bold_accept.docx")
+        with Document.open(src) as doc:
+            result = doc.insert_after("body.", "A\n\nC", paragraph=find_ref(doc, "Original body."))
+            assert result.group_id is not None
+
+            doc.accept_group(result.group_id)
+
+            assert doc.list_revisions() == []
+            runs = [run for run in _last_paragraph(doc).getElementsByTagName("w:r") if _run_text(run) == "C"]
+            assert len(runs) == 1
+            assert len(runs[0].getElementsByTagName("w:b")) == 1

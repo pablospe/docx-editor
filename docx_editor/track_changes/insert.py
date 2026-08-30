@@ -298,14 +298,20 @@ class _InsertMixin(_RevisionManagerBase):
         member_id = -1
         current_p = p1
         pos = split_pos
+        # Formatting to fall back on when the new paragraph's tail is empty
+        # (a split at the end of the current paragraph): the trailing run of the
+        # paragraph being split carries the boundary formatting. A paragraph left
+        # runless by an empty segment carries no formatting of its own, so the
+        # last known boundary rPr is kept rather than reset — that propagates
+        # through a run of empty tails (e.g. appending "A\n\nC" past the last
+        # word), so every segment keeps the surrounding format instead of only
+        # the first. A paragraph that *has* runs is a genuine boundary and
+        # replaces the fallback, even when its last run carries no rPr.
+        fallback_rPr = ""
         for segment in segments:
-            # Formatting to fall back on when the new paragraph's tail is empty
-            # (a split at the end of the current paragraph): its trailing run
-            # carries the boundary formatting. This propagates through a run of
-            # empty tails (e.g. appending "A\nB\nC" past the last word), so every
-            # segment keeps the surrounding format instead of only the first.
             boundary_runs = current_p.getElementsByTagName("w:r")
-            fallback_rPr = get_rPr_xml(boundary_runs[-1]) if boundary_runs else ""
+            if boundary_runs:
+                fallback_rPr = get_rPr_xml(boundary_runs[-1])
             new_p, mark_id = self._split_paragraph_at_position(current_p, pos)
             member_id = mark_id
             if segment:
@@ -439,8 +445,9 @@ class _InsertMixin(_RevisionManagerBase):
         inherits the formatting (rPr) of the tail it sits directly before — the
         moved boundary run — so a split-inserted segment matches the surrounding
         text instead of dropping to document default. When the tail is empty (a
-        split at the paragraph's end), ``fallback_rPr_xml`` (the previous
-        paragraph's boundary formatting) is used instead.
+        split at the paragraph's end), ``fallback_rPr_xml`` (the last boundary
+        formatting the split loop saw — several paragraphs back when empty
+        segments intervene) is used instead.
         """
         runs = paragraph.getElementsByTagName("w:r")
         rPr_xml = get_rPr_xml(runs[0]) if runs else fallback_rPr_xml

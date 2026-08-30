@@ -26,29 +26,6 @@ Item numbers (`#N`) are stable identifiers, not GitHub issue numbers. PR titles 
 
 Ordered by value. Each is one board task and one PR unless noted.
 
-### 73. Decompose `track_changes.py`  [refactor, no behaviour change]
-
-`docx_editor/track_changes.py` is 5,215 lines; `RevisionManager` alone is 107 methods over 3,739 lines. Every review round still finds real bugs in it, which says the file — not the reviewers — is the problem: each edit site re-derives the same run/insertion/boundary facts, and a fix in one site does not reach its siblings. The method list already clusters cleanly:
-
-| cluster | representative methods | ~lines |
-|---|---|---|
-| public dataclasses | `EditOperation`, `EditResult`, `SearchResult`, `Revision`, `ResolveResult`, `UnhandledRevision` | 700 |
-| group/changeset registry | `_reconstruct_groups`, `_grouped`, `_changeset`, `group_spans`, `groups_are_dead` | 500 |
-| locate/search | `find_text`, `find_all`, `count_matches`, `_locate_*`, `_find_across_boundaries*` | 300 |
-| batch + rewrite | `batch_edit`, `validate_batch`, `batch_rewrite`, `rewrite_paragraph`, `_rewrite_*` | 550 |
-| replace sites | `_replace_same_context`, `_replace_within_own_ins`, `_replace_mixed_state`, `_replace_across_nodes` | 450 |
-| delete sites | `_delete_*`, `_remove_from_insertion`, `_split_foreign_ins_at`, `_split_ins_after_child` | 550 |
-| insert sites + paragraph split/rejoin | `insert_text_*`, `_insert_*`, `_split_*`, `_collect_tail_nodes`, `_rejoin_paragraph` | 550 |
-| listing/parsing | `list_revisions`, `get_markup_text`, `_parse_revision`, `_revision_element_index` | 300 |
-| resolution | `accept_*`/`reject_*`, `_resolve_*`, `_restore_*`, `_sweep_*` | 600 |
-
-Plan: turn the module into a package `docx_editor/track_changes/` with one module per cluster; `RevisionManager` stays as the façade so the public API and `from docx_editor.track_changes import …` do not change. Rules: one cluster per PR, each PR a pure move (`git` must show renames, zero logic edits), gates unchanged — the test suite, the walk-count pins, and the corpus harness are the safety net that makes this mechanical. Do this **before** any further edit-site work (#6, #63c); it is what lets a fix land once instead of six times.
-
-Progress and decisions (2026-08-30):
-- **Steps 1–5 merged** (PRs #83, #84 registry, #85 locate, #87 batch/rewrite, #89 replace sites; each ~1 h approval-to-merge). Step 1 (PR #83): `track_changes.py` → package `track_changes/` with `models.py` (dataclasses, tag constants, validators), `dom.py` (minidom helpers), `diff.py` (tokenize/hunks/affix trimming), `manager.py` (`RevisionManager`, unchanged); `__init__.py` re-exports the public API. `scripts/check_pure_move.py --base main` is the gate for every step: line-multiset equality minus import plumbing, AST identity of every method, and `base.py` may hold only verbatim copies.
-- **Mixins and `ty`**: a method in one mixin that touches an attribute or method defined elsewhere fails `ty`'s `unresolved-attribute`. Decision: a typed `_RevisionManagerBase` in `base.py` declaring the instance attributes and one verbatim-copied stub per cross-cluster callee (`raise NotImplementedError`) — not a package-wide `[[tool.ty.overrides]]`, which would turn every `self.*` into `Unknown`.
-- **Remaining steps, one PR each, in order**: registry → locate → batch → replace → delete → insert (+ paragraph split/rejoin) → listing → resolution. Each moves its methods byte-identically into `<cluster>.py` as `class _<Cluster>Mixin(_RevisionManagerBase)` and adds the mixin to `RevisionManager`'s bases. Gate: pure-move script, ruff/format/ty, full suite (`-n 4`, 16 GB cap), CI; self-review only.
-
 ### 6. `w:br` in the paragraph text map  [second half of #6; `w:tab` shipped in 0.8.1]
 
 A run-level line break is still invisible to search, hashes and edit placement. It cannot map to `\n` (that means paragraph split — see commitments); candidate is a distinct atomic character (e.g. `\u2028`, LINE SEPARATOR) with the same boundary-only edit rules as tabs. Refs of affected paragraphs change, as they did for tabs.
@@ -64,6 +41,10 @@ Only `w:instrText` is known to the library today. A `replace()` targeting text i
 ### 79. Inserted text loses formatting after an empty split segment  [after #73 step 7]
 
 `_apply_paragraph_splits` resets `fallback_rPr = ""` whenever the current paragraph has no runs; a split at a paragraph end yields an empty tail, so the *next* segment drops the surrounding `rPr`: on a bold paragraph `insert_after(…, "A\nC")` keeps bold on `C`, `"A\n\nC"` loses it. The comment above the loop already claims the propagation works — PR #72 merged the comment but not the one-line fix. No test covers it. Lives in the insert/split cluster, so it lands after #73 moves it.
+
+### 83. Inserted runs inherit formatting from the raw DOM, not the accepted view
+
+Every path that decides which `rPr` a newly inserted run copies picks its boundary run with `getElementsByTagName("w:r")` — `_apply_paragraph_splits`'s `boundary_runs[-1]` and `_insert_ins_at_paragraph_start`'s `runs[0]` in `insert.py`, and `_rewrite_insert_at`'s empty-paragraph `runs[0]` in `batch.py`. That is document order, not the accepted view, so the "boundary" can be a run Word never shows: inside `w:del`, inside `w:moveFrom` (the moved-away source, which Word writes as plain `w:t`), or inside a `w:txbxContent` text box — the unfinished half of #65. A paragraph whose visible text is `Keep` plus a bold `w:moveFrom` run gives the inserted run bold; a bold paragraph carrying an italic text-box caption gives it italic. All of it reproduces before #79, with a plain `"A\nC"` split. Fix: take the boundary from `build_text_map`'s last (or first) visible position and walk to its `w:r` ancestor, which already excludes all three. Second defect on the same path: `get_rPr_xml` copies the boundary `rPr` verbatim, nested `w:rPrChange` included, so a new insertion carries a foreign author's tracked formatting change with its original `w:id` — `insert_after("body.", " A")` alone turns one unhandled revision into two. Sanitize the copy (drop `w:rPrChange`, as `_new_tail_paragraph` already does for the paragraph mark). Found by the multi-review of PR #95.
 
 ### 81. Workspace creation bypasses the unpack symlink guard
 
@@ -113,7 +94,7 @@ CodeRabbit reviews every PR; its inline Critical/Major/Potential-issue comments 
 
 Newest first. Details live in each PR and in the release notes.
 
-- **unreleased, on main**: #72 session tests robust to CI load — env-scaled start budget, timeout diagnostics, handshakes for sleeps ([#91](https://github.com/pablospe/docx-editor/pull/91)); #76 comment reply marker order, #77 unpack symlink ancestors, #78 session start leak, #80 docs/spec drift ([#88](https://github.com/pablospe/docx-editor/pull/88)); #73 steps 1–5 ([#83](https://github.com/pablospe/docx-editor/pull/83), [#84](https://github.com/pablospe/docx-editor/pull/84), [#85](https://github.com/pablospe/docx-editor/pull/85), [#87](https://github.com/pablospe/docx-editor/pull/87), [#89](https://github.com/pablospe/docx-editor/pull/89)); CI sharded, ~8½ min wall ([#86](https://github.com/pablospe/docx-editor/pull/86))
+- **unreleased, on main**: #73 `track_changes.py` decomposed into a package — `RevisionManager` = 8 mixins over a typed base, `manager.py` 5,215 → 74 lines, every step a byte-verified pure move (`scripts/check_pure_move.py`), previously-uncovered moved lines got tests along the way ([#83](https://github.com/pablospe/docx-editor/pull/83) [#84](https://github.com/pablospe/docx-editor/pull/84) [#85](https://github.com/pablospe/docx-editor/pull/85) [#87](https://github.com/pablospe/docx-editor/pull/87) [#89](https://github.com/pablospe/docx-editor/pull/89) [#90](https://github.com/pablospe/docx-editor/pull/90) [#92](https://github.com/pablospe/docx-editor/pull/92) [#93](https://github.com/pablospe/docx-editor/pull/93) [#94](https://github.com/pablospe/docx-editor/pull/94)); #72 session tests robust to CI load — env-scaled start budget, timeout diagnostics, handshakes for sleeps ([#91](https://github.com/pablospe/docx-editor/pull/91)); #76 comment reply marker order, #77 unpack symlink ancestors, #78 session start leak, #80 docs/spec drift ([#88](https://github.com/pablospe/docx-editor/pull/88)); #73 steps 1–5 ([#83](https://github.com/pablospe/docx-editor/pull/83), [#84](https://github.com/pablospe/docx-editor/pull/84), [#85](https://github.com/pablospe/docx-editor/pull/85), [#87](https://github.com/pablospe/docx-editor/pull/87), [#89](https://github.com/pablospe/docx-editor/pull/89)); CI sharded, ~8½ min wall ([#86](https://github.com/pablospe/docx-editor/pull/86))
 - **0.8.1** (2026-08-30): #68 Resolve moves and `w:pPrChange` as revisions ([#82](https://github.com/pablospe/docx-editor/pull/82)); #6a `w:tab` in the paragraph text map ([#81](https://github.com/pablospe/docx-editor/pull/81)); #71 LibreOffice opens-clean gate + real Word redline fixtures ([#80](https://github.com/pablospe/docx-editor/pull/80))
 - **0.8.0** (2026-08-29): #65 Exclude w:txbxContent from the host paragraph text map ([#78](https://github.com/pablospe/docx-editor/pull/78)); #67 Rationale channel ([#79](https://github.com/pablospe/docx-editor/pull/79)); #66 + #70 settings.xml pair + anti-scope statement ([#77](https://github.com/pablospe/docx-editor/pull/77)); #64 Foreign-revision census + accept_all honesty floor ([#76](https://github.com/pablospe/docx-editor/pull/76))
 - **0.7.2** (2026-08-28): #56+#62 Perf follow-ups + test hygiene ([#75](https://github.com/pablospe/docx-editor/pull/75)); #39 (also filed as #31) Site D own-insertion replace ordering ([#74](https://github.com/pablospe/docx-editor/pull/74)); #52+#60 Ergonomics grab-bag ([#73](https://github.com/pablospe/docx-editor/pull/73))
