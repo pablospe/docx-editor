@@ -77,9 +77,9 @@ The listing SHALL:
 
 ### Requirement: Paragraph-Scoped Text Operations
 
-The system SHALL accept an optional `paragraph` parameter on `replace()`, `delete()`, `insert_after()`, and `insert_before()` methods that scopes the text search to a single paragraph.
+The system SHALL require a `paragraph` reference on `replace()`, `delete()`, `insert_after()`, and `insert_before()` methods that scopes the text search to a single paragraph.
 
-When `paragraph` is specified:
+For every call:
 - The system SHALL parse the reference using `ParagraphRef`
 - The system SHALL resolve the paragraph by index and validate its hash
 - The `occurrence` parameter SHALL count matches within that paragraph only (paragraph-local)

@@ -2473,8 +2473,9 @@ class Document:
             :class:`ResolveResult` — an ``int`` whose value is the number of
             revisions accepted (so existing ``count = doc.accept_all()`` code
             is unaffected), carrying ``.unhandled`` (how many revision
-            elements this library never resolves are still in the document,
-            counted after resolution) and ``.unhandled_types`` (tag -> count).
+            elements this library never resolves are still in the document —
+            or, on an ``author=`` call, still carried by that author — counted
+            after resolution) and ``.unhandled_types`` (tag -> count).
 
         Warns:
             UnhandledRevisionWarning: If ``.unhandled`` is nonzero — the point

@@ -42,10 +42,10 @@
 
 ## 7. Benchmark: Hash-Anchored vs Plain Edits
 
-- [ ] 7.1 Create benchmark script (`benchmarks/hash_anchored_vs_plain.py`) that compares both approaches on a multi-paragraph document:
+- [x] 7.1 Create benchmark script (`benchmarks/hash_anchored_vs_plain.py`) that compares both approaches on a multi-paragraph document:
   - **Speed**: Time per operation with and without `paragraph=` parameter (measure hash computation + resolution overhead)
   - **Accuracy**: Run a batch of N edits (e.g., 20 targeted replacements across a 50-paragraph doc) using both approaches and count how many land on the correct paragraph
-- [ ] 7.2 Design accuracy test scenario: generate a document with repeated phrases across paragraphs, issue a sequence of edits that shift indices mid-batch, measure:
+- [x] 7.2 Design accuracy test scenario: generate a document with repeated phrases across paragraphs, issue a sequence of edits that shift indices mid-batch, measure:
   - Plain `occurrence`-based: how many edits hit wrong paragraph after shifts
   - Hash-anchored: how many raise `HashMismatchError` (correctly rejected) vs silently wrong
 - [ ] 7.3 Document benchmark results in `benchmarks/README.md` with a comparison table

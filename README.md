@@ -24,7 +24,7 @@ Pure Python library for Word document track changes and comments, without requir
 - **Mixed-State Editing**: Atomic decomposition for text spanning `<w:ins>`/`<w:del>` boundaries
 - **Comments**: Add, reply, resolve, and delete comments
 - **Word's Tracking Switch**: Saving a redline turns Track Changes on in `settings.xml`, so the recipient's own edits stay tracked too; documents protected with Word's *Restrict Editing* are refused at open rather than silently edited
-- **Rationale Notes**: `note=` on any text edit (`replace`/`delete`/`insert_*`/`rewrite_paragraph`/`batch_edit`) anchors a comment explaining the redline on exactly the revisions it creates — and deletes it when they are accepted or rejected
+- **Rationale Notes**: `note=` on any text edit (`replace`/`delete`/`insert_*`/`rewrite_paragraph`, and per `EditOperation` inside `batch_edit`) anchors a comment explaining the redline on exactly the revisions it creates — and deletes it when they are accepted or rejected
 - **Revision Management**: List, accept, and reject tracked changes at three granularities — individual revisions, groups (one logical edit), and changesets (one whole `batch_edit`/`batch_rewrite` call); `EditResult` and `Revision` objects carry `group_id` and `changeset_id`
 - **Session Mode**: Optional persistent kernel (`docx-session start/exec/eval/status/stop`) keeps documents open across many small commands — ideal for AI agents (`pip install "docx-editor[session]"`)
 - **Cross-Platform**: Works on Linux, macOS, and Windows

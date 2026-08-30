@@ -821,7 +821,8 @@ move (`"move_from"`/`"move_to"` — two rows, as in Word's revision pane) and
 `"property_change"` (a `w:pPrChange`: the paragraph's previous properties;
 `text` is `""`). Every row can be passed to `accept_revision()` /
 `reject_revision()`. Every other revision type in the OOXML schema — run,
-section and table property changes, table-structure revisions — is listed by
+section and table property changes, table-structure revisions,
+`w:numberingChange` and the custom-XML range marks — is listed by
 [`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone) instead,
 because none of it can be. A move's range marks (`w:moveFromRangeStart` etc.)
 are scaffolding: never listed, swept once the move they bracket is resolved.
@@ -1916,7 +1917,8 @@ except WorkspaceLockedError as e:
 Emitted by `accept_all()` / `reject_all()` when the document still holds
 revision elements outside the types those verbs resolve (insertions,
 deletions, moves, paragraph-property changes) — run/section/table property
-changes, table-structure revisions, custom-XML range marks. Without it,
+changes, table-structure revisions, `w:numberingChange`, custom-XML range
+marks. Without it,
 `accept_all()` returning 0 on a run-format-only redline reads as "there was
 nothing to accept" rather than "nothing here could be accepted".
 
