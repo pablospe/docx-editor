@@ -445,8 +445,9 @@ class _InsertMixin(_RevisionManagerBase):
         inherits the formatting (rPr) of the tail it sits directly before — the
         moved boundary run — so a split-inserted segment matches the surrounding
         text instead of dropping to document default. When the tail is empty (a
-        split at the paragraph's end), ``fallback_rPr_xml`` (the previous
-        paragraph's boundary formatting) is used instead.
+        split at the paragraph's end), ``fallback_rPr_xml`` (the last boundary
+        formatting the split loop saw — several paragraphs back when empty
+        segments intervene) is used instead.
         """
         runs = paragraph.getElementsByTagName("w:r")
         rPr_xml = get_rPr_xml(runs[0]) if runs else fallback_rPr_xml

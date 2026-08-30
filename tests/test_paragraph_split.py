@@ -428,11 +428,13 @@ def _last_paragraph(document: Document):
 
 
 def _run_text(run) -> str:
-    return "".join("".join(n.data for n in t.childNodes) for t in run.getElementsByTagName("w:t"))
+    return "".join(
+        "".join(c.data for c in t.childNodes if c.nodeType == c.TEXT_NODE) for t in run.getElementsByTagName("w:t")
+    )
 
 
-def _tail_insert_run(document):
-    """The last paragraph's single inserted run — the segment past the empty ones.
+def _assert_single_tail_insert(document, text: str):
+    """Assert the last paragraph holds exactly one inserted run, and return it.
 
     Runs are read out of the paragraph's ``w:ins`` elements; the inserted
     paragraph mark lives in ``w:pPr`` and holds no run, so it is not picked up.
@@ -442,7 +444,7 @@ def _tail_insert_run(document):
         for ins in _last_paragraph(document).getElementsByTagName("w:ins")
         for run in ins.getElementsByTagName("w:r")
     ]
-    assert [_run_text(run) for run in runs] == ["C"]
+    assert [_run_text(run) for run in runs] == [text]
     return runs[0]
 
 
@@ -462,13 +464,13 @@ class TestSplitFormattingAcrossEmptySegments:
         src = _formatted_docx(simple_docx, temp_dir, BOLD_RPR, "bold.docx")
         with Document.open(src) as doc:
             doc.insert_after("body.", text, paragraph=find_ref(doc, "Original body."))
-            assert len(_tail_insert_run(doc).getElementsByTagName("w:b")) == 1
+            assert len(_assert_single_tail_insert(doc, "C").getElementsByTagName("w:b")) == 1
 
     def test_replace_keeps_bold_past_empty_segment(self, simple_docx, temp_dir):
         src = _formatted_docx(simple_docx, temp_dir, BOLD_RPR, "bold_replace.docx")
         with Document.open(src) as doc:
             doc.replace("body.", "A\n\nC", paragraph=find_ref(doc, "Original body."))
-            assert len(_tail_insert_run(doc).getElementsByTagName("w:b")) == 1
+            assert len(_assert_single_tail_insert(doc, "C").getElementsByTagName("w:b")) == 1
 
     def test_rewrite_paragraph_keeps_bold_past_empty_segment(self, simple_docx, temp_dir):
         # The third entry point into _apply_paragraph_splits (rewrite opcodes).
@@ -476,7 +478,7 @@ class TestSplitFormattingAcrossEmptySegments:
         with Document.open(src) as doc:
             ref = find_ref(doc, "Original body.")
             doc.rewrite_paragraph(ref, "Original body.\n\nC")
-            assert len(_tail_insert_run(doc).getElementsByTagName("w:b")) == 1
+            assert len(_assert_single_tail_insert(doc, "C").getElementsByTagName("w:b")) == 1
 
     def test_unformatted_source_stays_unformatted(self, simple_docx, temp_dir):
         # Guards the opposite over-reach: the fallback follows the *presence of
@@ -484,7 +486,7 @@ class TestSplitFormattingAcrossEmptySegments:
         src = _formatted_docx(simple_docx, temp_dir, "", "plain.docx")
         with Document.open(src) as doc:
             doc.insert_after("body.", "A\n\nC", paragraph=find_ref(doc, "Original body."))
-            assert _tail_insert_run(doc).getElementsByTagName("w:rPr") == []
+            assert _assert_single_tail_insert(doc, "C").getElementsByTagName("w:rPr") == []
 
     def test_reject_group_rejoins_after_empty_segments(self, simple_docx, temp_dir):
         src = _formatted_docx(simple_docx, temp_dir, BOLD_RPR, "bold_reject.docx")
