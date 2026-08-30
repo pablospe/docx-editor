@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,43 @@ def test_start_session_creates_connection_file(session_conn):
 def test_start_session_twice_raises(session_conn):
     with pytest.raises(SessionError, match="already running"):
         start_session(session_conn)
+
+
+def test_start_session_unreadable_connection_file_stops_kernel(tmp_path, monkeypatch):
+    """A kernel whose connection file cannot be parsed is killed, not leaked (ROADMAP.md #78).
+
+    jupyter_client writes kernel.json non-atomically, so the startup loop's
+    "exists and non-empty" check can pass on a half-written file. The stand-in
+    kernel writes exactly such a file and then idles like a live kernel would.
+    """
+    import docx_editor.session as session_mod
+
+    conn = tmp_path / "kernel.json"
+    script = "import sys, time; open(sys.argv[1], 'w').write('{\"shell_port\": 1'); time.sleep(60)"
+    spawned: list[subprocess.Popen] = []
+
+    def fake_popen(args, **kwargs):
+        proc = subprocess.Popen([sys.executable, "-c", script, str(conn)], **kwargs)
+        spawned.append(proc)
+        return proc
+
+    # Patch the module attribute, not subprocess.Popen itself: conftest's
+    # kernel reaper wraps the real class for the whole session.
+    fake_subprocess = types.SimpleNamespace(Popen=fake_popen, DEVNULL=subprocess.DEVNULL, PIPE=subprocess.PIPE)
+    monkeypatch.setattr(session_mod, "subprocess", fake_subprocess)
+
+    try:
+        with pytest.raises(SessionError, match="unreadable connection file"):
+            start_session(conn, timeout=5.0)
+        assert len(spawned) == 1
+        assert spawned[0].wait(timeout=5) is not None
+        assert not conn.exists()
+        assert not conn.with_suffix(".pid").exists()
+    finally:
+        for proc in spawned:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
 
 
 def test_is_session_running_false_without_connection_file(tmp_path):

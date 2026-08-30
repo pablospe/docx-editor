@@ -142,7 +142,8 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
         PID of the kernel process.
 
     Raises:
-        SessionError: If a session is already running or the kernel fails to start.
+        SessionError: If a session is already running, the kernel fails to
+            start, or the connection file it wrote is unreadable.
         ImportError: If the [session] extra is not installed.
     """
     if is_session_running(connection_file):
@@ -180,10 +181,17 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
             raise _abort(f"Kernel did not start within {timeout}s")
         time.sleep(0.1)
 
-    kc = _client(connection_file)
+    kc = None
     try:
+        # Inside the guard: the kernel writes the connection file
+        # non-atomically, so a mid-write read fails to parse and must not
+        # leave the detached kernel running.
+        try:
+            kc = _client(connection_file)
+        except (ValueError, OSError) as e:
+            raise SessionError(f"Kernel wrote an unreadable connection file ({connection_file}): {e}") from e
         if not _kernel_alive(kc, timeout=max(1.0, deadline - time.monotonic())):
-            raise _abort(f"Kernel did not become ready within {timeout}s")
+            raise SessionError(f"Kernel did not become ready within {timeout}s")
     except BaseException:
         # Never leave a half-started kernel behind with no way to reach it.
         if proc.poll() is None:
@@ -193,7 +201,8 @@ def start_session(connection_file: Path = DEFAULT_CONNECTION_FILE, timeout: floa
         _pid_file(connection_file).unlink(missing_ok=True)
         raise
     finally:
-        kc.stop_channels()
+        if kc is not None:
+            kc.stop_channels()
     return proc.pid
 
 
