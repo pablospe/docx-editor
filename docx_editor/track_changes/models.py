@@ -925,8 +925,12 @@ class UnhandledRevision:
     """One revision element this library does not accept or reject.
 
     Returned by ``Document.list_unhandled_revisions()``. Deliberately not a
-    :class:`Revision`: these carry no adjudicable id, so handing them to
-    ``accept_revision()`` could only fail — see ``list_unhandled_revisions``.
+    :class:`Revision`: nothing here is adjudicable, so there is no id to hand
+    ``accept_revision()`` — see ``list_unhandled_revisions``. Where ``id`` is
+    not None it is reported for identification only: an unhandled mark's
+    ``w:id`` may coincide with a *handled* revision's, and passing it to
+    ``accept_revision``/``reject_revision`` then resolves that other element
+    instead (ROADMAP.md #87).
 
     Attributes:
         tag: the element's tag — one of ``UNHANDLED_REVISION_TAGS``, or a

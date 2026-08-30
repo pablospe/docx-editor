@@ -1089,10 +1089,12 @@ marker is dropped without merging or splitting paragraphs.
 Only `word/document.xml` is inspected; headers, footers and footnotes are the
 container-parts epic (ROADMAP.md #30).
 
-An `author=` call resolves that author's own elements and no one else's, even
+An `author=` call targets that author's own elements and no one else's, even
 where a producer repeats one `w:id` across authors (LibreOffice does): the id
 lookup is scoped to the author being resolved, so another author's same-id
-revision is never a candidate.
+revision is never a candidate. That is about which elements are *targeted*, not
+about what survives — rejecting an insertion still removes whatever another
+author nested inside it, `reject_all(author=…)` included.
 
 **Parameters:**
 
@@ -1123,8 +1125,9 @@ Reject every listed revision.
 Resolves insertions, deletions, content moves (both halves as a unit — the
 text is back at its source exactly once) and paragraph-property changes (the
 recorded previous properties are restored); every other revision type is left
-pending and reported exactly as in `accept_all()`. `author=` is author-exact in
-the same way, duplicate `w:id`s across authors included.
+pending and reported exactly as in `accept_all()`. `author=` targets one
+author's elements in the same way, duplicate `w:id`s across authors included —
+and carries away nested revisions in the same way too.
 
 **Parameters:**
 
