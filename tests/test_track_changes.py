@@ -1285,11 +1285,14 @@ class TestNestedForeignRevisions:
     def test_accept_all_author_filter_resolves_every_row_it_listed(self):
         """Test that a filtered call resolves every one of that author's listed rows.
 
-        Index and listing must agree on ownership: if the index used a
-        different author expression, the filtered pass would list rows it
-        could not resolve and exit on the no-progress guard — a silent no-op.
-        Equality holds here because none of these rows is nested; a listed row
-        inside a rejected insertion goes with its host and is not counted.
+        A filtered pass that could not reach a row it listed would exit on the
+        no-progress guard and report a count below the listing — a silent
+        no-op. Equality holds here because none of these rows is nested; a
+        listed row inside a rejected insertion goes with its host and is not
+        counted. The other way index and listing can disagree about ownership
+        — the ``"Unknown"`` fallback for a missing ``w:author`` — is pinned by
+        ``test_unattributed_revision_resolves_under_the_unknown_author``; both
+        of these rows carry an explicit author.
         """
         manager = _make_revision_manager(self.DUPLICATE_ID_ACROSS_AUTHORS)
 

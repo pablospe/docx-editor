@@ -297,7 +297,9 @@ class _ResolutionMixin(_RevisionManagerBase):
           sharing that id is never a candidate: the listing and the index
           agree on ownership, and the call cannot resolve a row it did not
           list. It may resolve fewer — a listed row nested inside a rejected
-          insertion goes with its host — but never someone else's.
+          insertion goes with its host — but never counts someone else's.
+          Targeting, not survival: another author's revision nested inside a
+          rejected insertion still goes with it, uncounted.
 
         The index is built once for the whole call, not per pass: resolution
         only ever detaches elements, so a single build stays a valid superset
