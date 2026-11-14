@@ -446,7 +446,8 @@ class _ResolutionMixin(_RevisionManagerBase):
         no room for: the tail's ``w:pPrChange`` when both paragraphs carry
         one, the tail's ``w:sectPr`` (with any ``w:sectPrChange`` in it)
         when both carry one, and a paragraph-mark revision next to the
-        rejected ``w:ins`` when the tail's mark carries one of the same tag.
+        rejected ``w:ins`` (``w:rPrChange`` included) when the tail's mark
+        carries one of the same tag.
         The tail's base properties survive only when its ``w:pPrChange``
         moves with them (otherwise the head's are kept), so a
         revision embedded in them — a ``w:ins`` or ``w:numberingChange`` in
@@ -708,11 +709,11 @@ class _ResolutionMixin(_RevisionManagerBase):
         not copied, so a bulk resolution's element index still finds them.
 
         ``p1``'s mark formatting goes with the rejected mark, but a revision
-        marker sitting next to the rejected ``w:ins`` (a ``w:del``,
-        ``w:moveFrom`` or ``w:moveTo``) does not: it moves onto the merged
-        mark, in schema order, unless ``p2``'s mark already carries a marker
-        of the same tag (a mark holds one of each; ``p2``'s wins and
-        ``p1``'s is dropped uncounted). A split written by an earlier release
+        sitting next to the rejected ``w:ins`` (a ``w:del``, ``w:moveFrom``
+        or ``w:moveTo`` marker, or an unhandled ``w:rPrChange``) does not: it
+        moves onto the merged mark, in schema order, unless ``p2``'s mark
+        already carries one of the same tag (a mark holds one of each;
+        ``p2``'s wins and ``p1``'s is dropped uncounted). A split written by an earlier release
         left a pre-existing revision of the original mark there, and it
         cannot be told apart from a revision of the new break, so both are
         kept: a kept revision can still be rejected, a dropped one is gone.
@@ -756,24 +757,24 @@ class _ResolutionMixin(_RevisionManagerBase):
         p1_pPr = slot.parentNode
         assert p1_pPr is not None  # _paragraph_mark_rPr returns an attached w:rPr (narrows for ty)
         p2_rPr = _first_child_element(p2_pPr, "w:rPr") if p2_pPr is not None else None
-        # p1's own mark revisions survive unless p2's mark has the same tag.
-        kept = [
-            (tag, marker)
-            for tag in _RUN_TRACK_CHANGE_TAGS
-            if (marker := _first_child_element(slot, tag)) is not None
-            and (p2_rPr is None or _first_child_element(p2_rPr, tag) is None)
-        ]
         if p2_rPr is None:
             p2_rPr = self.editor.dom.createElement("w:rPr")
         p1_pPr.replaceChild(p2_rPr, slot)
-        for tag, marker in kept:
-            # CT_ParaRPr order: the markers lead, in _RUN_TRACK_CHANGE_TAGS order.
-            before = _RUN_TRACK_CHANGE_TAGS[: _RUN_TRACK_CHANGE_TAGS.index(tag) + 1]
-            anchor = next(
-                (c for c in p2_rPr.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName not in before),
-                None,
-            )
-            p2_rPr.insertBefore(marker, anchor)
+        # p1's own mark revisions survive unless p2's mark has the same tag.
+        # CT_ParaRPr order: the markers lead, in _RUN_TRACK_CHANGE_TAGS order;
+        # the formatting follows; w:rPrChange is last.
+        for index, tag in enumerate((*_RUN_TRACK_CHANGE_TAGS, "w:rPrChange")):
+            revision = _first_child_element(slot, tag)
+            if revision is None or _first_child_element(p2_rPr, tag) is not None:
+                continue
+            leading = _RUN_TRACK_CHANGE_TAGS[: index + 1]
+            anchor = None
+            if tag != "w:rPrChange":
+                anchor = next(
+                    (c for c in p2_rPr.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName not in leading),
+                    None,
+                )
+            p2_rPr.insertBefore(revision, anchor)
         p2_sect = _first_child_element(p2_pPr, "w:sectPr") if p2_pPr is not None else None
         if p2_sect is not None and _first_child_element(p1_pPr, "w:sectPr") is None:
             # Schema order: after the w:rPr just placed, before any record.

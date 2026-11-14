@@ -613,7 +613,8 @@ def _merged_ppr(doc: Document) -> str:
 
 class TestRejoinKeepsTailRevisions:
     """Rejecting a tracked split merges the tail paragraph into the head; the
-    merged paragraph's mark is the tail's, revisions included (ROADMAP.md #85)."""
+    merged paragraph's mark is the tail's, revisions included, plus any revision
+    of the head's mark whose tag the tail's mark lacks (ROADMAP.md #85)."""
 
     @pytest.mark.parametrize(
         ("tag", "rev_type"),
@@ -693,6 +694,17 @@ class TestRejoinKeepsTailRevisions:
             assert doc.reject_all(author=author) == count
             assert [r.author for r in doc.list_revisions()] == left
             assert doc.get_visible_text() == "headtail\nlast"
+
+    @pytest.mark.parametrize("tail_ppr", ["", "<w:rPr><w:b/></w:rPr>"], ids=["bare-tail", "formatted-tail"])
+    def test_unhandled_mark_revision_next_to_the_rejected_mark_is_still_reported(self, make_docx, tail_ppr):
+        change = f'<w:rPrChange w:id="12" {_ANN}><w:rPr><w:i/></w:rPr></w:rPrChange>'
+        body = _split(tail_ppr, head_mark=f'<w:ins w:id="30" {_BOB}/><w:b/>{change}')
+        with _open(make_docx(body)) as doc, warnings.catch_warnings():
+            warnings.simplefilter("ignore", UnhandledRevisionWarning)
+            assert doc.reject_revision(30)
+            assert [u.tag for u in doc.list_unhandled_revisions()] == ["w:rPrChange"]
+            formatting = "<w:b/>" if tail_ppr else ""
+            assert _merged_ppr(doc) == f"<w:pPr><w:rPr>{formatting}{change}</w:rPr></w:pPr>"
 
     def test_tail_mark_revision_wins_over_one_of_the_same_tag_on_the_head(self, make_docx):
         """A mark holds one marker per tag: the tail's stays, the head's is the
