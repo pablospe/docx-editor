@@ -598,6 +598,7 @@ doc.add_comment(r.text, "please confirm", paragraph=r.paragraph_ref, occurrence=
 
 # Accept or reject individual revisions (return True if found, False if not).
 # Use IDs from list_revisions() — don't guess numbering.
+# An id shared by two pending revisions raises RevisionError; add author="…" to pick one.
 doc.accept_revision(revisions[0].id)
 doc.reject_revision(their_changes[0].id)
 
@@ -704,14 +705,21 @@ nested deletion's `nested_under` points back at its host.
   carries away what another author nested inside it. Revision types outside
   `list_revisions()` are not resolved at all — see the `result.unhandled`
   recipe above.
-- That duplicate-`w:id` guarantee is the bulk calls' alone. A producer may
-  reuse one `w:id` across authors, and `accept_revision(id)`/
-  `reject_revision(id)` take only the id: handed a duplicated one they resolve
-  whichever element comes first in the document, which may be the other
-  author's. Groups are no way around it — a duplicated id is barred from
-  grouping, so both rows carry `group_id=None`. Two rows sharing an id in
-  `list_revisions()` is the signal; resolve them with
-  `accept_all(author=…)`/`reject_all(author=…)`, which is author-exact.
+- A `w:id` must name one revision for `accept_revision(id)`/
+  `reject_revision(id)`. A producer may reuse one `w:id` — across authors, or
+  between a revision and a mark only `list_unhandled_revisions()` reports — and
+  a per-id call on such an id raises `RevisionError` with the document
+  untouched, rather than resolve whichever element comes first. An id on a
+  `list_revisions()` row that appears on another row, in either listing, is
+  the signal. Pass `author=` to name one reviewer's:
+  `doc.reject_revision(7, author="Ann")`. When one author wrote both (the
+  error says so), no per-id call can pick one. If both are `list_revisions()`
+  rows they are barred from grouping too (`group_id=None`), and
+  `accept_all(author=…)`/`reject_all(author=…)` is the way through. If the
+  other is a `list_unhandled_revisions()` row, the revision keeps whatever
+  `group_id` its row shows, and `accept_group()`/`reject_group()` resolve
+  that group without the id (if it is `None`, `accept_all(author=…)`/
+  `reject_all(author=…)` as above).
 
 **Moves are two rows.** A drag-and-drop move lists as a `move_from` (the
 source, text excluded from the visible view) and a `move_to` (the
@@ -1039,7 +1047,7 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `AmbiguousTextError`   | `search_text`, `paragraph_ref`, `paragraph_preview`, `total_occurrences`                | The target matched more than once with no `occurrence` given. Enumerate with `find_all()` and pick, or pass an explicit `occurrence` (0-based).      |
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` and retry with `get_paragraph(i)`, or call `list_paragraphs()` to pick a valid ref. |
 | `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (a missing paragraph ref, an element that is not an `EditOperation`, or a duplicate paragraph in `batch_rewrite` — `batch_edit` allows repeats, applied sequentially). Batch methods never raise the inner types directly. |
-| `RevisionError`        | `revision_id`, `group_id`, `changeset_id` (whichever the error is about is set, the rest None) | Unknown `group_id` passed to `accept_group()`/`reject_group()`, or unknown `changeset_id` passed to `accept_changeset()`/`reject_changeset()`. Group and changeset ids are per-open-Document and renumbered on each open (recorded for this session's edits, inferred for pre-existing revisions): use an id from this session's `EditResult` or `list_revisions()`, never one saved from a previous session. |
+| `RevisionError`        | `revision_id`, `group_id`, `changeset_id` (whichever the error is about is set, the rest None) | `revision_id` set: `accept_revision()`/`reject_revision()` was given a `w:id` that more than one pending revision carries — nothing was changed; retry with `author=` (the message lists the authors it works for), or use `accept_all(author=…)`/`reject_all(author=…)` when one author duplicated the id. Otherwise: unknown `group_id` passed to `accept_group()`/`reject_group()`, or unknown `changeset_id` passed to `accept_changeset()`/`reject_changeset()`. Group and changeset ids are per-open-Document and renumbered on each open (recorded for this session's edits, inferred for pre-existing revisions): use an id from this session's `EditResult` or `list_revisions()`, never one saved from a previous session. |
 | `CommentError`         | `comment_id` (set when a comment id was targeted, else None)                            | Replying to a nonexistent comment id — call `list_comments()` and retry with a real id. With `comment_id=None` the arguments themselves were invalid; fix them per the message. A `\r`/other control character in `anchor_text` or `comment_text`, or a `\t` in `comment_text`, also raises this — strip it (comments hold no newlines either). |
 | `ValueError`           | *(builtin — message names the field)*                                                  | Bad argument caught before any mutation: a malformed ref, a bad `occurrence`, a **control character** (`\r`, NUL, …) in any text, a `\t` in content text, or a `\t` in a `replace`/`delete` target. Only `\n` is allowed in content (it means a tracked paragraph split) and only `\t` in search/anchor text (it matches a tab mark). Remove the control character — never smuggle layout as `\t`/`\r`; to edit around a tab, target the text beside it. |
 | `DocumentClosedError`  | `path`                                                                                  | The `Document` was used after `close()`. Reopen with `Document.open(e.path)`; edits not saved before the `close()` were discarded with the workspace. |
@@ -1355,7 +1363,7 @@ which is tested by round-tripping real documents. Text in shapes and text boxes 
 excluded rather than half-editable, and headers, footers, footnotes and endnotes
 wait for a real demand.
 
-- **Text in shapes/text boxes**: Excluded, deliberately — text boxes are not an editing surface. Text-box content (`w:txbxContent`) appears in no paragraph listing, no text view, no search and no paragraph hash, and no ref addresses it. Word normally stores a box twice (an `mc:Choice` copy and an `mc:Fallback` copy), and a correct edit would have to write both copies, so an addressable box paragraph would let one write update a single copy and desynchronize the pair. The exclusion is uniform either way — a box stored once is excluded too. To read a box's text, go through HTML: `soffice --headless --convert-to html file.docx` then `pandoc file.html -t plain` (pandoc may render a `[ShapeN]` label beside a box's text, from the placeholder LibreOffice exports for a named shape — ignore those). Its `txt:Text` filter and pandoc reading the `.docx` directly both drop text boxes silently, so neither tells you anything is missing. A revision *inside* a box is still listed with `paragraph_ref`/`occurrence` left `None`, and `accept_all()`/`reject_all()` always resolve it. Anything narrower depends on the storage: a twice-stored box lists the revision once per copy, so one `accept_revision()`/`accept_group()` call resolves only one of them; copies with distinct ids and identical author/date share an inferred changeset that `accept_changeset()` resolves, while copies sharing a `w:id` are ungroupable (`group_id` and `changeset_id` both `None`), so no group- or changeset-keyed call reaches them and `accept_all()`/`reject_all()` is the single call that takes both. Because an all-text-box file (a poster, a flyer, a certificate) therefore reads as blank — `get_visible_text()` returns only the separators between its host paragraphs — check `doc.has_textbox_content` before reporting a document as having no text: `if not doc.get_visible_text().strip() and doc.has_textbox_content:`.
+- **Text in shapes/text boxes**: Excluded, deliberately — text boxes are not an editing surface. Text-box content (`w:txbxContent`) appears in no paragraph listing, no text view, no search and no paragraph hash, and no ref addresses it. Word normally stores a box twice (an `mc:Choice` copy and an `mc:Fallback` copy), and a correct edit would have to write both copies, so an addressable box paragraph would let one write update a single copy and desynchronize the pair. The exclusion is uniform either way — a box stored once is excluded too. To read a box's text, go through HTML: `soffice --headless --convert-to html file.docx` then `pandoc file.html -t plain` (pandoc may render a `[ShapeN]` label beside a box's text, from the placeholder LibreOffice exports for a named shape — ignore those). Its `txt:Text` filter and pandoc reading the `.docx` directly both drop text boxes silently, so neither tells you anything is missing. A revision *inside* a box is still listed with `paragraph_ref`/`occurrence` left `None`, and `accept_all()`/`reject_all()` always resolve it. Anything narrower depends on the storage: a twice-stored box lists the revision once per copy, so one `accept_revision()`/`accept_group()` call resolves only one of them; copies with distinct ids and identical author/date share an inferred changeset that `accept_changeset()` resolves, while copies sharing a `w:id` are ungroupable (`group_id` and `changeset_id` both `None`), so no group- or changeset-keyed call reaches them, a per-id call raises `RevisionError` (the id names two revisions), and `accept_all()`/`reject_all()` is the single call that takes both. Because an all-text-box file (a poster, a flyer, a certificate) therefore reads as blank — `get_visible_text()` returns only the separators between its host paragraphs — check `doc.has_textbox_content` before reporting a document as having no text: `if not doc.get_visible_text().strip() and doc.has_textbox_content:`.
 - **Tabs**: A tab mark (`<w:tab/>`) is one `\t` in the visible and original text views, in search and in hashes (`get_markup_text()` does not render it), and edits may land on either side of it — but no edit writes, deletes or replaces one yet: `replace`/`delete` targets containing `\t` are rejected, `rewrite_paragraph` must keep the paragraph's tab marks (same count; the text between them is what changes), and `w:br`/`w:ptab` are not mapped at all (ROADMAP.md #6).
 - **Charts**: Text inside charts is embedded in separate XML, not easily editable
 - **Concurrent editing**: Not supported — a second open of the same document raises `WorkspaceLockedError`; use sequential access

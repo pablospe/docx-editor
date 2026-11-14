@@ -824,7 +824,8 @@ Five `type` values: `"insertion"`, `"deletion"`, the two halves of a content
 move (`"move_from"`/`"move_to"` — two rows, as in Word's revision pane) and
 `"property_change"` (a `w:pPrChange`: the paragraph's previous properties;
 `text` is `""`). Every row can be passed to `accept_revision()` /
-`reject_revision()`. Every other revision type in the OOXML schema — run,
+`reject_revision()`, which refuse an id that more than one pending revision
+carries. Every other revision type in the OOXML schema — run,
 section and table property changes, table-structure revisions,
 `w:numberingChange` and the custom-XML range marks — is listed by
 [`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone) instead,
@@ -852,7 +853,7 @@ for r in revisions:
 # property_change:  by Ann
 ```
 
-#### `accept_revision(revision_id)`
+#### `accept_revision(revision_id, *, author=None)`
 
 Accept a revision by ID.
 
@@ -871,19 +872,29 @@ accepting the `move_to` and rejecting the `move_from` duplicates the text, the
 inverse loses it. A lone half in a damaged file behaves as what it structurally
 is: a `move_from` alone is a deletion, a `move_to` alone an insertion.
 
-**Duplicate ids are ambiguous here.** A producer may reuse one `w:id` across
-authors, and this call takes only the id: handed a duplicated one it resolves
-whichever element comes first in the document, which may be another author's.
-Groups are no way around it — a duplicated id is barred from grouping, so both
-rows carry `group_id=None`. Two rows sharing an id in `list_revisions()` is the
-signal; resolve them with `accept_all(author=…)`/`reject_all(author=…)`, which
-is author-exact.
+**An id must name one revision.** A producer may reuse one `w:id` — across
+authors, or between a revision and a mark only `list_unhandled_revisions()`
+reports. This call counts every pending element carrying the id and raises
+`RevisionError` when there is more than one and any of them is resolvable,
+leaving the document untouched, rather than resolve whichever comes first.
+An id on a `list_revisions()` row that appears on another row, in either
+listing, is the signal. `author=` narrows the id to one reviewer's revision.
+When one author wrote both, no per-id call can pick one. If both are
+`list_revisions()` rows they are barred from grouping too (`group_id=None`),
+and `accept_all(author=…)`/`reject_all(author=…)` resolve them. If the other
+is a `list_unhandled_revisions()` row, the revision keeps whatever `group_id`
+its row shows, and `accept_group()`/`reject_group()` resolve that group
+without the id (if it is None, `accept_all(author=…)`/`reject_all(author=…)`
+as above).
 
 **Parameters:**
 
 - `revision_id` (int): ID of the revision to accept
+- `author` (str | None, keyword-only): Only consider this author's revisions. Needed when two reviewers' revisions share the id
 
-**Returns:** True if accepted, False if not found (bool)
+**Returns:** True if accepted, False if not found — including an id that belongs only to `list_unhandled_revisions()` rows (bool)
+
+**Raises:** `RevisionError` if the id names a resolvable revision and at least one other pending one after `author` narrowing; nothing is changed
 
 **Note:** any `note=` rationale left with no live revision to explain is deleted with it, replies included — see [Rationale notes](#rationale-notes).
 
@@ -893,7 +904,7 @@ is author-exact.
 doc.accept_revision(1)
 ```
 
-#### `reject_revision(revision_id)`
+#### `reject_revision(revision_id, *, author=None)`
 
 Reject a revision by ID.
 
@@ -905,13 +916,16 @@ Reject a revision by ID.
 - Nested revisions: rejecting an insertion removes everything inside it — deletions another author nested inside it disappear with it
 
 Resolve both halves of a move together — see `accept_revision()`, whose
-duplicate-`w:id` caveat applies here too.
+refusal of a `w:id` shared by several revisions applies here too.
 
 **Parameters:**
 
 - `revision_id` (int): ID of the revision to reject
+- `author` (str | None, keyword-only): Only consider this author's revisions. Needed when two reviewers' revisions share the id
 
-**Returns:** True if rejected, False if not found (bool)
+**Returns:** True if rejected, False if not found — including an id that belongs only to `list_unhandled_revisions()` rows (bool)
+
+**Raises:** `RevisionError` if the id names a resolvable revision and at least one other pending one after `author` narrowing; nothing is changed
 
 **Note:** any `note=` rationale left with no live revision to explain is deleted with it, replies included — see [Rationale notes](#rationale-notes).
 
@@ -1171,7 +1185,9 @@ redline `accept_all()` returns 0 because there was nothing it *could* accept,
 not because there was nothing to do.
 
 Rows are [`UnhandledRevision`](#unhandledrevision), deliberately not `Revision`
-objects — they carry nothing `accept_revision()` could act on.
+objects — they carry nothing `accept_revision()` could act on. A row's `id`
+identifies it only: a bare per-id call on it returns False, or raises
+`RevisionError` when a `list_revisions()` row shares the id.
 
 Only `word/document.xml` is inspected (ROADMAP.md #30).
 
@@ -1311,11 +1327,11 @@ from docx_editor import Revision
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `id` | int | The revision ID |
-| `type` | str | `"insertion"`, `"deletion"`, `"move_from"`, `"move_to"` or `"property_change"`. The two halves of a move are two rows (Word's revision pane shows "Moved from"/"Moved to" the same way), sharing an inferred `changeset_id` when they carry the same author and date; resolve them together — see [`accept_revision()`](#accept_revisionrevision_id). `"property_change"` is a `w:pPrChange`: the paragraph's previous properties |
+| `type` | str | `"insertion"`, `"deletion"`, `"move_from"`, `"move_to"` or `"property_change"`. The two halves of a move are two rows (Word's revision pane shows "Moved from"/"Moved to" the same way), sharing an inferred `changeset_id` when they carry the same author and date; resolve them together — see [`accept_revision()`](#accept_revisionrevision_id-authornone). `"property_change"` is a `w:pPrChange`: the paragraph's previous properties |
 | `author` | str | The revision author |
 | `date` | datetime or None | When the revision was made |
 | `text` | str | The inserted, deleted or moved text; `""` for a property change or a paragraph-mark marker |
-| `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits in no addressable paragraph — outside any `<w:p>` (e.g. a `<w:trPr>` row marker), or inside a drawing's text box — still listed, and `accept_all()`/`reject_all()` always resolve it. Anything narrower depends on how the box is stored: Word normally writes a box twice (an `mc:Choice` copy and an `mc:Fallback` copy), so the revision is listed once per copy and one `accept_revision()`/`accept_group()` call resolves only the copy it lands on. Copies with distinct ids and identical author/date join one inferred changeset, which `accept_changeset()` resolves — along with every other group carrying that author and the identical raw `w:date` string. Copies sharing a `w:id` are ungroupable (`group_id` and `changeset_id` both None), so no group- or changeset-keyed call can reach them and `accept_all()`/`reject_all()` is the single call that takes both |
+| `paragraph_ref` | str or None | Hash-anchored reference (`"P{i}#{hash}"`) of the containing paragraph; None when the revision sits in no addressable paragraph — outside any `<w:p>` (e.g. a `<w:trPr>` row marker), or inside a drawing's text box — still listed, and `accept_all()`/`reject_all()` always resolve it. Anything narrower depends on how the box is stored: Word normally writes a box twice (an `mc:Choice` copy and an `mc:Fallback` copy), so the revision is listed once per copy and one `accept_revision()`/`accept_group()` call resolves only the copy it lands on. Copies with distinct ids and identical author/date join one inferred changeset, which `accept_changeset()` resolves — along with every other group carrying that author and the identical raw `w:date` string. Copies sharing a `w:id` are ungroupable (`group_id` and `changeset_id` both None), so no group- or changeset-keyed call can reach them, a per-id call raises `RevisionError` (the id names two revisions), and `accept_all()`/`reject_all()` is the single call that takes both |
 | `occurrence` | int or None | 0-based occurrence index of `text` within the containing paragraph, counted in the view where the revision's text lives (the visible view for insertions and `move_to` halves, the original pre-revision view for deletions and `move_from` halves). For insertions and `move_to` it plugs directly into the `occurrence=` parameter of the anchor APIs; None whenever targeting-by-text does not apply (empty text, a host insertion partly consumed by a nested deletion, a nested deletion, or a None `paragraph_ref`) |
 | `nested_under` | int or None | id of the nearest enclosing revision (e.g. a foreign deletion inside another author's pending insertion), else None |
 | `contains_ids` | tuple[int, ...] | ids of the revisions nested inside this one, in document order (empty tuple when none). Both nesting fields report *structural* containment and so, unlike `text`, still cross into a text box — accepting a host insertion does not resolve the box's own revisions |
@@ -1840,7 +1856,7 @@ except CommentError as e:
 
 ### `RevisionError`
 
-Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`, or an unknown changeset id passed to `accept_changeset()` / `reject_changeset()`. Group and changeset ids are per-open-`Document` and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use an id from the current session's `EditResult` or `list_revisions()` — a stale id from a previous session may raise this, or worse, silently resolve to a different group/changeset. Structured fields: `revision_id`, `group_id`, and `changeset_id` — set when the error is about that specific id (`group_id` for unknown-group errors, `changeset_id` for unknown-changeset errors), `None` otherwise.
+Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`, or an unknown changeset id passed to `accept_changeset()` / `reject_changeset()`. Also raised by `accept_revision()` / `reject_revision()` when the `w:id` is carried by more than one pending revision (`revision_id` is set; the document is untouched): pass `author=`, or use `accept_all(author=…)` / `reject_all(author=…)` when one author duplicated the id. Group and changeset ids are per-open-`Document` and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use an id from the current session's `EditResult` or `list_revisions()` — a stale id from a previous session may raise this, or worse, silently resolve to a different group/changeset. Structured fields: `revision_id`, `group_id`, and `changeset_id` — set when the error is about that specific id (`revision_id` for an ambiguous per-id call, `group_id` for unknown-group errors, `changeset_id` for unknown-changeset errors), `None` otherwise.
 
 ```python
 from docx_editor.exceptions import RevisionError
