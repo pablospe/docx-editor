@@ -16,6 +16,7 @@ from .dom import (
     _outermost_revision,
     _paragraph_mark_ins,
     _revision_elements,
+    _revision_elements_in_reading_order,
 )
 from .models import _GroupCapture, _RegistrySnapshot
 
@@ -27,7 +28,8 @@ class _RegistryMixin(_RevisionManagerBase):
         Word offers no grouping concept, so nothing about the original
         logical edits survives in the file; this reconstructs them with a
         heuristic: maximal runs of consecutive revisions (document order,
-        nested revisions included) in the *same paragraph* sharing identical
+        nested revisions included, a paragraph-mark revision read at the end
+        of its paragraph) in the *same paragraph* sharing identical
         raw ``w:author`` + ``w:date`` strings become one group. Same-paragraph
         contiguity is load-bearing — (author, date) alone would merge every
         edit an author made in the same second across the whole document.
@@ -98,7 +100,10 @@ class _RegistryMixin(_RevisionManagerBase):
                 self._group_changesets[group_id] = cs_id
                 run_members = []
 
-        elements = _revision_elements(self.editor.dom.documentElement)
+        # Reading order: a paragraph's mark revision comes after its content,
+        # so a foreign revision of a tail paragraph's mark does not sit
+        # between a split's mark and the content that continues it.
+        elements = _revision_elements_in_reading_order(self.editor.dom.documentElement)
 
         # Pre-scan for duplicated ids, independent of groupability: an
         # ungroupable occurrence (e.g. missing its date) must still bar its

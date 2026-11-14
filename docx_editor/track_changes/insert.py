@@ -324,7 +324,7 @@ class _InsertMixin(_RevisionManagerBase):
         """Split ``p1`` at visible position ``pos``.
 
         Everything from ``pos`` onward moves into a new following paragraph
-        (a copy of ``p1``'s properties, minus any section mark); ``p1``'s
+        (its properties: see ``_new_tail_paragraph``); ``p1``'s
         paragraph mark is flagged as an inserted revision. Returns the new
         paragraph element and the mark insertion's id.
         """
@@ -405,9 +405,11 @@ class _InsertMixin(_RevisionManagerBase):
         """Move the paragraph-mark revisions of ``orig_pPr`` onto ``new_p``.
 
         Each live marker takes the place of its clone in ``new_p``'s copied
-        ``w:rPr``: same position (schema order), one copy of the id, and the
-        element a revision index already holds stays attached. Done after
-        attribute injection so the existing revision is not stamped as new.
+        ``w:rPr``: same position (schema order), the id not duplicated, and
+        the element a revision index already holds stays attached. Done after
+        attribute injection so the existing revision is not stamped as new
+        (the discarded clone is; for a nonconforming marker without a
+        ``w:id`` that uses up one id).
         """
         if orig_pPr is None:
             return
@@ -418,7 +420,7 @@ class _InsertMixin(_RevisionManagerBase):
         for tag in _RUN_TRACK_CHANGE_TAGS:
             mark = _first_child_element(orig_rPr, tag)
             clone = _first_child_element(copy_rPr, tag)
-            if mark is not None and clone is not None:
+            if mark is not None and clone is not None:  # clone: always there, narrows for ty
                 copy_rPr.replaceChild(mark, clone)
 
     def _paragraph_mark_rPr(self, p1) -> Element:

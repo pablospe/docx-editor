@@ -522,12 +522,6 @@ class _ResolutionMixin(_RevisionManagerBase):
             # rather than rewrite whatever parent this is.
             self._remove_element(ppr_change)
             return
-        # The live w:pPr's tail — its paragraph-mark w:rPr (which may itself
-        # carry a pending mark revision), section mark and the record — is
-        # kept; everything before it is the base being replaced. The same
-        # tags are skipped on the recorded side because CT_PPrBase cannot
-        # hold them: a nonconforming record's copies are dropped, not
-        # restored over the live ones.
         recorded = _first_child_element(ppr_change, "w:pPr")
         self._replace_base_properties(ppr, recorded)
         self._remove_element(ppr_change)
@@ -535,7 +529,14 @@ class _ResolutionMixin(_RevisionManagerBase):
     def _replace_base_properties(self, ppr, source) -> None:
         """Replace ``ppr``'s base properties with those of ``source`` (another
         ``w:pPr``, or None for "no properties"), moving the nodes over ahead
-        of ``ppr``'s ``w:rPr``/``w:sectPr``/``w:pPrChange``."""
+        of ``ppr``'s ``w:rPr``/``w:sectPr``/``w:pPrChange``.
+
+        ``ppr``'s own tail — its paragraph-mark ``w:rPr`` (which may carry a
+        pending mark revision), section mark and record — is kept. The same
+        tags are skipped on the ``source`` side: a record's ``w:pPr``
+        (CT_PPrBase) cannot hold them, so a nonconforming record's copies are
+        dropped, not restored over the live ones.
+        """
         for child in _ppr_base_children(ppr):
             ppr.removeChild(child)
         if source is None:

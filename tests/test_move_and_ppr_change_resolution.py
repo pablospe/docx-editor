@@ -761,6 +761,61 @@ class TestRejoinKeepsTailRevisions:
             assert doc.reject_revision(5)
             assert _census(doc) == {}
 
+    _MARK_DELETED = (
+        f'<w:p><w:pPr><w:rPr><w:del w:id="5" {_ANN}/><w:b/></w:rPr></w:pPr><w:r><w:t>aa bb cc dd</w:t></w:r></w:p>'
+        "<w:p><w:r><w:t>last</w:t></w:r></w:p>"
+    )
+
+    @staticmethod
+    def _own_groups(doc: Document) -> list[int]:
+        """Distinct group ids of Tester's revisions, in listing order."""
+        ids = [r.group_id for r in doc.list_revisions() if r.author == "Tester"]
+        assert None not in ids
+        return list(dict.fromkeys(i for i in ids if i is not None))
+
+    def test_reopened_splits_over_a_revised_mark_keep_their_groups(self, make_docx, tmp_path):
+        """The original mark's revision now sits on the last tail, ahead of
+        that tail's content in the file; it must not cut the edit that wrote
+        that content in two when groups are rebuilt on open."""
+        out = tmp_path / "out.docx"
+        with _open(make_docx(_document(self._MARK_DELETED))) as doc:
+            doc.split_paragraph(find_ref(doc, "aa bb"), before="bb")
+            doc.replace("cc", "C1\nC2", paragraph=find_ref(doc, "bb cc"))
+            assert len(self._own_groups(doc)) == 2
+            doc.save(out)
+        with _open(out) as reopened:
+            groups = self._own_groups(reopened)
+            assert len(groups) == 2
+            for group_id in reversed(groups):
+                assert reopened.reject_group(group_id)
+            assert reopened.get_visible_text() == "aa bb cc dd\nlast"
+            assert [(r.id, r.author) for r in reopened.list_revisions()] == [(5, "Ann")]
+
+    def test_reopened_multi_split_over_a_revised_mark_is_one_group(self, make_docx, tmp_path):
+        out = tmp_path / "out.docx"
+        with _open(make_docx(_document(self._MARK_DELETED))) as doc:
+            doc.replace("bb", "X\nY\nZ", paragraph=find_ref(doc, "aa bb"))
+            doc.save(out)
+        with _open(out) as reopened:
+            (group_id,) = self._own_groups(reopened)
+            assert reopened.reject_group(group_id)
+            assert reopened.get_visible_text() == "aa bb cc dd\nlast"
+            assert [(r.id, r.author) for r in reopened.list_revisions()] == [(5, "Ann")]
+
+    def test_whole_paragraph_deletion_after_another_authors_edit_is_one_group(self, make_docx):
+        """A mark revision and the same author's content revisions in that
+        paragraph stay one group, whatever precedes them."""
+        tester = 'w:author="Tester" w:date="2026-01-29T10:00:00Z"'
+        body = _document(
+            f'<w:p><w:r><w:t>one </w:t></w:r><w:ins w:id="1" {tester}><w:r><w:t>X</w:t></w:r></w:ins></w:p>'
+            f'<w:p><w:pPr><w:rPr><w:del w:id="2" {_ANN}/></w:rPr></w:pPr>'
+            f'<w:del w:id="3" {_ANN}><w:r><w:delText>two</w:delText></w:r></w:del></w:p>'
+            "<w:p><w:r><w:t>three</w:t></w:r></w:p>"
+        )
+        with _open(make_docx(body)) as doc:
+            by_id = {r.id: r.group_id for r in doc.list_revisions()}
+            assert by_id[2] is not None and by_id[2] == by_id[3] != by_id[1]
+
     def test_mark_insertion_inside_a_record_leaves_the_live_mark_alone(self, make_docx):
         """A w:ins in a nonconforming w:pPrChange record is not a paragraph
         break: rejecting it must not rejoin or touch the live mark."""

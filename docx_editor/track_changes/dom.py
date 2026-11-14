@@ -123,6 +123,33 @@ def _revision_elements(root) -> list[Element]:
     return list(iter_revision_elements(root, HANDLED_REVISION_TAGS))
 
 
+def _revision_elements_in_reading_order(root) -> list[Element]:
+    """``_revision_elements`` with each paragraph's mark markers moved to the
+    end of that paragraph.
+
+    The paragraph mark is the paragraph's last character, though its marker
+    is serialized first (in ``w:pPr``). Read in this order, a revision of a
+    paragraph's mark sits between that paragraph's content and the next
+    paragraph's, not between the previous paragraph's mark and its own
+    content.
+    """
+    out: list[Element] = []
+    held: list[tuple[Element, list[Element]]] = []  # open paragraphs and their mark markers
+    for elem in _revision_elements(root):
+        while held and not _has_ancestor(elem, held[-1][0]):
+            out.extend(held.pop()[1])
+        paragraph = _ancestor_paragraph(elem) if _is_paragraph_mark_marker(elem) else None
+        if paragraph is None:
+            out.append(elem)
+        elif held and held[-1][0] is paragraph:
+            held[-1][1].append(elem)
+        else:
+            held.append((paragraph, [elem]))
+    while held:
+        out.extend(held.pop()[1])
+    return out
+
+
 def _insertion_text_nodes(elem) -> list:
     """All <w:t>/<w:delText> descendants and run-level <w:tab/> marks of a
     <w:ins>, <w:moveFrom> or <w:moveTo>, in document order.
