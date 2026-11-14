@@ -50,6 +50,9 @@ class _RegistryMixin(_RevisionManagerBase):
         - A revision inside a nested paragraph (e.g. a text box's
           w:txbxContent) interrupts the outer paragraph's run in document
           order — conservative over-split.
+        - Another author's revision at the end of a paragraph's content
+          separates that paragraph's mark revision from the same author's
+          content revisions before it — conservative over-split.
         - Foreign revisions group by the same heuristic; provenance is
           always honest ("inferred").
         - When Word already resolved part of a former edit, the remaining
@@ -332,7 +335,8 @@ class _RegistryMixin(_RevisionManagerBase):
 
     def group_revisions(self, group_id: int) -> tuple[int, ...]:
         """Member revision ids of ``group_id``, in creation order (recorded
-        groups) or document order (inferred groups).
+        groups) or reading order (inferred groups: document order, with a
+        paragraph-mark revision after its paragraph's content).
 
         Raises:
             RevisionError: If the group id is unknown to this manager (group

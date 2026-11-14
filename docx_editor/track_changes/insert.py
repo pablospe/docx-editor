@@ -324,7 +324,8 @@ class _InsertMixin(_RevisionManagerBase):
         """Split ``p1`` at visible position ``pos``.
 
         Everything from ``pos`` onward moves into a new following paragraph
-        (its properties: see ``_new_tail_paragraph``); ``p1``'s
+        (a copy of ``p1``'s properties; see ``_new_tail_paragraph`` for what
+        moves and what stays); ``p1``'s
         paragraph mark is flagged as an inserted revision. Returns the new
         paragraph element and the mark insertion's id.
         """

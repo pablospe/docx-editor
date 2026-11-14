@@ -563,8 +563,8 @@ MOVE_TO_INSIDE_INS = _document(
     "<w:r><w:t>tail</w:t></w:r></w:p>"
 )
 # A tracked split whose tail paragraph carries a moved paragraph mark: the
-# rejoin keeps that mark pending on the merged paragraph, so the range marks
-# stay until it is resolved.
+# rejoin keeps that mark pending on the merged paragraph (the range marks
+# bracket no content and are swept).
 SPLIT_BEFORE_MOVED_MARK = _document(
     f'<w:p><w:pPr><w:rPr><w:ins w:id="30" {_BOB}/></w:rPr></w:pPr><w:r><w:t>head</w:t></w:r></w:p>'
     f'<w:p><w:pPr><w:rPr><w:moveFrom w:id="11" {_ANN}/></w:rPr></w:pPr>'
@@ -707,7 +707,7 @@ class TestRejoinKeepsTailRevisions:
             )
 
     def test_head_property_change_wins_when_both_paragraphs_carry_one(self, make_docx):
-        """A w:pPr holds one record: the tail's is the one documented loss."""
+        """A w:pPr holds one record: the tail's is a documented loss."""
         head_change = f'<w:pPrChange w:id="12" {_BOB}><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange>'
         body = _split(self._TAIL_CHANGE, head_ppr=f'<w:pStyle w:val="Title"/>|{head_change}')
         with _open(make_docx(body)) as doc:
@@ -803,18 +803,17 @@ class TestRejoinKeepsTailRevisions:
             assert [(r.id, r.author) for r in reopened.list_revisions()] == [(5, "Ann")]
 
     def test_whole_paragraph_deletion_after_another_authors_edit_is_one_group(self, make_docx):
-        """A mark revision and the same author's content revisions in that
-        paragraph stay one group, whatever precedes them."""
-        tester = 'w:author="Tester" w:date="2026-01-29T10:00:00Z"'
+        """Bob's insertion sits between Ann's mark deletion and her content
+        deletion in the file, but not in reading order: her two stay one group."""
         body = _document(
-            f'<w:p><w:r><w:t>one </w:t></w:r><w:ins w:id="1" {tester}><w:r><w:t>X</w:t></w:r></w:ins></w:p>'
             f'<w:p><w:pPr><w:rPr><w:del w:id="2" {_ANN}/></w:rPr></w:pPr>'
+            f'<w:ins w:id="4" {_BOB}><w:r><w:t>X</w:t></w:r></w:ins>'
             f'<w:del w:id="3" {_ANN}><w:r><w:delText>two</w:delText></w:r></w:del></w:p>'
             "<w:p><w:r><w:t>three</w:t></w:r></w:p>"
         )
         with _open(make_docx(body)) as doc:
             by_id = {r.id: r.group_id for r in doc.list_revisions()}
-            assert by_id[2] is not None and by_id[2] == by_id[3] != by_id[1]
+            assert by_id[2] is not None and by_id[2] == by_id[3] != by_id[4]
 
     def test_mark_insertion_inside_a_record_leaves_the_live_mark_alone(self, make_docx):
         """A w:ins in a nonconforming w:pPrChange record is not a paragraph
