@@ -66,6 +66,26 @@ On a document that already ships a `word/comments.xml` whose root does not decla
 
 `rebuild_run_fragments` and the other `toxml()` round trips assume every prefix used in existing content is declared on the part's root. With `<w:p xmlns:foo="urn:foo"><w:r><foo:mark/>…`, a plain `replace` or `add_comment` raises on the unbound prefix (after #91: a typed `XMLError`). Declarations on the element itself, which is what Word writes for drawings, are fine; only a declaration on an intermediate ancestor breaks. Not seen in the corpus. Fix: carry the in-scope namespace declarations of the source element into the fragment wrapper. Found while planning #91.
 
+### 94. Ambiguity errors say where the matches are  [0.8.4: fewer round trips]
+
+`AmbiguousTextError` reports how many times the target matched and a paragraph preview, so the agent has to run a second search to learn which `occurrence=` it wants. Carry the matches on the error: for each, its `occurrence` index, `paragraph_ref` and a short window of surrounding text, capped (first N plus a count) so a common word cannot flood the output, and present in the session JSON error. The message should read as a pick-list. Seen in stetdoc, whose refusals list every match with its location.
+
+### 95. Document-wide edits that refuse when the target is not unique  [0.8.4]
+
+`replace`/`delete`/`insert_after`/`insert_before` need a paragraph ref, so every edit is find-then-edit: two calls where the agent already knows the text. Allow the edit verbs without `paragraph=` when the target occurs exactly once in the document; more than one match is `AmbiguousTextError` with the located list from #94, zero is `TextNotFoundError`, and nothing is written in either case. Add `expected_count=N` to the bulk forms (`find_all` + `batch_edit`, and any replace-all path): the call refuses, writing nothing, when the number of matches differs from what the caller stated. Design first: how this composes with hash-anchored refs (the safety those give must not be lost — a document-wide edit still returns the ref it touched) and with `occurrence=`.
+
+### 96. Quote-insensitive matching
+
+Contracts are full of typographic quotes and apostrophes; an agent types `"Term"` or `don't` with straight ones and gets `TextNotFoundError` on text that is visibly there. Match straight and curly forms of `'` and `"` as equivalent when locating text (`'` with U+2018/U+2019, `"` with U+201C/U+201D), in every locate path, while writing replacement text exactly as given. Decide and document: on by default or opt-in, and whether inserted text adopts the document's quote style (default: no, write what was passed). The match offsets must map back to the original characters so run splitting is unaffected.
+
+### 97. Every error names the next call
+
+Structured errors already carry fields; what they lack is a uniform, machine-readable `next` hint: the one call that usually resolves the situation (`HashMismatchError` → re-read the paragraph with `get_paragraph(i)`; `AmbiguousTextError` → pass `occurrence=`; `TextNotFoundError` → `find_all` or full text from `list_paragraphs_structured`; `RevisionError` on a duplicated id → `author=`). Add it to the exception base, the session JSON error, and the SKILL.md error table, one line per exception. No free-form advice: a short imperative naming a real call.
+
+### 29. Computed list numbers ("7.2(a)")  [large; after the 0.8.4 batch]
+
+Word computes clause numbers at render time from `numbering.xml`, the style chain and the list's running state, so "clause 7.2(a)" is not text in the file. `ParagraphLocation.list` gives only `(num_id, ilvl)`. An agent asked to "change clause 11.1" on an auto-numbered contract cannot find it; it worked on the docx-agent-bench contracts only because their numbers are typed as text. Compute the rendered label per paragraph (levels, start overrides, restarts, `lvlText` patterns, the common number formats), expose it on `ParagraphInfo`/`ParagraphLocation` and on search results, and allow lookup by label. Mark what is heuristic (legal numbering, custom formats, `w:numPicBullet`) rather than guessing. Design first; validate against real Word on the corpus. Promoted from Later on 2026-11-14: stetdoc ships this and it is the main capability gap for contract work.
+
 ### 69. Return-leg reconciliation: which changesets survived?  [design]
 
 The product loop is agent proposes → human adjudicates in Word → document comes back; accepted revisions become plain text, rejected ones vanish, and there is no way to ask "which of my changesets survived?". A propose-time-vs-current compare keyed on changeset `w:date` + content. Design first; large.
@@ -75,7 +95,6 @@ Design constraint (2026-09): the library cannot assume the caller still has the 
 ## Later (demand-gated — revisit when a named consumer asks)
 
 - **74. Author moves.** The library never writes `w:moveFrom`/`w:moveTo`; a move through the API is a delete plus an insert (one changeset when done in one batch call), which Word shows as two revisions rather than one green move pair. Emitting a real move pair when a batch deletes text and inserts the identical text elsewhere is now feasible on #68's machinery (range marks, pairing by `w:name`). No consumer has asked.
-- **29. Computed list numbers** ("7.2(a)") from `numbering.xml` — a real subsystem; only once list-context demand is proven.
 - **30. Container parts** (headers/footers/footnotes/endnotes): multi-part refs (`H1:P2#hash`), per-part editors, tracked-change routing. Stage (a) read-only enumeration, (b) locations, (c) tracked edits. Zero requests across four dogfood rounds; the failure mode is a visible miss, not silent corruption.
 - **MCP server** (PR #7, parked): persistent document caching behind an MCP interface; the `docx-session` kernel covers the same need today.
 
