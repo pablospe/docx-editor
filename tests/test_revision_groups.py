@@ -1773,6 +1773,99 @@ class TestGroupResolutionWithDuplicateIds:
             getattr(manager, method)(allocated + 1000)
 
 
+class TestPerIdResolutionWithDuplicateIds:
+    """A standalone by-id call refuses an id more than one revision carries
+    (ROADMAP.md #84, #87) instead of resolving whichever comes first."""
+
+    DUPLICATE_ID_BODY = TestGroupResolutionWithDuplicateIds.DUPLICATE_ID_BODY
+
+    @pytest.mark.parametrize("method", ["accept_revision", "reject_revision"])
+    def test_duplicated_id_is_refused_and_nothing_changes(self, temp_xml, method):
+        manager = _make_manager(temp_xml(self.DUPLICATE_ID_BODY))
+        before = manager.editor.dom.toxml()
+
+        with pytest.raises(RevisionError) as excinfo:
+            getattr(manager, method)(7)
+
+        assert excinfo.value.revision_id == 7
+        assert manager.editor.dom.toxml() == before
+        assert sorted(rev.id for rev in manager.list_revisions()) == [7, 7, 9]
+
+    def test_refusal_names_both_carriers_and_the_selector(self, temp_xml):
+        manager = _make_manager(temp_xml(self.DUPLICATE_ID_BODY))
+
+        with pytest.raises(RevisionError) as excinfo:
+            manager.reject_revision(7)
+
+        message = str(excinfo.value)
+        assert f"insertion by '{AUTHOR_B}'" in message
+        assert f"deletion by '{AUTHOR_A}'" in message
+        assert "author=" in message
+
+    def test_author_selects_one_carrier_and_frees_the_id(self, temp_xml):
+        manager = _make_manager(temp_xml(self.DUPLICATE_ID_BODY))
+
+        assert manager.reject_revision(7, author=AUTHOR_A) is True
+
+        # A's deletion is restored; B's insertion is untouched and is now the
+        # only carrier, so the bare id names it.
+        xml = manager.editor.dom.toxml()
+        assert "<w:t>AYE</w:t>" in xml and "w:del " not in xml
+        assert [(rev.id, rev.author) for rev in manager.list_revisions()] == [(7, AUTHOR_B), (9, AUTHOR_A)]
+        assert manager.accept_revision(7) is True
+        assert [rev.id for rev in manager.list_revisions()] == [9]
+        assert "BEE" in manager.editor.dom.toxml()
+
+    def test_author_that_does_not_own_the_id_resolves_nothing(self, temp_xml):
+        manager = _make_manager(temp_xml(self.DUPLICATE_ID_BODY))
+
+        assert manager.accept_revision(9, author=AUTHOR_B) is False
+        assert sorted(rev.id for rev in manager.list_revisions()) == [7, 7, 9]
+
+    def test_same_author_duplicate_stays_refused_with_author(self, temp_xml):
+        body = f"<w:p>{_ins_xml(7, 'one')}{_del_xml(7, 'two')}</w:p>"
+        manager = _make_manager(temp_xml(body))
+
+        with pytest.raises(RevisionError) as excinfo:
+            manager.accept_revision(7, author=AUTHOR_A)
+
+        assert "accept_all(author=...)" in str(excinfo.value)
+        assert len(manager.list_revisions()) == 2
+
+    def test_ungrouped_split_tail_with_a_unique_id_still_resolves(self, temp_xml):
+        # ``_revision_groups[id] is None`` also marks an unambiguous split
+        # tail, so it is not what makes an id ambiguous.
+        body = (
+            "<w:p><w:r><w:t>Before </w:t></w:r>"
+            f'<w:ins w:id="1" w:author="{AUTHOR_B}"><w:r><w:t>AAA MID BBB</w:t></w:r></w:ins>'
+            "<w:r><w:t> after</w:t></w:r></w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+        manager.suggest_deletion("MID ")
+        assert manager._revision_groups == {2: None}
+
+        assert manager.accept_revision(2) is True
+        assert [rev.id for rev in manager.list_revisions()] == [1]
+
+    @pytest.mark.parametrize("method", ["accept_group", "reject_group"])
+    def test_group_member_sharing_an_id_with_an_unhandled_mark_still_resolves(self, temp_xml, method):
+        # Strictness is by-id only: the group names its handled member.
+        body = (
+            f"<w:p>{_ins_xml(7, 'kept')}"
+            f'<w:r><w:rPr><w:rPrChange w:id="7" w:author="{AUTHOR_B}" w:date="{DATE_B}"><w:rPr/></w:rPrChange></w:rPr>'
+            "<w:t>styled</w:t></w:r></w:p>"
+        )
+        manager = _make_manager(temp_xml(body))
+        group_id = manager.group_id_of(7)
+        assert group_id is not None
+        with pytest.raises(RevisionError):
+            manager.accept_revision(7)
+
+        assert getattr(manager, method)(group_id) == 1
+        assert manager.list_revisions() == []
+        assert "w:rPrChange" in manager.editor.dom.toxml()
+
+
 class TestAcceptPathIndex:
     """The group/changeset accept path builds one w:id->element index per call
     instead of scanning the whole document per member (ISSUES.md #57).

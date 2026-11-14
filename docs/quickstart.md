@@ -190,6 +190,7 @@ comments = doc.list_comments()
 for comment in comments:
     print(f"Comment {comment.id}: {comment.text}")
     print(f"  Author: {comment.author}")
+    print(f"  Paragraph: {comment.paragraph_ref}")
     print(f"  Resolved: {comment.resolved}")
 
     for reply in comment.replies:

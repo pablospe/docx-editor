@@ -2077,12 +2077,15 @@ class Document:
             author: If provided, filter by author name
 
         Returns:
-            List of Comment objects (with replies nested)
+            List of Comment objects (with replies nested). Each carries
+            ``paragraph_ref``, the ref of the paragraph its range starts in
+            (None if it has no range start in a body paragraph); replies
+            carry their parent's.
 
         Example:
             comments = doc.list_comments()
             for c in comments:
-                print(f"{c.author}: {c.text}")
+                print(f"{c.paragraph_ref} {c.author}: {c.text}")
         """
         self._ensure_open()
         return self._comment_manager.list_comments(author=author)
@@ -2194,7 +2197,7 @@ class Document:
         self._ensure_open()
         return self._revision_manager.list_revisions(author=author, paragraph=paragraph)
 
-    def accept_revision(self, revision_id: int) -> bool:
+    def accept_revision(self, revision_id: int, *, author: str | None = None) -> bool:
         """Accept a revision by ID.
 
         - insertion: keeps the inserted content.
@@ -2219,19 +2222,29 @@ class Document:
 
         Args:
             revision_id: ID of the revision to accept
+            author: Only consider this author's revisions. Needed when two
+                reviewers' revisions share the id.
 
         Returns:
-            True if accepted, False if not found
+            True if accepted, False if not found — including an id that
+            belongs only to rows of ``list_unhandled_revisions()``.
+
+        Raises:
+            RevisionError: The id names a resolvable revision and at least
+                one other pending one (``list_unhandled_revisions()`` rows
+                count), after ``author`` narrowing. Nothing is changed. Word
+                does not guarantee ids are unique; pass ``author=``, or use
+                ``accept_all(author=...)`` when one author duplicated it.
 
         Example:
             doc.accept_revision(1)
         """
         self._ensure_open()
-        resolved = self._revision_manager.accept_revision(revision_id)
+        resolved = self._revision_manager.accept_revision(revision_id, author=author)
         self._reap_note_comments()
         return resolved
 
-    def reject_revision(self, revision_id: int) -> bool:
+    def reject_revision(self, revision_id: int, *, author: str | None = None) -> bool:
         """Reject a revision by ID.
 
         - insertion: removes the inserted content.
@@ -2254,15 +2267,25 @@ class Document:
 
         Args:
             revision_id: ID of the revision to reject
+            author: Only consider this author's revisions. Needed when two
+                reviewers' revisions share the id.
 
         Returns:
-            True if rejected, False if not found
+            True if rejected, False if not found — including an id that
+            belongs only to rows of ``list_unhandled_revisions()``.
+
+        Raises:
+            RevisionError: The id names a resolvable revision and at least
+                one other pending one (``list_unhandled_revisions()`` rows
+                count), after ``author`` narrowing. Nothing is changed. Word
+                does not guarantee ids are unique; pass ``author=``, or use
+                ``reject_all(author=...)`` when one author duplicated it.
 
         Example:
             doc.reject_revision(1)
         """
         self._ensure_open()
-        resolved = self._revision_manager.reject_revision(revision_id)
+        resolved = self._revision_manager.reject_revision(revision_id, author=author)
         self._reap_note_comments()
         return resolved
 

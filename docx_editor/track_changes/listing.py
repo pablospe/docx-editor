@@ -3,6 +3,7 @@
 from typing import Literal
 from xml.dom.minidom import Element
 
+from ..exceptions import RevisionError
 from ..xml_editor import (
     _TEXTBOX_CONTENT,
     ParagraphRef,
@@ -327,12 +328,12 @@ class _ListingMixin(_RevisionManagerBase):
         element with no numeric id is dropped rather than keyed: nothing
         id-based can reach it, and ``_unhandled_elements`` is what reports it.
 
-        Each id's list is in document order — the same order the fresh scan
-        in ``_find_revision_element`` uses, so an *unscoped* index resolves a
-        duplicated id to the same element the scan would. A scoped one
-        deliberately answers differently, which is the whole point of
-        ``author``: the scan would hand back the first element carrying the
-        id, the scoped index the first one this author wrote.
+        Each id's list is in document order, and a duplicated id keeps every
+        carrier. That is right for the callers that build an index — they have
+        already identified their targets (a group's members, an author's
+        revisions, the whole document) — and it is exactly what a standalone
+        by-id call must not do: with only the id to go on, position would
+        decide, so that path refuses instead (``_sole_revision_carrier``).
         """
         element_index: dict[str, list[Element]] = {}
         for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
@@ -363,14 +364,20 @@ class _ListingMixin(_RevisionManagerBase):
         return False
 
     def _find_revision_element(
-        self, revision_id: int | None, element_index: dict[str, list[Element]] | None
+        self,
+        revision_id: int | None,
+        element_index: dict[str, list[Element]] | None,
+        author: str | None = None,
     ) -> Element | None:
         """Locate the live handled revision element for ``revision_id``.
 
-        ``element_index is None`` scans the document fresh, returning the
-        first match in document order. Otherwise the id is resolved through
-        the pre-built ``element_index``, returning the first candidate still
-        attached to the document.
+        ``element_index is None`` is a standalone by-id call: the id is all
+        the caller gave, so it must name exactly one pending revision
+        (``_sole_revision_carrier``, which ``author`` narrows and which raises
+        on an id that more than one carries). Otherwise the id is resolved
+        through the pre-built ``element_index``, returning the first candidate
+        still attached to the document; ``author`` plays no part there,
+        because the index is already scoped to what its caller identified.
 
         Returning the *first still-attached* candidate (rather than a single
         remembered element) is what lets duplicate ids resolve from one index:
@@ -385,27 +392,89 @@ class _ListingMixin(_RevisionManagerBase):
         is ``int | None``, so None reaches here in practice and has to resolve
         nothing rather than match the first unreachable mark.
 
-        Both paths compare ``str`` of the *adjudicable* id, which is what keeps
-        them answering alike. Comparing the parsed int on one side and the
-        index's string key on the other would diverge on everything int-equal
-        but not an int: ``True`` matches id 1 through ``==`` (bool subclasses
-        int) but misses ``.get("True")``, and ``None`` — what
-        ``list_unhandled_revisions()`` reports for a mark with no numeric id —
-        matches every unreachable mark through ``==`` while missing the index
-        entirely. Stringifying both sides leaves one answer per id, whichever
-        path a caller reaches it by.
+        Both paths compare ``str`` of the *adjudicable* id. Comparing the
+        parsed int on one side and the index's string key on the other would
+        diverge on everything int-equal but not an int: ``True`` matches id 1
+        through ``==`` (bool subclasses int) but misses ``.get("True")``, and
+        ``None`` — what ``list_unhandled_revisions()`` reports for a mark with
+        no numeric id — matches every unreachable mark through ``==`` while
+        missing the index entirely. Stringifying both sides means neither path
+        matches such a value.
         """
-        wanted = str(revision_id)
         if element_index is None:
-            for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
-                rev_id = _adjudicable_id(elem)
-                if rev_id is not None and str(rev_id) == wanted:
-                    return elem
-            return None
-        for elem in element_index.get(wanted, ()):
+            return self._sole_revision_carrier(revision_id, author)
+        for elem in element_index.get(str(revision_id), ()):
             if self._is_in_document(elem):
                 return elem
         return None
+
+    def _sole_revision_carrier(self, revision_id: int | None, author: str | None) -> Element | None:
+        """The one handled element a standalone by-id call may resolve, or None.
+
+        Word does not guarantee ``w:id`` is unique, so an id alone can name
+        several pending revisions: two reviewers' ``w:ins`` and ``w:del``
+        (ROADMAP.md #84), or a handled revision and an unhandled mark such as
+        a ``w:rPrChange`` (ROADMAP.md #87). The carriers are every element the
+        caller can see under that id across the two listings — the walk
+        ``list_revisions`` makes plus ``_unhandled_elements`` — narrowed to
+        ``author`` when given (``_revision_author``, the listings' own test).
+
+        - none, or unhandled marks only: None. Nothing is adjudicable, so
+          there is nothing to mistake — and a ``w:customXml*RangeStart``/
+          ``End`` pair legitimately shares one id.
+        - exactly one, handled: that element.
+        - more than one, a handled one among them: ``RevisionError``. Picking
+          by document order is what resolved another author's revision;
+          refusing leaves the document untouched and the message names the
+          carriers and the way out.
+
+        Computed per call rather than remembered from ``_reconstruct_groups``:
+        an id stops being ambiguous once its twin is resolved, and the group
+        registry never saw unhandled marks at all.
+        """
+        wanted = str(revision_id)
+
+        def carries(elem: Element) -> bool:
+            rev_id = _adjudicable_id(elem)
+            return rev_id is not None and str(rev_id) == wanted
+
+        handled = [e for e in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS) if carries(e)]
+        carriers = handled + [e for e in self._unhandled_elements() if carries(e)]
+        chosen = carriers if author is None else [e for e in carriers if _revision_author(e) == author]
+        if not chosen:
+            return None
+        if not any(e.tagName in _REVISION_TYPE_BY_TAG for e in chosen):
+            return None
+        if len(chosen) == 1:
+            return chosen[0]
+
+        def describe(elem: Element) -> str:
+            who = f"by '{_revision_author(elem)}'"
+            rev_type = _REVISION_TYPE_BY_TAG.get(elem.tagName)
+            if rev_type is None:
+                return f"{elem.tagName} {who} (not resolvable by this library)"
+            return f"{rev_type} {who}"
+
+        # An author whose only carrier is a handled one is an author= that works.
+        selectable = sorted({
+            _revision_author(e)
+            for e in handled
+            if sum(_revision_author(c) == _revision_author(e) for c in carriers) == 1
+        })
+        if author is None and selectable:
+            remedy = f"Pass author= to name one (works here for: {', '.join(repr(a) for a in selectable)})."
+        else:
+            remedy = (
+                "author= cannot tell them apart; accept_all(author=...) / "
+                "reject_all(author=...) resolve every revision by that author."
+            )
+        scope = "" if author is None else f" by '{author}'"
+        raise RevisionError(
+            f"Revision id {revision_id} is ambiguous: {len(chosen)} pending revisions{scope} carry it "
+            f"({'; '.join(describe(e) for e in chosen)}), so the id alone does not say which to resolve. "
+            f"{remedy}",
+            revision_id=revision_id if type(revision_id) is int else None,
+        )
 
     def _unhandled_elements(self, author: str | None = None) -> list[Element]:
         """Pending elements this library cannot resolve, in document order.

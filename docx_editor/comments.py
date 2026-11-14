@@ -19,6 +19,8 @@ from .exceptions import (
     TextNotFoundError,
     _truncate_preview,
 )
+from .track_changes.dom import _addressable_paragraph, _adjudicable_id
+from .track_changes.listing import _RevisionLocationContext
 from .xml_editor import (
     W14_NAMESPACE,
     DocxXMLEditor,
@@ -45,7 +47,20 @@ TEMPLATE_DIR = Path(__file__).parent / "ooxml" / "templates"
 
 @dataclass
 class Comment:
-    """Represents a document comment."""
+    """Represents a document comment.
+
+    ``paragraph_ref`` is the hash-anchored ref ("P{i}#{hash}") of the body
+    paragraph holding the comment's ``w:commentRangeStart``; for a range that
+    spans paragraphs, the one it starts in. A reply carries the ref of the
+    comment it answers, so a whole thread reports one paragraph. It is None
+    when the comment has no range start inside a body paragraph (the marker is
+    missing, sits between block elements, or is in a text box).
+
+    A reply to such a comment is None too, wherever its own marker sits.
+
+    Like every ref it is a snapshot taken at list time: usable as
+    ``paragraph=`` until that paragraph is edited, stale afterwards.
+    """
 
     id: int
     text: str
@@ -53,11 +68,13 @@ class Comment:
     date: datetime | None
     resolved: bool = False
     replies: list["Comment"] = field(default_factory=list)
+    paragraph_ref: str | None = None
 
     def __repr__(self) -> str:
         status = "[RESOLVED] " if self.resolved else ""
         reply_count = f" ({len(self.replies)} replies)" if self.replies else ""
-        return f"Comment({self.id}: {status}'{self.text[:30]}...' by {self.author}{reply_count})"
+        location = f" @{self.paragraph_ref}" if self.paragraph_ref else ""
+        return f"Comment({self.id}: {status}'{self.text[:30]}...' by {self.author}{reply_count}{location})"
 
 
 class CommentManager:
@@ -562,11 +579,13 @@ class CommentManager:
             author: If provided, filter by author name
 
         Returns:
-            List of Comment objects (with replies nested)
+            List of Comment objects (with replies nested), each carrying the
+            ``paragraph_ref`` of the paragraph it sits on
         """
         if not self.comments_path.exists():
             return []
 
+        refs = self._range_start_refs()
         editor = self._get_editor(self.comments_path)
         comments_dict: dict[int, Comment] = {}
         parent_map: dict[str, str] = {}  # para_id -> parent_para_id
@@ -600,20 +619,47 @@ class CommentManager:
         for comment_id, info in self.existing_comments.items():
             para_to_id[info["para_id"]] = comment_id
 
+        def parent_of(comment_id: int) -> int | None:
+            para_id = self.existing_comments.get(comment_id, {}).get("para_id")
+            parent_para = parent_map.get(para_id) if para_id else None
+            return para_to_id.get(parent_para) if parent_para else None
+
         # Nest replies
         root_comments = []
         for comment_id, comment in comments_dict.items():
-            para_id = self.existing_comments.get(comment_id, {}).get("para_id")
-            if para_id:
-                parent_para = parent_map.get(para_id)
-                if parent_para and parent_para in para_to_id:
-                    parent_id = para_to_id[parent_para]
-                    if parent_id in comments_dict:
-                        comments_dict[parent_id].replies.append(comment)
-                        continue
-            root_comments.append(comment)
+            parent_id = parent_of(comment_id)
+            if parent_id in comments_dict:
+                comments_dict[parent_id].replies.append(comment)
+            else:
+                root_comments.append(comment)
+
+            # The ref is the thread root's, found through the unfiltered
+            # hierarchy so ``author=`` never changes what a comment reports.
+            # ``seen`` ends the climb on a cyclic paraIdParent chain.
+            root_id, seen = comment_id, {comment_id}
+            while (up := parent_of(root_id)) is not None and up not in seen:
+                seen.add(up)
+                root_id = up
+            comment.paragraph_ref = refs.get(root_id)
 
         return sorted(root_comments, key=lambda c: c.id)
+
+    def _range_start_refs(self) -> dict[int, str | None]:
+        """Paragraph ref of each comment's range start, keyed by comment id.
+
+        One paragraph-index walk and one marker walk per call, however many
+        comments there are. A marker outside any body paragraph maps to None;
+        of duplicate markers for one id, the first in document order wins.
+        """
+        context = _RevisionLocationContext(self.document_editor.dom)
+        refs: dict[int, str | None] = {}
+        for marker in self.document_editor.dom.getElementsByTagName("w:commentRangeStart"):
+            comment_id = _adjudicable_id(marker)
+            if comment_id is None:
+                continue
+            paragraph = _addressable_paragraph(marker)
+            refs.setdefault(comment_id, None if paragraph is None else context.paragraph_ref(paragraph))
+        return refs
 
     def resolve_comment(self, comment_id: int) -> bool:
         """Mark a comment as resolved.
