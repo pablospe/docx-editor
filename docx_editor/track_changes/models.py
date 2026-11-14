@@ -930,7 +930,7 @@ class UnhandledRevision:
     ``accept_revision()`` — see ``list_unhandled_revisions``. Where ``id`` is
     not None it is reported for identification only: an unhandled mark's
     ``w:id`` may coincide with a *handled* revision's, and passing such an
-    id to ``accept_revision``/``reject_revision`` raises ``RevisionError``
+    id bare to ``accept_revision``/``reject_revision`` raises ``RevisionError``
     rather than resolve that other element; an id only unhandled marks
     carry resolves nothing and returns False.
 

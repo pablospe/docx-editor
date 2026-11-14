@@ -58,8 +58,8 @@ class _ResolutionMixin(_RevisionManagerBase):
         narrows the count to one reviewer's; same-author duplicates stay
         refused. ``accept_all``/``reject_all`` (optionally by author) take
         them, and a revision whose only twin is an unhandled mark is still
-        reachable through its group, which the registry builds from handled
-        revisions alone.
+        reachable through its group when it has one, which the registry
+        builds from handled revisions alone.
 
         Args:
             revision_id: The w:id of the revision to accept

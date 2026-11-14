@@ -2189,9 +2189,7 @@ class Document:
         Args:
             revision_id: ID of the revision to accept
             author: Only consider this author's revisions. Needed when two
-                reviewers' revisions share the id (two rows with one id
-                across ``list_revisions()`` and
-                ``list_unhandled_revisions()``).
+                reviewers' revisions share the id.
 
         Returns:
             True if accepted, False if not found — including an id that
@@ -2236,9 +2234,7 @@ class Document:
         Args:
             revision_id: ID of the revision to reject
             author: Only consider this author's revisions. Needed when two
-                reviewers' revisions share the id (two rows with one id
-                across ``list_revisions()`` and
-                ``list_unhandled_revisions()``).
+                reviewers' revisions share the id.
 
         Returns:
             True if rejected, False if not found — including an id that

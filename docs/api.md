@@ -873,14 +873,15 @@ authors, or between a revision and a mark only `list_unhandled_revisions()`
 reports. This call counts every pending element carrying the id and raises
 `RevisionError` when there is more than one and any of them is resolvable,
 leaving the document untouched, rather than resolve whichever comes first.
-Two rows sharing an id (across `list_revisions()` and
-`list_unhandled_revisions()`) is the signal. `author=` narrows the id to one
-reviewer's revision. When one author wrote both, no per-id call can pick
-one. If both are `list_revisions()` rows they are barred from grouping too
-(`group_id=None`), and `accept_all(author=…)`/`reject_all(author=…)` resolve
-them. If the other is a `list_unhandled_revisions()` row, the revision keeps
-whatever `group_id` its row shows, and `accept_group()`/`reject_group()`
-resolve that group without the id.
+An id on a `list_revisions()` row that appears on another row, in either
+listing, is the signal. `author=` narrows the id to one reviewer's revision.
+When one author wrote both, no per-id call can pick one. If both are
+`list_revisions()` rows they are barred from grouping too (`group_id=None`),
+and `accept_all(author=…)`/`reject_all(author=…)` resolve them. If the other
+is a `list_unhandled_revisions()` row, the revision keeps whatever `group_id`
+its row shows, and `accept_group()`/`reject_group()` resolve that group
+without the id (if it is None, `accept_all(author=…)`/`reject_all(author=…)`
+as above).
 
 **Parameters:**
 
@@ -1181,7 +1182,7 @@ not because there was nothing to do.
 
 Rows are [`UnhandledRevision`](#unhandledrevision), deliberately not `Revision`
 objects — they carry nothing `accept_revision()` could act on. A row's `id`
-identifies it only: a per-id call on it returns False, or raises
+identifies it only: a bare per-id call on it returns False, or raises
 `RevisionError` when a `list_revisions()` row shares the id.
 
 Only `word/document.xml` is inspected (ROADMAP.md #30).
