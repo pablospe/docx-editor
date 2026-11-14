@@ -1563,7 +1563,8 @@ class TestCommentParagraphRef:
                     ex_elem.setAttribute("w15:paraIdParent", para_ids[second_id])
 
             # Returning at all is the assertion; which comments a cycle
-            # leaves listed is not this test's business.
+            # leaves listed is not this test's business. If the cycle guard
+            # regresses, this test hangs instead of failing.
             assert isinstance(doc.list_comments(), list)
         finally:
             doc.close()
@@ -1597,6 +1598,19 @@ class TestCommentParagraphRef:
             (reply,) = parent.replies
             assert parent.paragraph_ref is None
             assert reply.paragraph_ref is None
+        finally:
+            doc.close()
+
+    def test_range_start_with_a_non_numeric_id_is_skipped(self, clean_workspace):
+        """A nonconforming marker id names no comment and must not break the listing."""
+        doc = Document.open(clean_workspace)
+        try:
+            kept_id = doc.add_comment("sample document", "kept")
+            broken_id = doc.add_comment("brown fox", "broken marker")
+            _range_start(doc, broken_id).setAttribute("w:id", "not-a-number")
+
+            refs = {c.id: c.paragraph_ref for c in doc.list_comments()}
+            assert refs == {kept_id: _paragraph_ref(doc, "sample document"), broken_id: None}
         finally:
             doc.close()
 
