@@ -56,10 +56,22 @@ with Document.open("contract.docx") as doc:
 Output looks like:
 
 ```text
-P1#a7b2| Introduction to the contract...
-P2#f3c1| Payment is due within 30 days...
-P3#b2c4| Section 5 describes review obligations...
+P1#a7b2| Introduction to the contract
+P2#f3c1| Payment is due within 30 days
+P3#b2c4| Section 5 describes review obligations
 ```
+
+These lines are previews: a paragraph longer than `max_chars` (default 80) is cut and ends in `...`, which is not in the document, so a preview copied into an edit as search text can raise `TextNotFoundError` or match the wrong text. Take the refs from here, but quote the text you will search for (or hand to a model that writes the edits) from the untruncated listing:
+
+```python
+with Document.open("contract.docx") as doc:
+    # limit=None: the default returns at most 200 records and adds no notice
+    for info in doc.list_paragraphs_structured(limit=None):
+        print(info)       # P2#f3c1| <full paragraph text>
+        info.text         # the same full text, without the ref prefix
+```
+
+With a ref in hand there are four edit verbs: `replace()` to change text, `delete()` to remove it, `insert_after()` / `insert_before()` to add text next to an anchor. Prefer `delete` and the inserts over `replace(text, "")` or `replace(a, a + text)`.
 
 A bare `list_paragraphs()` call returns at most 200 paragraphs. When more remain, the last entry is a truncation notice (e.g. `"... 50 more paragraphs; use start=201 or limit=None"`) telling you the next `start`; notice lines always begin with `...` and never look like refs. Refs keep their global 1-based index across pages (page 2 starts at `P201`, not `P1`):
 

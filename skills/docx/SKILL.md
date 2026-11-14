@@ -27,7 +27,7 @@ What do you need to do?
 |
 +-- Edit Existing Document
     Use docx_editor Python library (see "Editing an existing Word document")
-    - Tracked changes (redlining)
+    - Tracked edits: replace / delete / insert_after / insert_before
     - Comments (add, reply, resolve)
     - Accept/reject revisions
     - Review received redlines (see "Reviewing Someone Else's Redlines")
@@ -159,6 +159,21 @@ For advanced formatting needs (precise spacing, complex table styling, detailed 
 
 Use the **docx_editor** Python library for all editing operations. It handles tracked changes, comments, and revisions with a simple API.
 
+### Which call to use
+
+| You want to                          | Call                                             | Not                    |
+| ------------------------------------ | ------------------------------------------------ | ---------------------- |
+| Change text                          | `doc.replace(find, replace_with, paragraph=ref)` |                        |
+| Remove text                          | `doc.delete(text, paragraph=ref)`                | `replace(text, "")`    |
+| Add text after an anchor             | `doc.insert_after(anchor, text, paragraph=ref)`  | `replace(a, a + text)` |
+| Add text before an anchor            | `doc.insert_before(anchor, text, paragraph=ref)` | `replace(a, text + a)` |
+
+The `replace` forms in the "Not" column work when the added or removed text is whole words — `replace()` trims the shared words and writes a pure deletion or insertion — but a change inside a word does not trim: `replace("Payment", "Payments")` rewrites the whole word, where `insert_after("Payment", "s")` inserts one letter. Prefer the dedicated verbs: they state the intent, the anchor is quoted once instead of twice (a slip in the second copy of `a` turns an insertion into a real rewrite of the anchor), and `delete` has no empty-string case to get wrong.
+
+Beyond the four verbs: `doc.batch_edit([...])` applies several edits atomically (see "Batch Editing"), `doc.rewrite_paragraph(ref, new_text)` restructures a whole paragraph (see "Paragraph Rewrite (Fallback for Structural Edits)"), `doc.split_paragraph(ref, before=text)` breaks one in two (see "Paragraph Structure (splitting on `\n`)"), and `doc.add_comment(anchor_text, comment)` comments on text (see "Comments API").
+
+**Quote full text, never a preview.** `list_paragraphs()` output is a preview for scanning: a paragraph longer than `max_chars` (default 80) is cut and ends in `...`, and that `...` is **not** in the document. Text that will be quoted back as `find` / `text` / `anchor` — by you, or by any model you hand the listing to — must come from an untruncated source: `list_paragraphs_structured(limit=None)` (`info.text`; `print(info)` shows `P{i}#{hash}| full text`), `get_paragraph(i).text`, or a `SearchResult` from `find_text()` / `find_all()` passed straight to the edit. A search string copied from a cut preview, `...` included, can raise `TextNotFoundError` or, when the document happens to contain that text, match the wrong text. The refs themselves (`P2#f3c1`) are safe to take from either listing.
+
 ### Installation
 
 ```bash
@@ -209,11 +224,13 @@ author = os.environ.get("USER") or os.environ.get("USERNAME") or "Reviewer"
 
 # Open document (supports context manager)
 with Document.open("contract.docx", author=author) as doc:
-    # Step 1: List paragraphs with hash-anchored references
-    for p in doc.list_paragraphs():
-        print(p)
-    # Output: P1#a7b2| Introduction to the contract...
-    #         P2#f3c1| The committee shall review...
+    # Step 1: List paragraphs with hash-anchored references and FULL text
+    # limit=None lists every paragraph: the default stops at 200 records with NO
+    # notice (cut if the last info.index < doc.paragraph_count())
+    for info in doc.list_paragraphs_structured(limit=None):
+        print(info)
+    # Output: P1#a7b2| Introduction to the contract
+    #         P2#f3c1| The committee shall review the old text every quarter.
 
     # Step 2: Edit using paragraph references (safe, unambiguous)
     # Each method returns the new paragraph ref for chaining
@@ -261,12 +278,15 @@ import os
 author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("document.docx", author=author)
 
-# List paragraphs to get hash-anchored references
-for p in doc.list_paragraphs():
-    print(p)
-# Output: P1#a7b2| Introduction...
-#         P2#f3c1| The payment term is 30 days...
-#         P3#b2c4| Section 3. Terms and conditions...
+# List paragraphs to get hash-anchored references and full, quotable text
+# (list_paragraphs() gives the same refs with 80-char previews — scan only)
+# limit=None lists every paragraph: the default stops at 200 records with NO
+# notice (cut if the last info.index < doc.paragraph_count())
+for info in doc.list_paragraphs_structured(limit=None):
+    print(info)
+# Output: P1#a7b2| Introduction
+#         P2#f3c1| The payment term is 30 days from the invoice date.
+#         P3#b2c4| Section 3. Terms and conditions
 
 # Find text (returns SearchResult or None, works across element boundaries).
 match = doc.find_text("30 days")
@@ -799,11 +819,13 @@ import os
 author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("contract.docx", author=author)
 
-# List paragraphs to get hash-anchored references
-for p in doc.list_paragraphs():
-    print(p)
+# List paragraphs to get hash-anchored references and full, quotable text
+# (limit=None: a redline must see the whole document — the default stops at
+# 200 records with no notice)
+for info in doc.list_paragraphs_structured(limit=None):
+    print(info)
 
-# Section 2 changes (using paragraph references from list_paragraphs)
+# Section 2 changes (using paragraph references from the listing)
 # Each edit returns the new ref — chain edits on the same paragraph
 r = doc.replace("30 days", "60 days", paragraph="P4#a1b2")
 doc.replace("net", "gross", paragraph=r)  # second edit on same paragraph
@@ -843,9 +865,9 @@ with Document.open("file.docx", author=author) as doc:
     # Step 1: List paragraphs — each has a unique hash anchor
     for p in doc.list_paragraphs():
         print(p)
-    # Output: P1#a7b2| Introduction to the contract...
-    #         P2#f3c1| The committee shall review all...
-    #         P3#b2c4| The meeting was productive...
+    # Output: P1#a7b2| Introduction to the contract
+    #         P2#f3c1| The committee shall review all submissions received before the deadline and shal...
+    #         P3#b2c4| The meeting was productive
 
     # Step 2: Edit returns the new ref — use it for follow-up edits
     result = doc.replace("the meeting was productive",
@@ -855,7 +877,7 @@ with Document.open("file.docx", author=author) as doc:
     doc.save()
 ```
 
-Refs are **1-based** global indexes (`P1`, not `P0`). A bare `list_paragraphs()` call returns at most **200 paragraphs** (the default `limit`). Whenever paragraphs remain beyond the returned window — default or explicit `limit` — the last list entry is a truncation notice instead of a paragraph, e.g. `"... 50 more paragraphs; use start=201 or limit=None"`, telling you the next `start`. Notice lines always begin with `...` and never match the `P{i}#{hash}` ref shape, so filter them with `entry.startswith("...")` when consuming entries as refs. `paragraph_count()` gives the total for bounds; `start`/`limit` return a slice whose refs keep their global index; `limit=None` removes the cap. Pass `max_chars=0` to get bare refs (`P1#a7b2`) with no preview text or `| ` separator:
+Refs are **1-based** global indexes (`P1`, not `P0`). A bare `list_paragraphs()` call returns at most **200 paragraphs** (the default `limit`). Whenever paragraphs remain beyond the returned window — default or explicit `limit` — the list ends with one extra entry that is a truncation notice, not a paragraph, e.g. `"... 50 more paragraphs; use start=201 or limit=None"`, telling you the next `start`. Notice lines always begin with `...` and never match the `P{i}#{hash}` ref shape, so filter them with `entry.startswith("...")` when consuming entries as refs. That leading-`...` notice entry is a different thing from the trailing `...` on a cut preview (`P2` above): the notice is an extra trailing entry, the suffix marks a paragraph whose text was cut at `max_chars` — and neither is document text (see "Quote full text, never a preview" under "Which call to use"). `paragraph_count()` gives the total for bounds; `start`/`limit` return a slice whose refs keep their global index; `limit=None` removes the cap. Pass `max_chars=0` to get bare refs (`P1#a7b2`) with no preview text or `| ` separator:
 
 ```python
 page1 = doc.list_paragraphs()                        # up to P200, then "... N more" notice
@@ -1009,7 +1031,7 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | Error                  | Fields                                                                                  | Recovery                                                                                         |
 | ---------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `HashMismatchError`    | `paragraph_index`, `expected_hash`, `actual_hash`, `paragraph_preview`                  | Retry with `P{paragraph_index}#{actual_hash}`.                                                   |
-| `TextNotFoundError`    | `search_text`, `paragraph_ref`, `paragraph_preview`, `occurrence`, `total_occurrences`  | Use `paragraph_preview` to pick a substring that actually appears (a tab mark is spelled `\t` there — search with a real tab); if `total_occurrences` is set, retry with an `occurrence` < `total_occurrences`. |
+| `TextNotFoundError`    | `search_text`, `paragraph_ref`, `paragraph_preview`, `occurrence`, `total_occurrences`  | Re-quote a substring that actually appears from `get_paragraph(i).text`; `paragraph_preview` is a quick look only — it is itself cut at 80 chars with a trailing `...`, and spells a tab mark `\t` (search with a real tab). A common cause is a search string copied from a `list_paragraphs()` preview with its trailing `...`. If `total_occurrences` is set, retry with an `occurrence` < `total_occurrences`. |
 | `AmbiguousTextError`   | `search_text`, `paragraph_ref`, `paragraph_preview`, `total_occurrences`                | The target matched more than once with no `occurrence` given. Enumerate with `find_all()` and pick, or pass an explicit `occurrence` (0-based).      |
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | Clamp to `1..total_paragraphs` and retry with `get_paragraph(i)`, or call `list_paragraphs()` to pick a valid ref. |
 | `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (a missing paragraph ref, an element that is not an `EditOperation`, or a duplicate paragraph in `batch_rewrite` — `batch_edit` allows repeats, applied sequentially). Batch methods never raise the inner types directly. |
@@ -1162,7 +1184,7 @@ with Document.open("contract.docx", author=author) as doc:
 
 ### Workflow for Large Documents
 
-1. **List paragraphs** with hash-anchored references:
+1. **List paragraphs** with hash-anchored references — 80-char previews keep the scan cheap:
    ```python
    from docx_editor import Document
    doc = Document.open("large-file.docx", author="Reviewer")
@@ -1170,11 +1192,15 @@ with Document.open("contract.docx", author=author) as doc:
        print(p)
    ```
 
-2. **Identify target paragraphs** by scanning the output for relevant content
+2. **Identify target paragraphs** by scanning the output, then **fetch their full text** before writing the edit — a preview ending in `...` was cut, and the `...` is not in the document:
+   ```python
+   info = doc.get_paragraph(42)   # index from the ref P42#c3d4
+   print(info.text)               # untruncated; quote search text from here
+   ```
 
 3. **Edit with paragraph references** — the hash ensures you target the correct location:
    ```python
-   doc.replace("old text", "new text", paragraph="P42#c3d4")
+   doc.replace("old text", "new text", paragraph=info.ref)
    ```
 
 4. **Verify** with `list_revisions()` if needed
@@ -1195,6 +1221,9 @@ docx-session start
 # necessarily the cwd of a later exec. `start` prints the cwd it captured.
 docx-session exec "from docx_editor import Document; doc = Document.open('/abs/path/contract.docx', author='Reviewer')"
 docx-session exec "paras = doc.list_paragraphs(); print('\n'.join(str(p) for p in paras[:20]))"
+# The lines above are 80-char previews ('...' = cut, not document text): read the
+# full text of the paragraph you are about to edit before quoting from it.
+docx-session exec "print(doc.get_paragraph(2).text)"
 docx-session exec "ref = doc.replace('30 days', '45 days', paragraph='P2#f3c1'); ref"
 docx-session exec "doc.add_comment('45 days', 'Extended per negotiation.', paragraph=ref)"
 docx-session exec "doc.save(); doc.close()"
