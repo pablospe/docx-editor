@@ -658,15 +658,53 @@ class TestRejoinKeepsTailRevisions:
             assert sorted((r.id, r.type) for r in doc.list_revisions()) == [(11, "deletion"), (31, "insertion")]
             assert _merged_ppr(doc) == f"<w:pPr><w:rPr>{marks}</w:rPr></w:pPr>"
 
-    def test_revision_on_the_rejected_mark_itself_goes_with_it(self, make_docx):
-        """A deletion of the very mark being rejected describes a break that no
-        longer exists — the same rule as a revision nested in a rejected insertion."""
-        body = _split("<w:rPr><w:b/></w:rPr>", head_mark=f'<w:ins w:id="30" {_BOB}/><w:del w:id="11" {_ANN}/>')
+    @pytest.mark.parametrize(
+        ("tag", "rev_type"),
+        [("del", "deletion"), ("moveFrom", "move_from"), ("moveTo", "move_to")],
+    )
+    def test_revision_next_to_the_rejected_mark_stays_pending(self, make_docx, tag, rev_type):
+        """A revision beside the rejected w:ins moves onto the merged mark (ahead
+        of the tail's formatting, schema order); the head's formatting does not."""
+        head_mark = f'<w:ins w:id="30" {_BOB}/><w:{tag} w:id="11" {_ANN}/><w:i/>'
+        with _open(make_docx(_split("<w:rPr><w:b/></w:rPr>", head_mark=head_mark))) as doc:
+            assert doc.reject_revision(30)
+            assert [(r.id, r.type, r.author) for r in doc.list_revisions()] == [(11, rev_type, "Ann")]
+            assert _merged_ppr(doc) == f'<w:pPr><w:rPr><w:{tag} w:id="11" {_ANN}/><w:b/></w:rPr></w:pPr>'
+            assert doc.reject_revision(11)
+            assert _census(doc) == {}
+
+    def test_revision_next_to_the_rejected_mark_survives_a_tail_without_properties(self, make_docx):
+        body = _document(
+            f'<w:p><w:pPr><w:rPr><w:ins w:id="30" {_BOB}/><w:del w:id="11" {_ANN}/><w:i/></w:rPr></w:pPr>'
+            "<w:r><w:t>head</w:t></w:r></w:p><w:p><w:r><w:t>tail</w:t></w:r></w:p>"
+        )
         with _open(make_docx(body)) as doc:
             assert doc.reject_revision(30)
-            assert doc.list_revisions() == []
-            assert _census(doc) == {}
-            assert _merged_ppr(doc) == "<w:pPr><w:rPr><w:b/></w:rPr></w:pPr>"
+            assert [(r.id, r.author) for r in doc.list_revisions()] == [(11, "Ann")]
+            assert _merged_ppr(doc) == f'<w:pPr><w:rPr><w:del w:id="11" {_ANN}/></w:rPr></w:pPr>'
+
+    @pytest.mark.parametrize(("split_id", "del_id"), [(30, 11), (11, 30)])
+    @pytest.mark.parametrize(("author", "count", "left"), [(None, 2, []), ("Bob", 1, ["Ann"])])
+    def test_bulk_reject_counts_a_revision_next_to_the_rejected_mark(
+        self, make_docx, split_id, del_id, author, count, left
+    ):
+        head_mark = f'<w:ins w:id="{split_id}" {_BOB}/><w:del w:id="{del_id}" {_ANN}/>'
+        with _open(make_docx(_split("<w:rPr><w:b/></w:rPr>", head_mark=head_mark))) as doc:
+            assert doc.reject_all(author=author) == count
+            assert [r.author for r in doc.list_revisions()] == left
+            assert doc.get_visible_text() == "headtail\nlast"
+
+    def test_tail_mark_revision_wins_over_one_of_the_same_tag_on_the_head(self, make_docx):
+        """A mark holds one marker per tag: the tail's stays, the head's is the
+        documented loss; a head marker of another tag joins it in schema order."""
+        head_mark = f'<w:ins w:id="30" {_BOB}/><w:del w:id="11" {_ANN}/><w:moveFrom w:id="12" {_ANN}/>'
+        tail = f'<w:rPr><w:del w:id="13" {_BOB}/><w:b/></w:rPr>'
+        with _open(make_docx(_split(tail, head_mark=head_mark))) as doc:
+            assert doc.reject_revision(30)
+            assert sorted(r.id for r in doc.list_revisions()) == [12, 13]
+            assert _merged_ppr(doc) == (
+                f'<w:pPr><w:rPr><w:del w:id="13" {_BOB}/><w:moveFrom w:id="12" {_ANN}/><w:b/></w:rPr></w:pPr>'
+            )
 
     def test_moved_mark_survives_and_resolves_clean(self, make_docx):
         """The fixture's range brackets no content (the marker sits in w:pPr,
