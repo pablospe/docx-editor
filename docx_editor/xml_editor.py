@@ -16,11 +16,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 from xml.dom.minidom import Element
+from xml.parsers.expat import ExpatError
 
 import defusedxml.minidom
 import defusedxml.sax
+from defusedxml.common import DefusedXmlException
 
-from .exceptions import MultipleNodesFoundError, NodeNotFoundError
+from .exceptions import MultipleNodesFoundError, NodeNotFoundError, XMLError
 
 
 def is_tab_node(node) -> bool:
@@ -135,6 +137,9 @@ _REJECTED_CONTROL_CHARS = frozenset(chr(c) for c in range(0x20) if c != 0x0A) | 
 # Everything under it is outside the document's addressable surface — see
 # :func:`body_paragraphs`.
 _TEXTBOX_CONTENT = "w:txbxContent"
+
+# Word 2010 namespace: w14:paraId / w14:textId on paragraphs.
+W14_NAMESPACE = "http://schemas.microsoft.com/office/word/2010/wordml"
 
 
 def _reject_control_chars(
@@ -1437,6 +1442,9 @@ class XMLEditor:
             List of DOM nodes imported into this document
 
         Raises:
+            XMLError: If the fragment is not well-formed in the context of
+                this part — most often a namespace prefix the part's root
+                element does not declare.
             AssertionError: If fragment contains no element nodes
         """
         # Extract namespace declarations from the root document element
@@ -1450,7 +1458,10 @@ class XMLEditor:
 
         ns_decl = " ".join(namespaces)
         wrapper = f"<root {ns_decl}>{xml_content}</root>"
-        fragment_doc = defusedxml.minidom.parseString(wrapper)
+        try:
+            fragment_doc = defusedxml.minidom.parseString(wrapper)
+        except (ExpatError, DefusedXmlException) as e:
+            raise XMLError(f"cannot parse XML fragment for {self.xml_path.name}: {e}") from e
         nodes = [self.dom.importNode(child, deep=True) for child in fragment_doc.documentElement.childNodes]
         elements = [n for n in nodes if n.nodeType == n.ELEMENT_NODE]
         assert elements, "Fragment must contain at least one element"
@@ -1671,32 +1682,36 @@ class DocxXMLEditor(XMLEditor):
         finally:
             self._frozen_timestamp = None
 
+    def ensure_namespace(self, prefix: str, uri: str) -> None:
+        """Declare ``xmlns:{prefix}`` on the root element if it is absent.
+
+        Fragments are parsed against the root's declarations, so a prefix must
+        be declared here before a fragment using it is inserted.
+
+        Raises:
+            XMLError: If the root already binds ``prefix`` to a different URI —
+                markup written with it would land in the wrong namespace.
+        """
+        root = self.dom.documentElement
+        attr = f"xmlns:{prefix}"
+        if not root.hasAttribute(attr):
+            root.setAttribute(attr, uri)
+        elif root.getAttribute(attr) != uri:
+            raise XMLError(
+                f"{self.xml_path.name}: prefix {prefix!r} is bound to {root.getAttribute(attr)!r}, expected {uri!r}"
+            )
+
     def _ensure_w16du_namespace(self) -> None:
         """Ensure w16du namespace is declared on the root element."""
-        root = self.dom.documentElement
-        if not root.hasAttribute("xmlns:w16du"):
-            root.setAttribute(
-                "xmlns:w16du",
-                "http://schemas.microsoft.com/office/word/2023/wordml/word16du",
-            )
+        self.ensure_namespace("w16du", "http://schemas.microsoft.com/office/word/2023/wordml/word16du")
 
     def _ensure_w16cex_namespace(self) -> None:
         """Ensure w16cex namespace is declared on the root element."""
-        root = self.dom.documentElement
-        if not root.hasAttribute("xmlns:w16cex"):
-            root.setAttribute(
-                "xmlns:w16cex",
-                "http://schemas.microsoft.com/office/word/2018/wordml/cex",
-            )
+        self.ensure_namespace("w16cex", "http://schemas.microsoft.com/office/word/2018/wordml/cex")
 
     def _ensure_w14_namespace(self) -> None:
         """Ensure w14 namespace is declared on the root element."""
-        root = self.dom.documentElement
-        if not root.hasAttribute("xmlns:w14"):
-            root.setAttribute(
-                "xmlns:w14",
-                "http://schemas.microsoft.com/office/word/2010/wordml",
-            )
+        self.ensure_namespace("w14", W14_NAMESPACE)
 
     def _inject_attributes_to_nodes(self, nodes) -> None:
         """Inject RSID, author, and date attributes into DOM nodes where applicable.

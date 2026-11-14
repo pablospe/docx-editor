@@ -20,6 +20,7 @@ from .exceptions import (
     _truncate_preview,
 )
 from .xml_editor import (
+    W14_NAMESPACE,
     DocxXMLEditor,
     ParagraphRef,
     TextMapMatch,
@@ -164,6 +165,9 @@ class CommentManager:
                 character (``anchor_text`` may contain ``\\t`` — a tab mark is
                 one text-map character — but ``comment_text`` may not).
             ValueError: If ``occurrence`` is negative or not an integer.
+            XMLError: If an existing comment part cannot take the comment (its
+                root is not the expected element, or it binds ``w14`` to
+                another namespace). Raised before document.xml is touched.
         """
         if not isinstance(anchor_text, str) or not anchor_text:
             raise CommentError(f"anchor_text must be a non-empty string, got {anchor_text!r}")
@@ -180,6 +184,7 @@ class CommentManager:
         _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id
+        self._prepare_comment_parts()
 
         # Place range markers at character-precise positions in document.xml
         self._place_markers(match, comment_id)
@@ -239,10 +244,13 @@ class CommentManager:
         Raises:
             CommentError: If ``comment_text`` is not a string or holds a
                 control character.
+            XMLError: If an existing comment part cannot take the comment.
+                Raised before document.xml is touched.
         """
         self._validate_comment_text(comment_text, field="comment_text", ctx="add_comment_on_elements(): ")
 
         comment_id = self.next_comment_id
+        self._prepare_comment_parts()
         self.document_editor.insert_before(first, self._comment_range_start_xml(comment_id))
         # _comment_range_end_xml emits the end marker *and* the reference run.
         self.document_editor.insert_after(last, self._comment_range_end_xml(comment_id))
@@ -500,6 +508,8 @@ class CommentManager:
                 included), or ``reply_text`` is not a non-empty string.
             CommentError: If the parent comment is not found; carries
                 ``comment_id``.
+            XMLError: If an existing comment part cannot take the reply.
+                Raised before document.xml is touched.
         """
         # Reject junk ids before the membership test: None/"1" would surface
         # as a misleading "not found" CommentError, and True aliases comment
@@ -532,6 +542,7 @@ class CommentManager:
             tag="w:commentReference", attrs={"w:id": str(parent_comment_id)}
         )
 
+        self._prepare_comment_parts()
         self._place_reply_markers(comment_id, parent_start_elem, parent_ref_elem)
 
         return self._commit_comment(comment_id, reply_text, parent_para_id=parent_info["para_id"])
@@ -888,6 +899,33 @@ class CommentManager:
             if self._on_write is not None:
                 self._on_write()
             shutil.copy(TEMPLATE_DIR / template_name, path)
+
+    def _prepare_comment_parts(self) -> None:
+        """Make the four comment parts ready to receive a comment.
+
+        Called before the first marker goes into document.xml, so everything
+        that can fail for a pre-existing part fails while the document is still
+        untouched: a part whose root is not the expected prefixed element
+        (``NodeNotFoundError``), and a ``comments.xml`` that binds ``w14`` to
+        another namespace. A ``comments.xml`` written by a producer that never
+        emits ``w14:paraId`` declares no ``xmlns:w14`` at all; it is added here.
+
+        Raises:
+            XMLError: If a part cannot take the comment markup.
+        """
+        for path, template_name, root_tag in (
+            (self.comments_path, "comments.xml", "w:comments"),
+            (self.comments_extended_path, "commentsExtended.xml", "w15:commentsEx"),
+            (self.comments_ids_path, "commentsIds.xml", "w16cid:commentsIds"),
+            (self.comments_extensible_path, "commentsExtensible.xml", "w16cex:commentsExtensible"),
+        ):
+            self._ensure_comment_file(path, template_name)
+            editor = self._get_editor(path)
+            editor.get_node(tag=root_tag)
+            # comments.xml comes first and is checked in full before a sibling
+            # part is created, so a rejected part leaves nothing new on disk.
+            if path == self.comments_path:
+                editor.ensure_namespace("w14", W14_NAMESPACE)
 
     def _add_to_comments_xml(self, comment_id: int, para_id: str, text: str, timestamp: str) -> None:
         """Add a single comment to comments.xml."""

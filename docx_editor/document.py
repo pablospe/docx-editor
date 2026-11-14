@@ -60,6 +60,31 @@ from .xml_editor import (
 # the output of a bare call on large documents; pass limit=None for everything.
 _DEFAULT_LIST_LIMIT = 200
 
+# (part file name in word/, relationship type, content type) for the four
+# comment parts. Each is wired on its own at save time.
+_COMMENT_PARTS = (
+    (
+        "comments.xml",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    ),
+    (
+        "commentsExtended.xml",
+        "http://schemas.microsoft.com/office/2011/relationships/commentsExtended",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml",
+    ),
+    (
+        "commentsIds.xml",
+        "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+    ),
+    (
+        "commentsExtensible.xml",
+        "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml",
+    ),
+)
+
 # CT_Settings is a sequence (ECMA-376 Part 1 §17.15.1.78), so w:trackRevisions has
 # exactly one legal slot. These are the elements the schema puts *before* it —
 # the flag goes after the last of them that the document actually has. Only the
@@ -2972,10 +2997,18 @@ class Document:
         editor.save()
 
     def _ensure_comment_relationships(self) -> None:
-        """Ensure word/_rels/document.xml.rels has comment relationships."""
-        # Only needed if comments.xml exists
-        comments_path = self._workspace.word_path / "comments.xml"
-        if not comments_path.exists():
+        """Ensure every comment part on disk has a relationship from document.xml.
+
+        Each part is wired on its own: a document that ships ``comments.xml``
+        alone gains the three sibling parts on its first new comment, and they
+        need relationships even though ``comments.xml`` already has one.
+        """
+        missing = [
+            (target, rel_type)
+            for target, rel_type, _ in _COMMENT_PARTS
+            if (self._workspace.word_path / target).exists()
+        ]
+        if not missing:
             return
 
         rels_path = self._workspace.word_path / "_rels" / "document.xml.rels"
@@ -2985,52 +3018,29 @@ class Document:
             author=self._workspace.author,
             on_save=self._workspace.mark_dirty,
         )
-
-        # Check if already exists
-        for rel_elem in editor.dom.getElementsByTagName("Relationship"):
-            if rel_elem.getAttribute("Target") == "comments.xml":
-                return
+        wired = {rel_elem.getAttribute("Target") for rel_elem in editor.dom.getElementsByTagName("Relationship")}
+        missing = [(target, rel_type) for target, rel_type in missing if target not in wired]
+        if not missing:
+            return
 
         root = editor.dom.documentElement
         root_tag = root.tagName
         prefix = root_tag.split(":")[0] + ":" if ":" in root_tag else ""
         next_rid_num = int(editor.get_next_rid()[3:])
-
-        # Add relationship elements
-        rels = [
-            (
-                next_rid_num,
-                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
-                "comments.xml",
-            ),
-            (
-                next_rid_num + 1,
-                "http://schemas.microsoft.com/office/2011/relationships/commentsExtended",
-                "commentsExtended.xml",
-            ),
-            (
-                next_rid_num + 2,
-                "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
-                "commentsIds.xml",
-            ),
-            (
-                next_rid_num + 3,
-                "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible",
-                "commentsExtensible.xml",
-            ),
-        ]
-
-        for rel_id, rel_type, target in rels:
-            rel_xml = f'<{prefix}Relationship Id="rId{rel_id}" Type="{rel_type}" Target="{target}"/>'
+        for offset, (target, rel_type) in enumerate(missing):
+            rel_xml = f'<{prefix}Relationship Id="rId{next_rid_num + offset}" Type="{rel_type}" Target="{target}"/>'
             editor.append_to(root, rel_xml)
 
         editor.save()
 
     def _ensure_comment_content_types(self) -> None:
-        """Ensure [Content_Types].xml has comment content types."""
-        # Only needed if comments.xml exists
-        comments_path = self._workspace.word_path / "comments.xml"
-        if not comments_path.exists():
+        """Ensure every comment part on disk has a content-type override."""
+        missing = [
+            (f"/word/{target}", content_type)
+            for target, _, content_type in _COMMENT_PARTS
+            if (self._workspace.word_path / target).exists()
+        ]
+        if not missing:
             return
 
         content_types_path = self._workspace.workspace_path / "[Content_Types].xml"
@@ -3040,35 +3050,15 @@ class Document:
             author=self._workspace.author,
             on_save=self._workspace.mark_dirty,
         )
-
-        # Check if already exists
-        for override_elem in editor.dom.getElementsByTagName("Override"):
-            if override_elem.getAttribute("PartName") == "/word/comments.xml":
-                return
+        declared = {
+            override_elem.getAttribute("PartName") for override_elem in editor.dom.getElementsByTagName("Override")
+        }
+        missing = [(part_name, content_type) for part_name, content_type in missing if part_name not in declared]
+        if not missing:
+            return
 
         root = editor.dom.documentElement
-
-        # Add Override elements
-        overrides = [
-            (
-                "/word/comments.xml",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
-            ),
-            (
-                "/word/commentsExtended.xml",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml",
-            ),
-            (
-                "/word/commentsIds.xml",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
-            ),
-            (
-                "/word/commentsExtensible.xml",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml",
-            ),
-        ]
-
-        for part_name, content_type in overrides:
+        for part_name, content_type in missing:
             override_xml = f'<Override PartName="{part_name}" ContentType="{content_type}"/>'
             editor.append_to(root, override_xml)
 
