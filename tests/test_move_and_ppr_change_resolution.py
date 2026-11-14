@@ -739,6 +739,44 @@ class TestRejoinKeepsTailRevisions:
             assert doc.list_unhandled_revisions() == []
             assert _merged_ppr(doc) == f"<w:pPr>{head_sect}</w:pPr>"
 
+    @pytest.mark.parametrize(
+        ("tag", "rev_type"),
+        [("del", "deletion"), ("moveFrom", "move_from"), ("moveTo", "move_to")],
+    )
+    @pytest.mark.parametrize("cuts", [["tail"], ["mid", "tail"]], ids=["one-split", "multi-split"])
+    def test_library_split_keeps_a_revision_of_the_original_mark(self, make_docx, tag, rev_type, cuts):
+        """The split moves the original mark's revision to the last tail, so
+        rejecting the split brings it back instead of dropping it."""
+        ppr = f'<w:pPr><w:rPr><w:{tag} w:id="5" {_ANN}/><w:b/></w:rPr></w:pPr>'
+        body = _document(f"<w:p>{ppr}<w:r><w:t>head mid tail</w:t></w:r></w:p><w:p><w:r><w:t>last</w:t></w:r></w:p>")
+        with _open(make_docx(body)) as doc:
+            groups = [doc.split_paragraph(find_ref(doc, cut), before=cut).group_id for cut in cuts]
+            assert doc.paragraph_count() == 2 + len(cuts)
+            for group_id in reversed(groups):
+                assert group_id is not None
+                assert doc.reject_group(group_id)
+            assert doc.get_visible_text() == "head mid tail\nlast"
+            assert [(r.id, r.type, r.author) for r in doc.list_revisions()] == [(5, rev_type, "Ann")]
+            assert _merged_ppr(doc) == ppr
+            assert doc.reject_revision(5)
+            assert _census(doc) == {}
+
+    def test_mark_insertion_inside_a_record_leaves_the_live_mark_alone(self, make_docx):
+        """A w:ins in a nonconforming w:pPrChange record is not a paragraph
+        break: rejecting it must not rejoin or touch the live mark."""
+        live = f'<w:rPr><w:b/><w:del w:id="7" {_ANN}/></w:rPr>'
+        record = f'<w:pPrChange w:id="12" {_ANN}><w:pPr><w:rPr><w:ins w:id="30" {_BOB}/></w:rPr></w:pPr></w:pPrChange>'
+        body = _document(
+            f"<w:p><w:pPr>{live}{record}</w:pPr><w:r><w:t>head</w:t></w:r></w:p><w:p><w:r><w:t>tail</w:t></w:r></w:p>"
+        )
+        with _open(make_docx(body)) as doc:
+            assert doc.reject_revision(30)
+            assert doc.get_visible_text() == "head\ntail"
+            assert sorted(r.id for r in doc.list_revisions()) == [7, 12]
+            assert _merged_ppr(doc) == (
+                f'<w:pPr>{live}<w:pPrChange w:id="12" {_ANN}><w:pPr></w:pPr></w:pPrChange></w:pPr>'
+            )
+
     def test_library_split_with_mark_formatting_and_own_record_rejoins_exactly(self, make_docx):
         record = f'<w:pPrChange w:id="5" {_ANN}><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange>'
         ppr = f'<w:pPr><w:jc w:val="right"/><w:rPr><w:b/></w:rPr>{record}</w:pPr>'

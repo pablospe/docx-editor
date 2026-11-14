@@ -13,29 +13,14 @@ from .dom import (
     _is_paragraph_mark_ins,
     _is_paragraph_mark_marker,
     _next_element_sibling,
+    _ppr_base_anchor,
+    _ppr_base_children,
 )
 from .models import (
     MOVE_RANGE_TAGS,
     ResolveResult,
     iter_revision_elements,
 )
-
-# The children of a ``w:pPr`` that are not base paragraph properties
-# (CT_PPrBase): the paragraph-mark run properties, the section mark and the
-# property-change record.
-_PPR_TAIL_TAGS = ("w:rPr", "w:sectPr", "w:pPrChange")
-
-
-def _ppr_base_children(ppr) -> list[Element]:
-    """The base-property children of a ``w:pPr`` (or of a ``w:pPrChange``'s
-    recorded ``w:pPr``): every element child except ``_PPR_TAIL_TAGS``."""
-    return [c for c in ppr.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName not in _PPR_TAIL_TAGS]
-
-
-def _ppr_base_anchor(ppr) -> Element | None:
-    """The first non-base child of a ``w:pPr``: where base properties are
-    inserted before so schema order holds. None when there is none (append)."""
-    return next((c for c in ppr.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName in _PPR_TAIL_TAGS), None)
 
 
 class _ResolutionMixin(_RevisionManagerBase):
@@ -718,7 +703,12 @@ class _ResolutionMixin(_RevisionManagerBase):
         What described ``p1``'s own mark goes with it, because that break no
         longer exists: a ``w:del``/``w:moveFrom``/``w:moveTo`` sitting next to
         the rejected ``w:ins`` is dropped uncounted, the same rule as a
-        revision nested inside a rejected insertion.
+        revision nested inside a rejected insertion. (A split made by this
+        library moves a pre-existing revision of the original mark onto
+        ``p2`` — see ``_new_tail_paragraph`` — so it is not in that position;
+        a document split by a release before that still has it next to the
+        ``w:ins``, where it cannot be told apart from a revision of the new
+        break and is dropped the same way.)
 
         A ``w:pPrChange`` on ``p2`` moves to the merged paragraph together
         with ``p2``'s base properties (the ones the record is a change *to*),
@@ -734,8 +724,15 @@ class _ResolutionMixin(_RevisionManagerBase):
         p1 = _ancestor_paragraph(mark_ins)
         p2 = _next_element_sibling(p1.nextSibling) if p1 is not None else None
         rPr = mark_ins.parentNode
+        on_live_mark = rPr.parentNode.parentNode is p1
         rPr.removeChild(mark_ins)
-        if p1 is None or p2 is None or p2.tagName != "w:p":  # pragma: no cover - a mark implies both paragraphs
+        if not on_live_mark:
+            # A w:ins in a nonconforming record's w:pPr/w:rPr is not p1's
+            # mark: there is no break to undo, so only the marker goes.
+            if _next_element_sibling(rPr.firstChild) is None:
+                rPr.parentNode.removeChild(rPr)
+            return
+        if p1 is None or p2 is None or p2.tagName != "w:p":  # pragma: no cover - no paragraph follows directly
             # Best effort: nothing to rejoin, so only the mark goes.
             self._tidy_mark_properties(rPr.parentNode)
             return

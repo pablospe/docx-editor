@@ -232,6 +232,24 @@ def _first_child_element(parent, tag: str) -> Element | None:
     return None
 
 
+# The children of a ``w:pPr`` that are not base paragraph properties
+# (CT_PPrBase): the paragraph-mark run properties, the section mark and the
+# property-change record.
+_PPR_TAIL_TAGS = ("w:rPr", "w:sectPr", "w:pPrChange")
+
+
+def _ppr_base_children(ppr) -> list[Element]:
+    """The base-property children of a ``w:pPr`` (or of a ``w:pPrChange``'s
+    recorded ``w:pPr``): every element child except ``_PPR_TAIL_TAGS``."""
+    return [c for c in ppr.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName not in _PPR_TAIL_TAGS]
+
+
+def _ppr_base_anchor(ppr) -> Element | None:
+    """The first non-base child of a ``w:pPr``: where base properties are
+    inserted before so schema order holds. None when there is none (append)."""
+    return next((c for c in ppr.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName in _PPR_TAIL_TAGS), None)
+
+
 def _first_content_child(run) -> Element | None:
     """First element child of ``run`` that is not its ``w:rPr``."""
     for child in run.childNodes:
