@@ -56,8 +56,10 @@ class _ResolutionMixin(_RevisionManagerBase):
         one and any of them is resolvable, rather than resolve whichever
         comes first in the document (possibly another author's). ``author=``
         narrows the count to one reviewer's; same-author duplicates stay
-        refused, and ``accept_all``/``reject_all`` (optionally by author) take
-        them.
+        refused. ``accept_all``/``reject_all`` (optionally by author) take
+        them, and a revision whose only twin is an unhandled mark is still
+        reachable through its group, which the registry builds from handled
+        revisions alone.
 
         Args:
             revision_id: The w:id of the revision to accept

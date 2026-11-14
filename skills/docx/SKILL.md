@@ -689,9 +689,12 @@ nested deletion's `nested_under` points back at its host.
   sharing an id (across `list_revisions()` and `list_unhandled_revisions()`)
   is the signal. Pass `author=` to name one reviewer's:
   `doc.reject_revision(7, author="Ann")`. When one author wrote both (the
-  error says so), no per-id call can pick one — a duplicated id is barred from
-  grouping too, so both rows carry `group_id=None` — and
-  `accept_all(author=…)`/`reject_all(author=…)` is the way through.
+  error says so), no per-id call can pick one. If both are `list_revisions()`
+  rows they are barred from grouping too (`group_id=None`), and
+  `accept_all(author=…)`/`reject_all(author=…)` is the way through. If the
+  other is a `list_unhandled_revisions()` row, the revision keeps whatever
+  `group_id` its row shows, and `accept_group()`/`reject_group()` resolve
+  that group without the id.
 
 **Moves are two rows.** A drag-and-drop move lists as a `move_from` (the
 source, text excluded from the visible view) and a `move_to` (the

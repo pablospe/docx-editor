@@ -820,7 +820,8 @@ Five `type` values: `"insertion"`, `"deletion"`, the two halves of a content
 move (`"move_from"`/`"move_to"` — two rows, as in Word's revision pane) and
 `"property_change"` (a `w:pPrChange`: the paragraph's previous properties;
 `text` is `""`). Every row can be passed to `accept_revision()` /
-`reject_revision()`. Every other revision type in the OOXML schema — run,
+`reject_revision()`, which refuse an id that more than one pending revision
+carries. Every other revision type in the OOXML schema — run,
 section and table property changes, table-structure revisions,
 `w:numberingChange` and the custom-XML range marks — is listed by
 [`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone) instead,
@@ -874,10 +875,12 @@ reports. This call counts every pending element carrying the id and raises
 leaving the document untouched, rather than resolve whichever comes first.
 Two rows sharing an id (across `list_revisions()` and
 `list_unhandled_revisions()`) is the signal. `author=` narrows the id to one
-reviewer's revision. When one author wrote both, no per-id call can pick one
-— a duplicated id is barred from grouping too, so both rows carry
-`group_id=None` — and `accept_all(author=…)`/`reject_all(author=…)` resolve
-them.
+reviewer's revision. When one author wrote both, no per-id call can pick
+one. If both are `list_revisions()` rows they are barred from grouping too
+(`group_id=None`), and `accept_all(author=…)`/`reject_all(author=…)` resolve
+them. If the other is a `list_unhandled_revisions()` row, the revision keeps
+whatever `group_id` its row shows, and `accept_group()`/`reject_group()`
+resolve that group without the id.
 
 **Parameters:**
 
@@ -1177,7 +1180,9 @@ redline `accept_all()` returns 0 because there was nothing it *could* accept,
 not because there was nothing to do.
 
 Rows are [`UnhandledRevision`](#unhandledrevision), deliberately not `Revision`
-objects — they carry nothing `accept_revision()` could act on.
+objects — they carry nothing `accept_revision()` could act on. A row's `id`
+identifies it only: a per-id call on it returns False, or raises
+`RevisionError` when a `list_revisions()` row shares the id.
 
 Only `word/document.xml` is inspected (ROADMAP.md #30).
 
@@ -1822,7 +1827,7 @@ except CommentError as e:
 
 ### `RevisionError`
 
-Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`, or an unknown changeset id passed to `accept_changeset()` / `reject_changeset()`. Also raised by `accept_revision()` / `reject_revision()` when the `w:id` is carried by more than one pending revision (`revision_id` is set; the document is untouched): pass `author=`, or use `accept_all(author=…)` / `reject_all(author=…)` when one author duplicated the id. Group and changeset ids are per-open-`Document` and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use an id from the current session's `EditResult` or `list_revisions()` — a stale id from a previous session may raise this, or worse, silently resolve to a different group/changeset. Structured fields: `revision_id`, `group_id`, and `changeset_id` — set when the error is about that specific id (`group_id` for unknown-group errors, `changeset_id` for unknown-changeset errors), `None` otherwise.
+Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`, or an unknown changeset id passed to `accept_changeset()` / `reject_changeset()`. Also raised by `accept_revision()` / `reject_revision()` when the `w:id` is carried by more than one pending revision (`revision_id` is set; the document is untouched): pass `author=`, or use `accept_all(author=…)` / `reject_all(author=…)` when one author duplicated the id. Group and changeset ids are per-open-`Document` and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use an id from the current session's `EditResult` or `list_revisions()` — a stale id from a previous session may raise this, or worse, silently resolve to a different group/changeset. Structured fields: `revision_id`, `group_id`, and `changeset_id` — set when the error is about that specific id (`revision_id` for an ambiguous per-id call, `group_id` for unknown-group errors, `changeset_id` for unknown-changeset errors), `None` otherwise.
 
 ```python
 from docx_editor.exceptions import RevisionError
