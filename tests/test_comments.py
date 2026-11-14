@@ -1517,22 +1517,54 @@ class TestCommentParagraphRef:
         finally:
             doc.close()
 
-    def test_reply_whose_parent_is_filtered_out_keeps_its_own_ref(self, clean_workspace):
+    def test_author_filter_does_not_change_a_reply_ref(self, clean_workspace):
+        """A reply promoted to a root by ``author=`` still reports its thread's paragraph."""
         doc = Document.open(clean_workspace, author="Parent Author")
-        parent_id = doc.add_comment("brown fox", "parent")
+        root_id = doc.add_comment("brown fox", "root")
         doc.save()
         doc.close()
 
         doc = Document.open(clean_workspace, author="Reply Author")
-        try:
-            reply_id = doc.reply_to_comment(parent_id, "reply")
-            marker = _range_start(doc, reply_id)
-            marker.parentNode.removeChild(marker)
-            _find_paragraph_with_text(doc, "sample document").appendChild(marker)
+        middle_id = doc.reply_to_comment(root_id, "middle")
+        doc.save()
+        doc.close()
 
-            (reply,) = doc.list_comments(author="Reply Author")
-            assert reply.id == reply_id
-            assert reply.paragraph_ref == _paragraph_ref(doc, "sample document")
+        doc = Document.open(clean_workspace, author="Parent Author")
+        try:
+            leaf_id = doc.reply_to_comment(middle_id, "leaf")
+            expected = _paragraph_ref(doc, "brown fox")
+            other = _find_paragraph_with_text(doc, "sample document")
+            for reply_id in (middle_id, leaf_id):
+                marker = _range_start(doc, reply_id)
+                marker.parentNode.removeChild(marker)
+                other.appendChild(marker)
+
+            # Parent filtered out: the reply is listed as a root.
+            (middle,) = doc.list_comments(author="Reply Author")
+            assert (middle.id, middle.paragraph_ref) == (middle_id, expected)
+
+            # Mid-thread gap: the leaf's parent is filtered out, its root is not.
+            listed = {c.id: c.paragraph_ref for c in doc.list_comments(author="Parent Author")}
+            assert listed == {root_id: expected, leaf_id: expected}
+        finally:
+            doc.close()
+
+    def test_cyclic_reply_chain_terminates(self, clean_workspace):
+        """A foreign ``paraIdParent`` cycle must not hang the listing."""
+        doc = Document.open(clean_workspace)
+        try:
+            first_id = doc.add_comment("brown fox", "first")
+            second_id = doc.reply_to_comment(first_id, "second")
+            manager = doc._comment_manager
+            para_ids = {cid: manager.existing_comments[cid]["para_id"] for cid in (first_id, second_id)}
+            ext_dom = manager._get_editor(manager.comments_extended_path).dom
+            for ex_elem in ext_dom.getElementsByTagName("w15:commentEx"):
+                if ex_elem.getAttribute("w15:paraId") == para_ids[first_id]:
+                    ex_elem.setAttribute("w15:paraIdParent", para_ids[second_id])
+
+            # Returning at all is the assertion; which comments a cycle
+            # leaves listed is not this test's business.
+            assert isinstance(doc.list_comments(), list)
         finally:
             doc.close()
 

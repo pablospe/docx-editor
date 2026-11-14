@@ -1264,7 +1264,7 @@ from docx_editor import Comment
 `paragraph_ref` follows three rules:
 
 - It names the body paragraph holding the comment's range start. For a comment whose range spans several paragraphs, that is the paragraph the range starts in.
-- A reply carries the ref of the comment it answers, so every comment in a thread reports the same paragraph.
+- A reply carries the ref of the comment it answers, so every comment in a thread reports the same paragraph. The `author` filter does not change this: a reply listed without its parent still reports the thread's paragraph.
 - It is `None` when the comment has no range start inside a body paragraph: the marker is missing, sits between block elements, or is inside a text box.
 
 The ref is computed when `list_comments()` runs, so it is set immediately after `add_comment()` without a save, and it can be passed straight back as `paragraph=`. Like every ref it goes stale once that paragraph is edited; list again to get a fresh one.

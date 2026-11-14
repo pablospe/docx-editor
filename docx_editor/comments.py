@@ -19,7 +19,7 @@ from .exceptions import (
     TextNotFoundError,
     _truncate_preview,
 )
-from .track_changes.dom import _addressable_paragraph
+from .track_changes.dom import _addressable_paragraph, _adjudicable_id
 from .track_changes.listing import _RevisionLocationContext
 from .xml_editor import (
     DocxXMLEditor,
@@ -599,7 +599,6 @@ class CommentManager:
                             comment.resolved = ex_elem.getAttribute("w15:done") == "1"
                             break
 
-                comment.paragraph_ref = refs.get(comment.id)
                 comments_dict[comment.id] = comment
 
         # Build reply tree
@@ -607,27 +606,28 @@ class CommentManager:
         for comment_id, info in self.existing_comments.items():
             para_to_id[info["para_id"]] = comment_id
 
+        def parent_of(comment_id: int) -> int | None:
+            para_id = self.existing_comments.get(comment_id, {}).get("para_id")
+            parent_para = parent_map.get(para_id) if para_id else None
+            return para_to_id.get(parent_para) if parent_para else None
+
         # Nest replies
         root_comments = []
         for comment_id, comment in comments_dict.items():
-            para_id = self.existing_comments.get(comment_id, {}).get("para_id")
-            if para_id:
-                parent_para = parent_map.get(para_id)
-                if parent_para and parent_para in para_to_id:
-                    parent_id = para_to_id[parent_para]
-                    if parent_id in comments_dict:
-                        comments_dict[parent_id].replies.append(comment)
-                        continue
-            root_comments.append(comment)
+            parent_id = parent_of(comment_id)
+            if parent_id in comments_dict:
+                comments_dict[parent_id].replies.append(comment)
+            else:
+                root_comments.append(comment)
 
-        # Top-down, after nesting: a reply to a reply takes the thread root's
-        # ref whatever order comments.xml lists them in.
-        pending = list(root_comments)
-        while pending:
-            parent = pending.pop()
-            for reply in parent.replies:
-                reply.paragraph_ref = parent.paragraph_ref
-            pending.extend(parent.replies)
+            # The ref is the thread root's, found through the unfiltered
+            # hierarchy so ``author=`` never changes what a comment reports.
+            # ``seen`` ends the climb on a cyclic paraIdParent chain.
+            root_id, seen = comment_id, {comment_id}
+            while (up := parent_of(root_id)) is not None and up not in seen:
+                seen.add(up)
+                root_id = up
+            comment.paragraph_ref = refs.get(root_id)
 
         return sorted(root_comments, key=lambda c: c.id)
 
@@ -641,11 +641,11 @@ class CommentManager:
         context = _RevisionLocationContext(self.document_editor.dom)
         refs: dict[int, str | None] = {}
         for marker in self.document_editor.dom.getElementsByTagName("w:commentRangeStart"):
-            raw_id = marker.getAttribute("w:id")
-            if not raw_id.isascii() or not raw_id.isdigit():
+            comment_id = _adjudicable_id(marker)
+            if comment_id is None:
                 continue
             paragraph = _addressable_paragraph(marker)
-            refs.setdefault(int(raw_id), None if paragraph is None else context.paragraph_ref(paragraph))
+            refs.setdefault(comment_id, None if paragraph is None else context.paragraph_ref(paragraph))
         return refs
 
     def resolve_comment(self, comment_id: int) -> bool:
