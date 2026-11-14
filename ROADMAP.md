@@ -70,6 +70,14 @@ Rejecting a paragraph-mark insertion migrates only the mark `w:ins` off the tail
 
 On a document that already ships a `word/comments.xml` whose root does not declare `xmlns:w14` (an empty comments part is enough), `add_comment` raises a raw `ExpatError: unbound prefix`: the comment fragment carries `w14:paraId` and is parsed against the existing root (`comments.py::_add_to_comments_xml`, `xml_editor.py::_parse_fragment`). Hit on the stock supply agreement from the Harvey LAB set used by docx-agent-bench; `note=` on edits goes through the same path and likely fails the same way. Fix: declare the namespaces the fragment needs on the existing root before inserting (comments, commentsExtended and friends), and audit every other fragment insert into a pre-existing part for the same assumption. A parse failure that still escapes must surface as a typed error, not `ExpatError`. Tests: a fixture with a namespace-poor `comments.xml`, for `add_comment`, `reply_to_comment` and a `note=` edit, plus the LibreOffice opens-clean gate.
 
+### 92. Comments without `w14:paraId` cannot be replied to, resolved or deleted
+
+`_load_existing_comments` skips any `w:comment` that carries no `w14:paraId`, so `reply_to_comment`, `resolve_comment` and `delete_comment` report "not found" for a comment that `list_comments()` returns. Every pre-existing comment in a document written by Word 2007, LibreOffice or Google Docs is in that state. Fix: mint a `paraId` for such a comment when a verb first needs one (and wire the extended parts), or make the three verbs work from `w:id` alone; either way a listed comment must be actionable. Found while planning #91.
+
+### 93. A namespace prefix declared on a non-root ancestor breaks re-serialized runs
+
+`rebuild_run_fragments` and the other `toxml()` round trips assume every prefix used in existing content is declared on the part's root. With `<w:p xmlns:foo="urn:foo"><w:r><foo:mark/>…`, a plain `replace` or `add_comment` raises on the unbound prefix (after #91: a typed `XMLError`). Declarations on the element itself, which is what Word writes for drawings, are fine; only a declaration on an intermediate ancestor breaks. Not seen in the corpus. Fix: carry the in-scope namespace declarations of the source element into the fragment wrapper. Found while planning #91.
+
 ### 69. Return-leg reconciliation: which changesets survived?  [design]
 
 The product loop is agent proposes → human adjudicates in Word → document comes back; accepted revisions become plain text, rejected ones vanish, and there is no way to ask "which of my changesets survived?". A propose-time-vs-current compare keyed on changeset `w:date` + content. Design first; large.
