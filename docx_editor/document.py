@@ -2052,12 +2052,15 @@ class Document:
             author: If provided, filter by author name
 
         Returns:
-            List of Comment objects (with replies nested)
+            List of Comment objects (with replies nested). Each carries
+            ``paragraph_ref``, the ref of the paragraph its range starts in
+            (None if it has no range start in a body paragraph); replies
+            carry their parent's.
 
         Example:
             comments = doc.list_comments()
             for c in comments:
-                print(f"{c.author}: {c.text}")
+                print(f"{c.paragraph_ref} {c.author}: {c.text}")
         """
         self._ensure_open()
         return self._comment_manager.list_comments(author=author)
