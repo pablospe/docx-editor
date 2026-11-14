@@ -715,6 +715,15 @@ class TestRejoinKeepsTailRevisions:
             assert [(r.id, r.author) for r in doc.list_revisions()] == [(12, "Bob")]
             assert _merged_ppr(doc) == f'<w:pPr><w:pStyle w:val="Title"/>{head_change}</w:pPr>'
 
+    def test_revision_in_tail_base_properties_goes_with_them(self, make_docx):
+        """The head's base properties win when the tail has no w:pPrChange, so
+        a revision inside the tail's (a tracked numbering insertion) is the
+        documented loss."""
+        num = f'<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/><w:ins w:id="12" {_ANN}/></w:numPr>'
+        with _open(make_docx(_split(num))) as doc:
+            assert doc.reject_all() == 1
+            assert _census(doc) == {}
+
     # A Word-made split leaves the section mark on the tail paragraph.
     _TAIL_SECT = (
         f'<w:sectPr><w:sectPrChange w:id="11" {_ANN}><w:sectPr/></w:sectPrChange><w:type w:val="nextPage"/></w:sectPr>'

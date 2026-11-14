@@ -446,8 +446,11 @@ class _ResolutionMixin(_RevisionManagerBase):
         paragraphs of the split carry a ``w:pPrChange`` (or both a
         ``w:sectPr``) — the tail paragraph's record (or section mark, with
         any ``w:sectPrChange`` in it), since the merged paragraph can hold
-        one. Every other revision on the tail paragraph, its mark included,
-        stays pending on the merged paragraph.
+        one. The tail's base properties survive only when its
+        ``w:pPrChange`` moves with them (otherwise the head's are kept), so a
+        revision embedded in them — a ``w:ins`` or ``w:numberingChange`` in
+        its ``w:numPr`` — goes with them. Every other revision on the tail
+        paragraph's mark and content stays pending on the merged paragraph.
 
         Args:
             author: If provided, only accept revisions by this author
@@ -691,7 +694,9 @@ class _ResolutionMixin(_RevisionManagerBase):
 
         The paragraph owning the mark (``p1``) survives, keeping its base
         properties and identity; the following paragraph's (``p2``) content
-        is appended and ``p2`` is removed.
+        is appended and ``p2`` is removed. ``p2``'s base properties, and any
+        revision inside them such as a ``w:numPr``'s ``w:ins``, are dropped
+        unless ``p2``'s ``w:pPrChange`` brings them over (below).
 
         The merged paragraph ends where ``p2`` ended, so its paragraph mark
         *is* ``p2``'s mark: ``p2``'s mark ``w:rPr`` replaces ``p1``'s whole.

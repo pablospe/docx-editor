@@ -325,9 +325,9 @@ class _InsertMixin(_RevisionManagerBase):
 
         Everything from ``pos`` onward moves into a new following paragraph
         (a copy of ``p1``'s properties; see ``_new_tail_paragraph`` for what
-        moves and what stays); ``p1``'s
-        paragraph mark is flagged as an inserted revision. Returns the new
-        paragraph element and the mark insertion's id.
+        moves and what stays); ``p1``'s paragraph mark is flagged as an
+        inserted revision. Returns the new paragraph element and the mark
+        insertion's id.
         """
         tail = self._collect_tail_nodes(p1, pos)
         new_p = self._new_tail_paragraph(p1)
