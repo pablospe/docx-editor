@@ -39,20 +39,26 @@ NESTED_ROOT = f'{XML_DECL}<wrapper xmlns:w="{W_NS}"><w:comments/></wrapper>'
 W14_BOUND_ELSEWHERE = f'{XML_DECL}<w:comments xmlns:w="{W_NS}" xmlns:w14="urn:not-w14"/>'
 
 
-def make_docx_with_comments(simple_docx: Path, tmp_path: Path, comments_xml: str) -> Path:
-    """Copy ``simple_docx`` adding ``word/comments.xml`` with its override and relationship."""
+def make_docx_with_comments(
+    simple_docx: Path, tmp_path: Path, comments_xml: str | None, part_name: str = "comments.xml"
+) -> Path:
+    """Copy ``simple_docx`` adding ``word/{part_name}`` with its override and relationship.
+
+    ``comments_xml=None`` adds the override and the relationship but no part.
+    """
     dest = tmp_path / "with_comments.docx"
     with zipfile.ZipFile(simple_docx) as z_in, zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z_out:
         for item in z_in.infolist():
             data = z_in.read(item.filename)
             if item.filename == "[Content_Types].xml":
-                override = f'<Override PartName="/word/comments.xml" ContentType="{COMMENTS_CONTENT_TYPE}"/>'
+                override = f'<Override PartName="/word/{part_name}" ContentType="{COMMENTS_CONTENT_TYPE}"/>'
                 data = data.decode("utf-8").replace("</Types>", override + "</Types>").encode("utf-8")
             elif item.filename == "word/_rels/document.xml.rels":
-                rel = f'<Relationship Id="rId900" Type="{COMMENTS_REL_TYPE}" Target="comments.xml"/>'
+                rel = f'<Relationship Id="rId900" Type="{COMMENTS_REL_TYPE}" Target="{part_name}"/>'
                 data = data.decode("utf-8").replace("</Relationships>", rel + "</Relationships>").encode("utf-8")
             z_out.writestr(item, data)
-        z_out.writestr("word/comments.xml", comments_xml)
+        if comments_xml is not None:
+            z_out.writestr(f"word/{part_name}", comments_xml)
     return dest
 
 
@@ -202,6 +208,98 @@ class TestSiblingPartWiring:
         assert read_part(again, "[Content_Types].xml").count("<Override") == read_part(
             out, "[Content_Types].xml"
         ).count("<Override")
+
+
+class TestCommentsPartUnderAnotherName:
+    """The comments part is the one the comments relationship names, whatever its file name.
+
+    Shape: ``word/comments1.xml`` holding the document's comments, wired by a
+    comments-type relationship with ``Target="comments1.xml"``, and no
+    ``word/comments.xml``.
+    """
+
+    def test_existing_comment_is_listed(self, simple_docx, tmp_path):
+        src = make_docx_with_comments(simple_docx, tmp_path, ONE_OLD_COMMENT, part_name="comments1.xml")
+        with Document.open(src, author="Tester") as doc:
+            assert [(c.id, c.text) for c in doc.list_comments()] == [(0, "old remark")]
+
+    def test_new_comment_survives_save(self, simple_docx, tmp_path):
+        src = make_docx_with_comments(simple_docx, tmp_path, ONE_OLD_COMMENT, part_name="comments1.xml")
+        out = tmp_path / "out.docx"
+        with Document.open(src, author="Tester") as doc:
+            new_id = doc.add_comment("quick brown", "check this")
+            doc.save(out)
+
+        assert new_id == 1
+        with Document.open(out, author="Tester") as reopened:
+            assert [(c.id, c.text) for c in reopened.list_comments()] == [(0, "old remark"), (1, "check this")]
+        # The comment went into the part the package already uses; no second
+        # comments part and no second comments relationship appeared.
+        with zipfile.ZipFile(out) as z:
+            assert "word/comments.xml" not in z.namelist()
+        assert "check this" in read_part(out, "word/comments1.xml")
+        rels = read_part(out, "word/_rels/document.xml.rels")
+        assert rels.count(f'Type="{COMMENTS_REL_TYPE}"') == 1
+        assert 'Target="comments1.xml"' in rels
+
+    def test_absolute_target_names_the_same_part(self, simple_docx, tmp_path):
+        src = make_docx_with_comments(simple_docx, tmp_path, ONE_OLD_COMMENT, part_name="comments1.xml")
+        absolute = tmp_path / "absolute.docx"
+        with zipfile.ZipFile(src) as z_in, zipfile.ZipFile(absolute, "w", zipfile.ZIP_DEFLATED) as z_out:
+            for item in z_in.infolist():
+                data = z_in.read(item.filename)
+                if item.filename == "word/_rels/document.xml.rels":
+                    data = data.replace(b'Target="comments1.xml"', b'Target="/word/comments1.xml"')
+                z_out.writestr(item, data)
+        out = tmp_path / "out.docx"
+        with Document.open(absolute, author="Tester") as doc:
+            doc.add_comment("quick brown", "check this")
+            doc.save(out)
+
+        with Document.open(out, author="Tester") as reopened:
+            assert [c.text for c in reopened.list_comments()] == ["old remark", "check this"]
+
+    def test_relationship_to_a_missing_part_refuses_the_comment(self, simple_docx, tmp_path):
+        """Nothing can be written where the relationship points, so nothing is written at all."""
+        src = make_docx_with_comments(simple_docx, tmp_path, None, part_name="comments1.xml")
+        out = tmp_path / "out.docx"
+        with Document.open(src, author="Tester") as doc:
+            with pytest.raises(XMLError, match=r"comments1\.xml"):
+                doc.add_comment("quick brown", "check this")
+
+            assert marker_count(doc) == 0
+            doc.save(out)
+        with zipfile.ZipFile(out) as z:
+            assert [n for n in z.namelist() if n.startswith("word/comments")] == []
+
+    def test_external_target_refuses_the_comment(self, simple_docx, tmp_path):
+        src = make_docx_with_comments(simple_docx, tmp_path, None, part_name="comments1.xml")
+        external = tmp_path / "external.docx"
+        with zipfile.ZipFile(src) as z_in, zipfile.ZipFile(external, "w", zipfile.ZIP_DEFLATED) as z_out:
+            for item in z_in.infolist():
+                data = z_in.read(item.filename)
+                if item.filename == "word/_rels/document.xml.rels":
+                    data = data.replace(
+                        b'Target="comments1.xml"', b'Target="https://example.invalid/c.xml" TargetMode="External"'
+                    )
+                z_out.writestr(item, data)
+        with Document.open(external, author="Tester") as doc:
+            with pytest.raises(XMLError, match="is not a part of this package"):
+                doc.add_comment("quick brown", "check this")
+
+            assert marker_count(doc) == 0
+
+    def test_relationship_to_a_missing_default_part_is_filled(self, simple_docx, tmp_path):
+        """A relationship to ``comments.xml`` with no such part: the part is created where it points."""
+        src = make_docx_with_comments(simple_docx, tmp_path, None)
+        out = tmp_path / "out.docx"
+        with Document.open(src, author="Tester") as doc:
+            doc.add_comment("quick brown", "check this")
+            doc.save(out)
+
+        with Document.open(out, author="Tester") as reopened:
+            assert [c.text for c in reopened.list_comments()] == ["check this"]
+        assert read_part(out, "word/_rels/document.xml.rels").count(f'Type="{COMMENTS_REL_TYPE}"') == 1
 
 
 class TestTypedFailureLeavesNoMarkers:

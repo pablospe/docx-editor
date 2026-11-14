@@ -14,7 +14,7 @@ from xml.dom.minidom import Attr, Element
 
 import defusedxml.minidom
 
-from .comments import Comment, CommentManager
+from .comments import COMMENT_PARTS, Comment, CommentManager
 from .exceptions import (
     DocumentClosedError,
     DocumentProtectedError,
@@ -59,31 +59,6 @@ from .xml_editor import (
 # Default page size for list_paragraphs / list_paragraphs_structured. Bounds
 # the output of a bare call on large documents; pass limit=None for everything.
 _DEFAULT_LIST_LIMIT = 200
-
-# (part file name in word/, relationship type, content type) for the four
-# comment parts. Each is wired on its own at save time.
-_COMMENT_PARTS = (
-    (
-        "comments.xml",
-        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
-    ),
-    (
-        "commentsExtended.xml",
-        "http://schemas.microsoft.com/office/2011/relationships/commentsExtended",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml",
-    ),
-    (
-        "commentsIds.xml",
-        "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
-    ),
-    (
-        "commentsExtensible.xml",
-        "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml",
-    ),
-)
 
 # CT_Settings is a sequence (ECMA-376 Part 1 §17.15.1.78), so w:trackRevisions has
 # exactly one legal slot. These are the elements the schema puts *before* it —
@@ -3027,9 +3002,7 @@ class Document:
         need relationships even though ``comments.xml`` already has one.
         """
         on_disk = [
-            (target, rel_type)
-            for target, rel_type, _ in _COMMENT_PARTS
-            if (self._workspace.word_path / target).exists()
+            (target, rel_type) for target, rel_type, _ in COMMENT_PARTS if (self._workspace.word_path / target).exists()
         ]
         if not on_disk:
             return
@@ -3068,7 +3041,7 @@ class Document:
         """Ensure every comment part on disk has a content-type override."""
         on_disk = [
             (f"/word/{target}", content_type)
-            for target, _, content_type in _COMMENT_PARTS
+            for target, _, content_type in COMMENT_PARTS
             if (self._workspace.word_path / target).exists()
         ]
         if not on_disk:

@@ -4,12 +4,15 @@ Provides CommentManager for creating and managing document comments.
 """
 
 import html
+import posixpath
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.dom.minidom import Element
+
+import defusedxml.minidom
 
 from .exceptions import (
     AmbiguousTextError,
@@ -81,6 +84,32 @@ class Comment:
         return f"Comment({self.id}: {status}'{self.text[:30]}...' by {self.author}{reply_count}{location})"
 
 
+# (default part file name in word/, relationship type, content type) for the
+# four comment parts. Each is wired on its own at save time.
+COMMENT_PARTS = (
+    (
+        "comments.xml",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    ),
+    (
+        "commentsExtended.xml",
+        "http://schemas.microsoft.com/office/2011/relationships/commentsExtended",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml",
+    ),
+    (
+        "commentsIds.xml",
+        "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+    ),
+    (
+        "commentsExtensible.xml",
+        "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml",
+    ),
+)
+
+
 class CommentManager:
     """Manages comments in a Word document.
 
@@ -122,11 +151,14 @@ class CommentManager:
         self.initials = initials
         self._on_write = on_write
 
-        # Comment file paths
-        self.comments_path = self.word_path / "comments.xml"
-        self.comments_extended_path = self.word_path / "commentsExtended.xml"
-        self.comments_ids_path = self.word_path / "commentsIds.xml"
-        self.comments_extensible_path = self.word_path / "commentsExtensible.xml"
+        # Comment file paths, and relationship targets that name no usable part
+        self._unusable_targets: list[str] = []
+        (
+            self.comments_path,
+            self.comments_extended_path,
+            self.comments_ids_path,
+            self.comments_extensible_path,
+        ) = self._resolve_comment_parts()
 
         # Cache for lazy-loaded editors
         self._editors: dict[str, DocxXMLEditor] = {}
@@ -134,6 +166,40 @@ class CommentManager:
         # Load existing comments for reply support
         self.existing_comments = self._load_existing_comments()
         self.next_comment_id = self._get_next_comment_id()
+
+    def _resolve_comment_parts(self) -> list[Path]:
+        """Return the path of each comment part, in ``COMMENT_PARTS`` order.
+
+        A comment part is the one ``document.xml.rels`` names for its
+        relationship type, whatever its file name (``word/comments1.xml``).
+        A type with no relationship gets the default name, where the part is
+        created on the first comment and wired at save.
+
+        A relationship whose target is not a file in the package, other than
+        the default name, cannot be honoured: a part created under the default
+        name would stay unwired, because its type already has a relationship.
+        Such targets are recorded and :meth:`_prepare_comment_parts` refuses
+        to add a comment.
+        """
+        paths = {rel_type: self.word_path / name for name, rel_type, _ in COMMENT_PARTS}
+        rels_path = self.word_path / "_rels" / "document.xml.rels"
+        if rels_path.exists():
+            rels = defusedxml.minidom.parse(str(rels_path))
+            for rel_elem in rels.getElementsByTagName("Relationship"):
+                rel_type = rel_elem.getAttribute("Type")
+                if rel_type not in paths:
+                    continue
+                target = rel_elem.getAttribute("Target")
+                # An OPC target is a reference relative to the source part,
+                # /word/document.xml. normpath cannot climb above the root of
+                # an absolute path, so the result stays inside the workspace.
+                part_name = posixpath.normpath(posixpath.join("/word", target))
+                part_path = self.workspace_path / part_name.lstrip("/")
+                if part_path.is_file():
+                    paths[rel_type] = part_path
+                elif part_path != paths[rel_type]:
+                    self._unusable_targets.append(target)
+        return [paths[rel_type] for _, rel_type, _ in COMMENT_PARTS]
 
     def _get_editor(self, xml_path: Path) -> DocxXMLEditor:
         """Get or create an editor for the specified XML file."""
@@ -961,6 +1027,9 @@ class CommentManager:
         producer that never emits ``w14:paraId`` declares no ``xmlns:w14`` at
         all; it is added here.
 
+        A comment relationship that points at a missing part is refused here
+        too (see :meth:`_resolve_comment_parts`).
+
         A missing part is not created here: the ``_add_to_*`` helpers copy it
         from its template once the markers are in, and a template cannot fail
         these checks. A call that fails therefore leaves no new part behind.
@@ -968,6 +1037,11 @@ class CommentManager:
         Raises:
             XMLError: If a part cannot take the comment markup.
         """
+        if self._unusable_targets:
+            raise XMLError(
+                f"document.xml.rels: comment relationship target {self._unusable_targets[0]!r} "
+                "is not a part of this package; a new comment could not be wired"
+            )
         existing = [
             (self._get_editor(path), root_tag, prefix, uri)
             for path, root_tag, prefix, uri in (
