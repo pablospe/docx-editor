@@ -49,12 +49,15 @@ with Document.open("contract.docx", author="Legal Team") as doc:
     # Example output:
     # P1#a7b2| Introduction to the contract...
     # P2#f3c1| Payment is due within 30 days...
+    # Previews are cut at 80 chars and end in "..." (not document text) —
+    # quote search text from list_paragraphs_structured() instead.
 
     # Edit methods require a paragraph ref and return the updated ref.
     # Pass occurrence= (0-based) to disambiguate repeated text; omitting it
     # requires a unique match, else AmbiguousTextError.
     ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
     ref = doc.insert_after("Payment", " terms", paragraph=ref)
+    ref = doc.insert_before("due", "now ", paragraph=ref)
     doc.delete("obsolete text", paragraph="P5#d4e5")
 
     # Comments and revision management.

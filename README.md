@@ -104,12 +104,15 @@ with Document.open("contract.docx", author=author) as doc:
         print(p)
     # Output: P1#a7b2| Introduction to the contract...
     #         P2#f3c1| The committee shall review...
+    # Previews are cut at 80 chars and end in "..." (not document text) —
+    # quote search text from list_paragraphs_structured() instead.
 
     # Step 2: Edit — each method returns the new paragraph ref
     r = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
     doc.replace("net", "gross", paragraph=r)  # chain without list_paragraphs()
     doc.delete("obsolete text", paragraph="P5#d4e5")
     doc.insert_after("Section 5", " (as amended)", paragraph="P3#b2c4")
+    doc.insert_before("Section 6", "See also ", paragraph="P6#e7f8")
     # Repeated text? Pass occurrence= (0-based) to pick which match; omitting it
     # requires a unique match, else AmbiguousTextError.
     doc.replace("the", "The", paragraph="P4#c5d6", occurrence=2)

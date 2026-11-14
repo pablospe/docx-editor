@@ -871,6 +871,12 @@ class Document:
             ref-consuming code can filter them out. Pass ``limit=None`` to
             restore the full listing.
 
+            A paragraph longer than ``max_chars`` is cut and its preview ends
+            in ``"..."``, which is not part of the document: previews are for
+            display, and one fed back as the search text of an edit raises
+            ``TextNotFoundError``. Quote search text from
+            ``list_paragraphs_structured()`` or ``get_paragraph(i).text``.
+
         Args:
             max_chars: Maximum characters for the preview text (default 80).
                 Must be >= 0. Use 0 to get only the hash refs (e.g. "P1#a7b2"),

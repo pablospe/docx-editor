@@ -160,11 +160,11 @@ List paragraphs with hash-anchored references. Refs are **1-based global** index
 
 **Parameters:**
 
-- `max_chars` (int): Maximum preview length (must be `>= 0`). Use `0` for refs only (e.g. `P1#a7b2`), with no preview or `| ` separator.
+- `max_chars` (int): Maximum preview length (must be `>= 0`). A paragraph longer than this is cut and the preview ends in `...`, which is not part of the document. Use `0` for refs only (e.g. `P1#a7b2`), with no preview or `| ` separator.
 - `start` (int): 1-based index of the first paragraph to return (default 1). A `start` beyond the last paragraph is a valid request with an empty answer — it yields `[]` and does **not** raise, exactly like `lst[500:]` on a shorter list, so a loop-until-empty walk terminates cleanly. (`start=0` or negative *does* raise `ValueError`: those are invalid inputs, not empty ranges.) To know where the end is up front, use `paragraph_count()` or follow the truncation notice's `start=` hint.
 - `limit` (int | None): Maximum number of paragraphs to return (default 200), or `None` for all paragraphs from `start` onward.
 
-**Returns:** List of strings in the form `P{index}#{hash}| preview text`, or bare `P{index}#{hash}` (no `| ` separator) when `max_chars=0` — plus one trailing `... N more paragraphs; use start=… or limit=None` notice when the window did not reach the end of the document.
+**Returns:** List of strings in the form `P{index}#{hash}| preview text` (with a trailing `...` when the paragraph was cut at `max_chars`), or bare `P{index}#{hash}` (no `| ` separator) when `max_chars=0` — plus one trailing `... N more paragraphs; use start=… or limit=None` notice when the window did not reach the end of the document.
 
 **Example:**
 
@@ -175,7 +175,9 @@ refs = [e for e in page1 if not e.startswith("...")]  # drop the notice line
 everything = doc.list_paragraphs(limit=None)  # uncapped, never a notice
 ```
 
-`list_paragraphs_structured()` (same `start`/`limit` semantics, returns typed [`ParagraphInfo`](#paragraphinfo) records with full untruncated text plus `style`/`outline_level`/`in_table`) shares the 200-record default cap but appends **no notice** — every entry stays a `ParagraphInfo`. Detect truncation by checking whether the last record's `index` is still below `paragraph_count()` (robust for any `start`), or pass `limit=None`.
+> **Previews are for display, not for search text.** The `...` that ends a cut preview is not in the document, so a preview fed back as the `find` / `text` / `anchor` of an edit raises [`TextNotFoundError`](#textnotfounderror). Do not quote edit targets from this listing, and do not hand it to a model that will produce them — use `list_paragraphs_structured()` (below), [`get_paragraph(i).text`](#get_paragraphindex) or a `SearchResult`. The refs are safe to take from either listing. This per-preview suffix is unrelated to the trailing truncation notice, which is a whole entry that *starts* with `...`.
+
+`list_paragraphs_structured()` returns the **full untruncated text** of every paragraph: typed [`ParagraphInfo`](#paragraphinfo) records (`info.text`, plus `ref`/`style`/`outline_level`/`in_table`) whose `str()` renders `P{index}#{hash}| full text`, so `print(info)` is a drop-in for the preview loop. It takes the same `start`/`limit` and shares the 200-record default cap but appends **no notice** — every entry stays a `ParagraphInfo`. Detect truncation by checking whether the last record's `index` is still below `paragraph_count()` (robust for any `start`), or pass `limit=None`.
 
 #### `get_paragraph(index)`
 
@@ -373,6 +375,8 @@ if doc.count_matches("Section 5") > 1:
 Replace text with tracked changes. When the target sits inside another author's pending insertion, that insertion is preserved: the matched text gets a nested `<w:del>` under your authorship and the replacement lands in your own sibling `<w:ins>` (Word's behavior), instead of silently rewriting the other author's proposal.
 
 Words shared by `find` and `replace_with` at either end are trimmed first, so only the changed words become revisions — a replace that only adds or only removes words is written as a pure insertion or deletion. When the trimmed spans are **whitespace only** on both sides, trimming continues character by character, so a spacing fix (`"clause  2"` → `"clause 2"`) becomes a pure deletion rather than an invisible deletion/insertion pair. Word spans are never trimmed character-wise: `"30 days"` → `"60 days"` stays a whole-word replacement. The replacement insertion carries the formatting (`rPr`) that covers the most characters of the replaced span (runs sharing identical formatting tally together), ties breaking to the earliest-seen formatting. **Accepting** a replace that straddled mixed formatting therefore leaves the replacement uniformly in that one majority format, while each deletion run keeps its own original formatting — so a **reject** restores the pre-edit mix. When `replace_with` equals the found text, the call is a **no-op**: no revisions are created and the returned `EditResult` equals the input `paragraph` ref with `group_id=None` and `revision_ids=()` — that triple is how callers detect the no-op.
+
+**See also:** to only remove or only add text, prefer [`delete()`](#deletetext-paragraphnone-occurrencenone-notenone), [`insert_after()`](#insert_afteranchor-text-paragraphnone-occurrencenone-notenone) or [`insert_before()`](#insert_beforeanchor-text-paragraphnone-occurrencenone-notenone) over `replace(text, "")` / `replace(a, a + text)`. Those forms work (the trimming above reduces them to a pure deletion or insertion), but the dedicated methods state the intent and quote the anchor once, so a slip in the repeated anchor cannot turn an insertion into a rewrite of it.
 
 A replace landing wholly inside **your own** pending insertion **amends** that insertion instead of tracking a change against it: the text is spliced in at the match position, whether the match covers part of the insertion or all of it. Your own unsaved text was never in the document, so there is nothing to counter-propose — no revision is created, and the `EditResult` comes back with `group_id=None` and `revision_ids=()` (with an updated ref). To undo an amendment, reject the group of the insertion it amended — the one holding the end of the match, which keeps its id and its group. A match spanning two of your own adjacent insertions consolidates into that one, dropping any insertion it consumed whole.
 
@@ -1709,6 +1713,11 @@ and `total_occurrences` and its message reports the actual count instead of
 claiming the text is absent. Other structured fields: `search_text`,
 `paragraph_ref`, `paragraph_preview` (a tab mark is spelled `\t` in every
 preview, so it cannot pass for a space).
+
+A common cause is search text copied from a
+[`list_paragraphs()`](#list_paragraphsmax_chars80-start1-limit200) preview: a
+preview cut at `max_chars` ends in `...`, which is not in the document. Quote
+from `get_paragraph(i).text` or `list_paragraphs_structured()` instead.
 
 ```python
 from docx_editor.exceptions import TextNotFoundError
