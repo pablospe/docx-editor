@@ -765,14 +765,14 @@ List all comments in the document.
 
 - `author` (str, optional): If provided, filter by author name
 
-**Returns:** List of Comment objects (with replies nested)
+**Returns:** List of Comment objects (with replies nested). Each carries `paragraph_ref`, the ref of the paragraph the comment sits on; see [Comment](#comment).
 
 **Example:**
 
 ```python
 comments = doc.list_comments()
 for c in comments:
-    print(f"{c.author}: {c.text}")
+    print(f"{c.paragraph_ref} {c.author}: {c.text}")
 ```
 
 #### `resolve_comment(comment_id)`
@@ -1259,6 +1259,15 @@ from docx_editor import Comment
 | `date` | datetime or None | When the comment was created |
 | `resolved` | bool | Whether the comment is resolved |
 | `replies` | list[Comment] | Nested replies to this comment |
+| `paragraph_ref` | str or None | Ref (`P{i}#{hash}`) of the paragraph the comment sits on |
+
+`paragraph_ref` follows three rules:
+
+- It names the body paragraph holding the comment's range start. For a comment whose range spans several paragraphs, that is the paragraph the range starts in.
+- A reply carries the ref of the comment it answers, so every comment in a thread reports the same paragraph.
+- It is `None` when the comment has no range start inside a body paragraph: the marker is missing, sits between block elements, or is inside a text box.
+
+The ref is computed when `list_comments()` runs, so it is set immediately after `add_comment()` without a save, and it can be passed straight back as `paragraph=`. Like every ref it goes stale once that paragraph is edited; list again to get a fresh one.
 
 ### Example
 
@@ -1271,6 +1280,15 @@ for comment in comments:
     print(f"Date: {comment.date}")
     print(f"Resolved: {comment.resolved}")
     print(f"Replies: {len(comment.replies)}")
+    print(f"Paragraph: {comment.paragraph_ref}")
+```
+
+Group comments by the paragraph they sit on:
+
+```python
+by_paragraph: dict[str | None, list[Comment]] = {}
+for comment in doc.list_comments():
+    by_paragraph.setdefault(comment.paragraph_ref, []).append(comment)
 ```
 
 ---

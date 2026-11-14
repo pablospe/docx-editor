@@ -502,9 +502,13 @@ cid2 = doc.add_comment("term", "Anchored to the 2nd 'term' in P3",
 # existing comments) — always use the ID returned by add_comment, don't guess.
 
 # List all comments (returns list[Comment] objects)
+# c.paragraph_ref is the ref of the paragraph the comment sits on (where its
+# range starts); replies carry their parent's. Pass it back as paragraph= to
+# edit or comment on that paragraph. It is None when the comment has no range
+# start in a body paragraph.
 comments = doc.list_comments()
 for c in comments:
-    print(f"ID: {c.id}, Author: {c.author}, Text: {c.text}, Resolved: {c.resolved}")
+    print(f"ID: {c.id}, At: {c.paragraph_ref}, Author: {c.author}, Text: {c.text}, Resolved: {c.resolved}")
     for reply in c.replies:
         print(f"  Reply: {reply.text}")
 

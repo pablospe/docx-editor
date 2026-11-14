@@ -19,6 +19,8 @@ from .exceptions import (
     TextNotFoundError,
     _truncate_preview,
 )
+from .track_changes.dom import _addressable_paragraph
+from .track_changes.listing import _RevisionLocationContext
 from .xml_editor import (
     DocxXMLEditor,
     ParagraphRef,
@@ -44,7 +46,18 @@ TEMPLATE_DIR = Path(__file__).parent / "ooxml" / "templates"
 
 @dataclass
 class Comment:
-    """Represents a document comment."""
+    """Represents a document comment.
+
+    ``paragraph_ref`` is the hash-anchored ref ("P{i}#{hash}") of the body
+    paragraph holding the comment's ``w:commentRangeStart``; for a range that
+    spans paragraphs, the one it starts in. A reply carries the ref of the
+    comment it answers, so a whole thread reports one paragraph. It is None
+    when the comment has no range start inside a body paragraph (the marker is
+    missing, sits between block elements, or is in a text box).
+
+    Like every ref it is a snapshot taken at list time: usable as
+    ``paragraph=`` until that paragraph is edited, stale afterwards.
+    """
 
     id: int
     text: str
@@ -52,11 +65,13 @@ class Comment:
     date: datetime | None
     resolved: bool = False
     replies: list["Comment"] = field(default_factory=list)
+    paragraph_ref: str | None = None
 
     def __repr__(self) -> str:
         status = "[RESOLVED] " if self.resolved else ""
         reply_count = f" ({len(self.replies)} replies)" if self.replies else ""
-        return f"Comment({self.id}: {status}'{self.text[:30]}...' by {self.author}{reply_count})"
+        location = f" @{self.paragraph_ref}" if self.paragraph_ref else ""
+        return f"Comment({self.id}: {status}'{self.text[:30]}...' by {self.author}{reply_count}{location})"
 
 
 class CommentManager:
@@ -551,11 +566,13 @@ class CommentManager:
             author: If provided, filter by author name
 
         Returns:
-            List of Comment objects (with replies nested)
+            List of Comment objects (with replies nested), each carrying the
+            ``paragraph_ref`` of the paragraph it sits on
         """
         if not self.comments_path.exists():
             return []
 
+        refs = self._range_start_refs()
         editor = self._get_editor(self.comments_path)
         comments_dict: dict[int, Comment] = {}
         parent_map: dict[str, str] = {}  # para_id -> parent_para_id
@@ -582,6 +599,7 @@ class CommentManager:
                             comment.resolved = ex_elem.getAttribute("w15:done") == "1"
                             break
 
+                comment.paragraph_ref = refs.get(comment.id)
                 comments_dict[comment.id] = comment
 
         # Build reply tree
@@ -602,7 +620,33 @@ class CommentManager:
                         continue
             root_comments.append(comment)
 
+        # Top-down, after nesting: a reply to a reply takes the thread root's
+        # ref whatever order comments.xml lists them in.
+        pending = list(root_comments)
+        while pending:
+            parent = pending.pop()
+            for reply in parent.replies:
+                reply.paragraph_ref = parent.paragraph_ref
+            pending.extend(parent.replies)
+
         return sorted(root_comments, key=lambda c: c.id)
+
+    def _range_start_refs(self) -> dict[int, str | None]:
+        """Paragraph ref of each comment's range start, keyed by comment id.
+
+        One paragraph-index walk and one marker walk per call, however many
+        comments there are. A marker outside any body paragraph maps to None;
+        of duplicate markers for one id, the first in document order wins.
+        """
+        context = _RevisionLocationContext(self.document_editor.dom)
+        refs: dict[int, str | None] = {}
+        for marker in self.document_editor.dom.getElementsByTagName("w:commentRangeStart"):
+            raw_id = marker.getAttribute("w:id")
+            if not raw_id.isascii() or not raw_id.isdigit():
+                continue
+            paragraph = _addressable_paragraph(marker)
+            refs.setdefault(int(raw_id), None if paragraph is None else context.paragraph_ref(paragraph))
+        return refs
 
     def resolve_comment(self, comment_id: int) -> bool:
         """Mark a comment as resolved.

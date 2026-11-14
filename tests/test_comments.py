@@ -3,7 +3,7 @@
 from typing import Any
 
 import pytest
-from conftest import match_for
+from conftest import count_dom_walks, match_for
 
 from docx_editor import (
     CommentError,
@@ -1440,3 +1440,188 @@ class TestAddCommentSearchResultAnchor:
             assert isinstance(doc.add_comment("brown fox", "unscoped"), int)
         finally:
             doc.close()
+
+
+def _range_start(doc, comment_id: int):
+    """The live ``w:commentRangeStart`` marker of ``comment_id``."""
+    for marker in doc._document_editor.dom.getElementsByTagName("w:commentRangeStart"):
+        if marker.getAttribute("w:id") == str(comment_id):
+            return marker
+    raise AssertionError(f"No range start for comment {comment_id}")
+
+
+class TestCommentParagraphRef:
+    """``Comment.paragraph_ref`` names the paragraph a comment sits on (ROADMAP.md #88)."""
+
+    def test_set_right_after_add_and_reusable_as_paragraph(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            expected = match_for(doc, "brown fox").paragraph_ref
+            comment_id = doc.add_comment("brown fox", "first")
+
+            (comment,) = doc.list_comments()
+            assert comment.id == comment_id
+            assert comment.paragraph_ref == expected
+
+            doc.add_comment("lazy", "second", paragraph=comment.paragraph_ref)
+            assert [c.paragraph_ref for c in doc.list_comments()] == [expected, expected]
+        finally:
+            doc.close()
+
+    def test_comments_in_different_paragraphs_report_different_refs(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            fox_ref = _paragraph_ref(doc, "brown fox")
+            sample_ref = _paragraph_ref(doc, "sample document")
+            assert fox_ref != sample_ref
+            fox_id = doc.add_comment("brown fox", "on the fox")
+            sample_id = doc.add_comment("sample document", "on the sample")
+
+            refs = {c.id: c.paragraph_ref for c in doc.list_comments()}
+            assert refs == {fox_id: fox_ref, sample_id: sample_ref}
+        finally:
+            doc.close()
+
+    def test_replies_inherit_the_thread_root_ref(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            expected = _paragraph_ref(doc, "brown fox")
+            parent_id = doc.add_comment("brown fox", "parent")
+            reply_id = doc.reply_to_comment(parent_id, "reply")
+            doc.reply_to_comment(reply_id, "reply to the reply")
+
+            def thread_refs(comment):
+                return [comment.paragraph_ref] + [r for reply in comment.replies for r in thread_refs(reply)]
+
+            (parent,) = doc.list_comments()
+            assert thread_refs(parent) == [expected] * 3
+        finally:
+            doc.close()
+
+    def test_reply_reports_parent_ref_over_its_own_marker(self, clean_workspace):
+        """A foreign document may seat a reply's range in another paragraph."""
+        doc = Document.open(clean_workspace)
+        try:
+            expected = _paragraph_ref(doc, "brown fox")
+            parent_id = doc.add_comment("brown fox", "parent")
+            reply_id = doc.reply_to_comment(parent_id, "reply")
+
+            marker = _range_start(doc, reply_id)
+            marker.parentNode.removeChild(marker)
+            other = _find_paragraph_with_text(doc, "sample document")
+            other.appendChild(marker)
+
+            (parent,) = doc.list_comments()
+            (reply,) = parent.replies
+            assert reply.paragraph_ref == parent.paragraph_ref == expected
+        finally:
+            doc.close()
+
+    def test_reply_whose_parent_is_filtered_out_keeps_its_own_ref(self, clean_workspace):
+        doc = Document.open(clean_workspace, author="Parent Author")
+        parent_id = doc.add_comment("brown fox", "parent")
+        doc.save()
+        doc.close()
+
+        doc = Document.open(clean_workspace, author="Reply Author")
+        try:
+            reply_id = doc.reply_to_comment(parent_id, "reply")
+            marker = _range_start(doc, reply_id)
+            marker.parentNode.removeChild(marker)
+            _find_paragraph_with_text(doc, "sample document").appendChild(marker)
+
+            (reply,) = doc.list_comments(author="Reply Author")
+            assert reply.id == reply_id
+            assert reply.paragraph_ref == _paragraph_ref(doc, "sample document")
+        finally:
+            doc.close()
+
+    def test_survives_save_and_reopen(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        doc.add_comment("brown fox", "persisted")
+        (before,) = doc.list_comments()
+        doc.save()
+        doc.close()
+
+        doc = Document.open(clean_workspace)
+        try:
+            (after,) = doc.list_comments()
+            assert before.paragraph_ref is not None
+            assert after.paragraph_ref == before.paragraph_ref
+        finally:
+            doc.close()
+
+    def test_missing_range_start_is_none(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            kept_id = doc.add_comment("sample document", "kept")
+            orphan_id = doc.add_comment("brown fox", "orphaned")
+            marker = _range_start(doc, orphan_id)
+            marker.parentNode.removeChild(marker)
+
+            refs = {c.id: c.paragraph_ref for c in doc.list_comments()}
+            assert refs == {kept_id: _paragraph_ref(doc, "sample document"), orphan_id: None}
+        finally:
+            doc.close()
+
+    def test_range_start_outside_a_body_paragraph_is_none(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            comment_id = doc.add_comment("brown fox", "between blocks")
+            marker = _range_start(doc, comment_id)
+            marker.parentNode.removeChild(marker)
+            body = doc._document_editor.dom.getElementsByTagName("w:body")[0]
+            body.insertBefore(marker, body.firstChild)
+
+            (comment,) = doc.list_comments()
+            assert comment.paragraph_ref is None
+        finally:
+            doc.close()
+
+    @pytest.mark.parametrize("in_box_paragraph", [True, False], ids=["box-paragraph", "box-content"])
+    def test_range_start_inside_a_text_box_is_none(self, clean_workspace, in_box_paragraph):
+        """Neither the box's own paragraph nor its host paragraph is reported."""
+        doc = Document.open(clean_workspace)
+        try:
+            comment_id = doc.add_comment("brown fox", "boxed")
+            marker = _range_start(doc, comment_id)
+            host = marker.parentNode
+            while host.tagName != "w:p":
+                host = host.parentNode
+            marker.parentNode.removeChild(marker)
+
+            dom = doc._document_editor.dom
+            parent = host
+            for tag in ("w:r", "w:pict", "v:textbox", "w:txbxContent"):
+                parent = parent.appendChild(dom.createElement(tag))
+            if in_box_paragraph:
+                parent = parent.appendChild(dom.createElement("w:p"))
+            parent.appendChild(marker)
+
+            (comment,) = doc.list_comments()
+            assert comment.paragraph_ref is None
+        finally:
+            doc.close()
+
+    def test_document_walks_do_not_grow_with_comment_count(self, clean_workspace, monkeypatch):
+        doc = Document.open(clean_workspace)
+        try:
+            for i in range(6):
+                doc.add_comment("brown fox", f"comment {i}")
+
+            walks = count_dom_walks(monkeypatch)
+            comments = doc.list_comments()
+
+            assert len(comments) == 6
+            assert all(c.paragraph_ref for c in comments)
+            assert walks.count("w:p") == 1
+            assert walks.count("w:commentRangeStart") == 1
+        finally:
+            doc.close()
+
+    def test_repr_shows_the_ref_only_when_set(self):
+        from docx_editor.comments import Comment
+
+        located = Comment(id=1, text="Located", author="A", date=None, paragraph_ref="P3#b2c4")
+        assert repr(located).endswith(" @P3#b2c4)")
+        assert "@" not in repr(Comment(id=1, text="Unlocated", author="A", date=None))
