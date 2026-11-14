@@ -23,6 +23,7 @@ The fixtures mirror the two corpus files that carry these types exactly
 files when the corpus is built locally.
 """
 
+import re
 import warnings
 import zipfile
 from pathlib import Path
@@ -562,7 +563,8 @@ MOVE_TO_INSIDE_INS = _document(
     "<w:r><w:t>tail</w:t></w:r></w:p>"
 )
 # A tracked split whose tail paragraph carries a moved paragraph mark: the
-# rejoin drops the tail's w:pPr, marker included.
+# rejoin keeps that mark pending on the merged paragraph, so the range marks
+# stay until it is resolved.
 SPLIT_BEFORE_MOVED_MARK = _document(
     f'<w:p><w:pPr><w:rPr><w:ins w:id="30" {_BOB}/></w:rPr></w:pPr><w:r><w:t>head</w:t></w:r></w:p>'
     f'<w:p><w:pPr><w:rPr><w:moveFrom w:id="11" {_ANN}/></w:rPr></w:pPr>'
@@ -577,9 +579,8 @@ class TestSweepAfterAnyResolution:
         [
             (MOVE_FROM_INSIDE_DEL, lambda doc: doc.accept_revision(30)),
             (MOVE_TO_INSIDE_INS, lambda doc: doc.reject_revision(30)),
-            (SPLIT_BEFORE_MOVED_MARK, lambda doc: doc.reject_revision(30)),
         ],
-        ids=["moveFrom-inside-accepted-del", "moveTo-inside-rejected-ins", "rejoin-drops-moved-mark"],
+        ids=["moveFrom-inside-accepted-del", "moveTo-inside-rejected-ins"],
     )
     def test_range_marks_are_swept_when_their_content_leaves_with_a_host(self, make_docx, body, resolve):
         with _open(make_docx(body)) as doc:
@@ -587,6 +588,170 @@ class TestSweepAfterAnyResolution:
             assert doc.list_revisions() == []
             assert doc.list_unhandled_revisions() == []
             assert _census(doc) == {}
+
+
+def _split(tail_ppr: str, *, head_mark: str = f'<w:ins w:id="30" {_BOB}/>', head_ppr: str = "") -> str:
+    """Bob's tracked split of ``head``/``tail`` (mark id 30), then ``last``.
+
+    ``tail_ppr`` is the tail paragraph's whole ``w:pPr`` content;
+    ``head_ppr`` is extra ``w:pPr`` content of the head, around its mark.
+    """
+    before, _, after = head_ppr.partition("|")
+    return _document(
+        f"<w:p><w:pPr>{before}<w:rPr>{head_mark}</w:rPr>{after}</w:pPr><w:r><w:t>head</w:t></w:r></w:p>"
+        f"<w:p><w:pPr>{tail_ppr}</w:pPr><w:r><w:t>tail</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>last</w:t></w:r></w:p>"
+    )
+
+
+def _merged_ppr(doc: Document) -> str:
+    """The first paragraph's ``w:pPr`` XML, indentation removed ('' when it has none)."""
+    first = doc._revision_manager.editor.dom.getElementsByTagName("w:p")[0]
+    ppr = next((c for c in first.childNodes if getattr(c, "tagName", "") == "w:pPr"), None)
+    return re.sub(r">\s+<", "><", ppr.toxml()) if ppr is not None else ""
+
+
+class TestRejoinKeepsTailRevisions:
+    """Rejecting a tracked split merges the tail paragraph into the head; the
+    merged paragraph's mark is the tail's, revisions included (ROADMAP.md #85)."""
+
+    @pytest.mark.parametrize(
+        ("tag", "rev_type"),
+        [("del", "deletion"), ("moveFrom", "move_from"), ("moveTo", "move_to")],
+    )
+    def test_foreign_mark_revision_on_the_tail_stays_pending(self, make_docx, tag, rev_type):
+        with _open(make_docx(_split(f'<w:rPr><w:{tag} w:id="11" {_ANN}/></w:rPr>'))) as doc:
+            assert doc.reject_revision(30)
+            assert doc.get_visible_text() == "headtail\nlast"
+            (rev,) = doc.list_revisions()
+            assert (rev.id, rev.type, rev.author) == (11, rev_type, "Ann")
+            assert _merged_ppr(doc) == f'<w:pPr><w:rPr><w:{tag} w:id="11" {_ANN}/></w:rPr></w:pPr>'
+            assert doc.reject_revision(11)
+            assert _census(doc) == {}
+
+    @pytest.mark.parametrize(("split_id", "del_id"), [(30, 11), (11, 30)])
+    def test_reject_all_counts_both_whatever_the_id_order(self, make_docx, split_id, del_id):
+        body = _split(f'<w:rPr><w:del w:id="{del_id}" {_BOB}/></w:rPr>', head_mark=f'<w:ins w:id="{split_id}" {_BOB}/>')
+        with _open(make_docx(body)) as doc:
+            assert doc.reject_all() == 2
+            assert _census(doc) == {}
+            assert doc.get_visible_text() == "headtail\nlast"
+
+    def test_author_filter_leaves_the_other_authors_mark_revision(self, make_docx):
+        with _open(make_docx(_split(f'<w:rPr><w:del w:id="11" {_ANN}/></w:rPr>'))) as doc:
+            assert doc.reject_all(author="Bob") == 1
+            assert [(r.id, r.author) for r in doc.list_revisions()] == [(11, "Ann")]
+
+    def test_unhandled_mark_revision_on_the_tail_is_still_reported(self, make_docx):
+        change = f'<w:rPrChange w:id="11" {_ANN}><w:rPr><w:b/></w:rPr></w:rPrChange>'
+        with _open(make_docx(_split(f"<w:rPr><w:i/>{change}</w:rPr>"))) as doc:
+            assert len(doc.list_unhandled_revisions()) == 1
+            assert doc.reject_revision(30)
+            assert [u.tag for u in doc.list_unhandled_revisions()] == ["w:rPrChange"]
+            assert doc.list_revisions() == []
+            assert _merged_ppr(doc) == f"<w:pPr><w:rPr><w:i/>{change}</w:rPr></w:pPr>"
+
+    def test_downstream_split_and_foreign_deletion_both_survive_in_order(self, make_docx):
+        marks = f'<w:ins w:id="31" {_BOB}/><w:del w:id="11" {_ANN}/>'
+        with _open(make_docx(_split(f"<w:rPr>{marks}</w:rPr>"))) as doc:
+            assert doc.reject_revision(30)
+            assert sorted((r.id, r.type) for r in doc.list_revisions()) == [(11, "deletion"), (31, "insertion")]
+            assert _merged_ppr(doc) == f"<w:pPr><w:rPr>{marks}</w:rPr></w:pPr>"
+
+    def test_revision_on_the_rejected_mark_itself_goes_with_it(self, make_docx):
+        """A deletion of the very mark being rejected describes a break that no
+        longer exists — the same rule as a revision nested in a rejected insertion."""
+        body = _split("<w:rPr><w:b/></w:rPr>", head_mark=f'<w:ins w:id="30" {_BOB}/><w:del w:id="11" {_ANN}/>')
+        with _open(make_docx(body)) as doc:
+            assert doc.reject_revision(30)
+            assert doc.list_revisions() == []
+            assert _census(doc) == {}
+            assert _merged_ppr(doc) == "<w:pPr><w:rPr><w:b/></w:rPr></w:pPr>"
+
+    def test_moved_mark_survives_and_resolves_clean(self, make_docx):
+        """The fixture's range brackets no content (the marker sits in w:pPr,
+        ahead of the range start), so the empty pair is swept as usual; the
+        marker itself stays pending."""
+        with _open(make_docx(SPLIT_BEFORE_MOVED_MARK)) as doc:
+            assert doc.reject_revision(30)
+            assert [(r.id, r.type) for r in doc.list_revisions()] == [(11, "move_from")]
+            assert _census(doc) == {"w:moveFrom": 1}
+            assert doc.reject_revision(11)
+            assert doc.list_revisions() == []
+            assert doc.list_unhandled_revisions() == []
+            assert _census(doc) == {}
+
+    # The tail's w:pPrChange moves with the properties it is a change to.
+    _TAIL_CHANGE = (
+        f'<w:jc w:val="center"/><w:pPrChange w:id="11" {_ANN}><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange>'
+    )
+    _HEAD_PPR = '<w:pStyle w:val="Title"/>|<w:sectPr><w:type w:val="nextPage"/></w:sectPr>'
+
+    @pytest.mark.parametrize(
+        ("resolve", "jc"),
+        [("accept_revision", "center"), ("reject_revision", "left")],
+    )
+    def test_property_change_on_the_tail_moves_with_its_properties(self, make_docx, resolve, jc):
+        with _open(make_docx(_split(self._TAIL_CHANGE, head_ppr=self._HEAD_PPR))) as doc:
+            assert doc.reject_revision(30)
+            (rev,) = doc.list_revisions()
+            assert (rev.id, rev.type, rev.author) == (11, "property_change", "Ann")
+            assert _merged_ppr(doc) == (
+                f'<w:pPr><w:jc w:val="center"/><w:sectPr><w:type w:val="nextPage"/></w:sectPr>'
+                f'<w:pPrChange w:id="11" {_ANN}><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange></w:pPr>'
+            )
+            assert getattr(doc, resolve)(11)
+            assert _census(doc) == {}
+            assert _merged_ppr(doc) == (
+                f'<w:pPr><w:jc w:val="{jc}"/><w:sectPr><w:type w:val="nextPage"/></w:sectPr></w:pPr>'
+            )
+
+    def test_head_property_change_wins_when_both_paragraphs_carry_one(self, make_docx):
+        """A w:pPr holds one record: the tail's is the one documented loss."""
+        head_change = f'<w:pPrChange w:id="12" {_BOB}><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange>'
+        body = _split(self._TAIL_CHANGE, head_ppr=f'<w:pStyle w:val="Title"/>|{head_change}')
+        with _open(make_docx(body)) as doc:
+            assert doc.reject_revision(30)
+            assert [(r.id, r.author) for r in doc.list_revisions()] == [(12, "Bob")]
+            assert _merged_ppr(doc) == f'<w:pPr><w:pStyle w:val="Title"/>{head_change}</w:pPr>'
+
+    # A Word-made split leaves the section mark on the tail paragraph.
+    _TAIL_SECT = (
+        f'<w:sectPr><w:sectPrChange w:id="11" {_ANN}><w:sectPr/></w:sectPrChange><w:type w:val="nextPage"/></w:sectPr>'
+    )
+
+    def test_section_mark_on_the_tail_moves_to_the_merged_paragraph(self, make_docx):
+        record = f'<w:pPrChange w:id="12" {_BOB}><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange>'
+        body = _split(f"<w:rPr><w:b/></w:rPr>{self._TAIL_SECT}", head_ppr=f'<w:pStyle w:val="Title"/>|{record}')
+        with _open(make_docx(body)) as doc, warnings.catch_warnings():
+            warnings.simplefilter("ignore", UnhandledRevisionWarning)
+            assert doc.reject_revision(30)
+            assert [u.tag for u in doc.list_unhandled_revisions()] == ["w:sectPrChange"]
+            assert _merged_ppr(doc) == (
+                f'<w:pPr><w:pStyle w:val="Title"/><w:rPr><w:b/></w:rPr>{self._TAIL_SECT}{record}</w:pPr>'
+            )
+
+    def test_head_section_mark_wins_when_both_paragraphs_carry_one(self, make_docx):
+        head_sect = '<w:sectPr><w:type w:val="continuous"/></w:sectPr>'
+        with _open(make_docx(_split(self._TAIL_SECT, head_ppr=f"|{head_sect}"))) as doc, warnings.catch_warnings():
+            warnings.simplefilter("ignore", UnhandledRevisionWarning)
+            assert doc.reject_revision(30)
+            assert doc.list_unhandled_revisions() == []
+            assert _merged_ppr(doc) == f"<w:pPr>{head_sect}</w:pPr>"
+
+    def test_library_split_with_mark_formatting_and_own_record_rejoins_exactly(self, make_docx):
+        record = f'<w:pPrChange w:id="5" {_ANN}><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange>'
+        ppr = f'<w:pPr><w:jc w:val="right"/><w:rPr><w:b/></w:rPr>{record}</w:pPr>'
+        body = _document(f"<w:p>{ppr}<w:r><w:t>head tail</w:t></w:r></w:p><w:p><w:r><w:t>last</w:t></w:r></w:p>")
+        with _open(make_docx(body)) as doc:
+            before = doc.get_visible_text()
+            result = doc.split_paragraph(find_ref(doc, "head tail"), before="tail")
+            assert doc.paragraph_count() == 3
+            assert result.group_id is not None
+            assert doc.reject_group(result.group_id)
+            assert doc.get_visible_text() == before
+            assert [r.id for r in doc.list_revisions()] == [5]
+            assert _merged_ppr(doc) == ppr
 
 
 class TestOwnEditInsideAForeignMoveTo:
