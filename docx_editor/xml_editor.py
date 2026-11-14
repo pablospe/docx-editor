@@ -138,8 +138,12 @@ _REJECTED_CONTROL_CHARS = frozenset(chr(c) for c in range(0x20) if c != 0x0A) | 
 # :func:`body_paragraphs`.
 _TEXTBOX_CONTENT = "w:txbxContent"
 
-# Word 2010 namespace: w14:paraId / w14:textId on paragraphs.
+# Namespaces of the markup written into the comment parts: w14:paraId on
+# comment paragraphs, and the root prefixes of the three extension parts.
 W14_NAMESPACE = "http://schemas.microsoft.com/office/word/2010/wordml"
+W15_NAMESPACE = "http://schemas.microsoft.com/office/word/2012/wordml"
+W16CID_NAMESPACE = "http://schemas.microsoft.com/office/word/2016/wordml/cid"
+W16CEX_NAMESPACE = "http://schemas.microsoft.com/office/word/2018/wordml/cex"
 
 
 def _reject_control_chars(
@@ -1707,7 +1711,7 @@ class DocxXMLEditor(XMLEditor):
 
     def _ensure_w16cex_namespace(self) -> None:
         """Ensure w16cex namespace is declared on the root element."""
-        self.ensure_namespace("w16cex", "http://schemas.microsoft.com/office/word/2018/wordml/cex")
+        self.ensure_namespace("w16cex", W16CEX_NAMESPACE)
 
     def _ensure_w14_namespace(self) -> None:
         """Ensure w14 namespace is declared on the root element."""

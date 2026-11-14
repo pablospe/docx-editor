@@ -23,6 +23,9 @@ from .track_changes.dom import _addressable_paragraph, _adjudicable_id
 from .track_changes.listing import _RevisionLocationContext
 from .xml_editor import (
     W14_NAMESPACE,
+    W15_NAMESPACE,
+    W16CEX_NAMESPACE,
+    W16CID_NAMESPACE,
     DocxXMLEditor,
     ParagraphRef,
     TextMapMatch,
@@ -952,9 +955,10 @@ class CommentManager:
         Called before the first marker goes into document.xml, so everything
         that can fail for a pre-existing part fails while the document is still
         untouched: a part whose root is not the expected prefixed element
-        (``NodeNotFoundError``), and a ``comments.xml`` that binds ``w14`` to
-        another namespace. A ``comments.xml`` written by a producer that never
-        emits ``w14:paraId`` declares no ``xmlns:w14`` at all; it is added here.
+        (``NodeNotFoundError``), and a part that binds the prefix its new
+        markup uses to another namespace. A ``comments.xml`` written by a
+        producer that never emits ``w14:paraId`` declares no ``xmlns:w14`` at
+        all; it is added here.
 
         A missing part is not created here: the ``_add_to_*`` helpers copy it
         from its template once the markers are in, and a template cannot fail
@@ -963,18 +967,17 @@ class CommentManager:
         Raises:
             XMLError: If a part cannot take the comment markup.
         """
-        for path, root_tag in (
-            (self.comments_path, "w:comments"),
-            (self.comments_extended_path, "w15:commentsEx"),
-            (self.comments_ids_path, "w16cid:commentsIds"),
-            (self.comments_extensible_path, "w16cex:commentsExtensible"),
+        for path, root_tag, prefix, uri in (
+            (self.comments_path, "w:comments", "w14", W14_NAMESPACE),
+            (self.comments_extended_path, "w15:commentsEx", "w15", W15_NAMESPACE),
+            (self.comments_ids_path, "w16cid:commentsIds", "w16cid", W16CID_NAMESPACE),
+            (self.comments_extensible_path, "w16cex:commentsExtensible", "w16cex", W16CEX_NAMESPACE),
         ):
             if not path.exists():
                 continue
             editor = self._get_editor(path)
             editor.get_node(tag=root_tag)
-            if path == self.comments_path:
-                editor.ensure_namespace("w14", W14_NAMESPACE)
+            editor.ensure_namespace(prefix, uri)
 
     def _add_to_comments_xml(self, comment_id: int, para_id: str, text: str, timestamp: str) -> None:
         """Add a single comment to comments.xml."""

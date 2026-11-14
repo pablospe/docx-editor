@@ -3026,12 +3026,12 @@ class Document:
         alone gains the three sibling parts on its first new comment, and they
         need relationships even though ``comments.xml`` already has one.
         """
-        missing = [
+        on_disk = [
             (target, rel_type)
             for target, rel_type, _ in _COMMENT_PARTS
             if (self._workspace.word_path / target).exists()
         ]
-        if not missing:
+        if not on_disk:
             return
 
         rels_path = self._workspace.word_path / "_rels" / "document.xml.rels"
@@ -3044,9 +3044,13 @@ class Document:
         # A part counts as wired by its target or by its relationship type: a
         # package may spell the target differently ("/word/comments.xml").
         rel_elems = editor.dom.getElementsByTagName("Relationship")
-        wired = {rel_elem.getAttribute("Target") for rel_elem in rel_elems}
-        wired |= {rel_elem.getAttribute("Type") for rel_elem in rel_elems}
-        missing = [(target, rel_type) for target, rel_type in missing if target not in wired and rel_type not in wired]
+        wired_targets = {rel_elem.getAttribute("Target") for rel_elem in rel_elems}
+        wired_types = {rel_elem.getAttribute("Type") for rel_elem in rel_elems}
+        missing = [
+            (target, rel_type)
+            for target, rel_type in on_disk
+            if target not in wired_targets and rel_type not in wired_types
+        ]
         if not missing:
             return
 
@@ -3062,12 +3066,12 @@ class Document:
 
     def _ensure_comment_content_types(self) -> None:
         """Ensure every comment part on disk has a content-type override."""
-        missing = [
+        on_disk = [
             (f"/word/{target}", content_type)
             for target, _, content_type in _COMMENT_PARTS
             if (self._workspace.word_path / target).exists()
         ]
-        if not missing:
+        if not on_disk:
             return
 
         content_types_path = self._workspace.workspace_path / "[Content_Types].xml"
@@ -3080,7 +3084,7 @@ class Document:
         declared = {
             override_elem.getAttribute("PartName") for override_elem in editor.dom.getElementsByTagName("Override")
         }
-        missing = [(part_name, content_type) for part_name, content_type in missing if part_name not in declared]
+        missing = [(part_name, content_type) for part_name, content_type in on_disk if part_name not in declared]
         if not missing:
             return
 

@@ -233,6 +233,21 @@ class TestTypedFailureLeavesNoMarkers:
         assert marker_count(doc) == 0
         assert len(doc._document_editor.dom.getElementsByTagName("w:ins")) == 1
 
+    def test_sibling_part_binding_its_prefix_elsewhere(self, simple_docx, tmp_path):
+        """``commentsExtensible.xml`` is the last part written; it is still checked first."""
+        src = make_docx_with_comments(simple_docx, tmp_path, EMPTY)
+        with zipfile.ZipFile(src, "a") as z:
+            z.writestr(
+                "word/commentsExtensible.xml",
+                f'{XML_DECL}<w16cex:commentsExtensible xmlns:w16cex="urn:not-w16cex"/>',
+            )
+        with Document.open(src, author="Tester") as doc:
+            with pytest.raises(XMLError, match=r"commentsExtensible\.xml: prefix 'w16cex' is bound"):
+                doc.add_comment("quick brown", "check this")
+
+            assert marker_count(doc) == 0
+            assert doc.list_comments() == []
+
     def test_wrong_w14_binding_is_named(self, open_doc):
         doc = open_doc(W14_BOUND_ELSEWHERE)
 
