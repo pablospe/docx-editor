@@ -50,7 +50,7 @@ with Document.open("contract.docx", author="Legal Team") as doc:
     # P1#a7b2| Introduction to the contract
     # P2#f3c1| Payment is due within 30 days
     # A paragraph over 80 chars is cut and its preview ends in "..." (not document text) —
-    # quote search text from list_paragraphs_structured() instead.
+    # quote search text from list_paragraphs_structured(limit=None) instead.
 
     # Edit methods require a paragraph ref and return the updated ref.
     # Pass occurrence= (0-based) to disambiguate repeated text; omitting it

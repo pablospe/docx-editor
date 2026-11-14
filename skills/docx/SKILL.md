@@ -172,7 +172,7 @@ The `replace` forms in the "Not" column work when the added or removed text is w
 
 Beyond the four verbs: `doc.batch_edit([...])` applies several edits atomically (see "Batch Editing"), `doc.rewrite_paragraph(ref, new_text)` restructures a whole paragraph (see "Paragraph Rewrite (Fallback for Structural Edits)"), `doc.split_paragraph(ref, before=text)` breaks one in two (see "Paragraph Structure (splitting on `\n`)"), and `doc.add_comment(anchor_text, comment)` comments on text (see "Comments API").
 
-**Quote full text, never a preview.** `list_paragraphs()` output is a preview for scanning: a paragraph longer than `max_chars` (default 80) is cut and ends in `...`, and that `...` is **not** in the document. Text that will be quoted back as `find` / `text` / `anchor` — by you, or by any model you hand the listing to — must come from an untruncated source: `list_paragraphs_structured()` (`info.text`; `print(info)` shows `P{i}#{hash}| full text`), `get_paragraph(i).text`, or a `SearchResult` from `find_text()` / `find_all()` passed straight to the edit. A search string copied from a cut preview, `...` included, raises `TextNotFoundError`. The refs themselves (`P2#f3c1`) are safe to take from either listing.
+**Quote full text, never a preview.** `list_paragraphs()` output is a preview for scanning: a paragraph longer than `max_chars` (default 80) is cut and ends in `...`, and that `...` is **not** in the document. Text that will be quoted back as `find` / `text` / `anchor` — by you, or by any model you hand the listing to — must come from an untruncated source: `list_paragraphs_structured(limit=None)` (`info.text`; `print(info)` shows `P{i}#{hash}| full text`), `get_paragraph(i).text`, or a `SearchResult` from `find_text()` / `find_all()` passed straight to the edit. A search string copied from a cut preview, `...` included, can raise `TextNotFoundError` or, when the document happens to contain that text, match the wrong text. The refs themselves (`P2#f3c1`) are safe to take from either listing.
 
 ### Installation
 
@@ -225,7 +225,9 @@ author = os.environ.get("USER") or os.environ.get("USERNAME") or "Reviewer"
 # Open document (supports context manager)
 with Document.open("contract.docx", author=author) as doc:
     # Step 1: List paragraphs with hash-anchored references and FULL text
-    for info in doc.list_paragraphs_structured():
+    # limit=None lists every paragraph: the default stops at 200 records with NO
+    # notice (cut if the last info.index < doc.paragraph_count())
+    for info in doc.list_paragraphs_structured(limit=None):
         print(info)
     # Output: P1#a7b2| Introduction to the contract
     #         P2#f3c1| The committee shall review the old text every quarter.
@@ -278,7 +280,9 @@ doc = Document.open("document.docx", author=author)
 
 # List paragraphs to get hash-anchored references and full, quotable text
 # (list_paragraphs() gives the same refs with 80-char previews — scan only)
-for info in doc.list_paragraphs_structured():
+# limit=None lists every paragraph: the default stops at 200 records with NO
+# notice (cut if the last info.index < doc.paragraph_count())
+for info in doc.list_paragraphs_structured(limit=None):
     print(info)
 # Output: P1#a7b2| Introduction
 #         P2#f3c1| The payment term is 30 days from the invoice date.
@@ -816,7 +820,9 @@ author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("contract.docx", author=author)
 
 # List paragraphs to get hash-anchored references and full, quotable text
-for info in doc.list_paragraphs_structured():
+# (limit=None: a redline must see the whole document — the default stops at
+# 200 records with no notice)
+for info in doc.list_paragraphs_structured(limit=None):
     print(info)
 
 # Section 2 changes (using paragraph references from the listing)

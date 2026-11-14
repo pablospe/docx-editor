@@ -61,11 +61,12 @@ P2#f3c1| Payment is due within 30 days
 P3#b2c4| Section 5 describes review obligations
 ```
 
-These lines are previews: a paragraph longer than `max_chars` (default 80) is cut and ends in `...`, which is not in the document, so a preview copied into an edit as search text raises `TextNotFoundError`. Take the refs from here, but quote the text you will search for (or hand to a model that writes the edits) from the untruncated listing:
+These lines are previews: a paragraph longer than `max_chars` (default 80) is cut and ends in `...`, which is not in the document, so a preview copied into an edit as search text can raise `TextNotFoundError` or match the wrong text. Take the refs from here, but quote the text you will search for (or hand to a model that writes the edits) from the untruncated listing:
 
 ```python
 with Document.open("contract.docx") as doc:
-    for info in doc.list_paragraphs_structured():
+    # limit=None: the default returns at most 200 records and adds no notice
+    for info in doc.list_paragraphs_structured(limit=None):
         print(info)       # P2#f3c1| <full paragraph text>
         info.text         # the same full text, without the ref prefix
 ```

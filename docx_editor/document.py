@@ -873,8 +873,8 @@ class Document:
 
             A paragraph longer than ``max_chars`` is cut and its preview ends
             in ``"..."``, which is not part of the document: previews are for
-            display, and one fed back as the search text of an edit raises
-            ``TextNotFoundError``. Quote search text from
+            display, and one fed back as the search text of an edit can raise
+            ``TextNotFoundError`` or match the wrong text. Quote search text from
             ``list_paragraphs_structured()`` or ``get_paragraph(i).text``.
 
         Args:
