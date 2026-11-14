@@ -17,6 +17,7 @@ from .exceptions import (
     HashMismatchError,
     ParagraphIndexError,
     TextNotFoundError,
+    XMLError,
     _truncate_preview,
 )
 from .track_changes.dom import _addressable_paragraph, _adjudicable_id
@@ -967,16 +968,25 @@ class CommentManager:
         Raises:
             XMLError: If a part cannot take the comment markup.
         """
-        for path, root_tag, prefix, uri in (
-            (self.comments_path, "w:comments", "w14", W14_NAMESPACE),
-            (self.comments_extended_path, "w15:commentsEx", "w15", W15_NAMESPACE),
-            (self.comments_ids_path, "w16cid:commentsIds", "w16cid", W16CID_NAMESPACE),
-            (self.comments_extensible_path, "w16cex:commentsExtensible", "w16cex", W16CEX_NAMESPACE),
-        ):
-            if not path.exists():
-                continue
-            editor = self._get_editor(path)
-            editor.get_node(tag=root_tag)
+        existing = [
+            (self._get_editor(path), root_tag, prefix, uri)
+            for path, root_tag, prefix, uri in (
+                (self.comments_path, "w:comments", "w14", W14_NAMESPACE),
+                (self.comments_extended_path, "w15:commentsEx", "w15", W15_NAMESPACE),
+                (self.comments_ids_path, "w16cid:commentsIds", "w16cid", W16CID_NAMESPACE),
+                (self.comments_extensible_path, "w16cex:commentsExtensible", "w16cex", W16CEX_NAMESPACE),
+            )
+            if path.exists()
+        ]
+        # Check every part before changing any: a rejected part leaves the
+        # others exactly as they were.
+        for editor, root_tag, prefix, uri in existing:
+            root = editor.dom.documentElement
+            if editor.get_node(tag=root_tag) is not root:
+                raise XMLError(f"{editor.xml_path.name}: root element is <{root.tagName}>, expected <{root_tag}>")
+            if root.hasAttribute(f"xmlns:{prefix}"):
+                editor.ensure_namespace(prefix, uri)
+        for editor, _, prefix, uri in existing:
             editor.ensure_namespace(prefix, uri)
 
     def _add_to_comments_xml(self, comment_id: int, para_id: str, text: str, timestamp: str) -> None:

@@ -35,6 +35,7 @@ ONE_OLD_COMMENT = (
     "</w:comment></w:comments>"
 )
 DEFAULT_NS_ROOT = f'{XML_DECL}<comments xmlns="{W_NS}"/>'
+NESTED_ROOT = f'{XML_DECL}<wrapper xmlns:w="{W_NS}"><w:comments/></wrapper>'
 W14_BOUND_ELSEWHERE = f'{XML_DECL}<w:comments xmlns:w="{W_NS}" xmlns:w14="urn:not-w14"/>'
 
 
@@ -207,7 +208,9 @@ class TestTypedFailureLeavesNoMarkers:
     """A part that cannot take the comment fails typed and leaves no comment markers."""
 
     @pytest.mark.parametrize(
-        "comments_xml", [DEFAULT_NS_ROOT, W14_BOUND_ELSEWHERE], ids=["default-ns-root", "w14-bound-elsewhere"]
+        "comments_xml",
+        [DEFAULT_NS_ROOT, NESTED_ROOT, W14_BOUND_ELSEWHERE],
+        ids=["default-ns-root", "nested-root", "w14-bound-elsewhere"],
     )
     def test_add_comment(self, open_doc, comments_xml):
         doc = open_doc(comments_xml)
@@ -221,7 +224,9 @@ class TestTypedFailureLeavesNoMarkers:
         assert sorted(p.name for p in doc._workspace.word_path.glob("comments*.xml")) == ["comments.xml"]
 
     @pytest.mark.parametrize(
-        "comments_xml", [DEFAULT_NS_ROOT, W14_BOUND_ELSEWHERE], ids=["default-ns-root", "w14-bound-elsewhere"]
+        "comments_xml",
+        [DEFAULT_NS_ROOT, NESTED_ROOT, W14_BOUND_ELSEWHERE],
+        ids=["default-ns-root", "nested-root", "w14-bound-elsewhere"],
     )
     def test_note_edit(self, open_doc, comments_xml):
         """A note is attached after its edit: the edit stays applied, the note leaves no markers."""
@@ -247,6 +252,10 @@ class TestTypedFailureLeavesNoMarkers:
 
             assert marker_count(doc) == 0
             assert doc.list_comments() == []
+            # comments.xml passed its own check but is left as it was.
+            assert not doc._comment_manager._get_editor(
+                doc._comment_manager.comments_path
+            ).dom.documentElement.hasAttribute("xmlns:w14")
 
     def test_wrong_w14_binding_is_named(self, open_doc):
         doc = open_doc(W14_BOUND_ELSEWHERE)
