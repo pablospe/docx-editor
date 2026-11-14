@@ -102,9 +102,9 @@ with Document.open("contract.docx", author=author) as doc:
     # Step 1: List paragraphs with hash-anchored references
     for p in doc.list_paragraphs():
         print(p)
-    # Output: P1#a7b2| Introduction to the contract...
-    #         P2#f3c1| The committee shall review...
-    # Previews are cut at 80 chars and end in "..." (not document text) —
+    # Output: P1#a7b2| Introduction to the contract
+    #         P2#f3c1| The committee shall review
+    # A paragraph over 80 chars is cut and its preview ends in "..." (not document text) —
     # quote search text from list_paragraphs_structured() instead.
 
     # Step 2: Edit — each method returns the new paragraph ref

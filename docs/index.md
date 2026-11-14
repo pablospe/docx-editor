@@ -47,9 +47,9 @@ with Document.open("contract.docx", author="Legal Team") as doc:
     for paragraph in doc.list_paragraphs():
         print(paragraph)
     # Example output:
-    # P1#a7b2| Introduction to the contract...
-    # P2#f3c1| Payment is due within 30 days...
-    # Previews are cut at 80 chars and end in "..." (not document text) —
+    # P1#a7b2| Introduction to the contract
+    # P2#f3c1| Payment is due within 30 days
+    # A paragraph over 80 chars is cut and its preview ends in "..." (not document text) —
     # quote search text from list_paragraphs_structured() instead.
 
     # Edit methods require a paragraph ref and return the updated ref.

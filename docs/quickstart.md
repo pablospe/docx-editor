@@ -56,9 +56,9 @@ with Document.open("contract.docx") as doc:
 Output looks like:
 
 ```text
-P1#a7b2| Introduction to the contract...
-P2#f3c1| Payment is due within 30 days...
-P3#b2c4| Section 5 describes review obligations...
+P1#a7b2| Introduction to the contract
+P2#f3c1| Payment is due within 30 days
+P3#b2c4| Section 5 describes review obligations
 ```
 
 These lines are previews: a paragraph longer than `max_chars` (default 80) is cut and ends in `...`, which is not in the document, so a preview copied into an edit as search text raises `TextNotFoundError`. Take the refs from here, but quote the text you will search for (or hand to a model that writes the edits) from the untruncated listing:

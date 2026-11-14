@@ -376,7 +376,7 @@ Replace text with tracked changes. When the target sits inside another author's 
 
 Words shared by `find` and `replace_with` at either end are trimmed first, so only the changed words become revisions — a replace that only adds or only removes words is written as a pure insertion or deletion. When the trimmed spans are **whitespace only** on both sides, trimming continues character by character, so a spacing fix (`"clause  2"` → `"clause 2"`) becomes a pure deletion rather than an invisible deletion/insertion pair. Word spans are never trimmed character-wise: `"30 days"` → `"60 days"` stays a whole-word replacement. The replacement insertion carries the formatting (`rPr`) that covers the most characters of the replaced span (runs sharing identical formatting tally together), ties breaking to the earliest-seen formatting. **Accepting** a replace that straddled mixed formatting therefore leaves the replacement uniformly in that one majority format, while each deletion run keeps its own original formatting — so a **reject** restores the pre-edit mix. When `replace_with` equals the found text, the call is a **no-op**: no revisions are created and the returned `EditResult` equals the input `paragraph` ref with `group_id=None` and `revision_ids=()` — that triple is how callers detect the no-op.
 
-**See also:** to only remove or only add text, prefer [`delete()`](#deletetext-paragraphnone-occurrencenone-notenone), [`insert_after()`](#insert_afteranchor-text-paragraphnone-occurrencenone-notenone) or [`insert_before()`](#insert_beforeanchor-text-paragraphnone-occurrencenone-notenone) over `replace(text, "")` / `replace(a, a + text)`. Those forms work (the trimming above reduces them to a pure deletion or insertion), but the dedicated methods state the intent and quote the anchor once, so a slip in the repeated anchor cannot turn an insertion into a rewrite of it.
+**See also:** to only remove or only add text, prefer [`delete()`](#deletetext-paragraphnone-occurrencenone-notenone), [`insert_after()`](#insert_afteranchor-text-paragraphnone-occurrencenone-notenone) or [`insert_before()`](#insert_beforeanchor-text-paragraphnone-occurrencenone-notenone) over `replace(text, "")` / `replace(a, a + text)`. Those forms work when the added or removed text is whole words (the trimming above reduces them to a pure deletion or insertion; a change inside a word, such as `"Payment"` → `"Payments"`, stays a whole-word replacement), but the dedicated methods state the intent and quote the anchor once, so a slip in the repeated anchor cannot turn an insertion into a rewrite of it.
 
 A replace landing wholly inside **your own** pending insertion **amends** that insertion instead of tracking a change against it: the text is spliced in at the match position, whether the match covers part of the insertion or all of it. Your own unsaved text was never in the document, so there is nothing to counter-propose — no revision is created, and the `EditResult` comes back with `group_id=None` and `revision_ids=()` (with an updated ref). To undo an amendment, reject the group of the insertion it amended — the one holding the end of the match, which keeps its id and its group. A match spanning two of your own adjacent insertions consolidates into that one, dropping any insertion it consumed whole.
 
@@ -1716,8 +1716,9 @@ preview, so it cannot pass for a space).
 
 A common cause is search text copied from a
 [`list_paragraphs()`](#list_paragraphsmax_chars80-start1-limit200) preview: a
-preview cut at `max_chars` ends in `...`, which is not in the document. Quote
-from `get_paragraph(i).text` or `list_paragraphs_structured()` instead.
+preview cut at `max_chars` ends in `...`, which is not in the document. The
+error's own `paragraph_preview` is cut the same way (80 chars, then `...`).
+Quote from `get_paragraph(i).text` or `list_paragraphs_structured()` instead.
 
 ```python
 from docx_editor.exceptions import TextNotFoundError
