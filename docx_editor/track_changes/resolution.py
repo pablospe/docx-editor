@@ -23,7 +23,13 @@ from .models import (
 
 
 class _ResolutionMixin(_RevisionManagerBase):
-    def accept_revision(self, revision_id: int, element_index: dict[str, list[Element]] | None = None) -> bool:
+    def accept_revision(
+        self,
+        revision_id: int,
+        element_index: dict[str, list[Element]] | None = None,
+        *,
+        author: str | None = None,
+    ) -> bool:
         """Accept a revision by ID.
 
         - insertion (``w:ins``): removes the wrapper, keeping the content.
@@ -43,11 +49,15 @@ class _ResolutionMixin(_RevisionManagerBase):
         content is all gone are swept (``_sweep_move_range_marks``) — move
         content can leave inside any resolved host, not only a move half.
 
-        A duplicated w:id is ambiguous here: Word does not guarantee w:id is
-        unique, and this call has only the id, so it resolves whichever element
-        carries it first in the document — possibly another author's
-        (ROADMAP.md #84). Two rows sharing an id in ``list_revisions()`` is the
-        signal; ``accept_all(author=...)`` is author-exact where this is not.
+        A w:id must name one revision here. Word does not guarantee w:id is
+        unique, so a standalone call counts every pending element carrying the
+        id — handled revisions and the marks ``list_unhandled_revisions()``
+        reports alike — and raises ``RevisionError`` when there is more than
+        one and any of them is resolvable, rather than resolve whichever
+        comes first in the document (possibly another author's). ``author=``
+        narrows the count to one reviewer's; same-author duplicates stay
+        refused, and ``accept_all``/``reject_all`` (optionally by author) take
+        them.
 
         Args:
             revision_id: The w:id of the revision to accept
@@ -55,11 +65,21 @@ class _ResolutionMixin(_RevisionManagerBase):
                 ``_revision_element_index``) that lets group/changeset
                 resolution skip a full-DOM scan per member. ``None`` scans
                 fresh (standalone calls); accept_all/reject_all pass one too.
+            author: Standalone calls only — narrow the id to this author's
+                revision when several pending revisions share it. Ignored
+                with an ``element_index``, whose caller has already
+                identified the members.
 
         Returns:
-            True if revision was accepted, False if not found
+            True if revision was accepted, False if not found — including an
+            id carried only by marks this library cannot resolve.
+
+        Raises:
+            RevisionError: Standalone call on an id that more than one
+                pending revision carries (after ``author`` narrowing), at
+                least one of them resolvable. The document is untouched.
         """
-        elem = self._find_revision_element(revision_id, element_index)
+        elem = self._find_revision_element(revision_id, element_index, author)
         if elem is None:
             return False
         tag = elem.tagName
@@ -82,7 +102,13 @@ class _ResolutionMixin(_RevisionManagerBase):
         self._sweep_after_move()
         return True
 
-    def reject_revision(self, revision_id: int, element_index: dict[str, list[Element]] | None = None) -> bool:
+    def reject_revision(
+        self,
+        revision_id: int,
+        element_index: dict[str, list[Element]] | None = None,
+        *,
+        author: str | None = None,
+    ) -> bool:
         """Reject a revision by ID.
 
         - insertion (``w:ins``): removes the element and its content entirely
@@ -105,9 +131,8 @@ class _ResolutionMixin(_RevisionManagerBase):
 
         A paragraph-mark move marker is dropped, as on accept.
 
-        A duplicated w:id is ambiguous here in the same way ``accept_revision``
-        describes: with only the id to go on, this resolves whichever element
-        carries it first in the document (ROADMAP.md #84).
+        A w:id shared by more than one pending revision is refused exactly as
+        ``accept_revision`` describes; ``author=`` narrows it.
 
         Args:
             revision_id: The w:id of the revision to reject
@@ -115,11 +140,21 @@ class _ResolutionMixin(_RevisionManagerBase):
                 ``_revision_element_index``) that lets group/changeset
                 resolution skip a full-DOM scan per member. ``None`` scans
                 fresh (standalone calls); accept_all/reject_all pass one too.
+            author: Standalone calls only — narrow the id to this author's
+                revision when several pending revisions share it. Ignored
+                with an ``element_index``, whose caller has already
+                identified the members.
 
         Returns:
-            True if revision was rejected, False if not found
+            True if revision was rejected, False if not found — including an
+            id carried only by marks this library cannot resolve.
+
+        Raises:
+            RevisionError: Standalone call on an id that more than one
+                pending revision carries (after ``author`` narrowing), at
+                least one of them resolvable. The document is untouched.
         """
-        elem = self._find_revision_element(revision_id, element_index)
+        elem = self._find_revision_element(revision_id, element_index, author)
         if elem is None:
             return False
         tag = elem.tagName

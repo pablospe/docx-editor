@@ -628,7 +628,8 @@ class Revision:
       string. Copies that share a ``w:id`` (a producer that duplicated the
       ``mc:Choice`` content verbatim) are ungroupable: ``group_id`` and
       ``changeset_id`` are both None, so no group- or changeset-keyed call
-      can reach them and ``accept_all``/``reject_all`` is the single call
+      can reach them, a per-id call raises ``RevisionError`` (the id names
+      two revisions), and ``accept_all``/``reject_all`` is the single call
       that takes both. A box stored in one form only (VML ``w:pict`` with no
       ``mc:Fallback`` twin) is listed once and behaves like any other
       revision.
@@ -928,9 +929,10 @@ class UnhandledRevision:
     :class:`Revision`: nothing here is adjudicable, so there is no id to hand
     ``accept_revision()`` — see ``list_unhandled_revisions``. Where ``id`` is
     not None it is reported for identification only: an unhandled mark's
-    ``w:id`` may coincide with a *handled* revision's, and passing it to
-    ``accept_revision``/``reject_revision`` then resolves that other element
-    instead (ROADMAP.md #87).
+    ``w:id`` may coincide with a *handled* revision's, and passing such an
+    id to ``accept_revision``/``reject_revision`` raises ``RevisionError``
+    rather than resolve that other element; an id only unhandled marks
+    carry resolves nothing and returns False.
 
     Attributes:
         tag: the element's tag — one of ``UNHANDLED_REVISION_TAGS``, or a

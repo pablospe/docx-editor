@@ -33,6 +33,7 @@ from conftest import find_ref, replace_document_xml
 from docx_editor import (
     Document,
     ResolveResult,
+    RevisionError,
     UnhandledRevision,
     UnhandledRevisionWarning,
 )
@@ -698,6 +699,67 @@ NON_NUMERIC_MOVE_ID = _document(
     f'<w:p><w:moveFrom w:id="m1" {_ANN}><w:r><w:t>gone</w:t></w:r></w:moveFrom>'
     '<w:r><w:t xml:space="preserve"> tail</w:t></w:r></w:p>'
 )
+
+
+# Bob's formatting change and Ann's insertion share w:id="7".
+ID_SHARED_WITH_HANDLED = _document(
+    f'<w:p><w:r><w:rPr><w:rPrChange w:id="7" {_BOB}><w:rPr/></w:rPrChange></w:rPr><w:t>Styled </w:t></w:r>'
+    f'<w:ins w:id="7" {_ANN}><w:r><w:t>inserted</w:t></w:r></w:ins></w:p>'
+)
+
+
+class TestUnhandledIdSharedWithAHandledRevision:
+    """An id read off ``list_unhandled_revisions()`` must not resolve the
+    handled revision that happens to share it (ROADMAP.md #87)."""
+
+    @pytest.mark.parametrize("method", ["accept_revision", "reject_revision"])
+    def test_shared_id_is_refused(self, make_docx, method):
+        with _open(make_docx(ID_SHARED_WITH_HANDLED)) as doc:
+            (row,) = doc.list_unhandled_revisions()
+            assert (row.tag, row.id) == ("w:rPrChange", 7)
+
+            with pytest.raises(RevisionError) as excinfo:
+                getattr(doc, method)(row.id)
+
+            assert excinfo.value.revision_id == 7
+            assert "w:rPrChange by 'Bob' (not resolvable by this library)" in str(excinfo.value)
+            assert "author=" in str(excinfo.value) and "'Ann'" in str(excinfo.value)
+            assert [r.id for r in doc.list_revisions()] == [7]
+            assert "inserted" in doc.get_visible_text()
+            assert len(doc.list_unhandled_revisions()) == 1
+
+    def test_author_of_the_unhandled_mark_resolves_nothing(self, make_docx):
+        with _open(make_docx(ID_SHARED_WITH_HANDLED)) as doc:
+            assert doc.reject_revision(7, author="Bob") is False
+            assert [r.id for r in doc.list_revisions()] == [7]
+            assert len(doc.list_unhandled_revisions()) == 1
+
+    def test_author_of_the_handled_revision_resolves_it(self, make_docx):
+        with _open(make_docx(ID_SHARED_WITH_HANDLED)) as doc:
+            assert doc.reject_revision(7, author="Ann") is True
+            assert doc.list_revisions() == []
+            assert "inserted" not in doc.get_visible_text()
+            assert len(doc.list_unhandled_revisions()) == 1
+
+    @pytest.mark.parametrize("method", ["accept_revision", "reject_revision"])
+    def test_id_shared_by_unhandled_marks_only_resolves_nothing(self, make_docx, method):
+        """A customXml range's Start and End may share one id; with nothing
+        adjudicable under it there is nothing to refuse."""
+        body = _document(
+            f'<w:p><w:customXmlDelRangeStart w:id="42" {_ANN}/><w:r><w:t>Region</w:t></w:r>'
+            '<w:customXmlDelRangeEnd w:id="42"/></w:p>'
+        )
+        with _open(make_docx(body)) as doc:
+            assert [r.id for r in doc.list_unhandled_revisions()] == [42, 42]
+            assert getattr(doc, method)(42) is False
+            assert len(doc.list_unhandled_revisions()) == 2
+
+    def test_accept_all_is_unaffected(self, make_docx):
+        with _open(make_docx(ID_SHARED_WITH_HANDLED)) as doc:
+            with pytest.warns(UnhandledRevisionWarning):
+                result = doc.accept_all()
+            assert result == 1
+            assert result.unhandled == 1
 
 
 class TestHandledTagsWithoutAnAdjudicableId:

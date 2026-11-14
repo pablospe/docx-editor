@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 from conftest import replace_document_xml
 
-from docx_editor import Document, TextNotFoundError
+from docx_editor import Document, RevisionError, TextNotFoundError
 
 # Namespaces a Word-shaped text box needs. simple.docx declares all of these on
 # its own <w:document>; a swapped-in body has to redeclare them.
@@ -393,7 +393,8 @@ class TestRevisionsInsideABox:
         A producer that copies the mc:Choice content into mc:Fallback
         verbatim carries the w:id across with it. A duplicated id is
         ungroupable, so group_id and changeset_id are both None and no group-
-        or changeset-keyed call can reach either copy.
+        or changeset-keyed call can reach either copy, and a per-id call
+        refuses the ambiguous id.
         """
         body = f"<w:p><w:r>{word_box(_boxed_ins(90))}</w:r></w:p>"
         docx = make_docx(simple_docx, temp_dir / "same_id_twins.docx", body)
@@ -401,12 +402,11 @@ class TestRevisionsInsideABox:
         try:
             revisions = doc.list_revisions()
             assert [(r.id, r.group_id, r.changeset_id) for r in revisions] == [(90, None, None)] * 2
-            # Repeating the call happens to reach the twin here, but that is
-            # a property of the duplicated id, not a technique: any third
-            # element sharing the id would absorb one of the calls. accept_all
-            # is what the docs recommend, and it is checked below.
-            assert [doc.accept_revision(90) for _ in range(3)] == [True, True, False]
-            assert doc.list_revisions() == []
+            # The id names two revisions, so a per-id call refuses rather than
+            # resolve one copy and leave the twins out of step.
+            with pytest.raises(RevisionError):
+                doc.accept_revision(90)
+            assert len(doc.list_revisions()) == 2
         finally:
             doc.close()
 

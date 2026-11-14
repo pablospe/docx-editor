@@ -31,7 +31,7 @@ import defusedxml.minidom
 import pytest
 from conftest import find_ref, replace_document_xml
 
-from docx_editor import Document, UnhandledRevisionWarning
+from docx_editor import Document, RevisionError, UnhandledRevisionWarning
 from docx_editor.track_changes import MOVE_RANGE_TAGS, RevisionManager, count_revision_elements
 
 _W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
@@ -750,11 +750,16 @@ class TestParagraphPropertyChange:
             styles = [doc.get_paragraph(i).style for i in (1, 2, 3)]
             assert styles == (["Cmsor1", None, "Cmsor3"] if method == "accept_all" else [None, None, "UnknownStyle"])
 
-    def test_duplicate_ids_by_id_resolve_the_first_still_attached(self, make_docx):
+    def test_duplicate_ids_are_refused_by_id(self, make_docx):
+        """One author wrote both, so ``author=`` cannot tell them apart either."""
         with _open(make_docx(PPR_DUPLICATE_IDS)) as doc:
-            assert doc.accept_revision(0)
-            assert doc.accept_revision(0)
-            assert not doc.accept_revision(0)
+            (author,) = {r.author for r in doc.list_revisions()}
+            for kwargs in ({}, {"author": author}):
+                with pytest.raises(RevisionError) as excinfo:
+                    doc.accept_revision(0, **kwargs)
+                assert excinfo.value.revision_id == 0
+            assert _census(doc) == {"w:pPrChange": 2}
+            assert doc.accept_all() == 2
             assert _census(doc) == {}
 
     def test_reject_restores_numbering_and_alignment(self, make_docx, tmp_path):
