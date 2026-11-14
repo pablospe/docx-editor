@@ -70,6 +70,10 @@ Rejecting a paragraph-mark insertion migrates only the mark `w:ins` off the tail
 
 Two foot-guns a real consumer hit. (1) `list_paragraphs()` previews end in `...`, and a model fed those previews copied the ellipsis into its `original_text`, which then matched nothing; SKILL.md and the API docs should say plainly that anything handed to a model comes from `list_paragraphs_structured()`. (2) The same consumer never found `insert_after`/`insert_before`/`delete` and rebuilt both on `replace(a, a + text)` and `replace(text, "")`; the SKILL.md action table should lead with all four verbs. Docs-only, one PR.
 
+### 91. `add_comment` crashes when `comments.xml` lacks the `w14` namespace
+
+On a document that already ships a `word/comments.xml` whose root does not declare `xmlns:w14` (an empty comments part is enough), `add_comment` raises a raw `ExpatError: unbound prefix`: the comment fragment carries `w14:paraId` and is parsed against the existing root (`comments.py::_add_to_comments_xml`, `xml_editor.py::_parse_fragment`). Hit on the stock supply agreement from the Harvey LAB set used by docx-agent-bench; `note=` on edits goes through the same path and likely fails the same way. Fix: declare the namespaces the fragment needs on the existing root before inserting (comments, commentsExtended and friends), and audit every other fragment insert into a pre-existing part for the same assumption. A parse failure that still escapes must surface as a typed error, not `ExpatError`. Tests: a fixture with a namespace-poor `comments.xml`, for `add_comment`, `reply_to_comment` and a `note=` edit, plus the LibreOffice opens-clean gate.
+
 ### 69. Return-leg reconciliation: which changesets survived?  [design]
 
 The product loop is agent proposes → human adjudicates in Word → document comes back; accepted revisions become plain text, rejected ones vanish, and there is no way to ask "which of my changesets survived?". A propose-time-vs-current compare keyed on changeset `w:date` + content. Design first; large.
