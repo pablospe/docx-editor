@@ -55,6 +55,8 @@ class Comment:
     when the comment has no range start inside a body paragraph (the marker is
     missing, sits between block elements, or is in a text box).
 
+    A reply to such a comment is None too, wherever its own marker sits.
+
     Like every ref it is a snapshot taken at list time: usable as
     ``paragraph=`` until that paragraph is edited, stale afterwards.
     """

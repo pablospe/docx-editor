@@ -1583,6 +1583,23 @@ class TestCommentParagraphRef:
         finally:
             doc.close()
 
+    def test_reply_to_a_comment_without_a_range_start_is_none(self, clean_workspace):
+        """The thread root decides, even when the reply's own marker is intact."""
+        doc = Document.open(clean_workspace)
+        try:
+            parent_id = doc.add_comment("brown fox", "parent")
+            reply_id = doc.reply_to_comment(parent_id, "reply")
+            marker = _range_start(doc, parent_id)
+            marker.parentNode.removeChild(marker)
+            assert _range_start(doc, reply_id) is not None
+
+            (parent,) = doc.list_comments()
+            (reply,) = parent.replies
+            assert parent.paragraph_ref is None
+            assert reply.paragraph_ref is None
+        finally:
+            doc.close()
+
     def test_missing_range_start_is_none(self, clean_workspace):
         doc = Document.open(clean_workspace)
         try:
