@@ -947,7 +947,7 @@ class CommentManager:
             shutil.copy(TEMPLATE_DIR / template_name, path)
 
     def _prepare_comment_parts(self) -> None:
-        """Make the four comment parts ready to receive a comment.
+        """Make the comment parts that already exist ready to receive a comment.
 
         Called before the first marker goes into document.xml, so everything
         that can fail for a pre-existing part fails while the document is still
@@ -956,20 +956,23 @@ class CommentManager:
         another namespace. A ``comments.xml`` written by a producer that never
         emits ``w14:paraId`` declares no ``xmlns:w14`` at all; it is added here.
 
+        A missing part is not created here: the ``_add_to_*`` helpers copy it
+        from its template once the markers are in, and a template cannot fail
+        these checks. A call that fails therefore leaves no new part behind.
+
         Raises:
             XMLError: If a part cannot take the comment markup.
         """
-        for path, template_name, root_tag in (
-            (self.comments_path, "comments.xml", "w:comments"),
-            (self.comments_extended_path, "commentsExtended.xml", "w15:commentsEx"),
-            (self.comments_ids_path, "commentsIds.xml", "w16cid:commentsIds"),
-            (self.comments_extensible_path, "commentsExtensible.xml", "w16cex:commentsExtensible"),
+        for path, root_tag in (
+            (self.comments_path, "w:comments"),
+            (self.comments_extended_path, "w15:commentsEx"),
+            (self.comments_ids_path, "w16cid:commentsIds"),
+            (self.comments_extensible_path, "w16cex:commentsExtensible"),
         ):
-            self._ensure_comment_file(path, template_name)
+            if not path.exists():
+                continue
             editor = self._get_editor(path)
             editor.get_node(tag=root_tag)
-            # comments.xml comes first and is checked in full before a sibling
-            # part is created, so a rejected part leaves nothing new on disk.
             if path == self.comments_path:
                 editor.ensure_namespace("w14", W14_NAMESPACE)
 

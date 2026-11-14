@@ -3041,8 +3041,12 @@ class Document:
             author=self._workspace.author,
             on_save=self._workspace.mark_dirty,
         )
-        wired = {rel_elem.getAttribute("Target") for rel_elem in editor.dom.getElementsByTagName("Relationship")}
-        missing = [(target, rel_type) for target, rel_type in missing if target not in wired]
+        # A part counts as wired by its target or by its relationship type: a
+        # package may spell the target differently ("/word/comments.xml").
+        rel_elems = editor.dom.getElementsByTagName("Relationship")
+        wired = {rel_elem.getAttribute("Target") for rel_elem in rel_elems}
+        wired |= {rel_elem.getAttribute("Type") for rel_elem in rel_elems}
+        missing = [(target, rel_type) for target, rel_type in missing if target not in wired and rel_type not in wired]
         if not missing:
             return
 

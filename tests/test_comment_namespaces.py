@@ -169,6 +169,21 @@ class TestSiblingPartWiring:
         part_names = [o.getAttribute("PartName") for o in types.getElementsByTagName("Override")]
         assert {part: part_names.count(f"/word/{part}") for part in COMMENT_PARTS} == dict.fromkeys(COMMENT_PARTS, 1)
 
+    def test_absolute_target_is_not_wired_twice(self, simple_docx, tmp_path):
+        src = make_docx_with_comments(simple_docx, tmp_path, EMPTY)
+        absolute = tmp_path / "absolute.docx"
+        with zipfile.ZipFile(src) as z_in, zipfile.ZipFile(absolute, "w", zipfile.ZIP_DEFLATED) as z_out:
+            for item in z_in.infolist():
+                data = z_in.read(item.filename)
+                if item.filename == "word/_rels/document.xml.rels":
+                    data = data.replace(b'Target="comments.xml"', b'Target="/word/comments.xml"')
+                z_out.writestr(item, data)
+        out = tmp_path / "out.docx"
+        with Document.open(absolute, author="Tester") as doc:
+            doc.save(out)
+
+        assert read_part(out, "word/_rels/document.xml.rels").count(COMMENTS_REL_TYPE) == 1
+
     def test_second_save_adds_nothing(self, open_doc, tmp_path):
         doc = open_doc(EMPTY)
         doc.add_comment("quick brown", "check this")
@@ -189,7 +204,7 @@ class TestSiblingPartWiring:
 
 
 class TestTypedFailureLeavesNoMarkers:
-    """A part that cannot take the comment fails typed, before document.xml is touched."""
+    """A part that cannot take the comment fails typed and leaves no comment markers."""
 
     @pytest.mark.parametrize(
         "comments_xml", [DEFAULT_NS_ROOT, W14_BOUND_ELSEWHERE], ids=["default-ns-root", "w14-bound-elsewhere"]
@@ -209,12 +224,14 @@ class TestTypedFailureLeavesNoMarkers:
         "comments_xml", [DEFAULT_NS_ROOT, W14_BOUND_ELSEWHERE], ids=["default-ns-root", "w14-bound-elsewhere"]
     )
     def test_note_edit(self, open_doc, comments_xml):
+        """A note is attached after its edit: the edit stays applied, the note leaves no markers."""
         doc = open_doc(comments_xml)
 
         with pytest.raises(XMLError):
             doc.replace("quick", "swift", paragraph=find_ref(doc, "quick brown"), note="plainer word")
 
         assert marker_count(doc) == 0
+        assert len(doc._document_editor.dom.getElementsByTagName("w:ins")) == 1
 
     def test_wrong_w14_binding_is_named(self, open_doc):
         doc = open_doc(W14_BOUND_ELSEWHERE)
@@ -252,6 +269,16 @@ class TestPrefixDeclaredOnNonRootAncestor:
             doc.add_comment("quick", "check this")
 
         assert marker_count(doc) == 0
+
+    def test_failed_add_comment_creates_no_comment_parts(self, doc, tmp_path):
+        with pytest.raises(XMLError):
+            doc.add_comment("quick", "check this")
+
+        out = tmp_path / "out.docx"
+        doc.save(out)
+        with zipfile.ZipFile(out) as z:
+            assert [n for n in z.namelist() if "comments" in n.lower()] == []
+        assert "comments" not in read_part(out, "word/_rels/document.xml.rels")
 
 
 @pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice not installed")
