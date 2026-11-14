@@ -3001,9 +3001,7 @@ class Document:
         alone gains the three sibling parts on its first new comment, and they
         need relationships even though ``comments.xml`` already has one.
         """
-        on_disk = [
-            (target, rel_type) for target, rel_type, _ in COMMENT_PARTS if (self._workspace.word_path / target).exists()
-        ]
+        on_disk = [part for part in COMMENT_PARTS if (self._workspace.word_path / part.name).exists()]
         if not on_disk:
             return
 
@@ -3014,16 +3012,10 @@ class Document:
             author=self._workspace.author,
             on_save=self._workspace.mark_dirty,
         )
-        # A part counts as wired by its target or by its relationship type: a
-        # package may spell the target differently ("/word/comments.xml").
-        rel_elems = editor.dom.getElementsByTagName("Relationship")
-        wired_targets = {rel_elem.getAttribute("Target") for rel_elem in rel_elems}
-        wired_types = {rel_elem.getAttribute("Type") for rel_elem in rel_elems}
-        missing = [
-            (target, rel_type)
-            for target, rel_type in on_disk
-            if target not in wired_targets and rel_type not in wired_types
-        ]
+        # A part is wired when a relationship of its type exists, however the
+        # target is spelled — the rule CommentManager resolves the parts by.
+        wired_types = {rel_elem.getAttribute("Type") for rel_elem in editor.dom.getElementsByTagName("Relationship")}
+        missing = [part for part in on_disk if part.rel_type not in wired_types]
         if not missing:
             return
 
@@ -3031,8 +3023,10 @@ class Document:
         root_tag = root.tagName
         prefix = root_tag.split(":")[0] + ":" if ":" in root_tag else ""
         next_rid_num = int(editor.get_next_rid()[3:])
-        for offset, (target, rel_type) in enumerate(missing):
-            rel_xml = f'<{prefix}Relationship Id="rId{next_rid_num + offset}" Type="{rel_type}" Target="{target}"/>'
+        for offset, part in enumerate(missing):
+            rel_xml = (
+                f'<{prefix}Relationship Id="rId{next_rid_num + offset}" Type="{part.rel_type}" Target="{part.name}"/>'
+            )
             editor.append_to(root, rel_xml)
 
         editor.save()
@@ -3040,9 +3034,9 @@ class Document:
     def _ensure_comment_content_types(self) -> None:
         """Ensure every comment part on disk has a content-type override."""
         on_disk = [
-            (f"/word/{target}", content_type)
-            for target, _, content_type in COMMENT_PARTS
-            if (self._workspace.word_path / target).exists()
+            (f"/word/{part.name}", part.content_type)
+            for part in COMMENT_PARTS
+            if (self._workspace.word_path / part.name).exists()
         ]
         if not on_disk:
             return

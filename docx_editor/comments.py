@@ -10,9 +10,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 from xml.dom.minidom import Element
+from xml.parsers.expat import ExpatError
 
 import defusedxml.minidom
+from defusedxml.common import DefusedXmlException
 
 from .exceptions import (
     AmbiguousTextError,
@@ -84,28 +87,49 @@ class Comment:
         return f"Comment({self.id}: {status}'{self.text[:30]}...' by {self.author}{reply_count}{location})"
 
 
-# (default part file name in word/, relationship type, content type) for the
-# four comment parts. Each is wired on its own at save time.
+class CommentPart(NamedTuple):
+    """One of the four comment parts: how it is named, wired and rooted."""
+
+    name: str  # default file name in word/
+    rel_type: str  # relationship type in document.xml.rels
+    content_type: str  # override in [Content_Types].xml
+    root_tag: str  # the part's document element
+    prefix: str  # prefix of the markup written into the part
+    namespace: str  # what that prefix must be bound to
+
+
 COMMENT_PARTS = (
-    (
+    CommentPart(
         "comments.xml",
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+        "w:comments",
+        "w14",
+        W14_NAMESPACE,
     ),
-    (
+    CommentPart(
         "commentsExtended.xml",
         "http://schemas.microsoft.com/office/2011/relationships/commentsExtended",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml",
+        "w15:commentsEx",
+        "w15",
+        W15_NAMESPACE,
     ),
-    (
+    CommentPart(
         "commentsIds.xml",
         "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+        "w16cid:commentsIds",
+        "w16cid",
+        W16CID_NAMESPACE,
     ),
-    (
+    CommentPart(
         "commentsExtensible.xml",
         "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml",
+        "w16cex:commentsExtensible",
+        "w16cex",
+        W16CEX_NAMESPACE,
     ),
 )
 
@@ -151,13 +175,16 @@ class CommentManager:
         self.initials = initials
         self._on_write = on_write
 
-        # Comment file paths, and relationship targets that name no usable part
-        self._unusable_targets: list[str] = []
+        # Comment file paths, in COMMENT_PARTS order, and why a new comment
+        # cannot be wired (empty when it can).
         (
-            self.comments_path,
-            self.comments_extended_path,
-            self.comments_ids_path,
-            self.comments_extensible_path,
+            (
+                self.comments_path,
+                self.comments_extended_path,
+                self.comments_ids_path,
+                self.comments_extensible_path,
+            ),
+            self._unusable_relationships,
         ) = self._resolve_comment_parts()
 
         # Cache for lazy-loaded editors
@@ -167,39 +194,70 @@ class CommentManager:
         self.existing_comments = self._load_existing_comments()
         self.next_comment_id = self._get_next_comment_id()
 
-    def _resolve_comment_parts(self) -> list[Path]:
-        """Return the path of each comment part, in ``COMMENT_PARTS`` order.
+    def _resolve_comment_parts(self) -> tuple[list[Path], list[str]]:
+        """Return each comment part's path (``COMMENT_PARTS`` order) and the relationships that cannot be honoured.
 
         A comment part is the one ``document.xml.rels`` names for its
         relationship type, whatever its file name (``word/comments1.xml``).
-        A type with no relationship gets the default name, where the part is
-        created on the first comment and wired at save.
+        A type with no relationship, or one that names the default file, gets
+        the default name, where the part is created on the first comment and
+        wired at save.
 
-        A relationship whose target is not a file in the package, other than
-        the default name, cannot be honoured: a part created under the default
-        name would stay unwired, because its type already has a relationship.
-        Such targets are recorded and :meth:`_prepare_comment_parts` refuses
-        to add a comment.
+        A target under another name is adopted only when it is a file whose
+        document element is the part's expected root. Anything else — a
+        missing file, another kind of part such as ``document.xml``, an
+        external target, two different parts for one type — cannot be
+        honoured: adopting it would put a second editor on a part the document
+        already edits, and a part created under the default name instead would
+        stay unwired, because its type already has a relationship. Each such
+        relationship is described in the second list, and
+        :meth:`_prepare_comment_parts` refuses to add a comment while it is
+        non-empty.
         """
-        paths = {rel_type: self.word_path / name for name, rel_type, _ in COMMENT_PARTS}
+        resolved: dict[str, set[Path]] = {part.rel_type: set() for part in COMMENT_PARTS}
+        unusable: list[str] = []
         rels_path = self.word_path / "_rels" / "document.xml.rels"
         if rels_path.exists():
+            parts_by_type = {part.rel_type: part for part in COMMENT_PARTS}
             rels = defusedxml.minidom.parse(str(rels_path))
             for rel_elem in rels.getElementsByTagName("Relationship"):
-                rel_type = rel_elem.getAttribute("Type")
-                if rel_type not in paths:
+                part = parts_by_type.get(rel_elem.getAttribute("Type"))
+                if part is None:
                     continue
                 target = rel_elem.getAttribute("Target")
+                if rel_elem.getAttribute("TargetMode") == "External":
+                    unusable.append(f"{part.name} relationship has the external target {target!r}")
+                    continue
                 # An OPC target is a reference relative to the source part,
                 # /word/document.xml. normpath cannot climb above the root of
                 # an absolute path, so the result stays inside the workspace.
                 part_name = posixpath.normpath(posixpath.join("/word", target))
                 part_path = self.workspace_path / part_name.lstrip("/")
-                if part_path.is_file():
-                    paths[rel_type] = part_path
-                elif part_path != paths[rel_type]:
-                    self._unusable_targets.append(target)
-        return [paths[rel_type] for _, rel_type, _ in COMMENT_PARTS]
+                if part_path == self.word_path / part.name or self._has_root(part_path, part.root_tag):
+                    resolved[part.rel_type].add(part_path)
+                else:
+                    unusable.append(f"{part.name} relationship target {target!r} is not a comment part of this package")
+        paths = []
+        for part in COMMENT_PARTS:
+            candidates = resolved[part.rel_type]
+            if len(candidates) > 1:
+                unusable.append(f"{part.name} relationships name more than one part")
+            paths.append(candidates.pop() if len(candidates) == 1 else self.word_path / part.name)
+        return paths, unusable
+
+    @staticmethod
+    def _has_root(path: Path, root_tag: str) -> bool:
+        """Whether ``path`` is a well-formed XML file whose document element is ``root_tag``.
+
+        Parsed on its own, never through :meth:`_get_editor`: a file that
+        fails this test must not end up in the editor cache.
+        """
+        if not path.is_file():
+            return False
+        try:
+            return defusedxml.minidom.parse(str(path)).documentElement.tagName == root_tag
+        except (ExpatError, DefusedXmlException):
+            return False
 
     def _get_editor(self, xml_path: Path) -> DocxXMLEditor:
         """Get or create an editor for the specified XML file."""
@@ -1021,47 +1079,42 @@ class CommentManager:
 
         Called before the first marker goes into document.xml, so everything
         that can fail for a pre-existing part fails while the document is still
-        untouched: a part whose root is not the expected prefixed element
-        (``NodeNotFoundError``), and a part that binds the prefix its new
-        markup uses to another namespace. A ``comments.xml`` written by a
-        producer that never emits ``w14:paraId`` declares no ``xmlns:w14`` at
-        all; it is added here.
+        untouched:
 
-        A comment relationship that points at a missing part is refused here
-        too (see :meth:`_resolve_comment_parts`).
+        - a comment relationship that cannot be honoured (see
+          :meth:`_resolve_comment_parts`);
+        - a part whose document element is not the expected prefixed element;
+        - a part that binds the prefix its new markup uses to another
+          namespace.
+
+        A ``comments.xml`` written by a producer that never emits
+        ``w14:paraId`` declares no ``xmlns:w14`` at all; it is added here.
 
         A missing part is not created here: the ``_add_to_*`` helpers copy it
-        from its template once the markers are in, and a template cannot fail
-        these checks. A call that fails therefore leaves no new part behind.
+        from its template once the markers are in. A call that fails therefore
+        leaves no new part behind.
 
         Raises:
-            XMLError: If a part cannot take the comment markup.
+            XMLError: If a new comment cannot be written and wired
+                (``NodeNotFoundError``, a subclass, when a part does not
+                contain the expected element at all).
         """
-        if self._unusable_targets:
-            raise XMLError(
-                f"document.xml.rels: comment relationship target {self._unusable_targets[0]!r} "
-                "is not a part of this package; a new comment could not be wired"
-            )
+        if self._unusable_relationships:
+            raise XMLError(f"document.xml.rels: {'; '.join(self._unusable_relationships)}; cannot add a comment")
+        paths = (self.comments_path, self.comments_extended_path, self.comments_ids_path, self.comments_extensible_path)
         existing = [
-            (self._get_editor(path), root_tag, prefix, uri)
-            for path, root_tag, prefix, uri in (
-                (self.comments_path, "w:comments", "w14", W14_NAMESPACE),
-                (self.comments_extended_path, "w15:commentsEx", "w15", W15_NAMESPACE),
-                (self.comments_ids_path, "w16cid:commentsIds", "w16cid", W16CID_NAMESPACE),
-                (self.comments_extensible_path, "w16cex:commentsExtensible", "w16cex", W16CEX_NAMESPACE),
-            )
-            if path.exists()
+            (self._get_editor(path), part) for path, part in zip(paths, COMMENT_PARTS, strict=True) if path.exists()
         ]
         # Check every part before changing any: a rejected part leaves the
         # others exactly as they were.
-        for editor, root_tag, prefix, uri in existing:
+        for editor, part in existing:
             root = editor.dom.documentElement
-            if editor.get_node(tag=root_tag) is not root:
-                raise XMLError(f"{editor.xml_path.name}: root element is <{root.tagName}>, expected <{root_tag}>")
-            if root.hasAttribute(f"xmlns:{prefix}"):
-                editor.ensure_namespace(prefix, uri)
-        for editor, _, prefix, uri in existing:
-            editor.ensure_namespace(prefix, uri)
+            if editor.get_node(tag=part.root_tag) is not root:
+                raise XMLError(f"{editor.xml_path.name}: root element is <{root.tagName}>, expected <{part.root_tag}>")
+            if root.hasAttribute(f"xmlns:{part.prefix}"):
+                editor.ensure_namespace(part.prefix, part.namespace)
+        for editor, part in existing:
+            editor.ensure_namespace(part.prefix, part.namespace)
 
     def _add_to_comments_xml(self, comment_id: int, para_id: str, text: str, timestamp: str) -> None:
         """Add a single comment to comments.xml."""

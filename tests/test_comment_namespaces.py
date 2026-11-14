@@ -13,7 +13,7 @@ from pathlib import Path
 
 import defusedxml.minidom
 import pytest
-from conftest import find_ref, replace_document_xml
+from conftest import find_ref, replace_document_xml, replace_docx_parts
 from test_corpus_harness import harness
 
 from docx_editor import Document
@@ -23,7 +23,7 @@ W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
 COMMENTS_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
 COMMENTS_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"
-COMMENT_PARTS = ("comments.xml", "commentsExtended.xml", "commentsIds.xml", "commentsExtensible.xml")
+COMMENT_PART_NAMES = ("comments.xml", "commentsExtended.xml", "commentsIds.xml", "commentsExtensible.xml")
 
 XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
 EMPTY = f'{XML_DECL}<w:comments xmlns:w="{W_NS}"/>'
@@ -65,6 +65,22 @@ def make_docx_with_comments(
 def read_part(docx: Path, name: str) -> str:
     with zipfile.ZipFile(docx) as z:
         return z.read(name).decode("utf-8")
+
+
+RELS = "word/_rels/document.xml.rels"
+
+
+def rewrite_rels(src: Path, dest: Path, old: str, new: str) -> Path:
+    """Copy ``src`` to ``dest`` with ``old`` replaced by ``new`` in ``document.xml.rels``."""
+    rels = read_part(src, RELS)
+    assert old in rels
+    replace_docx_parts(src, dest, {RELS: rels.replace(old, new)})
+    return dest
+
+
+def add_relationship(src: Path, dest: Path, rel_type: str, target: str, extra: str = "") -> Path:
+    rel = f'<Relationship Id="rId901" Type="{rel_type}" Target="{target}"{extra}/>'
+    return rewrite_rels(src, dest, "</Relationships>", rel + "</Relationships>")
 
 
 def marker_count(doc: Document) -> int:
@@ -168,23 +184,20 @@ class TestSiblingPartWiring:
         rels = defusedxml.minidom.parseString(read_part(out, "word/_rels/document.xml.rels"))
         rel_elems = rels.getElementsByTagName("Relationship")
         targets = [r.getAttribute("Target") for r in rel_elems]
-        assert {part: targets.count(part) for part in COMMENT_PARTS} == dict.fromkeys(COMMENT_PARTS, 1)
+        assert {part: targets.count(part) for part in COMMENT_PART_NAMES} == dict.fromkeys(COMMENT_PART_NAMES, 1)
         ids = [r.getAttribute("Id") for r in rel_elems]
         assert len(ids) == len(set(ids))
 
         types = defusedxml.minidom.parseString(read_part(out, "[Content_Types].xml"))
         part_names = [o.getAttribute("PartName") for o in types.getElementsByTagName("Override")]
-        assert {part: part_names.count(f"/word/{part}") for part in COMMENT_PARTS} == dict.fromkeys(COMMENT_PARTS, 1)
+        assert {part: part_names.count(f"/word/{part}") for part in COMMENT_PART_NAMES} == dict.fromkeys(
+            COMMENT_PART_NAMES, 1
+        )
 
     def test_absolute_target_is_not_wired_twice(self, simple_docx, tmp_path):
         src = make_docx_with_comments(simple_docx, tmp_path, EMPTY)
         absolute = tmp_path / "absolute.docx"
-        with zipfile.ZipFile(src) as z_in, zipfile.ZipFile(absolute, "w", zipfile.ZIP_DEFLATED) as z_out:
-            for item in z_in.infolist():
-                data = z_in.read(item.filename)
-                if item.filename == "word/_rels/document.xml.rels":
-                    data = data.replace(b'Target="comments.xml"', b'Target="/word/comments.xml"')
-                z_out.writestr(item, data)
+        rewrite_rels(src, absolute, 'Target="comments.xml"', 'Target="/word/comments.xml"')
         out = tmp_path / "out.docx"
         with Document.open(absolute, author="Tester") as doc:
             doc.save(out)
@@ -245,12 +258,7 @@ class TestCommentsPartUnderAnotherName:
     def test_absolute_target_names_the_same_part(self, simple_docx, tmp_path):
         src = make_docx_with_comments(simple_docx, tmp_path, ONE_OLD_COMMENT, part_name="comments1.xml")
         absolute = tmp_path / "absolute.docx"
-        with zipfile.ZipFile(src) as z_in, zipfile.ZipFile(absolute, "w", zipfile.ZIP_DEFLATED) as z_out:
-            for item in z_in.infolist():
-                data = z_in.read(item.filename)
-                if item.filename == "word/_rels/document.xml.rels":
-                    data = data.replace(b'Target="comments1.xml"', b'Target="/word/comments1.xml"')
-                z_out.writestr(item, data)
+        rewrite_rels(src, absolute, 'Target="comments1.xml"', 'Target="/word/comments1.xml"')
         out = tmp_path / "out.docx"
         with Document.open(absolute, author="Tester") as doc:
             doc.add_comment("quick brown", "check this")
@@ -275,16 +283,11 @@ class TestCommentsPartUnderAnotherName:
     def test_external_target_refuses_the_comment(self, simple_docx, tmp_path):
         src = make_docx_with_comments(simple_docx, tmp_path, None, part_name="comments1.xml")
         external = tmp_path / "external.docx"
-        with zipfile.ZipFile(src) as z_in, zipfile.ZipFile(external, "w", zipfile.ZIP_DEFLATED) as z_out:
-            for item in z_in.infolist():
-                data = z_in.read(item.filename)
-                if item.filename == "word/_rels/document.xml.rels":
-                    data = data.replace(
-                        b'Target="comments1.xml"', b'Target="https://example.invalid/c.xml" TargetMode="External"'
-                    )
-                z_out.writestr(item, data)
+        rewrite_rels(
+            src, external, 'Target="comments1.xml"', 'Target="https://example.invalid/c.xml" TargetMode="External"'
+        )
         with Document.open(external, author="Tester") as doc:
-            with pytest.raises(XMLError, match="is not a part of this package"):
+            with pytest.raises(XMLError, match="external target"):
                 doc.add_comment("quick brown", "check this")
 
             assert marker_count(doc) == 0
@@ -300,6 +303,65 @@ class TestCommentsPartUnderAnotherName:
         with Document.open(out, author="Tester") as reopened:
             assert [c.text for c in reopened.list_comments()] == ["check this"]
         assert read_part(out, "word/_rels/document.xml.rels").count(f'Type="{COMMENTS_REL_TYPE}"') == 1
+
+    def test_two_parts_of_one_type_refuse_the_comment(self, simple_docx, tmp_path):
+        src = make_docx_with_comments(simple_docx, tmp_path, ONE_OLD_COMMENT, part_name="comments1.xml")
+        with zipfile.ZipFile(src, "a") as z:
+            z.writestr("word/comments2.xml", EMPTY)
+        two = add_relationship(src, tmp_path / "two.docx", COMMENTS_REL_TYPE, "comments2.xml")
+        with Document.open(two, author="Tester") as doc:
+            with pytest.raises(XMLError, match="more than one part"):
+                doc.add_comment("quick brown", "check this")
+
+            assert marker_count(doc) == 0
+
+
+class TestRelationshipNamingAnotherPart:
+    """A comment relationship is honoured only when its target is a comment part.
+
+    Adopting any other file would put a second editor on a part the document
+    already edits, and the stale copy would overwrite it at save.
+    """
+
+    EXTENDED_REL_TYPE = "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
+
+    @pytest.mark.parametrize("rel_type", [COMMENTS_REL_TYPE, EXTENDED_REL_TYPE], ids=["comments", "commentsExtended"])
+    @pytest.mark.parametrize("target", ["document.xml", "_rels/document.xml.rels", "../[Content_Types].xml"])
+    def test_tracked_edit_survives_save(self, simple_docx, tmp_path, rel_type, target):
+        src = add_relationship(simple_docx, tmp_path / "aliased.docx", rel_type, target)
+        out = tmp_path / "out.docx"
+        with Document.open(src, author="Tester") as doc:
+            doc.replace("quick", "swift", paragraph=find_ref(doc, "quick brown"))
+            with pytest.raises(XMLError, match="is not a comment part"):
+                doc.add_comment("brown", "check this")
+            assert marker_count(doc) == 0
+            doc.save(out)
+
+        assert "swift" in read_part(out, "word/document.xml")
+        with Document.open(out, author="Tester") as reopened:
+            assert len(reopened.list_revisions()) == 2
+
+    def test_external_target_with_a_local_looking_name_refuses_the_comment(self, simple_docx, tmp_path):
+        src = make_docx_with_comments(simple_docx, tmp_path, EMPTY)
+        external = rewrite_rels(
+            src, tmp_path / "external.docx", 'Target="comments.xml"', 'Target="comments.xml" TargetMode="External"'
+        )
+        with Document.open(external, author="Tester") as doc:
+            with pytest.raises(XMLError, match="external"):
+                doc.add_comment("quick brown", "check this")
+
+            assert marker_count(doc) == 0
+
+    def test_another_type_targeting_comments_xml_does_not_count_as_wired(self, simple_docx, tmp_path):
+        src = make_docx_with_comments(simple_docx, tmp_path, EMPTY)
+        other = rewrite_rels(src, tmp_path / "other.docx", COMMENTS_REL_TYPE, "urn:not-the-comments-type")
+        out = tmp_path / "out.docx"
+        with Document.open(other, author="Tester") as doc:
+            doc.add_comment("quick brown", "check this")
+            doc.save(out)
+
+        rels = read_part(out, RELS)
+        assert rels.count(f'Type="{COMMENTS_REL_TYPE}"') == 1
 
 
 class TestTypedFailureLeavesNoMarkers:
