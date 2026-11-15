@@ -1,12 +1,28 @@
 """Custom exceptions and warnings for docx_editor library."""
 
+import re
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+
+MAX_REPORTED_MATCHES = 10
+"""Most matches an ``AmbiguousTextError`` lists; the rest are counted in ``matches_omitted``."""
+
+MATCH_CONTEXT_CHARS = 30
+"""Characters of surrounding text a ``MatchLocation.context`` keeps on each side of the match."""
 
 
 class DocxEditError(Exception):
-    """Base exception for all docx_editor errors."""
+    """Base exception for all docx_editor errors.
 
-    pass
+    Attributes:
+        next: The one call that usually resolves this error, as a short
+            imperative (``"get_paragraph(3)"``, ``"retry with occurrence=N
+            (0..2)"``), or None when no single call does — including errors
+            whose recovery discards data or needs the user.
+    """
+
+    next: str | None = None
 
 
 class DocumentNotFoundError(DocxEditError):
@@ -179,10 +195,12 @@ class DocumentClosedError(DocxEditError):
 
     Attributes:
         path: Source path of the closed document, or None if unknown.
+        next: ``"Document.open(path)"``.
     """
 
     def __init__(self, message: str, *, path: Path | None = None):
         self.path = path
+        self.next = "Document.open(path)"
         super().__init__(message)
 
 
@@ -217,6 +235,7 @@ class RevisionError(DocxEditError):
             unknown changeset passed to
             ``accept_changeset``/``reject_changeset``), or None if the error
             is not about a changeset.
+        next: Supplied by the raising site (see ``DocxEditError.next``).
     """
 
     def __init__(
@@ -226,10 +245,12 @@ class RevisionError(DocxEditError):
         revision_id: int | None = None,
         group_id: int | None = None,
         changeset_id: int | None = None,
+        next: str | None = None,
     ):
         self.revision_id = revision_id
         self.group_id = group_id
         self.changeset_id = changeset_id
+        self.next = next
         super().__init__(message)
 
 
@@ -239,10 +260,12 @@ class CommentError(DocxEditError):
     Attributes:
         comment_id: The comment id the operation targeted (e.g. the parent id
             of a failed reply), or None if no comment id applies.
+        next: Supplied by the raising site (see ``DocxEditError.next``).
     """
 
-    def __init__(self, message: str, *, comment_id: int | None = None):
+    def __init__(self, message: str, *, comment_id: int | None = None, next: str | None = None):
         self.comment_id = comment_id
+        self.next = next
         super().__init__(message)
 
 
@@ -265,6 +288,43 @@ def _append_preview(msg: str, preview: str) -> str:
     return f'{msg}{sep}Current content: "{preview}"'
 
 
+@dataclass(frozen=True)
+class MatchLocation:
+    """One match listed on an ``AmbiguousTextError``.
+
+    Attributes:
+        occurrence: The value to pass as ``occurrence=`` to the call that
+            raised, to select this match. It counts within the paragraph when
+            that call was scoped with ``paragraph=``, and document-wide when it
+            was not — so pass it back to the same call, unchanged in scope.
+        paragraph_ref: Hash-anchored reference (``"P3#a7b2"``) of the
+            paragraph holding the match, valid for the document as it was
+            when the error was raised.
+        context: The matched text with up to 30 characters of surrounding
+            paragraph text on each side, ``...`` where the paragraph was cut,
+            and a tab mark spelled ``\\t``.
+    """
+
+    occurrence: int
+    paragraph_ref: str
+    context: str
+
+
+def _match_context(text: str, start: int, end: int) -> str:
+    """The match ``text[start:end]`` with ``MATCH_CONTEXT_CHARS`` of context per side."""
+    lo = max(0, start - MATCH_CONTEXT_CHARS)
+    hi = min(len(text), end + MATCH_CONTEXT_CHARS)
+    snippet = text[lo:hi].replace("\t", "\\t")
+    return ("..." if lo > 0 else "") + snippet + ("..." if hi < len(text) else "")
+
+
+_REF_INDEX_RE = re.compile(r"^P(\d+)#")
+
+
+def _retry_occurrence_hint(total: int) -> str:
+    return f"retry with occurrence=N (0..{total - 1})"
+
+
 class TextNotFoundError(DocxEditError):
     """Raised when the target text cannot be found in the document.
 
@@ -283,6 +343,9 @@ class TextNotFoundError(DocxEditError):
             lookups), or None otherwise.
         total_occurrences: Actual number of occurrences found, or None for
             non-occurrence lookups.
+        next: ``"retry with occurrence=N (0..K)"`` when the occurrence was out
+            of range; ``"get_paragraph(N).text"`` when a scoped search found
+            nothing; ``"find_all(text)"`` when a document-wide one did not.
     """
 
     def __init__(
@@ -299,6 +362,14 @@ class TextNotFoundError(DocxEditError):
         self.paragraph_preview = _truncate_preview(paragraph_preview) if paragraph_preview is not None else None
         self.occurrence = occurrence
         self.total_occurrences = total_occurrences
+
+        ref_index = _REF_INDEX_RE.match(paragraph_ref) if paragraph_ref is not None else None
+        if occurrence is not None and total_occurrences is not None:
+            self.next = _retry_occurrence_hint(total_occurrences)
+        elif ref_index is not None:
+            self.next = f"get_paragraph({ref_index.group(1)}).text"
+        else:
+            self.next = "find_all(text)"
 
         if occurrence is not None and total_occurrences is not None:
             msg = (
@@ -324,8 +395,8 @@ class AmbiguousTextError(DocxEditError):
     Edit methods called without an explicit ``occurrence`` require the target
     text to be unique within the search scope; otherwise the intended match is
     ambiguous and editing the first one silently risks changing the wrong text.
-    Pass ``occurrence=`` (0-based) to pick a match, or enumerate every match
-    with ``find_all()``.
+    The message lists the matches as a pick-list; pass one's ``occurrence=``
+    (0-based) back to the same call to choose it.
 
     Attributes:
         search_text: The text that matched multiple times.
@@ -333,8 +404,14 @@ class AmbiguousTextError(DocxEditError):
             if the search was document-wide.
         paragraph_preview: Current visible text of the scoped paragraph
             (truncated to 80 chars with "..." suffix; a tab mark is spelled
-            ``\\t``), or None if unscoped.
+            ``\\t``), or None if unscoped. Kept for compatibility; the
+            message shows ``matches`` instead.
         total_occurrences: Number of matches found in the search scope.
+        matches: The first ``MAX_REPORTED_MATCHES`` (10) matches as
+            ``MatchLocation`` records, in document order.
+        matches_omitted: How many matches ``matches`` leaves out
+            (``total_occurrences - len(matches)``); ``find_all()`` lists them.
+        next: ``"retry with occurrence=N (0..K)"``.
     """
 
     def __init__(
@@ -344,20 +421,24 @@ class AmbiguousTextError(DocxEditError):
         paragraph_ref: str | None = None,
         paragraph_preview: str | None = None,
         total_occurrences: int,
+        matches: Sequence[MatchLocation] = (),
     ):
         self.search_text = search_text
         self.paragraph_ref = paragraph_ref
         self.paragraph_preview = _truncate_preview(paragraph_preview) if paragraph_preview is not None else None
         self.total_occurrences = total_occurrences
+        self.matches = list(matches[:MAX_REPORTED_MATCHES])
+        self.matches_omitted = max(0, total_occurrences - len(self.matches))
+        self.next = _retry_occurrence_hint(total_occurrences)
 
         scope = f"paragraph {paragraph_ref}" if paragraph_ref is not None else "the document"
-        msg = (
-            f"'{search_text}' matches {total_occurrences} times in {scope}. "
-            f"Pass occurrence= (0-based) to pick one, or use find_all() to list every match."
-        )
-        if self.paragraph_preview is not None:
-            msg = _append_preview(msg, self.paragraph_preview)
-        super().__init__(msg)
+        lines = [
+            f"'{search_text}' matches {total_occurrences} times in {scope}. Pass occurrence= (0-based) to pick one:"
+        ]
+        lines += [f'  occurrence={m.occurrence}  {m.paragraph_ref}  "{m.context}"' for m in self.matches]
+        if self.matches_omitted:
+            lines.append(f"  (+{self.matches_omitted} more; find_all() lists every match)")
+        super().__init__("\n".join(lines))
 
 
 class ParagraphIndexError(DocxEditError):
@@ -366,11 +447,13 @@ class ParagraphIndexError(DocxEditError):
     Attributes:
         index: The paragraph index supplied by the caller (1-indexed).
         total_paragraphs: Number of paragraphs the document actually has.
+        next: ``"list_paragraphs()"``.
     """
 
     def __init__(self, index: int, total_paragraphs: int):
         self.index = index
         self.total_paragraphs = total_paragraphs
+        self.next = "list_paragraphs()"
         if total_paragraphs == 0:
             msg = f"Paragraph index {index} out of range. Document has no paragraphs."
         else:
@@ -392,23 +475,34 @@ class BatchOperationError(DocxEditError):
         original: The underlying exception that caused the failure (also set
             as ``__cause__``), or None. Typed recovery data stays reachable
             through it, e.g. ``e.original.actual_hash`` for a stale hash.
+        next: ``original.next`` when ``original`` is a library error, else None.
     """
 
     def __init__(self, operation_index: int, reason: str, *, original: Exception | None = None):
         self.operation_index = operation_index
         self.reason = reason
         self.original = original
+        self.next = original.next if isinstance(original, DocxEditError) else None
         super().__init__(f"Operation {operation_index}: {reason}")
 
 
 class HashMismatchError(DocxEditError):
-    """Raised when a paragraph's content hash doesn't match the expected hash."""
+    """Raised when a paragraph's content hash doesn't match the expected hash.
+
+    Attributes:
+        paragraph_index: 1-based index of the paragraph.
+        expected_hash: The hash the caller's reference carried.
+        actual_hash: The paragraph's current hash.
+        paragraph_preview: Current visible text of the paragraph (truncated).
+        next: ``"get_paragraph(N)"``.
+    """
 
     def __init__(self, paragraph_index: int, expected_hash: str, actual_hash: str, paragraph_preview: str):
         self.paragraph_index = paragraph_index
         self.expected_hash = expected_hash
         self.actual_hash = actual_hash
         self.paragraph_preview = paragraph_preview
+        self.next = f"get_paragraph({paragraph_index})"
         super().__init__(
             f"Paragraph P{paragraph_index} content has changed. "
             f"Expected hash '{expected_hash}', got '{actual_hash}'. "

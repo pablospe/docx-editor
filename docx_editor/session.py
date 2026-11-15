@@ -689,6 +689,11 @@ def __docx_session_eval():
                 payload[key] = repr(val)
             else:
                 payload[key] = val
+        # Every library error carries the "next" key (None when no single call
+        # resolves it); a builtin error, whose class has no such attribute,
+        # stays exactly {"type", "message"}.
+        if "next" not in payload and hasattr(type(exc), "next"):
+            payload["next"] = None
         return payload
 
     try:
@@ -743,7 +748,10 @@ def eval_code(expr: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
     When the expression raises, status is "error" and `error` holds
     {"type", "message", <structured recovery fields>} captured from the
     exception object kernel-side (e.g. actual_hash for a HashMismatchError),
-    with a compact path-stripped traceback. Exceptions that bypass the
+    with a compact path-stripped traceback. A library error always has a
+    "next" key — the one call that usually resolves it, or None — and an
+    AmbiguousTextError adds "matches" (a list of {"occurrence",
+    "paragraph_ref", "context"} objects) and "matches_omitted". Exceptions that bypass the
     kernel-side capture (KeyboardInterrupt/SystemExit, transport failures)
     still ride the exec path: `error` stays None and `traceback` holds the
     IPython-formatted trace.

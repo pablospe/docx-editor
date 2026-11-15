@@ -29,6 +29,7 @@ from .exceptions import (
 )
 from .track_changes.dom import _addressable_paragraph, _adjudicable_id
 from .track_changes.listing import _RevisionLocationContext
+from .track_changes.locate import _match_locations
 from .xml_editor import (
     W14_NAMESPACE,
     W15_NAMESPACE,
@@ -534,6 +535,7 @@ class CommentManager:
                         paragraph_ref=paragraph,
                         paragraph_preview=text_map.text,
                         total_occurrences=total,
+                        matches=_match_locations([(0, p)], anchor_text, scoped_ref=paragraph),
                     )
                 return p, match
             if total > 0:
@@ -571,7 +573,13 @@ class CommentManager:
                 local += 1
         if found is not None:
             if occurrence is None and current > 1:
-                raise AmbiguousTextError(anchor_text, total_occurrences=current)
+                raise AmbiguousTextError(
+                    anchor_text,
+                    total_occurrences=current,
+                    matches=_match_locations(
+                        enumerate(body_paragraphs(self.document_editor.dom), start=1), anchor_text
+                    ),
+                )
             return found
         if current > 0:
             raise TextNotFoundError(
@@ -748,6 +756,7 @@ class CommentManager:
             raise CommentError(
                 f"Parent comment with id={parent_comment_id} not found",
                 comment_id=parent_comment_id,
+                next="list_comments()",
             )
 
         comment_id = self.next_comment_id

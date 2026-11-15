@@ -26,6 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from conftest import NS, replace_document_xml
 
 from docx_editor import (
     AmbiguousTextError,
@@ -36,13 +37,16 @@ from docx_editor import (
     DocumentNotFoundError,
     DocxEditError,
     EditOperation,
+    HashMismatchError,
     InvalidDocumentError,
+    MatchLocation,
     ParagraphIndexError,
     RevisionError,
     TextNotFoundError,
     WorkspaceLockedError,
     WorkspaceSyncError,
 )
+from docx_editor.exceptions import _match_context
 
 
 @pytest.fixture
@@ -307,9 +311,9 @@ class TestAmbiguousTextErrorQuality:
     signal that it may have edited the wrong text.
 
     After: an omitted occurrence requires the target to be unique in the
-    search scope. `AmbiguousTextError` carries `total_occurrences` and
-    names both recovery paths (explicit `occurrence=` or `find_all()`);
-    explicit `occurrence=0` keeps the old first-match behavior per call.
+    search scope. `AmbiguousTextError` carries `total_occurrences` and a
+    pick-list of the matches (see TestAmbiguityMatchLocations); explicit
+    `occurrence=0` keeps the old first-match behavior per call.
     """
 
     AMBIGUOUS = "alpha beta alpha gamma alpha."
@@ -344,7 +348,8 @@ class TestAmbiguousTextErrorQuality:
                 msg = str(err)
                 assert "matches 3 times" in msg
                 assert "occurrence=" in msg
-                assert "find_all()" in msg
+                # Three matches fit the pick-list: no "+N more" pointer.
+                assert "find_all()" not in msg
         finally:
             doc.close()
 
@@ -389,7 +394,7 @@ class TestAmbiguousTextErrorQuality:
                 assert "matches 3 times" in msg
                 assert "in the document" in msg
                 assert "occurrence=" in msg
-                assert "find_all()" in msg
+                assert "find_all()" not in msg
             assert doc.list_revisions() == []
         finally:
             doc.close()
@@ -429,6 +434,257 @@ class TestAmbiguousTextErrorQuality:
             assert "matches 3 times" in error
         finally:
             doc.close()
+
+
+class TestAmbiguityMatchLocations:
+    """
+    Before: an ambiguous target said only "matches N times"; the agent had to
+    call find_all() to learn where the matches were, then work out which
+    `occurrence=` selects the one it meant.
+
+    After: the error lists the matches (`matches`, capped at 10, with
+    `matches_omitted` counting the rest), each with the `occurrence` to pass
+    back to the same call, its paragraph ref and surrounding text, and the
+    message is that pick-list.
+    """
+
+    AMBIGUOUS = TestAmbiguousTextErrorQuality.AMBIGUOUS
+
+    def test_scoped_matches_list_every_verb(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, [self.AMBIGUOUS, "one needle only."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            for call in TestAmbiguousTextErrorQuality()._edit_calls(doc, ref):
+                with pytest.raises(AmbiguousTextError) as exc:
+                    call()
+                err = exc.value
+                assert [m.occurrence for m in err.matches] == [0, 1, 2]
+                assert all(isinstance(m, MatchLocation) for m in err.matches)
+                assert {m.paragraph_ref for m in err.matches} == {ref}
+                assert all("alpha" in m.context for m in err.matches)
+                assert err.matches_omitted == 0
+                assert err.next == "retry with occurrence=N (0..2)"
+        finally:
+            doc.close()
+
+    def test_message_is_a_pick_list(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, [self.AMBIGUOUS])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(AmbiguousTextError) as exc:
+                doc.replace("alpha", "x", paragraph=ref)
+            lines = str(exc.value).splitlines()
+            assert lines[0] == f"'alpha' matches 3 times in paragraph {ref}. Pass occurrence= (0-based) to pick one:"
+            assert lines[1:] == [f'  occurrence={m.occurrence}  {ref}  "{m.context}"' for m in exc.value.matches]
+            assert "Current content" not in str(exc.value)
+        finally:
+            doc.close()
+
+    @pytest.mark.parametrize("verb", ["replace", "delete"])
+    def test_scoped_occurrence_round_trips(self, doc_path, verb):
+        """Passing a listed occurrence back to the same call edits that match."""
+        doc = _build_doc_with_paragraphs(doc_path, [self.AMBIGUOUS])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            call = {
+                "replace": lambda **kw: doc.replace("alpha", "X", paragraph=ref, **kw),
+                "delete": lambda **kw: doc.delete("alpha", paragraph=ref, **kw),
+            }[verb]
+            with pytest.raises(AmbiguousTextError) as exc:
+                call()
+            call(occurrence=exc.value.matches[1].occurrence)
+            doc.accept_all()
+            expected = "alpha beta X gamma alpha." if verb == "replace" else "alpha beta  gamma alpha."
+            assert doc.get_paragraph(1).text == expected
+        finally:
+            doc.close()
+
+    def test_docwide_anchor_numbers_matches_document_wide(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["alpha one alpha", "beta only", "two alpha"])
+        try:
+            with pytest.raises(AmbiguousTextError) as exc:
+                doc.add_comment("alpha", "note")
+            matches = exc.value.matches
+            assert [m.occurrence for m in matches] == [0, 1, 2]
+            refs = [m.paragraph_ref for m in matches]
+            assert refs[0] == refs[1] != refs[2]
+            assert refs[0].startswith("P1#") and refs[2].startswith("P3#")
+            for m in matches:
+                assert doc.find_all("alpha", paragraph=m.paragraph_ref)  # each ref resolves
+            assert exc.value.next == "retry with occurrence=N (0..2)"
+            comment_id = doc.add_comment("alpha", "note", occurrence=matches[2].occurrence)
+            (comment,) = [c for c in doc.list_comments() if c.id == comment_id]
+            assert comment.paragraph_ref == refs[2]
+        finally:
+            doc.close()
+
+    def test_manager_docwide_edit_lists_document_wide_occurrences(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["alpha one", "two alpha alpha"])
+        try:
+            manager = doc._revision_manager
+            with pytest.raises(AmbiguousTextError) as exc:
+                manager.replace_text("alpha", "X")
+            matches = exc.value.matches
+            assert [(m.occurrence, m.paragraph_ref[:3]) for m in matches] == [(0, "P1#"), (1, "P2#"), (2, "P2#")]
+            manager.replace_text("alpha", "X", occurrence=matches[2].occurrence)
+            doc.accept_all()
+            assert doc.get_paragraph(2).text == "two alpha X"
+        finally:
+            doc.close()
+
+    def test_matches_are_capped_at_ten(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, [" ".join(["ab"] * 25)])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(AmbiguousTextError) as exc:
+                doc.replace("ab", "x", paragraph=ref)
+            err = exc.value
+            assert err.total_occurrences == 25
+            assert len(err.matches) == 10
+            assert err.matches_omitted == 15
+            lines = str(err).splitlines()
+            assert len(lines) == 12  # header + 10 picks + the "+15 more" line
+            assert lines[-1] == "  (+15 more; find_all() lists every match)"
+            assert len(str(err)) < 1500
+        finally:
+            doc.close()
+
+    def test_context_is_windowed_and_spells_tabs(self, doc_path):
+        long_text = "x" * 100 + " needle " + "y" * 100 + " needle"
+        doc = _build_doc_with_paragraphs(doc_path, [long_text])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(AmbiguousTextError) as exc:
+                doc.replace("needle", "x", paragraph=ref)
+            first, last = exc.value.matches
+            assert first.context == "..." + "x" * 29 + " needle " + "y" * 29 + "..."
+            assert last.context == "..." + "y" * 29 + " needle"
+        finally:
+            doc.close()
+
+        assert _match_context("a\tneedle b needle", 2, 8) == "a\\tneedle b needle"
+
+
+class TestNextHint:
+    """
+    Before: an agent read the message prose to decide what to call next.
+
+    After: every library error has `next`, the one call that usually resolves
+    it (or None when none does), so the recovery step is machine-readable.
+    """
+
+    def test_text_not_found_branches(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["term one, term two."])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(TextNotFoundError) as exc:
+                doc.replace("term", "x", paragraph=ref, occurrence=9)
+            assert exc.value.next == "retry with occurrence=N (0..1)"
+            with pytest.raises(TextNotFoundError) as exc:
+                doc.replace("absent", "x", paragraph=ref)
+            assert exc.value.next == "get_paragraph(1).text"
+            with pytest.raises(TextNotFoundError) as exc:
+                doc.add_comment("absent", "c")
+            assert exc.value.next == "find_all(text)"
+        finally:
+            doc.close()
+
+    def test_hash_mismatch_and_index(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one", "two"])
+        try:
+            with pytest.raises(HashMismatchError) as exc:
+                doc.replace("two", "x", paragraph="P2#0000")
+            assert exc.value.next == "get_paragraph(2)"
+            with pytest.raises(ParagraphIndexError) as exc:
+                doc.replace("two", "x", paragraph="P9#0000")
+            assert exc.value.next == "list_paragraphs()"
+        finally:
+            doc.close()
+
+    def test_unknown_group_changeset_and_comment(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["one"])
+        try:
+            with pytest.raises(RevisionError) as exc:
+                doc.accept_group(999)
+            assert exc.value.next == "list_revisions()"
+            with pytest.raises(RevisionError) as exc:
+                doc.reject_changeset(999)
+            assert exc.value.next == "list_revisions()"
+            with pytest.raises(CommentError) as exc:
+                doc.reply_to_comment(999, "r")
+            assert exc.value.next == "list_comments()"
+            with pytest.raises(CommentError) as exc:
+                doc.add_comment("", "note", paragraph=doc.list_paragraphs()[0].split("|")[0])
+            assert exc.value.next is None  # a validation error has no call to make
+        finally:
+            doc.close()
+
+    @pytest.mark.parametrize(
+        ("authors", "hint"),
+        [(("Ann", "Bob"), "retry with author=<name>"), (("Ann", "Ann"), "list_revisions()")],
+    )
+    def test_duplicated_revision_id(self, simple_docx, tmp_path, authors, hint):
+        a, b = (f'w:author="{n}" w:date="2026-01-29T16:55:00Z"' for n in authors)
+        body = (
+            f'<w:p><w:ins w:id="7" {a}><w:r><w:t>first</w:t></w:r></w:ins></w:p>'
+            f'<w:p><w:ins w:id="7" {b}><w:r><w:t>second</w:t></w:r></w:ins></w:p>'
+        )
+        dest = tmp_path / "dup.docx"
+        replace_document_xml(
+            simple_docx, dest, f'<?xml version="1.0"?><w:document {NS}><w:body>{body}</w:body></w:document>'
+        )
+        with Document.open(dest, force_recreate=True) as doc:
+            with pytest.raises(RevisionError) as exc:
+                doc.accept_revision(7)
+            assert exc.value.next == hint
+
+    def test_batch_error_delegates_to_original(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["alpha alpha"])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(BatchOperationError) as exc:
+                doc.batch_edit([EditOperation.replace("alpha", "x", paragraph=ref)])
+            assert isinstance(exc.value.original, AmbiguousTextError)
+            assert exc.value.next == exc.value.original.next == "retry with occurrence=N (0..1)"
+            results = doc.batch_edit([EditOperation.replace("alpha", "x", paragraph=ref)], dry_run=True)
+            assert results[0].error is not None and "occurrence=1" in results[0].error
+        finally:
+            doc.close()
+        assert BatchOperationError(0, "r", original=ValueError("v")).next is None
+
+    def test_closed_document(self, doc_path):
+        doc = Document.open(doc_path)
+        doc.close()
+        with pytest.raises(DocumentClosedError) as exc:
+            doc.list_paragraphs()
+        assert exc.value.next == "Document.open(path)"
+
+    def test_every_error_class_exposes_next(self):
+        def subclasses(cls):
+            for sub in cls.__subclasses__():
+                yield sub
+                yield from subclasses(sub)
+
+        classes = [DocxEditError, *subclasses(DocxEditError)]
+        assert len(classes) > 15
+        for cls in classes:
+            assert cls.next is None, cls  # class default; instances that know a call set it
+
+    @pytest.mark.parametrize(
+        "hint",
+        [
+            "get_paragraph(2)",
+            "get_paragraph(1).text",
+            "list_paragraphs()",
+            "find_all(text)",
+            "list_revisions()",
+            "list_comments()",
+            "Document.open(path)",
+        ],
+    )
+    def test_named_calls_exist_on_document(self, hint):
+        name = hint.removeprefix("Document.").split("(")[0]
+        assert callable(getattr(Document, name)), hint
 
 
 class TestOccurrenceOutOfRangeQuality:

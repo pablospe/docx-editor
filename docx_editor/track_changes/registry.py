@@ -355,6 +355,7 @@ class _RegistryMixin(_RevisionManagerBase):
                 f"reconstruction for revisions already in the file); use a group_id from "
                 f"this session's EditResult or list_revisions().",
                 group_id=group_id,
+                next="list_revisions()",
             )
         return members
 
@@ -389,6 +390,7 @@ class _RegistryMixin(_RevisionManagerBase):
                 f"reconstruction for revisions already in the file); use a changeset_id from "
                 f"this session's EditResult or list_revisions().",
                 changeset_id=changeset_id,
+                next="list_revisions()",
             )
         return members
 
