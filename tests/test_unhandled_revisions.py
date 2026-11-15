@@ -285,7 +285,7 @@ def _open(path: Path) -> Document:
 
 def _body_xml(doc: Document) -> str:
     """The live ``w:body``, serialized — for "this call changed nothing"."""
-    return doc._document_editor.dom.getElementsByTagName("w:body")[0].toxml()
+    return doc._revision_manager.editor.dom.getElementsByTagName("w:body")[0].toxml()
 
 
 # --------------------------------------------------------------------------
@@ -1012,6 +1012,54 @@ class TestHandledMarksInsideChangeRecords:
             assert _body_xml(doc) == before
             assert [(r.id, r.author) for r in doc.list_revisions()] == [(90, "Ann")]
 
+    def test_reject_group_leaves_the_mark_it_made_live_pending_and_ungrouped(self, make_docx):
+        """A group call resolves its members and nothing else, like a by-id call."""
+        body = _document(
+            "<w:p><w:pPr>"
+            f'<w:pPrChange w:id="90" {_ANN}><w:pPr><w:numPr>'
+            f'<w:ilvl w:val="0"/><w:numId w:val="1"/><w:ins w:id="5" {_ANN}/>'
+            "</w:numPr></w:pPr></w:pPrChange>"
+            "</w:pPr><w:r><w:t>First </w:t></w:r>"
+            f'<w:ins w:id="6" {_ANN}><w:r><w:t>live</w:t></w:r></w:ins></w:p>'
+        )
+        with _open(make_docx(body, "numpr_group")) as doc:
+            groups = {r.id: r.group_id for r in doc.list_revisions()}
+            assert set(groups) == {6, 90}
+            assert groups[6] is not None and groups[6] == groups[90]
+            assert doc.reject_group(groups[6]) == 2
+            assert [(r.id, r.type, r.group_id) for r in doc.list_revisions()] == [(5, "insertion", None)]
+            assert doc.reject_revision(5) is True
+            assert doc.list_revisions() == []
+
+    def test_live_id_shared_with_a_recorded_mark_never_gets_a_group(self, make_docx):
+        """Groups are built once, so a recorded id counts as a duplicate up front.
+
+        Otherwise Ann's live insertion would win a group, rejecting the record
+        would make Bob's same-id mark live, and resolving Ann's group — keyed
+        by id — would resolve Bob's mark with it.
+        """
+        body = _document(
+            "<w:p><w:pPr>"
+            f'<w:pPrChange w:id="90" {_ANN}><w:pPr><w:numPr>'
+            f'<w:ilvl w:val="0"/><w:numId w:val="1"/><w:ins w:id="5" {_BOB}/>'
+            "</w:numPr></w:pPr></w:pPrChange>"
+            "</w:pPr><w:r><w:t>First</w:t></w:r></w:p>"
+            f'<w:p><w:r><w:t>Keep </w:t></w:r><w:ins w:id="5" {_ANN}><w:r><w:t>live</w:t></w:r></w:ins></w:p>'
+        )
+        with _open(make_docx(body, "shared_id_group")) as doc:
+            assert sorted((r.id, r.author, r.group_id is None) for r in doc.list_revisions()) == [
+                (5, "Ann", True),
+                (90, "Ann", False),
+            ]
+            assert doc.reject_revision(90) is True
+            assert sorted((r.id, r.author, r.group_id) for r in doc.list_revisions()) == [
+                (5, "Ann", None),
+                (5, "Bob", None),
+            ]
+            # Each is still reachable by id, narrowed by author; the other stays.
+            assert doc.accept_revision(5, author="Ann") is True
+            assert [(r.id, r.author) for r in doc.list_revisions()] == [(5, "Bob")]
+
     def test_reject_all_rebuilds_the_index_a_bounded_number_of_times(self, make_docx, monkeypatch):
         """The stalled case costs one extra index build, not one per pass."""
         path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_builds")
@@ -1062,9 +1110,9 @@ class TestHandledMarksInsideChangeRecords:
                     pytest.fail("_resolve_all kept re-listing without progress")
                 return original_list(**kwargs)
 
-            def resolve(_rev_id, _index):
+            def resolve(rev_id, _index):
                 # Claims success without detaching anything, then never again.
-                resolve_calls.append(_rev_id)
+                resolve_calls.append(rev_id)
                 return len(resolve_calls) <= successes
 
             monkeypatch.setattr(manager, "_revision_element_index", counting_index)

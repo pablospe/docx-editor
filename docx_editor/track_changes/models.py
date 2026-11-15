@@ -839,8 +839,7 @@ def iter_revision_elements(root, tags: Iterable[str], *, skip_change_records: bo
     pin (``tests/test_revision_groups.py``) exists to prevent.
 
     By default no subtree is skipped, so a mark nested inside another revision
-    — a ``w:del`` inside a foreign ``w:ins`` — is yielded after its host,
-    exactly as ``_revision_elements`` does for the handled tags.
+    — a ``w:del`` inside a foreign ``w:ins`` — is yielded after its host.
 
     Args:
         root: any DOM node; its descendants are searched, not itself.

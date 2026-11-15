@@ -1498,8 +1498,11 @@ recorded inside a change record is previous state, so it is not listed by
 its id, and `accept_all()`/`reject_all()` do not count it. The one exception is
 a mark recorded in a `w:pPrChange`'s previous numbering properties: rejecting
 that change restores them, so the mark becomes a pending revision —
-`reject_all()` resolves it in the same call, and after `reject_revision()` it
-appears in `list_revisions()`.
+`reject_all()` resolves it in the same call, and after `reject_revision()`,
+`reject_group()` or `reject_changeset()` it appears in `list_revisions()` with
+no group: those calls resolve the revisions they were given and no others. A
+pending revision whose `w:id` is also carried by a recorded mark has no group
+either (`group_id` is `None`), as for any duplicated id; resolve it by id.
 
 ### Example
 
