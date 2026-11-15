@@ -903,7 +903,7 @@ class TestRejoinKeepsTailRevisions:
             by_id = {r.id: r.group_id for r in doc.list_revisions()}
             assert by_id[2] is not None and by_id[2] == by_id[3] != by_id[4]
 
-    def test_mark_insertion_inside_a_record_leaves_the_live_mark_alone(self, make_docx):
+    def test_recorded_mark_insertion_cannot_be_rejected_and_leaves_the_live_mark_alone(self, make_docx):
         """A w:ins in a nonconforming w:pPrChange record is not a paragraph
         break and not pending: it cannot be rejected, and the attempt leaves
         the live mark and the record as they were."""
@@ -917,6 +917,17 @@ class TestRejoinKeepsTailRevisions:
             assert doc.get_visible_text() == "head\ntail"
             assert sorted(r.id for r in doc.list_revisions()) == [7, 12]
             assert _merged_ppr(doc) == f"<w:pPr>{live}{record}</w:pPr>"
+
+    def test_mark_shaped_insertion_outside_the_paragraph_properties_does_not_rejoin(self, make_docx):
+        """A nonconforming w:pPr inside a run is not the paragraph's own: its
+        w:rPr/w:ins is no paragraph break, so rejecting it drops the marker
+        and leaves both paragraphs standing."""
+        stray = f'<w:pPr><w:rPr><w:ins w:id="30" {_BOB}/></w:rPr></w:pPr>'
+        body = _document(f"<w:p><w:r>{stray}<w:t>head</w:t></w:r></w:p><w:p><w:r><w:t>tail</w:t></w:r></w:p>")
+        with _open(make_docx(body)) as doc:
+            assert doc.reject_revision(30)
+            assert doc.get_visible_text() == "head\ntail"
+            assert doc.list_revisions() == []
 
     def test_library_split_with_mark_formatting_and_own_record_rejoins_exactly(self, make_docx):
         record = f'<w:pPrChange w:id="5" {_ANN}><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange>'

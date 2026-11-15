@@ -758,7 +758,15 @@ class _ResolutionMixin(_RevisionManagerBase):
         p1 = _ancestor_paragraph(mark_ins)
         p2 = _next_element_sibling(p1.nextSibling) if p1 is not None else None
         rPr = mark_ins.parentNode
+        on_live_mark = rPr.parentNode.parentNode is p1
         rPr.removeChild(mark_ins)
+        if not on_live_mark:
+            # A w:pPr/w:rPr/w:ins somewhere other than directly under p1 (a
+            # nonconforming w:pPr inside a run, say) is not p1's mark: there
+            # is no break to undo, so only the marker goes.
+            if _next_element_sibling(rPr.firstChild) is None:
+                rPr.parentNode.removeChild(rPr)
+            return
         if p1 is None or p2 is None or p2.tagName != "w:p":  # pragma: no cover - no paragraph follows directly
             # Best effort: nothing to rejoin, so only the mark goes.
             self._tidy_mark_properties(rPr.parentNode)

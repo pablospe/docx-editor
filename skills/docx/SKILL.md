@@ -738,7 +738,8 @@ properties — a record with none clears them, and a recorded style id is
 restored verbatim even when the document defines no such style. A revision
 mark recorded in those previous properties is history while the change is
 pending (not listed, not resolvable by id); rejecting the change makes it a
-live revision again — `reject_all()` resolves it in the same call; after
+live revision again — `reject_all()` resolves it in the same call (if any `author=` filter
+matches it); after
 `reject_revision()`, `reject_group()` or `reject_changeset()` it is left
 pending, ungrouped, for you to resolve by id.
 

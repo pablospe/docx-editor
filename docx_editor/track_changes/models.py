@@ -811,10 +811,11 @@ _MARKUP_KIND_BY_TAG: dict[str, str] = {
 #
 # Every walk that answers "what is pending" skips these subtrees: the listings
 # (handled and unhandled), the w:id index behind accept_*/reject_*, group
-# reconstruction, nesting (contains_ids) and the move range-mark sweep. The two
-# raw inventories do not: count_revision_elements() reports what the XML
-# contains, and the w:id allocator must still see a recorded id to avoid
-# reusing it.
+# membership, nesting (contains_ids) and the move range-mark sweep. Three raw
+# walks do not: count_revision_elements() reports what the XML contains, the
+# w:id allocator must still see a recorded id to avoid reusing it, and the
+# duplicate-id pre-scan of _reconstruct_groups must see it because the mark
+# can become pending after groups are built.
 #
 # A recorded mark can become pending again: rejecting a w:pPrChange moves its
 # recorded w:pPr back into the paragraph, w:numPr/w:ins included.

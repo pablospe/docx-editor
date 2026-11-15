@@ -66,7 +66,9 @@ class _RegistryMixin(_RevisionManagerBase):
         operation could target them). A duplicated id is wholly ungrouped —
         every occurrence, whether or not individually groupable — because
         id-keyed lookup cannot tell the occurrences apart, so no group may
-        contain an ambiguous member.
+        contain an ambiguous member. An occurrence recorded inside a change
+        record counts too: it is not pending now, but rejecting a
+        ``w:pPrChange`` can make it so.
         """
         # (author, date) of the current run. Paragraph identity is tracked
         # separately in run_para, so it is not part of the key.
