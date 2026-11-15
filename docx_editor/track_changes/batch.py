@@ -25,7 +25,7 @@ from ..xml_editor import (
 from .base import _RevisionManagerBase
 from .diff import _diff_hunks
 from .dom import _set_xml_space_preserve
-from .locate import _refuse_field_result
+from .locate import _refuse_field_result, _refuse_split_into_field
 from .models import (
     EditOperation,
     EditValidationResult,
@@ -75,7 +75,7 @@ class _BatchMixin(_RevisionManagerBase):
         # An op landing in a result is refused before it mutates, but an op
         # that splits a run re-creates its other w:t nodes — a result node too
         # when a fldChar shares the run — so the loop below rebuilds the index
-        # after an op on a paragraph holding a fldChar.
+        # before a second op on a paragraph holding a fldChar.
         fields = field_result_index(self.editor.dom)
 
         # Parse and validate all refs upfront
@@ -110,7 +110,7 @@ class _BatchMixin(_RevisionManagerBase):
             # so a failed op never bundles a changeset (the generator raises at
             # its yield before bundling) and rollback restores the registry.
             with self._changeset(), self.editor.frozen_timestamp():
-                for original_idx, ref, op in parsed:
+                for k, (original_idx, ref, op) in enumerate(parsed):
                     try:
                         # Each op is its own logical edit: one group per op, so
                         # callers can accept one op and reject another.
@@ -119,7 +119,11 @@ class _BatchMixin(_RevisionManagerBase):
                     except (ValueError, DocxEditError) as e:
                         raise BatchOperationError(original_idx, str(e), original=e) from e
                     results[original_idx] = change_id
-                    if fields and paragraphs[ref.index - 1].getElementsByTagName("w:fldChar"):
+                    # Only a later op on this same paragraph can meet a re-created
+                    # node (ops run in descending order; a split's tail is never
+                    # targeted), and same-paragraph ops are adjacent after the sort.
+                    same_next = k + 1 < len(parsed) and parsed[k + 1][1].index == ref.index
+                    if fields and same_next and paragraphs[ref.index - 1].getElementsByTagName("w:fldChar"):
                         fields = field_result_index(self.editor.dom)
             return results
         except Exception:
@@ -286,8 +290,17 @@ class _BatchMixin(_RevisionManagerBase):
         except ValueError as e:
             return _ValidationOutcome(error=str(e))
 
+        ctx = f"{op.action}(): "
+        if fields is None:
+            fields = field_result_index(self.editor.dom)
         try:
-            self._locate_in_paragraph(p, op.paragraph, target, op.occurrence, fields=fields, ctx=f"{op.action}(): ")
+            match = self._locate_in_paragraph(p, op.paragraph, target, op.occurrence, fields=fields, ctx=ctx)
+            # A \n replace / insert_after splits before the character after the
+            # match, as _split_replace/_split_insert check on apply (an
+            # insert_before splits at its anchor, already checked above).
+            new_text = {"replace": op.replace_with, "insert_after": op.text}.get(op.action)
+            if new_text and "\n" in new_text:
+                _refuse_split_into_field(p, build_text_map(p), match.end, fields, new_text, op.paragraph, ctx)
         except (ValueError, DocxEditError) as e:
             return _ValidationOutcome(error=str(e))
 
@@ -321,8 +334,9 @@ class _BatchMixin(_RevisionManagerBase):
         # (see the loop below), every insertion lands after the paragraphs
         # still to be processed, so no pending ref's snapshot index shifts.
         paragraphs = body_paragraphs(self.editor.dom)
-        # Shared like ``paragraphs``: a rewrite never touches a field-result
-        # node (its preflight refuses first), so the index stays valid.
+        # Shared like ``paragraphs``: each paragraph is rewritten at most once
+        # (duplicates are refused), so a result node a rewrite re-creates by
+        # splitting a run is never looked up again.
         fields = field_result_index(self.editor.dom)
 
         # Parse and validate all refs upfront
@@ -485,15 +499,18 @@ class _BatchMixin(_RevisionManagerBase):
             fields = field_result_index(self.editor.dom)
         if fields:
             for tag, old_char_start, old_char_end, frag in hunks:
+                ctx = "rewrite_paragraph(): "
                 if tag == "insert":
                     touched = text_map.positions[min(old_char_start, len(text_map.positions) - 1) :][:1]
                     target = frag
                 else:
                     touched = text_map.positions[old_char_start:old_char_end]
-                    if tag == "replace" and "\n" in frag:
-                        touched = touched + text_map.positions[old_char_end : old_char_end + 1]
                     target = old_text[old_char_start:old_char_end]
-                _refuse_field_result(touched, fields, target, ref_str, "rewrite_paragraph(): ")
+                _refuse_field_result(touched, fields, target, ref_str, ctx)
+                if tag != "delete" and "\n" in frag:
+                    # A replace splits at its old end, an insert at its start.
+                    split_at = old_char_end if tag == "replace" else old_char_start
+                    _refuse_split_into_field(p, text_map, split_at, fields, frag, ref_str, ctx)
 
         # Preflight the split (\n) hunks against the pre-mutation state: the
         # reversed hunk loop below has no rollback, so anything that can't split

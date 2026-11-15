@@ -9,7 +9,7 @@ import io
 import random
 import re
 import zlib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -1067,6 +1067,8 @@ _FIELD_EXEMPT_TYPES = frozenset({"HYPERLINK", "FORMTEXT"})
 FieldResultIndex = dict[object, str]
 """``field_result_index`` output: result ``w:t`` / ``w:tab`` node -> its field's instruction.
 
+A ``w:p`` whose end lies inside a field result is a key too (see :func:`field_result_index`).
+
 Keyed like :attr:`TextPosition.node` (``object``) so a position's node looks up directly."""
 
 
@@ -1087,7 +1089,7 @@ def _field_regenerated(instr: str, locked: bool) -> bool:
     return not locked and bool(words) and words[0].upper() not in _FIELD_EXEMPT_TYPES
 
 
-def _regenerating(frames) -> _FieldFrame | None:
+def _regenerating(frames: Iterable[_FieldFrame]) -> _FieldFrame | None:
     """The first frame in ``frames`` that is in its result phase and regenerated."""
     return next((f for f in frames if f.in_result and f.regenerated), None)
 
@@ -1106,18 +1108,23 @@ def field_result_index(dom) -> FieldResultIndex:
     ``instrText`` runs without a separator (Word splits them mid-word) and
     whitespace-normalized.
 
+    A ``w:p`` whose end falls inside a regenerated field result (a TOC
+    opened in it and continuing into the next paragraph) is also a key, so a
+    paragraph split at its end can be refused.
+
     Not indexed: results Word keeps on update — a locked field
     (``@w:fldLock``), ``HYPERLINK`` display text and a ``FORMTEXT`` value —
     and tracked-deleted content (``w:del`` / ``w:moveFrom``: the accepted
     view, as in :func:`build_text_map`). Unbalanced markup never locks the
-    rest of the document and never unlocks a well-formed field: a stray
-    ``end`` is ignored, a node is recorded when the innermost regenerated
-    field holding it closes, and a field still open when the walk ends drops
-    only its own direct result.
+    rest of the document: an ``end`` with no field open is ignored, a node is
+    recorded when the innermost regenerated field holding it closes, and a
+    field still open when the walk ends drops only its own direct result
+    (it is reported as the owner of fields nested after it). An ``end`` whose
+    ``begin`` is tracked-deleted closes the innermost open field early.
 
     One element-level walk of ``w:body``; edit paths build it once per call
-    (batches once per batch, rebuilt after an op on a paragraph holding a
-    ``fldChar``) and check matched positions against it.
+    (batches once per batch; ``batch_edit`` rebuilds it after an op on a
+    paragraph holding a ``fldChar``) and check matched positions against it.
     """
     # The body is a child of the root: finding it that way keeps this off the
     # Document-level walk count the batch paths pin (count_dom_walks).
@@ -1128,12 +1135,20 @@ def field_result_index(dom) -> FieldResultIndex:
     result: FieldResultIndex = {}
     stack: list[_FieldFrame] = []
     deleted: set[Element] = set()
+    last_p = None
     for node in bodies[0].getElementsByTagName("*"):
         if node in deleted:
             continue
         tag = node.tagName
         if tag in ("w:del", "w:moveFrom"):
             deleted.update(node.getElementsByTagName("*"))
+        elif tag == "w:p":
+            # A field still open when the next paragraph starts spans the
+            # previous paragraph's end: a split there lands inside its result.
+            owner = _regenerating(stack)
+            if last_p is not None and owner is not None:
+                result[last_p] = owner.instr[0]
+            last_p = node
         elif tag == "w:fldChar":
             kind = node.getAttribute("w:fldCharType")
             if kind == "begin":

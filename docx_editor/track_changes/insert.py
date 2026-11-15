@@ -25,7 +25,7 @@ from .dom import (
     _paragraph_mark_ins,
     _set_xml_space_preserve,
 )
-from .locate import _refuse_field_result
+from .locate import _refuse_split_into_field
 from .models import _RUN_TRACK_CHANGE_TAGS
 
 
@@ -266,10 +266,10 @@ class _InsertMixin(_RevisionManagerBase):
         # unsplittable boundary now, before mutating (no single-op rollback).
         text_map = build_text_map(p1)
         self._reject_unsplittable_boundary(p1, text_map, match.end)
-        # The split cuts before the character at match.end: refuse when that is
-        # a field result (the field's begin would stay behind, its result move).
-        _refuse_field_result(
-            text_map.positions[match.end : match.end + 1], field_result_index(self.editor.dom), replace_with, None, ""
+        # The split cuts at match.end: refuse when that is inside a field result
+        # (the field's begin would stay behind while its result moves).
+        _refuse_split_into_field(
+            p1, text_map, match.end, field_result_index(self.editor.dom), replace_with, None, "replace(): "
         )
         start = match.start
         self._delete_across_nodes(match)
@@ -293,9 +293,10 @@ class _InsertMixin(_RevisionManagerBase):
         # boundary now, before mutating (no single-op rollback).
         text_map = build_text_map(p1)
         self._reject_unsplittable_boundary(p1, text_map, base)
-        # Segment 0 and the split both land before the character at base:
-        # refuse when that is a field result (see _split_replace).
-        _refuse_field_result(text_map.positions[base : base + 1], field_result_index(self.editor.dom), text, None, "")
+        # Segment 0 and the split both land at base (see _split_replace).
+        _refuse_split_into_field(
+            p1, text_map, base, field_result_index(self.editor.dom), text, None, f"insert_{position}(): "
+        )
         if segments[0]:
             self._rewrite_insert_at(p1, build_text_map(p1), base, segments[0])
         return self._apply_paragraph_splits(p1, base + len(segments[0]), segments[1:])

@@ -513,6 +513,9 @@ if match := doc.find_text("Section 6"):
 > touches a field (`"5."` → `"5!"` after a page number, or an insertion
 > before a field that starts the paragraph) is refused as a whole: make that
 > change with `replace`/`insert_after` on the characters outside the field.
+> Text cannot be appended after a field that ends its paragraph (`"Page 3"` →
+> `"Page 3 of 10"` with `3` a PAGE field): every verb would write it inside the
+> field's result, so it is refused, and there is no outside anchor to use.
 > Three kinds of result stay editable because Word keeps them on update:
 > `HYPERLINK` display text, a legacy text form field's value (`FORMTEXT`) and
 > locked fields (`w:fldLock="true"`). Searching is unaffected — `find_text`/`find_all`

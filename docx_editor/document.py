@@ -1507,7 +1507,8 @@ class Document:
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
                 matches more than once in the paragraph.
             FieldResultError: If any character of the target is inside a field
-                result (Word regenerates it, discarding the edit).
+                result (Word regenerates it, discarding the edit), or a ``\\n`` in
+                the new text would split the paragraph right before one.
             HashMismatchError: If the paragraph hash is stale — including a
                 SearchResult whose paragraph was edited after the search.
 
@@ -1651,7 +1652,8 @@ class Document:
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the paragraph.
             FieldResultError: If any character of the target is inside a field
-                result (Word regenerates it, discarding the edit).
+                result (Word regenerates it, discarding the edit), or a ``\\n`` in
+                the new text would split the paragraph right before one.
             HashMismatchError: If the paragraph hash is stale.
 
         Example:
@@ -1929,8 +1931,9 @@ class Document:
                 ``note`` is neither None nor a
                 non-empty control-character-free string, or ``ref`` is
                 malformed.
-            FieldResultError: If a changed span lands inside a field result;
-                refused before any change is written.
+            FieldResultError: If a changed word (the diff is word-level) touches
+                a field result, or a split lands right before one; refused before
+                any change is written.
             ParagraphIndexError: If ``ref``'s index is out of range.
             HashMismatchError: If ``ref``'s hash is stale.
 

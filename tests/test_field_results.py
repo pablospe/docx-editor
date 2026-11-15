@@ -108,8 +108,8 @@ class TestRefusal:
         assert field_type in str(e) and "Narrow the target" in str(e)
         assert _xml(doc) == before
 
-    @pytest.mark.parametrize(("para", "target", "field_type"), TARGETS)
-    def test_document_wide_edit_refuses(self, doc, para, target, field_type):
+    @pytest.mark.parametrize(("_para", "target", "field_type"), TARGETS)
+    def test_document_wide_edit_refuses(self, doc, _para, target, field_type):
         before = _xml(doc)
         with pytest.raises(FieldResultError) as exc:
             doc._revision_manager.replace_text(target, "X")
@@ -133,7 +133,85 @@ class TestRefusal:
         with pytest.raises(FieldResultError) as exc:
             call(doc, ref)
         assert exc.value.field_type == "REF"
+        assert str(exc.value).startswith(("insert_after(): ", "replace(): "))
         assert _xml(doc) == before
+
+    @pytest.mark.parametrize(
+        "op",
+        [
+            lambda ref: EditOperation.insert_after("section ", "X\nY", paragraph=ref),
+            lambda ref: EditOperation.replace("section ", "sec\ntion ", paragraph=ref),
+        ],
+        ids=["insert_after", "replace"],
+    )
+    def test_dry_run_reports_a_split_before_a_field(self, doc, op):
+        ref = find_ref(doc, "See section")
+        [result] = doc.batch_edit([op(ref)], dry_run=True)
+        assert not result.valid and "REF field" in result.error
+        with pytest.raises(BatchOperationError) as exc:
+            doc.batch_edit([op(ref)])
+        assert isinstance(exc.value.original, FieldResultError)
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda d, ref: d.insert_after("Contents", "\nNew", paragraph=ref),
+            lambda d, ref: d.replace("Contents", "Contents\nNew", paragraph=ref),
+            lambda d, ref: d.rewrite_paragraph(ref, "Contents\nNew"),
+        ],
+        ids=["insert_after", "replace", "rewrite"],
+    )
+    @pytest.mark.parametrize(
+        "after_p1",
+        [
+            _p(_r("Intro")) + _p(_r("Scope"), _fld("end")),
+            _p() + _p(_r("Intro"), _fld("end")),  # empty next paragraph
+            _p(_fld("end"), _r("After")),  # next paragraph opens with the field's end
+            "<w:tbl><w:tr><w:tc>" + _p(_r("Cell")) + "</w:tc></w:tr></w:tbl>" + _p(_fld("end")),  # table in the result
+        ],
+        ids=["entries", "empty_next", "next_starts_with_end", "table_next"],
+    )
+    def test_split_at_the_end_of_a_paragraph_opening_a_field_refuses(self, simple_docx, tmp_path, call, after_p1):
+        # The TOC opens at the end of P1, so a new paragraph after P1 would sit
+        # inside its result.
+        body = _p(_r("Contents"), _fld("begin"), _instr("TOC"), _fld("separate")) + after_p1
+        with _open(simple_docx, tmp_path, body) as d:
+            ref = find_ref(d, "Contents")
+            before = _xml(d)
+            with pytest.raises(FieldResultError):
+                call(d, ref)
+            assert _xml(d) == before
+            [result] = d.batch_edit([EditOperation.insert_after("Contents", "\nNew", paragraph=ref)], dry_run=True)
+            assert not result.valid
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda d, ref: d.insert_after("Contents", "\nNew", paragraph=ref),
+            lambda d, ref: d.rewrite_paragraph(ref, "Contents\nNew"),
+        ],
+        ids=["insert_after", "rewrite"],
+    )
+    def test_split_after_a_heading_before_a_field_applies(self, simple_docx, tmp_path, call):
+        # The TOC begins in the next paragraph: the new paragraph lands before
+        # its begin, outside the field.
+        body = _p(_r("Contents")) + _p(_complex("REF _Ref1 \\h", _r("Overview")), _r(" here."))
+        with _open(simple_docx, tmp_path, body) as d:
+            call(d, find_ref(d, "Contents"))
+            assert any(t.endswith("New") for t in d.list_paragraphs(limit=None))
+
+    def test_batch_rewrite_split_check_survives_an_earlier_rewrite(self, simple_docx, tmp_path):
+        # P2 is rewritten first (descending order) and re-creates its "Intro"
+        # node; P1's end-of-paragraph check must not depend on that node.
+        run = '<w:r><w:t>Intro</w:t><w:fldChar w:fldCharType="end"/><w:t xml:space="preserve"> tail</w:t></w:r>'
+        body = _p(_r("Contents"), _fld("begin"), _instr("TOC"), _fld("separate")) + _p(run)
+        with _open(simple_docx, tmp_path, body) as d:
+            rewrites = [(find_ref(d, "Contents"), "Contents\nNew"), (find_ref(d, "Intro"), "Intro TAIL")]
+            before = _xml(d)
+            with pytest.raises(BatchOperationError) as exc:
+                d.batch_rewrite(rewrites)
+            assert isinstance(exc.value.original, FieldResultError)
+            assert _xml(d) == before
 
     def test_found_then_scoped_edit_refuses(self, doc):
         # The locate-document-wide-then-scoped route: the guard lives in
@@ -233,14 +311,20 @@ class TestBatch:
         calls = []
         real = batch_mod.field_result_index
         monkeypatch.setattr(batch_mod, "field_result_index", lambda dom: calls.append(1) or real(dom))
-        # No op touches a paragraph holding a fldChar (PAGE is a fldSimple), so
-        # the index is never rebuilt; one that does costs one rebuild.
+        # Rebuilt only before a second op on a paragraph holding a fldChar:
+        # PAGE is a fldSimple, and one op per fldChar paragraph needs no rebuild.
         ops = [EditOperation.replace("table", "list", paragraph=find_ref(doc, "After the table"))]
         ops += [EditOperation.insert_before("Page", f"{i} ", paragraph=find_ref(doc, "Page ")) for i in range(3)]
+        ops += [EditOperation.replace("details", "context", paragraph=find_ref(doc, "See section"))]
+        ops += [EditOperation.replace("Visit", "See", paragraph=find_ref(doc, "Visit"))]
         doc.batch_edit(ops)
         assert calls == [1]
         calls.clear()
-        doc.batch_edit([EditOperation.replace("details", "context", paragraph=find_ref(doc, "See section"))])
+        ref = find_ref(doc, "See section")
+        doc.batch_edit([
+            EditOperation.replace("See", "Read", paragraph=ref),
+            EditOperation.replace("context", "it", paragraph=ref),
+        ])
         assert calls == [1, 1]
 
     def test_field_index_adds_no_document_walk(self, doc, monkeypatch):
@@ -280,6 +364,15 @@ class TestRewrite:
                 d.rewrite_paragraph(find_ref(d, "Overview"), "The Overview for details.")
             assert _xml(d) == before
 
+    def test_append_after_a_trailing_field_refuses(self, simple_docx, tmp_path):
+        # The insert attaches after the last result run, before the field's end.
+        body = _p(_r("Page "), _complex("PAGE", _r("3")))
+        with _open(simple_docx, tmp_path, body) as d:
+            before = _xml(d)
+            with pytest.raises(FieldResultError):
+                d.rewrite_paragraph(find_ref(d, "Page"), "Page 3 of 10")
+            assert _xml(d) == before
+
     def test_split_before_a_field_refuses(self, doc):
         ref = find_ref(doc, "See section")
         before = _xml(doc)
@@ -304,7 +397,8 @@ def _index_texts(body_xml: str) -> dict[str, str]:
     dom = defusedxml.minidom.parseString(f"<w:document {NS}><w:body>{body_xml}</w:body></w:document>")
     out: dict[str, str] = {}
     for node, instr in field_result_index(dom).items():
-        out[get_text_node_data(node) or "\t"] = instr
+        if getattr(node, "tagName", "") != "w:p":  # paragraph-end keys: see test_paragraph_end_inside_a_field_is_keyed
+            out[get_text_node_data(node) or "\t"] = instr
     return out
 
 
@@ -366,6 +460,13 @@ class TestFieldResultIndex:
             '<w:fldSimple w:instr="TOC"><w:fldSimple w:instr="PAGE"><w:r><w:t>4</w:t></w:r></w:fldSimple></w:fldSimple>'
         )
         assert _index_texts(body) == {"4": "TOC"}
+
+    def test_paragraph_end_inside_a_field_is_keyed(self):
+        dom = defusedxml.minidom.parseString(f"<w:document {NS}><w:body>{''.join(TOC)}</w:body></w:document>")
+        index = field_result_index(dom)
+        paragraphs = dom.getElementsByTagName("w:p")
+        # TOC opens in P2 and closes in P3: only P2's end lies inside it.
+        assert [index.get(p) for p in paragraphs] == [None, 'TOC \\o "1-3" \\h', None, None]
 
     def test_no_fields(self):
         assert _index_texts(_p(_r("plain"))) == {}

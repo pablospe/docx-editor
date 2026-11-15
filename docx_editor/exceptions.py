@@ -461,11 +461,13 @@ class FieldResultError(DocxEditError, ValueError):
     fields update — a TOC entry, a page number, a cross-reference — so an
     edit there would be silently discarded. Results Word keeps on update
     (``HYPERLINK`` display text, a ``FORMTEXT`` value, a locked field) are
-    not refused. Also a
-    ``ValueError``: the call's argument is what has to change.
+    not refused. Also a ``ValueError``: the call's argument is what has to
+    change.
 
     Attributes:
-        text: The edit target (search text, anchor, or rewritten span).
+        text: The edit target (search text, anchor, or rewritten span), or
+            the new text when the refusal is a ``\\n`` split right before a
+            field result.
         field_code: The field's instruction, whitespace-normalized
             (``"PAGEREF _Toc123 \\h"``).
         field_type: The instruction's first word, upper-cased (``"PAGEREF"``).

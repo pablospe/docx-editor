@@ -17,6 +17,7 @@ from ..exceptions import (
 from ..xml_editor import (
     FieldResultIndex,
     ParagraphRef,
+    TextMap,
     TextMapMatch,
     TextPosition,
     _require_valid_occurrence,
@@ -82,6 +83,27 @@ def _refuse_field_result(
         instr = fields.get(pos.node)
         if instr is not None:
             raise FieldResultError(text, instr, paragraph_ref=paragraph_ref, ctx=ctx)
+
+
+def _refuse_split_into_field(
+    paragraph,
+    text_map: TextMap,
+    pos: int,
+    fields: FieldResultIndex,
+    text: str,
+    paragraph_ref: str | None,
+    ctx: str,
+) -> None:
+    """Raise :class:`FieldResultError` if a ``\\n`` split at ``pos`` would land inside a field result.
+
+    Mid-paragraph the split lands before ``positions[pos]``; at the paragraph
+    end it lands inside whatever field is still open there (a TOC opened in
+    this paragraph), which ``field_result_index`` records under the paragraph.
+    """
+    key = text_map.positions[pos].node if pos < len(text_map.positions) else paragraph
+    instr = fields.get(key)
+    if instr is not None:
+        raise FieldResultError(text, instr, paragraph_ref=paragraph_ref, ctx=ctx)
 
 
 class _LocateMixin(_RevisionManagerBase):
