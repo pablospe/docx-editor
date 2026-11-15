@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from xml.dom.minidom import Element
 
 from ..exceptions import UnhandledRevisionWarning
-from ..xml_editor import _inside_textbox
 from .base import _RevisionManagerBase
 from .dom import (
     _ancestor_paragraph,
@@ -67,39 +66,61 @@ def _in_fallback_copy(node, stop) -> bool:
     return False
 
 
-def _nearest_paragraph(elem, direction: str) -> Element | None:
-    """The nearest ``w:p`` before (``direction="previousSibling"``) or after
-    (``"nextSibling"``) a block-level ``elem`` in document order, within its
-    enclosing block container: the closest sibling paragraph, or the last
-    (first) paragraph of the closest sibling holding one, such as a table or
-    another pending wrapper; climbs past wrappers up to the container. Text
-    boxes' and ``mc:Fallback`` copies' paragraphs are not candidates.
+_RANGE_MARK_TAGS = ("w:commentRangeStart", "w:commentRangeEnd")
+# Pruned from the paragraph search: a text box's paragraphs are not the
+# surrounding flow, and an mc:Fallback copy is not what a modern reader shows.
+_UNSEARCHED_TAGS = ("w:txbxContent", "mc:Fallback")
 
-    Document order, not sibling order, is what keeps a range's start before
-    its end however many block-level revisions it spans and in whatever order
-    they are resolved: a marker re-homed into a paragraph that is itself
-    pending is moved on again when that paragraph's revision is resolved.
-    The search stops at the nearest hit, so it costs the distance walked,
-    not the size of the body.
+
+def _edge_paragraph(node, last: bool, passed: list) -> Element | None:
+    """The last (``last=True``) or first ``w:p`` of ``node``'s subtree, found by
+    walking from that edge and stopping at the first hit. Block-level comment
+    range marks walked over on the way are appended to ``passed``."""
+    if node.nodeType != node.ELEMENT_NODE or node.tagName in _UNSEARCHED_TAGS:
+        return None
+    if node.tagName == "w:p":
+        return node
+    if node.tagName in _RANGE_MARK_TAGS:
+        passed.append(node)
+        return None
+    for child in reversed(node.childNodes) if last else node.childNodes:
+        if (paragraph := _edge_paragraph(child, last, passed)) is not None:
+            return paragraph
+    return None
+
+
+def _nearest_paragraph(elem, direction: str) -> tuple[Element | None, list[Element]]:
+    """The nearest ``w:p`` before (``direction="previousSibling"``) or after
+    (``"nextSibling"``) a block-level ``elem`` in document order within its
+    enclosing block container, plus the block-level comment range marks lying
+    between the two, in document order.
+
+    The walk goes sibling by sibling outwards from ``elem``, climbing past
+    wrappers up to the container, and descends into a sibling (a table,
+    another pending wrapper) only from its near edge, so it costs the distance
+    to the hit, not the size of the body. Text boxes and ``mc:Fallback``
+    copies are skipped, and so are the other branches of an
+    ``mc:AlternateContent`` that ``elem`` sits in.
+
+    Document order is what keeps a range's start before its end however many
+    block-level revisions it spans and in whatever order they are resolved: a
+    marker re-homed into a paragraph that is itself pending moves on again
+    when that paragraph's revision is resolved. The range marks passed over
+    must move with the hoisted ones for the same reason.
     """
+    last = direction == "previousSibling"
+    passed: list[Element] = []
     node = elem
     while True:
         sibling = getattr(node, direction)
         while sibling is not None:
-            if sibling.nodeType == sibling.ELEMENT_NODE:
-                if sibling.tagName == "w:p":
-                    return sibling
-                inner = [
-                    p
-                    for p in sibling.getElementsByTagName("w:p")
-                    if not _inside_textbox(p, sibling) and not _in_fallback_copy(p, sibling)
-                ]
-                if inner:
-                    return inner[-1] if direction == "previousSibling" else inner[0]
+            is_branch = sibling.nodeType == sibling.ELEMENT_NODE and sibling.tagName in ("mc:Choice", "mc:Fallback")
+            if not is_branch and (paragraph := _edge_paragraph(sibling, last, passed)) is not None:
+                return paragraph, passed[::-1] if last else passed
             sibling = getattr(sibling, direction)
         node = node.parentNode
         if node is None or node.nodeType != node.ELEMENT_NODE or node.tagName in _BLOCK_CONTAINER_TAGS:
-            return None
+            return None, []
 
 
 def _only_rpr_besides(run, mark) -> bool:
@@ -649,12 +670,16 @@ class _ResolutionMixin(_RevisionManagerBase):
         ``w:rPr`` (the shape Word and this library write); otherwise it is
         detached into a new bare ``w:r``, so the run's text is not resurrected.
         """
+        if _in_fallback_copy(elem, None):
+            # An mc:Fallback copy's markers repeat those of the mc:Choice copy,
+            # which keeps them; leave them to go with the content.
+            return
         marks = [
             node
             for node in elem.getElementsByTagName("*")  # document order
             if node.tagName in _COMMENT_MARK_TAGS
-            # A text box's mc:Fallback copy repeats the mc:Choice copy's
-            # markers; hoisting both would duplicate the comment's ids.
+            # Likewise for a text box's Fallback copy inside elem: hoisting
+            # both copies would duplicate the comment's ids.
             and not _in_fallback_copy(node, elem)
         ]
         if not marks:
@@ -663,10 +688,14 @@ class _ResolutionMixin(_RevisionManagerBase):
         if _holds_run_content(elem.parentNode):
             target, anchor = elem.parentNode, elem
         else:
-            if (before := _nearest_paragraph(elem, "previousSibling")) is not None:
-                target, anchor = before, None  # append: end of the paragraph
-            elif (after := _nearest_paragraph(elem, "nextSibling")) is not None:
-                target, anchor = after, _first_child_not_in(after, ("w:pPr",))
+            before, passed = _nearest_paragraph(elem, "previousSibling")
+            if before is not None:
+                target, marks = before, passed + marks  # append: end of the paragraph
+            else:
+                after, passed = _nearest_paragraph(elem, "nextSibling")
+                if after is not None:
+                    target, anchor = after, _first_child_not_in(after, ("w:pPr",))
+                    marks = marks + passed
         if target is None:
             # No surviving paragraph to re-home into: a half-pair elsewhere
             # would be worse than no anchor, so the comment keeps its body in

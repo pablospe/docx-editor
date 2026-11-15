@@ -2330,6 +2330,16 @@ class TestResolutionKeepsCommentMarkers:
         "start_in_a_table": "<w:p><w:r><w:t>P0</w:t></w:r></w:p>"
         f"<w:tbl><w:tr><w:tc><w:p>{_START}<w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
         f'<w:ins w:id="2" {_ANN}><w:p><w:r><w:t>b</w:t></w:r>{_END}</w:p></w:ins>',
+        # A body-level range start (schema-valid; Word writes one before a
+        # table) lies between P0 and the insertion holding the end.
+        "block_level_start_passed": "<w:p><w:r><w:t>P0</w:t></w:r></w:p>"
+        + _START
+        + f'<w:ins w:id="2" {_ANN}><w:p><w:r><w:t>b</w:t></w:r>{_END}</w:p></w:ins>'
+        "<w:p><w:r><w:t>P3</w:t></w:r></w:p>",
+        # Its mirror: no paragraph before, a body-level end before P3.
+        "block_level_end_passed": f'<w:ins w:id="1" {_ANN}><w:p>{_START}<w:r><w:t>a</w:t></w:r></w:p></w:ins>'
+        '<w:commentRangeEnd w:id="0"/><w:p><w:r><w:t>P3</w:t></w:r>'
+        '<w:r><w:rPr/><w:commentReference w:id="0"/></w:r></w:p>',
         # The insertion is alone in a block content control: the paragraph
         # outside it still receives the markers.
         "inside_a_block_sdt": "<w:p><w:r><w:t>P0</w:t></w:r></w:p>"
@@ -2388,6 +2398,54 @@ class TestResolutionKeepsCommentMarkers:
             assert doc.reject_revision(2)
             (start,) = doc._document_editor.dom.getElementsByTagName("w:commentRangeStart")
             assert start.parentNode.parentNode.tagName == "mc:Choice"
+        finally:
+            doc.close()
+
+    def test_insertion_in_a_choice_branch_skips_the_fallback_branch(self, clean_workspace, tmp_path):
+        mc = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+        ins = f'<w:ins w:id="2" {_ANN}><w:p>{self._START}<w:r><w:t>b</w:t></w:r>{self._END}</w:p></w:ins>'
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            f'<mc:AlternateContent {mc}><mc:Choice Requires="w14">{ins}</mc:Choice>'
+            f"<mc:Fallback>{ins}</mc:Fallback></mc:AlternateContent>"
+            "<w:p><w:r><w:t>after</w:t></w:r></w:p>",
+        )
+        try:
+            doc.reject_all()
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS)}
+            (start,) = doc._document_editor.dom.getElementsByTagName("w:commentRangeStart")
+            assert start.parentNode.parentNode.tagName == "w:body"  # the "after" paragraph
+        finally:
+            doc.close()
+
+    def test_rehoming_past_a_large_table_does_not_rescan_it(self, clean_workspace, tmp_path, monkeypatch):
+        # 50 commented block insertions after a 3000-cell table, rejected in
+        # document order: each search descends the table from its near edge
+        # (a handful of nodes), never through all of its paragraphs.
+        from docx_editor.track_changes import resolution
+
+        visits = []
+        edge_paragraph = resolution._edge_paragraph
+
+        def counting(*args):
+            visits.append(args[0])
+            return edge_paragraph(*args)
+
+        monkeypatch.setattr(resolution, "_edge_paragraph", counting)
+        cells = "".join(f"<w:tc><w:p><w:r><w:t>c{i}</w:t></w:r></w:p></w:tc>" for i in range(3000))
+        inserts = "".join(
+            f'<w:ins w:id="{100 + i}" {_ANN}><w:p><w:commentRangeStart w:id="{i}"/><w:r><w:t>x</w:t></w:r>'
+            f'<w:commentRangeEnd w:id="{i}"/></w:p></w:ins>'
+            for i in range(50)
+        )
+        doc = _open_body(clean_workspace, tmp_path, f"<w:tbl><w:tr>{cells}</w:tr></w:tbl>{inserts}")
+        try:
+            for rev_id in range(100, 150):
+                assert doc.reject_revision(rev_id)
+            elements = [node for node in visits if node.nodeType == node.ELEMENT_NODE]
+            assert 0 < len(elements) < 50 * 10  # one full walk of the table alone is 9000
+            self._assert_nothing_at_block_level(doc)
         finally:
             doc.close()
 
