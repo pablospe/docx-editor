@@ -2168,13 +2168,13 @@ The verb is the `Document` method name in kebab-case and the flags are its keywo
 | `find F TEXT [--expect N]` | `doc.find_all(TEXT, expected_count=N)` | same, through `eval` |
 | `list F [--start S] [--limit L] [--max-chars C]` | `doc.list_paragraphs(...)` (`--limit 0` = all) | same, through `eval` |
 | `revisions F [--by NAME] [--paragraph P]` | `doc.list_revisions(author=NAME, paragraph=P)` | same, through `eval` |
-| `accept F ID... \| --all [--by NAME]`, `reject` likewise | `doc.accept_revision(ID)` per id, or `doc.accept_all(author=NAME)` | same, through `eval` |
+| `accept F ID...` or `accept F --all [--by NAME]`; `reject` likewise | `doc.accept_revision(ID)` per id, or `doc.accept_all(author=NAME)` | same, through `eval` |
 
 **Flags.** Every mutating verb (`replace`, `delete`, `insert-*`, `comment`, `accept`, `reject`) requires `--author NAME` (who is editing) and exactly one of `-o OUT` / `--in-place`; there is no default output. `--by NAME` filters by a revision's author, so it never means "who is editing". `--note TEXT` is `note=`. `accept`/`reject` take revision ids only: group and changeset ids belong to one open `Document` and mean nothing to the next command. Ids are applied in order and the whole command refuses, saving nothing, if any id is not pending. A content move is two ids (`move_from` + `move_to`): pass both, or use `--all`.
 
-**Receipt.** One line per result (`replace P2#a1cf  (revisions 0, 1; comment 0)`), then each touched paragraph as it now reads in `get_markup_text()` markup (`P2#a1cf| The [del#0:Me]quick[/del][ins#1:Me]swift[/ins] brown fox ...`), then any library warning (`UnanchoredNoteWarning`, `UnhandledRevisionWarning`) and `saved OUT`. That is the whole check: no follow-up call is needed. `comment` prints `comment N on REF` and the paragraph. `accept`/`reject` print `accepted 2 revision(s); 0 pending`; by ids they add each touched paragraph under its current ref (resolving changes the text, so the old ref is stale). With `--all` they add only the count of revisions this tool does not resolve, if any.
+**Receipt.** One line per result (`replace P2#a1cf  (revisions 0, 1; comment 0)`), then each touched paragraph as it now reads in `get_markup_text()` markup (`P2#a1cf| The [del#0:Me]quick[/del][ins#1:Me]swift[/ins] brown fox ...`), then any library warning (`UnanchoredNoteWarning`, `UnhandledRevisionWarning`) and `saved OUT`. That is the whole check: no follow-up call is needed. `comment` prints `comment N on REF` and the paragraph. `accept`/`reject` print `accepted 2 revision(s); 0 pending`; by ids they add each touched paragraph under its current ref (resolving changes the text, so the old ref is stale), and count any that a resolved paragraph mark or move merged into a neighbour rather than show the neighbour. With `--all` they add only the count of revisions this tool does not resolve, if any.
 
-**Refusals.** Nothing is saved and the workspace is discarded. The exit status is 1 and the library's message goes to stderr, including its pick-list (up to 10 matches; `docx-edit find` lists all). When one command fixes the refusal, a `retry:` line follows, preceded by a `note:` line when something must be filled in or known first. The retry is rebuilt from the parsed command: options first, then `--`, then the positionals, so text starting with `-` stays text.
+**Refusals.** A refusal saves nothing; the command's own workspace is discarded, and a locked or leftover one is left untouched. The exit status is 1 and the library's message goes to stderr, including its pick-list (up to 10 matches; `docx-edit find` lists all). When one command fixes the refusal, a `retry:` line follows, preceded by a `note:` line when something must be filled in or known first. The retry is rebuilt from the parsed command: valued flags as one `--flag=value` word (so a value starting with `-` stays a value), then `--`, then the positionals (so text starting with `-` stays text). It is quoted for a POSIX shell (bash, zsh, Git Bash), with a control character such as a newline written `$'...'` to keep it on one line; for cmd.exe, PowerShell or a program, run `retry_argv` from `--json`.
 
 | Refusal | `retry:` |
 | --- | --- |
@@ -2182,13 +2182,14 @@ The verb is the `Document` method name in kebab-case and the flags are its keywo
 | `--occurrence` out of range | same command with `--occurrence N` (note: the valid range) |
 | stale `--paragraph` | same command with the fresh ref |
 | `--expect` mismatch on `replace` | same command with the actual count (note: only if every match listed should change) |
-| nothing matches (`--expect`, or text not found) | `docx-edit list -- F`; with `--paragraph`, just that paragraph |
+| nothing matches (`--expect`, text not found, paragraph index out of range) | `docx-edit list -- F` |
+| text not in the `--paragraph` given | `docx-edit find -- F TEXT` (where it is) |
 | unknown revision id | `docx-edit revisions -- F` |
 | revision id shared by two authors | same command with `--by NAME` |
 | editing-protected document | same command with `--allow-protected` (the protection stays in the saved file) |
-| workspace left behind by a crashed session (`WorkspaceSyncError`) | same command with `--force-recreate` (discards that workspace's unsaved edits) |
+| workspace left behind by a crashed session (`WorkspaceSyncError`) | same command with `--force-recreate` (discards that workspace's unsaved edits; used only for that error and never against a live session's lock) |
 
-A count mismatch on `find` has no retry (`find` only checks). When no CLI command fixes the error, for example `WorkspaceLockedError` from a `docx-session` holding the file, the library's `next` is printed as `next (Python API): ...` if it has one. A bad command line exits 2 (argparse). `list`, `find` and `revisions` never save, so they read an editing-protected document without `--allow-protected`. The library's "more paragraphs" notice on `list` is rewritten as the next `docx-edit list --start N` command.
+A count mismatch on `find` has no retry (`find` only checks). When no CLI command fixes the error, for example `WorkspaceLockedError` from a `docx-session` holding the file, the library's `next` is printed as `next (Python API): ...` if it has one. A bad command line exits 2 (argparse). `list`, `find` and `revisions` never save: they read the file in a private workspace, so they work beside a live session or a leftover workspace, and on an editing-protected document. The library's "more paragraphs" notice on `list` is rewritten as the next `docx-edit list --start N` command.
 
 **`--json`.** Every verb except `skill` takes `--json` and prints one object on stdout. Success is `{"ok": true, "verb": ..., "warnings": [...]}` plus the verb's fields:
 
@@ -2212,4 +2213,4 @@ docx-edit replace contract.docx "30 days" "60 days" --author Reviewer -o out.doc
 # saved out.docx
 ```
 
-An open `docx-session` (or any open `Document`) on the same file holds its workspace lock, so `docx-edit` on that file refuses with `WorkspaceLockedError` rather than take it over. A workspace left behind by a crashed session is reported as `WorkspaceSyncError`; it is discarded only by the `--force-recreate` retry, never silently.
+An open `docx-session` (or any open `Document`) on the same file holds its workspace lock, so `docx-edit` on that file refuses with `WorkspaceLockedError` rather than take it over. A workspace left behind by a crashed session is reported as `WorkspaceSyncError` by the editing verbs; it is discarded only by the `--force-recreate` retry, never silently. Output that the terminal's encoding cannot show is escaped (`\u2192`), never a crash after the save; a workspace that cannot be removed after a save is a warning, not a refusal.

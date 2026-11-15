@@ -16,10 +16,9 @@ the same as one JSON object on stdout. Exit status: 0 success, 1 refused,
 
 import argparse
 import json
-import os
 import shlex
-import subprocess
 import sys
+import tempfile
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -31,6 +30,7 @@ from .exceptions import (
     DocxEditError,
     HashMismatchError,
     MatchCountError,
+    ParagraphIndexError,
     RevisionError,
     TextNotFoundError,
     UnanchoredNoteWarning,
@@ -40,6 +40,7 @@ from .exceptions import (
     _json_default,
     _match_context,
 )
+from .xml_editor import body_paragraphs
 
 PROG = "docx-edit"
 _EDIT_VERBS = ("replace", "delete", "insert-after", "insert-before")
@@ -66,13 +67,12 @@ _FLAGS = (
     ("limit", "--limit"),
     ("max_chars", "--max-chars"),
     ("author", "--author"),
-    ("output", "-o"),
+    ("output", "--output"),
 )
 _SWITCHES = (
     ("all", "--all"),
     ("in_place", "--in-place"),
     ("allow_protected", "--allow-protected"),
-    ("force_recreate", "--force-recreate"),
 )
 
 AGENT_GUIDE = """\
@@ -135,22 +135,25 @@ class _Refusal(Exception):
         self.retry = retry
 
 
-def _command(args: argparse.Namespace, **overrides: object) -> list[str]:
+def _command(args: argparse.Namespace, *switches: str, **overrides: object) -> list[str]:
     """The command ``args`` came from, with ``overrides`` applied, as an argv.
 
     Rebuilt from the parsed arguments, not edited from the raw argv, so a
     repeated flag or a ``--`` cannot make the retry differ from what argparse
-    actually ran. Positionals always follow ``--``, so text starting with
-    ``-`` stays text.
+    actually ran. Valued flags are one ``--flag=value`` token, so a value
+    starting with ``-`` stays a value; positionals follow ``--``, so text
+    starting with ``-`` stays text. ``switches`` (e.g. ``--force-recreate``)
+    are added for this retry only and never carried over.
     """
     values = {**vars(args), **overrides}
     argv = [PROG, args.verb]
     for dest, flag in _FLAGS:
         if values.get(dest) is not None:
-            argv += [flag, str(values[dest])]
+            argv.append(f"{flag}={values[dest]}")
     for dest, flag in _SWITCHES:
         if values.get(dest):
             argv.append(flag)
+    argv += switches
     if values.get("json"):
         argv.append("--json")
     argv += ["--", values["file"]]
@@ -160,9 +163,37 @@ def _command(args: argparse.Namespace, **overrides: object) -> list[str]:
     return argv
 
 
+def _other(args: argparse.Namespace, verb: str, *argv: str) -> list[str]:
+    """Another verb on the same file, keeping ``--json`` when the caller used it."""
+    return [PROG, verb, *argv, *(["--json"] if args.json else []), "--", args.file]
+
+
+_ANSI_C_ESCAPES = {"\\": "\\\\", "'": "\\'", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def _quote(arg: str) -> str:
+    """One shell word. An argument with a control character (a newline in a
+    split) uses bash's ``$'...'`` form, so the retry stays on one line."""
+    if arg.isprintable():
+        return shlex.quote(arg)
+    body = []
+    for c in arg:
+        if c in _ANSI_C_ESCAPES:
+            body.append(_ANSI_C_ESCAPES[c])
+        elif c.isprintable():
+            body.append(c)
+        else:
+            body.append(f"\\x{ord(c):02x}" if ord(c) < 0x100 else f"\\u{ord(c):04x}")
+    return "$'" + "".join(body) + "'"
+
+
 def _render(argv: Sequence[str]) -> str:
-    """``argv`` as a command line for this platform's shell."""
-    return subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
+    """``argv`` as one POSIX-shell command line (bash, zsh, Git Bash).
+
+    Not cmd.exe or PowerShell, whose quoting differs; ``--json`` gives the
+    exact ``retry_argv`` for any other caller.
+    """
+    return " ".join(_quote(a) for a in argv)
 
 
 def _retry_for(error: Exception, args: argparse.Namespace) -> _Retry | None:
@@ -172,10 +203,10 @@ def _retry_for(error: Exception, args: argparse.Namespace) -> _Retry | None:
     if isinstance(error, AmbiguousTextError):
         return _Retry(_command(args, occurrence="N"), "N: an occurrence= from the list above")
     if isinstance(error, MatchCountError):
-        if error.total_occurrences == 0:
-            return _Retry([PROG, "list", "--", args.file], "nothing matches; read the paragraphs to quote the text")
         if args.verb == "find":
             return None
+        if error.total_occurrences == 0:
+            return _Retry(_other(args, "list"), "nothing matches; read the paragraphs to quote the text")
         return _Retry(_command(args, expect=error.total_occurrences), "only if every match listed above should change")
     if isinstance(error, HashMismatchError) and getattr(args, "paragraph", None):
         return _Retry(_command(args, paragraph=f"P{error.paragraph_index}#{error.actual_hash}"))
@@ -183,16 +214,18 @@ def _retry_for(error: Exception, args: argparse.Namespace) -> _Retry | None:
         if error.total_occurrences:
             return _Retry(_command(args, occurrence="N"), f"N: 0..{error.total_occurrences - 1}")
         if getattr(args, "paragraph", None):
-            index = args.paragraph[1:].split("#")[0]
-            return _Retry([PROG, "list", "--start", index, "--limit", "1", "--", args.file])
-        return _Retry([PROG, "list", "--", args.file])
+            target = getattr(args, "old", None) or getattr(args, "anchor", None) or args.text
+            return _Retry([*_other(args, "find"), target], "not in that paragraph; find lists where it is")
+        return _Retry(_other(args, "list"))
+    if isinstance(error, ParagraphIndexError):
+        return _Retry(_other(args, "list"))
     if isinstance(error, RevisionError) and (error.next or "").startswith("retry with author="):
         return _Retry(_command(args, by="NAME"), "NAME: one of the authors named above")
     if isinstance(error, DocumentProtectedError):
         return _Retry(_command(args, allow_protected=True), "the protection stays in place in the saved file")
     if isinstance(error, WorkspaceSyncError):
         return _Retry(
-            _command(args, force_recreate=True), "discards the leftover workspace and any unsaved edits it holds"
+            _command(args, "--force-recreate"), "discards the leftover workspace and any unsaved edits it holds"
         )
     return None
 
@@ -254,7 +287,12 @@ def _run_resolve(doc: Document, args: argparse.Namespace) -> dict:
             "unhandled_types": dict(resolved.unhandled_types),
             "pending": len(doc.list_revisions()),
         }
-    where = {r.id: r.paragraph_ref for r in doc.list_revisions()}
+    # The touched paragraphs, as elements: resolving a paragraph mark or a
+    # move merges or removes paragraphs, so an index taken before would name
+    # another paragraph afterwards.
+    before = body_paragraphs(doc._document_editor.dom)
+    where = {r.id: r.paragraph_ref for r in doc.list_revisions(author=args.by)}
+    touched = [before[int(ref[1:].split("#")[0]) - 1] for i in args.ids if (ref := where.get(i))]
     one = doc.accept_revision if args.verb == "accept" else doc.reject_revision
     for rev_id in args.ids:
         if not one(rev_id, author=args.by):
@@ -262,17 +300,21 @@ def _run_resolve(doc: Document, args: argparse.Namespace) -> dict:
             raise _Refusal(
                 f"No pending revision {rev_id}{by} (it may have been resolved together with an earlier id). "
                 f"Nothing was saved.",
-                _Retry([PROG, "revisions", "--", args.file]),
+                _Retry(_other(args, "revisions")),
             )
-    # Resolving changes the paragraph's text, so its old ref is stale: report
-    # each touched paragraph under its current ref, found by index.
-    indexes = [int(ref[1:].split("#")[0]) for i in args.ids if (ref := where.get(i))]
-    return {
+    # Report each touched paragraph that still exists under its current ref
+    # (resolving changed its text); one merged away is counted, not guessed.
+    after = {id(p): i for i, p in enumerate(body_paragraphs(doc._document_editor.dom), start=1)}
+    indexes = [after[id(p)] for p in dict.fromkeys(touched) if id(p) in after]
+    out = {
         "resolved": len(args.ids),
         "ids": list(args.ids),
         "pending": len(doc.list_revisions()),
         "paragraphs": _paragraphs(doc, _current_refs(doc, indexes)),
     }
+    if gone := len(dict.fromkeys(touched)) - len(indexes):
+        out["merged_paragraphs"] = gone
+    return out
 
 
 def _run_find(doc: Document, args: argparse.Namespace) -> dict:
@@ -306,8 +348,10 @@ def _run_list(doc: Document, args: argparse.Namespace) -> dict:
     if lines and lines[-1].startswith("... "):
         next_start = kwargs.get("start", 1) + len(lines) - 1
         remaining = doc.paragraph_count() - next_start + 1
-        page = _render([PROG, "list", "--start", str(next_start), "--", args.file])
-        lines[-1] = f"... {remaining} more paragraphs; next page: {page} (--limit 0 lists all)"
+        page = _render(_command(args, start=next_start))
+        lines[-1] = f"... {remaining} more paragraphs; next page: {page} (--limit=0 lists all)"
+    elif not lines:
+        lines = [f"no paragraphs from {kwargs.get('start', 1)} (the document has {doc.paragraph_count()})"]
     return {"lines": lines}
 
 
@@ -343,6 +387,8 @@ def _print_text(verb: str, out: dict) -> None:
             print(f'#{r.id} {r.type} by {r.author} in {r.paragraph_ref}: "{r.text}"')
     elif verb in ("accept", "reject"):
         line = f"{verb}ed {out['resolved']} revision(s); {out['pending']} pending"
+        if out.get("merged_paragraphs"):
+            line += f"; {out['merged_paragraphs']} touched paragraph(s) merged into a neighbour"
         if out.get("unhandled"):
             kinds = ", ".join(f"{k}={v}" for k, v in out["unhandled_types"].items())
             line += f"; {out['unhandled']} left that this tool does not resolve ({kinds})"
@@ -506,11 +552,38 @@ def _refusal_output(error: Exception, args: argparse.Namespace) -> None:
         print(f"next (Python API): {hint}", file=sys.stderr)
 
 
+def _open(args: argparse.Namespace, mutating: bool, scratch: str) -> Document:
+    """Open ``args.file`` the way this verb needs.
+
+    A read-only verb gets a private workspace under ``scratch``: it never
+    saves, so it must not lock, adopt or destroy the shared one a session or
+    an earlier crash left behind, and a protected file may be read. A
+    mutating verb uses the shared workspace, so a live session's lock still
+    refuses; ``--force-recreate`` discards a leftover workspace only when
+    opening without it reports one (WorkspaceSyncError), never a live lock.
+    """
+    if not mutating:
+        return Document.open(args.file, workspace_dir=scratch, allow_protected=True)
+    kwargs = {"author": args.author, "allow_protected": args.allow_protected}
+    try:
+        return Document.open(args.file, **kwargs)
+    except WorkspaceSyncError:
+        if not args.force_recreate:
+            raise
+        return Document.open(args.file, force_recreate=True, **kwargs)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one docx-edit command; returns 0 (done) or 1 (refused, nothing saved).
 
     A bad command line exits with status 2 through argparse (SystemExit).
     """
+    # An output encoding that cannot show a character must not turn a saved
+    # edit into a traceback and exit 1 ("nothing saved").
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(errors="backslashreplace")
     parser = _parser()
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     if args.verb == "skill":
@@ -520,30 +593,34 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     mutating = args.verb in _MUTATING
     library_warnings = (UnanchoredNoteWarning, UnhandledRevisionWarning)
+    cleanup_warnings: list[str] = []
     try:
-        with warnings.catch_warnings(record=True) as caught:
+        with warnings.catch_warnings(record=True) as caught, tempfile.TemporaryDirectory() as scratch:
             # Only the library's own warnings are the caller's business; a
             # ResourceWarning or DeprecationWarning from a dependency is not.
             for category in library_warnings:
                 warnings.simplefilter("always", category)
-            doc = Document.open(
-                args.file,
-                author=args.author if mutating else None,
-                force_recreate=args.force_recreate,
-                # A read-only verb never saves, so a protected file may be read.
-                allow_protected=getattr(args, "allow_protected", False) or not mutating,
-            )
+            doc = _open(args, mutating, scratch)
+            out: dict = {}
             try:
                 out = _RUNNERS[args.verb](doc, args)
                 if mutating:
                     out["saved"] = str(doc.save(args.file if args.in_place else args.output))
             finally:
-                doc.close(cleanup=True)
+                try:
+                    doc.close(cleanup=True)
+                except OSError as error:
+                    # After a save, a workspace that cannot be removed (a file
+                    # held open by a scanner) is not a refusal: the edit is done.
+                    if "saved" not in out:
+                        raise
+                    cleanup_warnings.append(f"saved, but the workspace could not be removed: {error}")
     except (DocxEditError, ValueError, OSError, _Refusal) as error:
         _refusal_output(error, args)
         return 1
 
-    out["warnings"] = list(dict.fromkeys(str(w.message) for w in caught if issubclass(w.category, library_warnings)))
+    found = (str(w.message) for w in caught if issubclass(w.category, library_warnings))
+    out["warnings"] = list(dict.fromkeys([*found, *cleanup_warnings]))
     if args.json:
         print(json.dumps({"ok": True, "verb": args.verb, **out}, default=_json_default))
     else:

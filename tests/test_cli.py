@@ -50,7 +50,16 @@ def retry_argv(err: str, **fill: str) -> list[str]:
     line = next(line for line in err.splitlines() if line.startswith("retry: "))
     argv = shlex.split(line.removeprefix("retry: "))
     assert argv[0] == "docx-edit"
-    return [fill.get(a, a) for a in argv[1:]]
+    filled = []
+    for a in argv[1:]:
+        flag, eq, value = a.partition("=")
+        filled.append(f"{flag}={fill.get(value, value)}" if eq and flag.startswith("--") else fill.get(a, a))
+    return filled
+
+
+def flag_value(argv: list[str], flag: str) -> str:
+    """The value of ``--flag=value`` in an argv."""
+    return next(a.partition("=")[2] for a in argv if a.startswith(flag + "="))
 
 
 def revisions(path: Path) -> list[tuple[str, str]]:
@@ -183,7 +192,7 @@ class TestRefusals:
         ref = ref_of(src, 3)
         code, _, err = run(capsys, "delete", src, "quick", "--paragraph", ref, "--author", AUTHOR, "--in-place")
         assert code == 1
-        assert retry_argv(err) == ["list", "--start", "3", "--limit", "1", "--", str(src)]
+        assert retry_argv(err) == ["find", "--", str(src), "quick"]
 
     def test_stale_ref_retry_carries_the_fresh_ref(self, capsys, src):
         stale = ref_of(src, 2)
@@ -194,7 +203,7 @@ class TestRefusals:
         assert code == 1 and src.read_bytes() == before
         fresh = ref_of(src, 2)
         retry = retry_argv(err)
-        assert retry[retry.index("--paragraph") + 1] == fresh
+        assert flag_value(retry, "--paragraph") == fresh
         code, out, _ = run(capsys, *retry)
         assert code == 0 and "[ins#3:Me]red[/ins]" in out
 
@@ -203,7 +212,7 @@ class TestRefusals:
         code, _, err = run(capsys, "replace", src, "the", "THE", "--expect", 3, "--author", AUTHOR, "--in-place")
         assert code == 1 and src.read_bytes() == before
         assert "matches 2 times in the document, expected 3" in err
-        assert "--expect 2" in err.splitlines()[-1]
+        assert "--expect=2" in err.splitlines()[-1]
         assert "note: only if every match listed above should change" in err
 
     def test_expect_with_nothing_matching_does_not_offer_expect_0(self, capsys, src):
@@ -225,8 +234,8 @@ class TestRefusals:
     def test_shared_revision_id_retry_names_by_not_author(self, src):
         args = _parser().parse_args(["accept", str(src), "7", "--author", AUTHOR, "--in-place"])
         retry = _retry_for(RevisionError("two revisions share id 7", next="retry with author=<name>"), args)
-        assert retry is not None and retry.argv[retry.argv.index("--by") + 1] == "NAME"
-        assert "--author" in retry.argv  # who is resolving, unchanged
+        assert retry is not None and flag_value(retry.argv, "--by") == "NAME"
+        assert flag_value(retry.argv, "--author") == AUTHOR  # who is resolving, unchanged
 
     def test_protected_document_is_readable_and_editable_on_retry(self, capsys, src, tmp_path):
         protected = with_settings(
@@ -246,10 +255,50 @@ class TestRefusals:
         doc.replace("quick", "swift")
         doc.save(tmp_path / "elsewhere.docx")
         doc.close(cleanup=False)  # a session that never finished: unsaved edits stay behind
-        code, _, err = run(capsys, "list", src)
-        assert code == 1 and "discards the leftover workspace" in err
-        code, out, _ = run(capsys, *retry_argv(err))
+        # A read-only verb reads around it, in a private workspace ...
+        code, out, _ = run(capsys, "list", src)
         assert code == 0 and "quick brown" in out
+        # ... an edit refuses, and its retry discards the leftover explicitly.
+        code, _, err = run(capsys, "replace", src, "lazy", "idle", "--author", AUTHOR, "--in-place")
+        assert code == 1 and "discards the leftover workspace" in err
+        retry = retry_argv(err)
+        assert "--force-recreate" in retry
+        code, out, _ = run(capsys, *retry)
+        assert code == 0 and "The quick brown fox jumps over the [del#0:Me]lazy[/del][ins#1:Me]idle[/ins] dog." in out
+
+    def test_force_recreate_never_takes_over_a_live_session(self, capsys, src):
+        with Document.open(src):
+            code, _, err = run(
+                capsys, "replace", src, "lazy", "idle", "--author", AUTHOR, "--in-place", "--force-recreate"
+            )
+        assert code == 1 and err.startswith("error:")
+        assert revisions(src) == []
+
+    def test_force_recreate_is_not_carried_into_other_retries(self, capsys, src):
+        code, _, err = run(capsys, "replace", src, "the", "x", "--author", AUTHOR, "--in-place", "--force-recreate")
+        assert code == 1 and "--force-recreate" not in retry_argv(err)
+
+    def test_dash_leading_flag_values_survive_the_retry(self, capsys, src, tmp_path):
+        out_path = tmp_path / "-out.docx"
+        argv = ["replace", "the", "x", "--note=-urgent", "--author=-me", f"--output={out_path}", "--", src]
+        code, _, err = run(
+            capsys, argv[0], "--note=-urgent", "--author=-me", f"--output={out_path}", "--", src, "the", "x"
+        )
+        assert code == 1
+        code, out, _ = run(capsys, *retry_argv(err, N="0"))
+        assert code == 0 and out_path.exists()
+
+    def test_newline_in_text_keeps_the_retry_on_one_line(self, capsys, src):
+        code, _, err = run(capsys, "replace", src, "the", "x\ny", "--author", AUTHOR, "--in-place")
+        assert code == 1
+        line = next(line for line in err.splitlines() if line.startswith("retry: "))
+        assert line.endswith("the $'x\\ny'")
+        # The same retry as an argv (--json), run with N filled in: the split
+        # lands and the receipt shows both halves.
+        _, out, _ = run(capsys, "replace", src, "the", "x\ny", "--author", AUTHOR, "--in-place", "--json")
+        argv = [a.replace("=N", "=0") for a in json.loads(out)["retry_argv"][1:] if a != "--json"]
+        code, out, _ = run(capsys, *argv)
+        assert code == 0 and len([line for line in out.splitlines() if line.startswith("  P")]) == 2
 
     def test_locked_document_is_refused(self, capsys, src):
         with Document.open(src):
@@ -266,8 +315,8 @@ class TestRefusals:
         assert [m["occurrence"] for m in payload["error"]["matches"]] == [0, 1]
         assert payload["error"]["next"].startswith("retry with occurrence=")
         argv = payload["retry_argv"]
-        assert argv[argv.index("--occurrence") + 1] == "N" and "--json" in argv
-        assert payload["retry"] == shlex.join(argv)
+        assert flag_value(argv, "--occurrence") == "N" and "--json" in argv
+        assert shlex.split(payload["retry"]) == argv
         assert payload["retry_note"] == "N: an occurrence= from the list above"
 
     def test_json_cli_refusal_has_a_next_key(self, capsys, src):
@@ -343,7 +392,10 @@ class TestReadVerbs:
         code, out, _ = run(capsys, "list", src, "--start", 2, "--limit", 1)
         assert code == 0 and out.startswith("P2#")
         notice = out.splitlines()[1]
-        assert notice == f"... 2 more paragraphs; next page: docx-edit list --start 3 -- {src} (--limit 0 lists all)"
+        assert (
+            notice
+            == f"... 2 more paragraphs; next page: docx-edit list --start=3 --limit=1 -- {src} (--limit=0 lists all)"
+        )
         with Document.open(src) as doc:
             total = doc.paragraph_count()
         code, out, _ = run(capsys, "list", src, "--limit", 0)
@@ -425,3 +477,45 @@ def test_receipt_is_right_after_a_line_separator_in_a_paragraph(capsys, src):
     code, out, _ = run(capsys, "replace", src, "sample", "SAMPLE", "--author", AUTHOR, "--in-place")
     assert code == 0
     assert out.splitlines()[1].startswith(f"  {ref_of(src, 3)}| This is a [del#")
+
+
+def test_unencodable_output_still_exits_0_after_saving(src, tmp_path):
+    # A cp1252 pipe (Windows) cannot show "→"; the saved edit must not turn
+    # into a traceback and exit 1, which means "nothing saved".
+    exe = Path(sys.executable).parent / "docx-edit"
+    if not exe.exists():
+        pytest.skip("docx-edit entry point not installed in this environment")
+    out_path = tmp_path / "w.docx"
+    env = {**__import__("os").environ, "PYTHONIOENCODING": "cp1252"}
+    cmd = [str(exe), "replace", str(src), "lazy", "lazy → idle", "--author", AUTHOR, "-o", str(out_path)]
+    done = subprocess.run(cmd, capture_output=True, env=env, check=False)
+    assert done.returncode == 0 and out_path.exists()
+    assert b"\\u2192" in done.stdout
+
+
+def test_workspace_removal_failure_after_save_is_a_warning(capsys, src, ws, monkeypatch):
+    real_rmtree = shutil.rmtree
+
+    def busy(path, *args, **kwargs):
+        # Only the document's workspace is "held open by a scanner".
+        if Path(path).is_relative_to(ws):
+            raise PermissionError("file in use")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", busy)
+    code, out, _ = run(capsys, "replace", src, "lazy", "idle", "--author", AUTHOR, "--in-place")
+    assert code == 0
+    assert any(line.startswith("warning: saved, but the workspace could not be removed") for line in out.splitlines())
+    monkeypatch.undo()
+    assert revisions(src) == [("deletion", "lazy"), ("insertion", "idle")]
+
+
+def test_rejecting_a_split_by_id_reports_the_merge_not_a_neighbour(capsys, src):
+    run(capsys, "replace", src, "brown", "brown\nX", "--author", AUTHOR, "--in-place")
+    with Document.open(src) as doc:
+        ids = [r.id for r in doc.list_revisions()]
+    code, out, _ = run(capsys, "reject", src, *ids, "--author", AUTHOR, "--in-place")
+    assert code == 0
+    shown = [line for line in out.splitlines() if line.startswith("  P")]
+    # Only the paragraph the split came from, back to its original text.
+    assert shown == [f"  {ref_of(src, 2)}| The quick brown fox jumps over the lazy dog."]
