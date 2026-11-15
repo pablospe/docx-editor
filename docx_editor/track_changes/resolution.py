@@ -55,6 +55,16 @@ def _holds_run_content(node) -> bool:
     return False
 
 
+def _block_container(node) -> Element | None:
+    """The nearest ancestor of ``node`` in ``_BLOCK_CONTAINER_TAGS``, or None."""
+    node = node.parentNode
+    while node is not None and node.nodeType == node.ELEMENT_NODE:
+        if node.tagName in _BLOCK_CONTAINER_TAGS:
+            return node
+        node = node.parentNode
+    return None
+
+
 def _in_fallback_copy(node, stop) -> bool:
     """True if ``node`` sits inside an ``mc:Fallback`` below ``stop``: the
     alternate copy of content whose ``mc:Choice`` copy is the one kept."""
@@ -93,7 +103,8 @@ def _nearest_paragraph(elem, direction: str) -> tuple[Element | None, list[Eleme
     """The nearest ``w:p`` before (``direction="previousSibling"``) or after
     (``"nextSibling"``) a block-level ``elem`` in document order within its
     enclosing block container, plus the block-level comment range marks lying
-    between the two, in document order.
+    between the two (or, with no paragraph, all those walked over), in
+    document order.
 
     The walk goes sibling by sibling outwards from ``elem``, climbing past
     wrappers up to the container, and descends into a sibling (a table,
@@ -120,7 +131,7 @@ def _nearest_paragraph(elem, direction: str) -> tuple[Element | None, list[Eleme
             sibling = getattr(sibling, direction)
         node = node.parentNode
         if node is None or node.nodeType != node.ELEMENT_NODE or node.tagName in _BLOCK_CONTAINER_TAGS:
-            return None, []
+            return None, passed[::-1] if last else passed
 
 
 def _only_rpr_besides(run, mark) -> bool:
@@ -670,16 +681,12 @@ class _ResolutionMixin(_RevisionManagerBase):
         ``w:rPr`` (the shape Word and this library write); otherwise it is
         detached into a new bare ``w:r``, so the run's text is not resurrected.
         """
-        if _in_fallback_copy(elem, None):
-            # An mc:Fallback copy's markers repeat those of the mc:Choice copy,
-            # which keeps them; leave them to go with the content.
-            return
         marks = [
             node
             for node in elem.getElementsByTagName("*")  # document order
             if node.tagName in _COMMENT_MARK_TAGS
-            # Likewise for a text box's Fallback copy inside elem: hoisting
-            # both copies would duplicate the comment's ids.
+            # A text box's mc:Fallback copy inside elem repeats the
+            # mc:Choice copy's markers: hoisting both would duplicate ids.
             and not _in_fallback_copy(node, elem)
         ]
         if not marks:
@@ -687,15 +694,20 @@ class _ResolutionMixin(_RevisionManagerBase):
         target, anchor = None, None
         if _holds_run_content(elem.parentNode):
             target, anchor = elem.parentNode, elem
+        elif _in_fallback_copy(elem, _block_container(elem)):
+            # Block content in a block-level mc:Fallback: the walk would leave
+            # the copy and re-home its markers beside those the mc:Choice copy
+            # re-homes, duplicating ids. They go with the content instead.
+            return
         else:
-            before, passed = _nearest_paragraph(elem, "previousSibling")
+            before, back_passed = _nearest_paragraph(elem, "previousSibling")
             if before is not None:
-                target, marks = before, passed + marks  # append: end of the paragraph
+                target, marks = before, back_passed + marks  # append: end of the paragraph
             else:
                 after, passed = _nearest_paragraph(elem, "nextSibling")
                 if after is not None:
                     target, anchor = after, _first_child_not_in(after, ("w:pPr",))
-                    marks = marks + passed
+                    marks = back_passed + marks + passed
         if target is None:
             # No surviving paragraph to re-home into: a half-pair elsewhere
             # would be worse than no anchor, so the comment keeps its body in

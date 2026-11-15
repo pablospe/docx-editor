@@ -2449,6 +2449,46 @@ class TestResolutionKeepsCommentMarkers:
         finally:
             doc.close()
 
+    def test_insertion_inside_both_text_box_copies_keeps_each_copy_whole(self, clean_workspace, tmp_path):
+        # The shape Word writes: a run-level insertion in a text box, repeated
+        # in the mc:Choice and mc:Fallback copies, the range straddling its edge.
+        mc = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+        box = (
+            f'<w:txbxContent><w:p><w:ins w:id="1" {_ANN}>{self._START}<w:r><w:t>new </w:t></w:r></w:ins>'
+            f"<w:r><w:t>kept</w:t></w:r>{self._END}</w:p></w:txbxContent>"
+        )
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            f'<w:p><w:r><mc:AlternateContent {mc}><mc:Choice Requires="wps"><w:drawing>{box}</w:drawing></mc:Choice>'
+            f"<mc:Fallback><w:pict>{box}</w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>",
+        )
+        try:
+            doc.reject_all()
+            assert "new" not in doc._document_editor.dom.toxml()
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS) * 2}
+        finally:
+            doc.close()
+
+    def test_block_level_marks_passed_backwards_move_with_a_forward_rehoming(self, clean_workspace, tmp_path):
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            '<w:commentRangeStart w:id="0"/>'
+            f'<w:ins w:id="2" {_ANN}><w:p><w:r><w:t>b</w:t></w:r><w:commentRangeEnd w:id="0"/>'
+            '<w:r><w:rPr/><w:commentReference w:id="0"/></w:r><w:commentRangeStart w:id="1"/></w:p></w:ins>'
+            '<w:commentRangeEnd w:id="1"/><w:p><w:r><w:t>P3</w:t></w:r></w:p>',
+        )
+        try:
+            assert doc.reject_revision(2)
+            self._assert_nothing_at_block_level(doc)
+            assert _markers_by_id(doc) == {
+                "0": list(_COMMENT_TAGS),
+                "1": ["w:commentRangeStart", "w:commentRangeEnd"],
+            }
+        finally:
+            doc.close()
+
     def test_text_box_fallback_copy_is_not_hoisted_twice(self, clean_workspace, tmp_path):
         box = f"<w:txbxContent><w:p>{self._START}<w:r><w:t>box</w:t></w:r>{self._END}</w:p></w:txbxContent>"
         doc = _open_body(
