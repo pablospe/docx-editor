@@ -2141,7 +2141,7 @@ class Document:
             comment_id: ID of the comment to delete
 
         Returns:
-            True if deleted, False if not found
+            True if deleted, False if the document has no such comment
 
         Raises:
             ValueError: If ``comment_id`` is not an integer (bool included).

@@ -774,7 +774,10 @@ class CommentManager:
         return self._commit_comment(comment_id, reply_text, parent_para_id=parent_para_id)
 
     def _find_marker(self, tag: str, comment_id: int) -> Element | None:
-        """The one ``tag`` marker of ``comment_id`` in document.xml, or None when it has none."""
+        """The one ``tag`` marker of ``comment_id`` in document.xml, or None when it has none.
+
+        Several markers for the one id raise ``MultipleNodesFoundError``.
+        """
         try:
             return self.document_editor.get_node(tag=tag, attrs={"w:id": str(comment_id)})
         except NodeNotFoundError:
@@ -936,7 +939,7 @@ class CommentManager:
             comment_id: The comment ID to delete
 
         Returns:
-            True if deleted, False if not found
+            True if deleted, False if the document has no such comment
 
         Raises:
             ValueError: If ``comment_id`` is not an integer (bool included).
