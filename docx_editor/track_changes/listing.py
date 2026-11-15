@@ -483,7 +483,9 @@ class _ListingMixin(_RevisionManagerBase):
         })
         if author is None and selectable:
             remedy = f"Pass author= to name one (works here for: {', '.join(repr(a) for a in selectable)})."
+            hint = "retry with author=<name>"
         else:
+            hint = "list_revisions()"
             remedy = (
                 "author= cannot tell them apart; accept_all(author=...) / "
                 "reject_all(author=...) resolve every revision by that author."
@@ -494,6 +496,7 @@ class _ListingMixin(_RevisionManagerBase):
             f"({'; '.join(describe(e) for e in chosen)}), so the id alone does not say which to resolve. "
             f"{remedy}",
             revision_id=revision_id if type(revision_id) is int else None,
+            next=hint,
         )
 
     def _unhandled_elements(self, author: str | None = None) -> list[Element]:

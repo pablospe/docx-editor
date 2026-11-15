@@ -832,6 +832,33 @@ class TestEvalErrorEnvelope:
         assert original["type"] == "HashMismatchError"
         assert original["expected_hash"] == "0000"
         assert re.fullmatch(r"[0-9a-f]{4}", original["actual_hash"])
+        assert original["next"] == "get_paragraph(2)"
+        assert res.error["next"] == "get_paragraph(2)"
+
+    def test_hash_mismatch_names_next_call(self, eval_doc):
+        res = eval_code("doc.replace('Sample', 'X', paragraph='P1#0000')", connection_file=eval_doc)
+        assert res.error is not None
+        assert res.error["next"] == "get_paragraph(1)"
+
+    def test_ambiguous_error_carries_matches(self, eval_doc):
+        # "e" occurs far more than ten times, so the list is capped.
+        res = eval_code("doc.add_comment('e', 'note')", connection_file=eval_doc)
+        assert res.status == "error"
+        assert res.error is not None
+        assert res.error["type"] == "AmbiguousTextError"
+        matches = res.error["matches"]
+        assert len(matches) == 10
+        fields = {"occurrence", "paragraph_ref", "paragraph_occurrence", "start", "context"}
+        assert all(set(m) == fields for m in matches)
+        assert [m["occurrence"] for m in matches] == list(range(10))
+        assert res.error["matches_omitted"] == res.error["total_occurrences"] - 10 > 0
+        assert res.error["next"] == f"retry with occurrence=N (0..{res.error['total_occurrences'] - 1})"
+
+    def test_library_error_without_hint_has_next_none(self, eval_doc):
+        res = eval_code("Document.open('/nope/missing.docx')", connection_file=eval_doc)
+        assert res.error is not None
+        assert "next" in res.error
+        assert res.error["next"] is None
 
     def test_non_library_error_has_no_stray_fields(self, eval_doc):
         res = eval_code("1 / 0", connection_file=eval_doc)

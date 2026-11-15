@@ -1,12 +1,16 @@
 """Text location: the ``RevisionManager`` mixin that resolves paragraph refs and finds text."""
 
+from collections.abc import Iterable
 from xml.dom.minidom import Element
 
 from ..exceptions import (
+    MAX_REPORTED_MATCHES,
     AmbiguousTextError,
     HashMismatchError,
+    MatchLocation,
     ParagraphIndexError,
     TextNotFoundError,
+    _match_context,
     _truncate_preview,
 )
 from ..xml_editor import (
@@ -21,6 +25,42 @@ from ..xml_editor import (
 )
 from .base import _RevisionManagerBase
 from .models import SearchResult, _LocatedMatch
+
+
+def _match_locations(
+    paragraphs: Iterable[tuple[int, Element]],
+    text: str,
+    *,
+    scoped_ref: str | None = None,
+) -> list[MatchLocation]:
+    """The first ``MAX_REPORTED_MATCHES`` matches of ``text`` as ``MatchLocation`` records.
+
+    ``paragraphs`` is ``(1-based index, <w:p>)`` pairs in document order.
+    Matches are found with the same overlapping advance as
+    ``find_in_text_map``/``count_in_text_map``, so each listed ``occurrence``
+    selects exactly the listed match. With ``scoped_ref`` (a paragraph-scoped
+    call) ``occurrence`` counts within the paragraph and every record carries
+    that ref; without it ``occurrence`` counts document-wide and each
+    paragraph's ref is computed from its current hash.
+
+    Only the raise path calls this, so a successful edit pays nothing for it.
+    """
+    found: list[MatchLocation] = []
+    for idx, p in paragraphs:
+        visible = build_text_map(p).text
+        ref = scoped_ref
+        local = 0
+        pos = visible.find(text)
+        while pos != -1:
+            if len(found) >= MAX_REPORTED_MATCHES:
+                return found
+            if ref is None:
+                ref = f"P{idx}#{compute_paragraph_hash(p)}"
+            context = _match_context(visible, pos, pos + len(text))
+            found.append(MatchLocation(len(found), ref, local, pos, context))
+            local += 1
+            pos = visible.find(text, pos + 1)
+    return found
 
 
 class _LocateMixin(_RevisionManagerBase):
@@ -91,6 +131,7 @@ class _LocateMixin(_RevisionManagerBase):
                 text,
                 paragraph_ref=paragraph_ref,
                 paragraph_preview=text_map.text,
+                paragraph_index=ParagraphRef.parse(paragraph_ref).index,
             )
         if occurrence is None and total > 1:
             raise AmbiguousTextError(
@@ -98,6 +139,7 @@ class _LocateMixin(_RevisionManagerBase):
                 paragraph_ref=paragraph_ref,
                 paragraph_preview=text_map.text,
                 total_occurrences=total,
+                matches=_match_locations([(0, paragraph)], text, scoped_ref=paragraph_ref),
             )
         return match
 
@@ -146,7 +188,11 @@ class _LocateMixin(_RevisionManagerBase):
         if occurrence is None:
             total = self.count_matches(text)
             if total > 1:
-                raise AmbiguousTextError(text, total_occurrences=total)
+                raise AmbiguousTextError(
+                    text,
+                    total_occurrences=total,
+                    matches=_match_locations(enumerate(body_paragraphs(self.editor.dom), start=1), text),
+                )
         return match
 
     def _find_across_boundaries_located(self, text: str, occurrence: int = 0) -> _LocatedMatch | None:

@@ -1774,6 +1774,17 @@ genuinely need the internals (raw DOM positions), import them from
 
 ## Exceptions
 
+Every exception below (the two warnings at the end excepted) inherits from
+`DocxEditError` and has a `next` attribute: the one call that usually resolves it, as a short string
+(`"get_paragraph(3)"`, `"retry with occurrence=N (0..2)"`), or `None` when no
+single call does. It is `None` on every error whose recovery discards data or
+needs the user (`WorkspaceSyncError`, `WorkspaceLockedError`,
+`DocumentOpenError`, `DocumentProtectedError`, ...), so never treat a missing
+hint as permission to retry. Each section names its non-`None` values; every
+other case has `next = None`. Through
+`docx-session eval` it arrives as `error["next"]`, present (possibly `null`)
+on every library error.
+
 ### `TextNotFoundError`
 
 Raised when the specified text is not found in the document, or when an
@@ -1789,6 +1800,11 @@ preview cut at `max_chars` ends in `...`, which is not in the document. The
 error's own `paragraph_preview` is cut the same way (80 chars, then `...`).
 Quote from `get_paragraph(i).text` or `list_paragraphs_structured()` instead.
 
+`next`: `"retry with occurrence=N (0..K)"` when the occurrence was out of
+range, `"get_paragraph(N).text"` when a paragraph-scoped search found nothing,
+`"list_paragraphs()"` when a document-wide one did not
+(`list_paragraphs_structured()` is the other way in).
+
 ```python
 from docx_editor.exceptions import TextNotFoundError
 
@@ -1803,8 +1819,35 @@ except TextNotFoundError as e:
 Raised when an edit target matches more than once in the search scope and no
 `occurrence` was given. Not a `TextNotFoundError` subclass — the text *was*
 found. Structured fields: `search_text`, `paragraph_ref` (None when
-document-wide), `paragraph_preview` (None when document-wide),
-`total_occurrences`.
+document-wide), `paragraph_preview` (None when document-wide; kept for
+compatibility, the message no longer shows it), `total_occurrences`, and:
+
+- `matches`: the first 10 matches, in document order, as `MatchLocation`
+  records (below).
+- `matches_omitted`: how many matches `matches` leaves out
+  (`total_occurrences - len(matches)`); `find_all()` lists every one.
+- `next`: `"retry with occurrence=N (0..K)"`.
+
+The message is the same list, one pick per line:
+
+```
+'alpha' matches 3 times in paragraph P1#ab12. Pass occurrence= (0-based) to pick one:
+  occurrence=0  P1#ab12 at char 0  "alpha beta alpha gamma alpha."
+  occurrence=1  P1#ab12 at char 11  "alpha beta alpha gamma alpha."
+  occurrence=2  P1#ab12 at char 23  "alpha beta alpha gamma alpha."
+```
+
+followed by `  (+N more; find_all() lists every match)` when the list was cut.
+
+`MatchLocation` (exported from `docx_editor`) is a frozen dataclass:
+
+| Field | Meaning |
+| --- | --- |
+| `occurrence` | The value to pass as `occurrence=` **to the same call** to select this match. It counts within the paragraph when that call had `paragraph=`, document-wide when it did not, so do not carry it to a call with a different scope. |
+| `paragraph_ref` | Hash-anchored ref of the paragraph holding the match, current when the error was raised. |
+| `paragraph_occurrence` | The match's 0-based number within that paragraph. `paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence` selects this match from any call; it equals `occurrence` when the raising call had `paragraph=`. Inside `batch_edit`, the locations describe the paragraph as the batch's earlier operations left it, and the batch is rolled back, so there pass `m.occurrence` back in the retried batch instead. |
+| `start` | Character offset of the match in the paragraph's visible text. It tells apart matches whose `context` is identical, such as a word repeated in a short paragraph. |
+| `context` | The match with up to 30 characters either side, `...` where the paragraph was cut, a tab mark spelled `\t`. |
 
 ```python
 from docx_editor.exceptions import AmbiguousTextError
@@ -1812,9 +1855,8 @@ from docx_editor.exceptions import AmbiguousTextError
 try:
     doc.replace("term", "clause", paragraph="P2#f3c1")
 except AmbiguousTextError as e:
-    r = doc.find_all("term", paragraph=e.paragraph_ref)[0]
-    doc.replace("term", "clause", paragraph=r.paragraph_ref,
-                occurrence=r.paragraph_occurrence)
+    m = next(m for m in e.matches if "term of the lease" in m.context)
+    doc.replace("term", "clause", paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence)
 ```
 
 ### `HashMismatchError`
@@ -1825,6 +1867,7 @@ listed, so the ref is stale. Structured fields: `paragraph_index` (1-based),
 `expected_hash` (the hash in the stale ref), `actual_hash` (the paragraph's
 current hash), and `paragraph_preview` (the current text, a tab mark spelled `\t`). Recover by retrying
 with the fresh ref `P{paragraph_index}#{actual_hash}`, or re-list paragraphs.
+`next`: `"get_paragraph(N)"`.
 
 ```python
 from docx_editor.exceptions import HashMismatchError
@@ -1841,7 +1884,7 @@ Raised when a paragraph index is out of range — `< 1` or greater than
 `paragraph_count()` (for example `get_paragraph(0)`). Structured fields:
 `index` (the offending index) and `total_paragraphs` (how many the document
 has). Clamp to `1..total_paragraphs` and retry, or call `list_paragraphs()`
-to pick a valid ref.
+to pick a valid ref. `next`: `"list_paragraphs()"`.
 
 ```python
 from docx_editor.exceptions import ParagraphIndexError
@@ -1859,7 +1902,8 @@ operation. Structured fields: `operation_index` (0-based position of the
 failing op), `reason` (human-readable message), `original` (the underlying
 typed exception, also set as `__cause__`; `None` for batch-level rule
 violations that have no underlying exception, e.g. a missing paragraph ref or
-a duplicate paragraph in `batch_rewrite`).
+a duplicate paragraph in `batch_rewrite`). `next`: `original.next` when
+`original` is a library error, else `None`.
 
 ```python
 from docx_editor.exceptions import BatchOperationError, HashMismatchError
@@ -1878,7 +1922,7 @@ while ops:
 
 ### `CommentError`
 
-Raised when a comment operation fails. Structured field: `comment_id` (the comment id the operation targeted, e.g. the parent id of a failed reply; `None` when no comment id applies).
+Raised when a comment operation fails. Structured field: `comment_id` (the comment id the operation targeted, e.g. the parent id of a failed reply; `None` when no comment id applies). `next`: `"list_comments()"` when the reply's parent id is unknown; `None` otherwise.
 
 ```python
 from docx_editor.exceptions import CommentError
@@ -1891,7 +1935,7 @@ except CommentError as e:
 
 ### `RevisionError`
 
-Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`, or an unknown changeset id passed to `accept_changeset()` / `reject_changeset()`. Also raised by `accept_revision()` / `reject_revision()` when the `w:id` is carried by more than one pending revision (`revision_id` is set; the document is untouched): pass `author=`, or use `accept_all(author=…)` / `reject_all(author=…)` when one author duplicated the id. Group and changeset ids are per-open-`Document` and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use an id from the current session's `EditResult` or `list_revisions()` — a stale id from a previous session may raise this, or worse, silently resolve to a different group/changeset. Structured fields: `revision_id`, `group_id`, and `changeset_id` — set when the error is about that specific id (`revision_id` for an ambiguous per-id call, `group_id` for unknown-group errors, `changeset_id` for unknown-changeset errors), `None` otherwise.
+Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`, or an unknown changeset id passed to `accept_changeset()` / `reject_changeset()`. Also raised by `accept_revision()` / `reject_revision()` when the `w:id` is carried by more than one pending revision (`revision_id` is set; the document is untouched): pass `author=`, or use `accept_all(author=…)` / `reject_all(author=…)` when one author duplicated the id. Group and changeset ids are per-open-`Document` and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use an id from the current session's `EditResult` or `list_revisions()` — a stale id from a previous session may raise this, or worse, silently resolve to a different group/changeset. Structured fields: `revision_id`, `group_id`, and `changeset_id` — set when the error is about that specific id (`revision_id` for an ambiguous per-id call, `group_id` for unknown-group errors, `changeset_id` for unknown-changeset errors), `None` otherwise. `next`: `"list_revisions()"` for an unknown group or changeset; for a duplicated id, `"retry with author=<name>"` when `author=` can tell the carriers apart (the message names who) and `"list_revisions()"` when it cannot; `None` otherwise.
 
 ```python
 from docx_editor.exceptions import RevisionError
@@ -1919,7 +1963,7 @@ from docx_editor.exceptions import InvalidDocumentError
 
 ### `DocumentClosedError`
 
-Raised when any operation is attempted on a `Document` after `close()`. Closing discards the workspace (unless `cleanup=False`), so the object cannot keep serving reads or edits — reopen the source to continue. Structured field: `path` (the source path of the closed document).
+Raised when any operation is attempted on a `Document` after `close()`. Closing discards the workspace (unless `cleanup=False`), so the object cannot keep serving reads or edits — reopen the source to continue. Structured field: `path` (the source path of the closed document). `next`: `"Document.open(path)"`.
 
 ```python
 from docx_editor import Document
