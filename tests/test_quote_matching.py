@@ -96,6 +96,14 @@ class TestEdits:
         assert _revs(curly_doc) == [("deletion", "pay"), ("insertion", "charge")]
         assert "don’t charge" in curly_doc.get_visible_text()
 
+    def test_interior_word_is_rewritten_as_passed(self, simple_docx, tmp_path):
+        # Only words at the ends of the span are trimmed: "don't" sits between two
+        # changed words, so it is deleted and reinserted with the caller's quote.
+        with _open(simple_docx, tmp_path, _p("say old don’t pay now")) as doc:
+            doc.replace("old don't pay", "new don't charge", paragraph=find_ref(doc, "say"))
+            assert _revs(doc) == [("deletion", "old don’t pay"), ("insertion", "new don't charge")]
+            assert doc.get_visible_text() == "say new don't charge now"
+
     def test_straight_to_curly_style_only_replace_is_tracked(self, curly_doc):
         # (b) The new token differs from both the search and the document token.
         curly_doc.replace('"straight"', "“straight”", paragraph=find_ref(curly_doc, "Plain"))

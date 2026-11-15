@@ -1435,7 +1435,10 @@ class Document:
         exactly as in ``find`` or exactly as in the document, which can differ
         in quote style) are trimmed first, so only the changed words become
         revisions — a replace that only adds or only removes words is written
-        as a pure insertion or deletion. The insertion carries the formatting (rPr) that covers
+        as a pure insertion or deletion. Only leading and trailing words are
+        kept: everything from the first changed word to the last is deleted
+        and reinserted exactly as ``replace_with`` spells it, so an unchanged
+        interior word takes the replacement's quote style. The insertion carries the formatting (rPr) that covers
         the most characters of the replaced span — runs sharing identical
         formatting tally together, with ties breaking to the earliest-seen
         formatting.
