@@ -1034,8 +1034,9 @@ class CommentManager:
     def _remove_range_markers(self, comment_id: int) -> None:
         """Drop a comment's range markers and reference run from document.xml.
 
-        Each lookup is guarded: a marker can already be gone (carried away
-        inside a rejected revision that hosted it), and a comment missing one
+        Each lookup is guarded: resolving revisions keeps comment markers (or
+        drops a comment's whole set), but a file saved by an earlier release
+        (or another producer) can hold a half pair, and a comment missing one
         marker must still lose the others rather than keep a half-range.
         """
         for tag in ("w:commentRangeStart", "w:commentRangeEnd"):

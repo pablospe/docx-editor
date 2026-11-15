@@ -1,5 +1,6 @@
 """Tests for comment functionality."""
 
+import shutil
 from typing import Any
 
 import pytest
@@ -1767,7 +1768,6 @@ class TestAddCommentWholeParagraph:
     def test_same_markup_as_anchoring_on_the_full_text(self, clean_workspace, tmp_path):
         """The whole-paragraph form is the anchored form with the full text as the anchor."""
         import re
-        import shutil
 
         def markup(doc) -> str:
             # w:rsidR is random per session.
@@ -1842,19 +1842,17 @@ class TestAddCommentWholeParagraph:
         finally:
             doc.close()
 
-    # What resolving the edge insertions does to the markers. A marker inside a
-    # w:ins is unwrapped with it on accept and removed with it on reject, so a
-    # rejected edge takes its marker along: (start parent, end parent,
-    # reference-run parent, paragraph_ref still set). paragraph_ref follows the
-    # range start alone, so reject_end keeps it although the reference run is
-    # gone, and reject_start loses it although the reference run remains.
+    # What resolving the edge insertions does to the markers: (start parent,
+    # end parent, reference-run parent, paragraph_ref still set). A marker
+    # inside a w:ins is unwrapped with it on accept and hoisted out of it (to
+    # where the insertion was) on reject, so no edge loses its marker.
     EDGE_OUTCOMES = {
         "accept_all": ("w:p", "w:p", "w:p", True),
         "accept_start": ("w:p", "w:ins", "w:ins", True),
         "accept_end": ("w:ins", "w:p", "w:p", True),
-        "reject_all": (None, None, None, False),
-        "reject_start": (None, "w:ins", "w:ins", False),
-        "reject_end": ("w:ins", None, None, True),
+        "reject_all": ("w:p", "w:p", "w:p", True),
+        "reject_start": ("w:p", "w:ins", "w:ins", True),
+        "reject_end": ("w:ins", "w:p", "w:p", True),
     }
 
     @pytest.mark.parametrize("action", list(EDGE_OUTCOMES))
@@ -1862,14 +1860,10 @@ class TestAddCommentWholeParagraph:
         """Accepting or rejecting the edge insertions treats a whole-paragraph
         comment exactly as it treats one anchored on the same full text.
 
-        Pins the inherited behaviour: the markers live inside the edge
-        ``w:ins`` wrappers, so accept keeps them (unwrapped into the paragraph)
-        and reject removes them with the insertion. The comment body stays
-        listed either way; ``paragraph_ref`` is ``None`` exactly when the range
-        start went (``reject_all``, ``reject_start``), and survives
-        ``reject_end`` even though the range end and reference run are gone.
+        The markers live inside the edge ``w:ins`` wrappers: accept unwraps
+        them into the paragraph, reject hoists them out before the insertion
+        goes. The comment stays listed with its ``paragraph_ref`` either way.
         """
-        import shutil
 
         other = tmp_path / "other.docx"
         shutil.copy(clean_workspace, other)
@@ -2065,3 +2059,544 @@ class TestAddCommentWholeParagraph:
             assert _commented_text(doc, comment_id) == FOX
         finally:
             doc.close()
+
+
+_COMMENT_TAGS = ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
+_W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+_ANN = 'w:author="Ann" w:date="2026-01-29T16:55:00Z"'
+
+
+def _markers_by_id(doc) -> dict[str, list[str]]:
+    """Comment id -> the marker tags it has in the document, in document order."""
+    out: dict[str, list[str]] = {}
+    for node in doc._document_editor.dom.getElementsByTagName("*"):
+        if node.tagName in _COMMENT_TAGS:
+            out.setdefault(node.getAttribute("w:id"), []).append(node.tagName)
+    return out
+
+
+def _marker_nodes(doc) -> list:
+    """The range marks and reference runs, in document order."""
+    nodes = []
+    for node in doc._document_editor.dom.getElementsByTagName("*"):
+        if node.tagName in ("w:commentRangeStart", "w:commentRangeEnd"):
+            nodes.append(node)
+        elif node.tagName == "w:commentReference":
+            nodes.append(node.parentNode)
+    return nodes
+
+
+def _open_body(clean_workspace, tmp_path, paragraph: str) -> Document:
+    """Open a copy of ``clean_workspace`` whose body is the single ``paragraph``."""
+    from conftest import replace_document_xml
+
+    dest = tmp_path / "hand.docx"
+    replace_document_xml(
+        clean_workspace,
+        dest,
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<w:document {_W_NS}><w:body>{paragraph}</w:body></w:document>",
+    )
+    return Document.open(dest)
+
+
+class TestResolutionKeepsCommentMarkers:
+    """Resolving a revision never drops the comment markers inside it
+    (ROADMAP.md #102): rejecting an insertion, or accepting a deletion, moves
+    them to where the removed content was before it goes."""
+
+    INSERTED = " EXTRA words"
+
+    def _with_insertion(self, path):
+        doc = Document.open(path)
+        result = doc.insert_after("lazy dog.", self.INSERTED, paragraph=find_ref(doc, "brown fox"))
+        return doc, result
+
+    @staticmethod
+    def _assert_point_comment(doc, comment_id: int) -> None:
+        """One start, end and reference, adjacent children of the paragraph."""
+        assert _markers_by_id(doc) == {str(comment_id): list(_COMMENT_TAGS)}
+        start, end, ref_run = _marker_nodes(doc)
+        assert start.parentNode.tagName == "w:p"
+        assert end.parentNode is start.parentNode and ref_run.parentNode is start.parentNode
+        siblings = [n for n in start.parentNode.childNodes if n.nodeType == n.ELEMENT_NODE]
+        i = siblings.index(start)
+        assert siblings[i : i + 3] == [start, end, ref_run]
+
+    @pytest.mark.parametrize("verb", ["reject_revision", "reject_all", "reject_group", "reject_changeset"])
+    def test_comment_wholly_inside_a_rejected_insertion_becomes_a_point_comment(self, clean_workspace, verb):
+        doc, result = self._with_insertion(clean_workspace)
+        try:
+            comment_id = doc.add_comment("EXTRA words", "keep me", paragraph=find_ref(doc, "brown fox"))
+            if verb == "reject_revision":
+                (rev,) = doc.list_revisions()
+                assert doc.reject_revision(rev.id)
+            elif verb == "reject_all":
+                doc.reject_all()
+            elif verb == "reject_group":
+                assert doc.reject_group(result.group_id) == 1
+            else:
+                assert doc.reject_changeset(result.changeset_id) == 1
+
+            assert doc.list_revisions() == []
+            assert "EXTRA" not in doc._document_editor.dom.toxml()
+            self._assert_point_comment(doc, comment_id)
+            ref = find_ref(doc, "brown fox")
+            (comment,) = doc.list_comments()
+            assert (comment.id, comment.text, comment.paragraph_ref) == (comment_id, "keep me", ref)
+            doc.save()
+        finally:
+            doc.close()
+
+        doc = Document.open(clean_workspace)
+        try:
+            self._assert_point_comment(doc, comment_id)
+            (comment,) = doc.list_comments()
+            assert comment.paragraph_ref == find_ref(doc, "brown fox")
+        finally:
+            doc.close()
+
+    def test_straddling_anchor_is_clipped_to_the_surviving_text(self, clean_workspace):
+        doc, _ = self._with_insertion(clean_workspace)
+        try:
+            comment_id = doc.add_comment("dog. EXTRA", "straddle", paragraph=find_ref(doc, "brown fox"))
+            doc.reject_all()
+            assert _markers_by_id(doc) == {str(comment_id): list(_COMMENT_TAGS)}
+            assert _commented_text(doc, comment_id) == "dog."
+        finally:
+            doc.close()
+
+    def test_reply_keeps_its_markers_with_its_parent(self, clean_workspace):
+        doc, _ = self._with_insertion(clean_workspace)
+        try:
+            parent_id = doc.add_comment("EXTRA words", "parent", paragraph=find_ref(doc, "brown fox"))
+            reply_id = doc.reply_to_comment(parent_id, "reply")
+            doc.reject_all()
+            markers = _markers_by_id(doc)
+            assert sorted(markers) == sorted([str(parent_id), str(reply_id)])
+            for tags in markers.values():
+                assert sorted(tags) == sorted(_COMMENT_TAGS)
+            (parent,) = doc.list_comments()
+            assert parent.paragraph_ref == find_ref(doc, "brown fox")
+            assert [r.text for r in parent.replies] == ["reply"]
+        finally:
+            doc.close()
+
+    def test_accepting_keeps_the_markers_where_they_were(self, clean_workspace):
+        doc, _ = self._with_insertion(clean_workspace)
+        try:
+            comment_id = doc.add_comment("EXTRA words", "accepted", paragraph=find_ref(doc, "brown fox"))
+            doc.accept_all()
+            assert _markers_by_id(doc) == {str(comment_id): list(_COMMENT_TAGS)}
+            assert _commented_text(doc, comment_id) == "EXTRA words"
+        finally:
+            doc.close()
+
+    def test_rejected_foreign_move_to_keeps_its_markers(self, clean_workspace, tmp_path):
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            '<w:p><w:r><w:t xml:space="preserve">before </w:t></w:r>'
+            f'<w:moveTo w:id="14" {_ANN}><w:commentRangeStart w:id="0"/><w:r><w:t>moved</w:t></w:r>'
+            '<w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:moveTo></w:p>',
+        )
+        try:
+            assert doc.reject_revision(14)
+            xml = doc._document_editor.dom.toxml()
+            assert "moved" not in xml and "w:moveTo" not in xml
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS)}
+            assert {n.parentNode.tagName for n in _marker_nodes(doc)} == {"w:p"}
+        finally:
+            doc.close()
+
+    def test_accepted_deletion_keeps_its_markers(self, clean_workspace, tmp_path):
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            '<w:p><w:r><w:t xml:space="preserve">kept </w:t></w:r>'
+            f'<w:del w:id="5" {_ANN}><w:commentRangeStart w:id="0"/><w:r><w:delText>gone</w:delText></w:r>'
+            '<w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:del></w:p>',
+        )
+        try:
+            assert doc.accept_revision(5)
+            xml = doc._document_editor.dom.toxml()
+            assert "gone" not in xml and "w:del " not in xml
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS)}
+            assert {n.parentNode.tagName for n in _marker_nodes(doc)} == {"w:p"}
+        finally:
+            doc.close()
+
+    def test_reference_in_a_run_with_text_does_not_resurrect_the_text(self, clean_workspace, tmp_path):
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            '<w:p><w:r><w:t xml:space="preserve">kept </w:t></w:r>'
+            f'<w:ins w:id="5" {_ANN}><w:commentRangeStart w:id="0"/>'
+            '<w:r><w:t>new</w:t><w:commentRangeEnd w:id="0"/><w:commentReference w:id="0"/></w:r></w:ins></w:p>',
+        )
+        try:
+            assert doc.reject_revision(5)
+            xml = doc._document_editor.dom.toxml()
+            assert "new" not in xml and "w:ins" not in xml
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS)}
+            (ref,) = doc._document_editor.dom.getElementsByTagName("w:commentReference")
+            run = ref.parentNode
+            assert run.tagName == "w:r" and run.parentNode.tagName == "w:p"
+            assert [n.tagName for n in run.childNodes if n.nodeType == n.ELEMENT_NODE] == ["w:commentReference"]
+        finally:
+            doc.close()
+
+    @staticmethod
+    def _assert_nothing_at_block_level(doc) -> None:
+        """No run and no comment mark is a direct child of w:body or w:tc."""
+        for node in doc._document_editor.dom.getElementsByTagName("*"):
+            if node.tagName in ("w:r", "w:commentRangeStart", "w:commentRangeEnd"):
+                assert node.parentNode.tagName not in ("w:body", "w:tc"), node.toxml()
+
+    def _reject_block_insertion(self, clean_workspace, tmp_path, body: str) -> Document:
+        """Open ``body`` (holding a block-level w:ins id 7 around a paragraph
+        "inserted para"), comment that paragraph, and reject the insertion."""
+        doc = _open_body(clean_workspace, tmp_path, body)
+        doc.add_comment("inserted para", "on the inserted paragraph")
+        assert doc.reject_revision(7)
+        assert "inserted para" not in doc._document_editor.dom.toxml()
+        return doc
+
+    _BLOCK_INS = f'<w:ins w:id="7" {_ANN}><w:p><w:r><w:t>inserted para</w:t></w:r></w:p></w:ins>'
+
+    def test_block_level_insertion_rehomes_markers_to_the_previous_paragraph_end(self, clean_workspace, tmp_path):
+        doc = self._reject_block_insertion(
+            clean_workspace, tmp_path, "<w:p><w:r><w:t>before</w:t></w:r></w:p>" + self._BLOCK_INS
+        )
+        try:
+            self._assert_nothing_at_block_level(doc)
+            (paragraph,) = doc._document_editor.dom.getElementsByTagName("w:p")
+            children = [n for n in paragraph.childNodes if n.nodeType == n.ELEMENT_NODE]
+            assert children[-3:] == _marker_nodes(doc)  # point comment at the end
+            assert [c.id for c in doc.list_comments()] == [0]
+        finally:
+            doc.close()
+
+    def test_block_level_insertion_in_a_cell_rehomes_markers_to_the_next_paragraph_start(
+        self, clean_workspace, tmp_path
+    ):
+        doc = self._reject_block_insertion(
+            clean_workspace,
+            tmp_path,
+            "<w:tbl><w:tr><w:tc>"
+            + self._BLOCK_INS
+            + '<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t>after</w:t></w:r></w:p></w:tc></w:tr></w:tbl>',
+        )
+        try:
+            self._assert_nothing_at_block_level(doc)
+            (paragraph,) = doc._document_editor.dom.getElementsByTagName("w:p")
+            children = [n for n in paragraph.childNodes if n.nodeType == n.ELEMENT_NODE]
+            assert [children[0].tagName] + children[1:4] == ["w:pPr", *_marker_nodes(doc)]
+        finally:
+            doc.close()
+
+    def test_block_level_insertion_with_no_surviving_paragraph_drops_the_whole_marker_set(
+        self, clean_workspace, tmp_path
+    ):
+        # The range starts outside the cell; with no paragraph left beside the
+        # insertion, the start goes too rather than survive as a half-pair.
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            '<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>outside</w:t></w:r></w:p>'
+            f'<w:tbl><w:tr><w:tc><w:ins w:id="7" {_ANN}><w:p><w:r><w:t>inside</w:t></w:r>'
+            '<w:commentRangeEnd w:id="0"/><w:r><w:rPr/><w:commentReference w:id="0"/></w:r></w:p>'
+            "</w:ins></w:tc></w:tr></w:tbl>",
+        )
+        try:
+            assert doc.reject_revision(7)
+            assert _markers_by_id(doc) == {}
+            assert "outside" in doc._document_editor.dom.toxml()
+        finally:
+            doc.close()
+
+    _START = '<w:commentRangeStart w:id="0"/>'
+    _END = '<w:commentRangeEnd w:id="0"/><w:r><w:rPr/><w:commentReference w:id="0"/></w:r>'
+    _SPANNING = {
+        # A range starting in block insertion 1 and ending in block insertion 2.
+        "two_insertions": "<w:p><w:r><w:t>P0</w:t></w:r></w:p>"
+        f'<w:ins w:id="1" {_ANN}><w:p>{_START}<w:r><w:t>a</w:t></w:r></w:p></w:ins>'
+        f'<w:ins w:id="2" {_ANN}><w:p><w:r><w:t>b</w:t></w:r>{_END}</w:p></w:ins>'
+        "<w:p><w:r><w:t>P3</w:t></w:r></w:p>",
+        "two_insertions_no_previous": f'<w:ins w:id="1" {_ANN}><w:p>{_START}<w:r><w:t>a</w:t></w:r></w:p></w:ins>'
+        f'<w:ins w:id="2" {_ANN}><w:p><w:r><w:t>b</w:t></w:r>{_END}</w:p></w:ins>'
+        "<w:p><w:r><w:t>P3</w:t></w:r></w:p>",
+        # The range starts in a table cell between P0 and the insertion.
+        "start_in_a_table": "<w:p><w:r><w:t>P0</w:t></w:r></w:p>"
+        f"<w:tbl><w:tr><w:tc><w:p>{_START}<w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+        f'<w:ins w:id="2" {_ANN}><w:p><w:r><w:t>b</w:t></w:r>{_END}</w:p></w:ins>',
+        # A body-level range start (schema-valid; Word writes one before a
+        # table) lies between P0 and the insertion holding the end.
+        "block_level_start_passed": "<w:p><w:r><w:t>P0</w:t></w:r></w:p>"
+        + _START
+        + f'<w:ins w:id="2" {_ANN}><w:p><w:r><w:t>b</w:t></w:r>{_END}</w:p></w:ins>'
+        "<w:p><w:r><w:t>P3</w:t></w:r></w:p>",
+        # Its mirror: no paragraph before, a body-level end before P3.
+        "block_level_end_passed": f'<w:ins w:id="1" {_ANN}><w:p>{_START}<w:r><w:t>a</w:t></w:r></w:p></w:ins>'
+        '<w:commentRangeEnd w:id="0"/><w:p><w:r><w:t>P3</w:t></w:r>'
+        '<w:r><w:rPr/><w:commentReference w:id="0"/></w:r></w:p>',
+        # The insertion is alone in a block content control: the paragraph
+        # outside it still receives the markers.
+        "inside_a_block_sdt": "<w:p><w:r><w:t>P0</w:t></w:r></w:p>"
+        f'<w:sdt><w:sdtContent><w:ins w:id="2" {_ANN}><w:p>{_START}<w:r><w:t>b</w:t></w:r>{_END}</w:p></w:ins>'
+        "</w:sdtContent></w:sdt>",
+    }
+
+    @pytest.mark.parametrize("body", sorted(_SPANNING))
+    @pytest.mark.parametrize("order", ["reject_all", "ascending", "descending"])
+    def test_rehomed_range_keeps_its_start_before_its_end(self, clean_workspace, tmp_path, body, order):
+        doc = _open_body(clean_workspace, tmp_path, self._SPANNING[body])
+        try:
+            ids = sorted(rev.id for rev in doc.list_revisions())
+            if order == "reject_all":
+                doc.reject_all()
+            else:
+                for rev_id in ids if order == "ascending" else reversed(ids):
+                    assert doc.reject_revision(rev_id)
+            assert doc.list_revisions() == []
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS)}
+            self._assert_nothing_at_block_level(doc)
+        finally:
+            doc.close()
+
+    def test_rehoming_cost_does_not_grow_with_the_body(self, clean_workspace, tmp_path):
+        # 1000 commented block insertions in a 5000-paragraph body: a search
+        # that walks the whole body per insertion took ~14 s here, the
+        # nearest-first one ~0.25 s.
+        import time
+
+        parts = []
+        for i in range(5000):
+            parts.append(f"<w:p><w:r><w:t>p{i}</w:t></w:r></w:p>")
+            if i % 5 == 0:
+                marks = f'<w:commentRangeStart w:id="{i}"/><w:r><w:t>c</w:t></w:r><w:commentRangeEnd w:id="{i}"/>'
+                parts.append(f'<w:ins w:id="{100000 + i}" {_ANN}><w:p>{marks}</w:p></w:ins>')
+        doc = _open_body(clean_workspace, tmp_path, "".join(parts))
+        try:
+            started = time.perf_counter()
+            assert doc.reject_all() == 1000
+            assert time.perf_counter() - started < 5
+            self._assert_nothing_at_block_level(doc)
+        finally:
+            doc.close()
+
+    def test_block_alternate_content_neighbour_rehomes_into_its_choice_copy(self, clean_workspace, tmp_path):
+        mc = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            f'<mc:AlternateContent {mc}><mc:Choice Requires="w14"><w:p><w:r><w:t>choice</w:t></w:r></w:p></mc:Choice>'
+            "<mc:Fallback><w:p><w:r><w:t>fallback</w:t></w:r></w:p></mc:Fallback></mc:AlternateContent>"
+            f'<w:ins w:id="2" {_ANN}><w:p>{self._START}<w:r><w:t>b</w:t></w:r>{self._END}</w:p></w:ins>',
+        )
+        try:
+            assert doc.reject_revision(2)
+            (start,) = doc._document_editor.dom.getElementsByTagName("w:commentRangeStart")
+            assert start.parentNode.parentNode.tagName == "mc:Choice"
+        finally:
+            doc.close()
+
+    def test_insertion_in_a_choice_branch_skips_the_fallback_branch(self, clean_workspace, tmp_path):
+        mc = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+        ins = f'<w:ins w:id="2" {_ANN}><w:p>{self._START}<w:r><w:t>b</w:t></w:r>{self._END}</w:p></w:ins>'
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            f'<mc:AlternateContent {mc}><mc:Choice Requires="w14">{ins}</mc:Choice>'
+            f"<mc:Fallback>{ins}</mc:Fallback></mc:AlternateContent>"
+            "<w:p><w:r><w:t>after</w:t></w:r></w:p>",
+        )
+        try:
+            doc.reject_all()
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS)}
+            (start,) = doc._document_editor.dom.getElementsByTagName("w:commentRangeStart")
+            assert start.parentNode.parentNode.tagName == "w:body"  # the "after" paragraph
+        finally:
+            doc.close()
+
+    def test_rehoming_past_a_large_table_does_not_rescan_it(self, clean_workspace, tmp_path, monkeypatch):
+        # 50 commented block insertions after a 3000-cell table, rejected in
+        # document order: each search descends the table from its near edge
+        # (a handful of nodes), never through all of its paragraphs.
+        from docx_editor.track_changes import resolution
+
+        visits = []
+        edge_paragraph = resolution._edge_paragraph
+
+        def counting(*args):
+            visits.append(args[0])
+            return edge_paragraph(*args)
+
+        monkeypatch.setattr(resolution, "_edge_paragraph", counting)
+        cells = "".join(f"<w:tc><w:p><w:r><w:t>c{i}</w:t></w:r></w:p></w:tc>" for i in range(3000))
+        inserts = "".join(
+            f'<w:ins w:id="{100 + i}" {_ANN}><w:p><w:commentRangeStart w:id="{i}"/><w:r><w:t>x</w:t></w:r>'
+            f'<w:commentRangeEnd w:id="{i}"/></w:p></w:ins>'
+            for i in range(50)
+        )
+        doc = _open_body(clean_workspace, tmp_path, f"<w:tbl><w:tr>{cells}</w:tr></w:tbl>{inserts}")
+        try:
+            for rev_id in range(100, 150):
+                assert doc.reject_revision(rev_id)
+            elements = [node for node in visits if node.nodeType == node.ELEMENT_NODE]
+            assert 0 < len(elements) < 50 * 10  # one full walk of the table alone is 9000
+            self._assert_nothing_at_block_level(doc)
+        finally:
+            doc.close()
+
+    def test_insertion_inside_both_text_box_copies_keeps_each_copy_whole(self, clean_workspace, tmp_path):
+        # The shape Word writes: a run-level insertion in a text box, repeated
+        # in the mc:Choice and mc:Fallback copies, the range straddling its edge.
+        mc = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+        box = (
+            f'<w:txbxContent><w:p><w:ins w:id="1" {_ANN}>{self._START}<w:r><w:t>new </w:t></w:r></w:ins>'
+            f"<w:r><w:t>kept</w:t></w:r>{self._END}</w:p></w:txbxContent>"
+        )
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            f'<w:p><w:r><mc:AlternateContent {mc}><mc:Choice Requires="wps"><w:drawing>{box}</w:drawing></mc:Choice>'
+            f"<mc:Fallback><w:pict>{box}</w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>",
+        )
+        try:
+            doc.reject_all()
+            assert "new" not in doc._document_editor.dom.toxml()
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS) * 2}
+        finally:
+            doc.close()
+
+    def test_block_level_marks_passed_backwards_move_with_a_forward_rehoming(self, clean_workspace, tmp_path):
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            '<w:commentRangeStart w:id="0"/>'
+            f'<w:ins w:id="2" {_ANN}><w:p><w:r><w:t>b</w:t></w:r><w:commentRangeEnd w:id="0"/>'
+            '<w:r><w:rPr/><w:commentReference w:id="0"/></w:r><w:commentRangeStart w:id="1"/></w:p></w:ins>'
+            '<w:commentRangeEnd w:id="1"/><w:p><w:r><w:t>P3</w:t></w:r></w:p>',
+        )
+        try:
+            assert doc.reject_revision(2)
+            self._assert_nothing_at_block_level(doc)
+            assert _markers_by_id(doc) == {
+                "0": list(_COMMENT_TAGS),
+                "1": ["w:commentRangeStart", "w:commentRangeEnd"],
+            }
+        finally:
+            doc.close()
+
+    def test_rehoming_walks_past_a_sibling_holding_no_paragraph(self, clean_workspace, tmp_path):
+        # A body-level bookmark (Word writes these) between P0 and the
+        # insertion has no paragraph to offer; the search moves on to P0.
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            '<w:p><w:r><w:t>P0</w:t></w:r></w:p><w:bookmarkStart w:id="9" w:name="b"/>'
+            f'<w:ins w:id="2" {_ANN}><w:p>{self._START}<w:r><w:t>b</w:t></w:r>{self._END}</w:p></w:ins>',
+        )
+        try:
+            assert doc.reject_revision(2)
+            (paragraph,) = doc._document_editor.dom.getElementsByTagName("w:p")
+            children = [n for n in paragraph.childNodes if n.nodeType == n.ELEMENT_NODE]
+            assert children[-3:] == _marker_nodes(doc)
+            assert doc._document_editor.dom.getElementsByTagName("w:bookmarkStart")[0].parentNode.tagName == "w:body"
+        finally:
+            doc.close()
+
+    def test_revision_outside_every_block_container_still_rehomes_into_a_paragraph(self, clean_workspace, tmp_path):
+        # Non-conforming: a block w:ins directly under w:document, beside
+        # w:body. It is listed and rejectable; its markers must still land in
+        # a paragraph (the body's first), not stay at the document root.
+        from conftest import replace_document_xml
+
+        dest = tmp_path / "stray.docx"
+        replace_document_xml(
+            clean_workspace,
+            dest,
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<w:document {_W_NS}><w:ins w:id="7" {_ANN}><w:p>{self._START}<w:r><w:t>stray</w:t></w:r>'
+            f"{self._END}</w:p></w:ins><w:body><w:p><w:r><w:t>P</w:t></w:r></w:p></w:body></w:document>",
+        )
+        doc = Document.open(dest)
+        try:
+            assert doc.reject_revision(7)
+            assert "stray" not in doc._document_editor.dom.toxml()
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS)}
+            assert {node.parentNode.tagName for node in _marker_nodes(doc)} == {"w:p"}
+        finally:
+            doc.close()
+
+    def test_text_box_fallback_copy_is_not_hoisted_twice(self, clean_workspace, tmp_path):
+        box = f"<w:txbxContent><w:p>{self._START}<w:r><w:t>box</w:t></w:r>{self._END}</w:p></w:txbxContent>"
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            "<w:p><w:r><w:t>keep</w:t></w:r>"
+            f'<w:ins w:id="1" {_ANN}><w:r>'
+            '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+            f'<mc:Choice Requires="wps"><w:drawing>{box}</w:drawing></mc:Choice>'
+            f"<mc:Fallback><w:pict>{box}</w:pict></mc:Fallback>"
+            "</mc:AlternateContent></w:r></w:ins></w:p>",
+        )
+        try:
+            assert doc.reject_revision(1)
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS)}
+        finally:
+            doc.close()
+
+    @pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice not installed")
+    def test_libreoffice_opens_a_rejected_block_level_insertion(self, clean_workspace, tmp_path, monkeypatch):
+
+        from test_corpus_harness import harness
+
+        doc = self._reject_block_insertion(
+            clean_workspace, tmp_path, "<w:p><w:r><w:t>before</w:t></w:r></w:p>" + self._BLOCK_INS
+        )
+        try:
+            out = tmp_path / "out.docx"
+            doc.save(out)
+        finally:
+            doc.close()
+
+        monkeypatch.setattr(harness, "LO_DIR", tmp_path / "lo")
+        (tmp_path / "lo").mkdir()
+        monkeypatch.setattr(harness, "LO_PROFILE", tmp_path / "profile")
+        record = harness.run_lo_roundtrip(out, False, shutil.which("soffice"), tmp_path / "work")
+        assert record["status"] == "pass", record
+
+    @pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice not installed")
+    def test_libreoffice_keeps_the_comment_after_rejecting_the_trailing_edge(
+        self, clean_workspace, tmp_path, monkeypatch
+    ):
+        import zipfile
+
+        from test_corpus_harness import harness
+
+        doc = Document.open(clean_workspace)
+        try:
+            doc.insert_before("The quick", "START ", paragraph=find_ref(doc, "brown fox"))
+            doc.insert_after("lazy dog.", " END", paragraph=find_ref(doc, "brown fox"))
+            doc.add_comment(comment="whole paragraph", paragraph=find_ref(doc, "brown fox"))
+            _, end_ins = doc.list_revisions()
+            doc.reject_revision(end_ins.id)
+            out = tmp_path / "out.docx"
+            doc.save(out)
+        finally:
+            doc.close()
+
+        lo_dir = tmp_path / "lo"
+        lo_dir.mkdir()
+        monkeypatch.setattr(harness, "LO_DIR", lo_dir)
+        monkeypatch.setattr(harness, "LO_PROFILE", tmp_path / "profile")
+        record = harness.run_lo_roundtrip(out, False, shutil.which("soffice"), tmp_path / "work")
+        assert record["status"] == "pass", record
+
+        (resaved,) = lo_dir.glob("*.docx")
+        with zipfile.ZipFile(resaved) as z:
+            assert "whole paragraph" in z.read("word/comments.xml").decode()
+            body = z.read("word/document.xml").decode()
+        assert "commentRangeStart" in body and "commentReference" in body

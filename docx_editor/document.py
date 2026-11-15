@@ -2242,6 +2242,10 @@ class Document:
         ``move_from`` alone is a deletion, a ``move_to`` alone an insertion.
         A move's range marks are swept once their content is resolved.
 
+        Comment markers inside an accepted deletion (or ``move_from``) are
+        kept exactly as :meth:`reject_revision` keeps those of a rejected
+        insertion.
+
         Note:
             Any ``note=`` rationale left with no live revision to explain is
             deleted with it, replies included (see :meth:`replace`).
@@ -2286,6 +2290,15 @@ class Document:
           is restored verbatim even when the document defines no such style.
 
         Resolve both halves of a move together — see :meth:`accept_revision`.
+
+        Comment markers inside rejected content are kept, moved to where the
+        content was: a comment on part of it shrinks to the text that
+        survives, one wholly on it becomes a point comment there. It stays
+        listed; delete it with :meth:`delete_comment` if it no longer applies.
+        Rejected content that is whole paragraphs moves the markers to the end
+        of the paragraph before it (else the start of the one after); with no
+        paragraph left in its body, cell or text box, the comment loses all its
+        markers.
 
         Note:
             Any ``note=`` rationale left with no live revision to explain is
