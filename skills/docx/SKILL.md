@@ -524,10 +524,10 @@ cid2 = doc.add_comment("term", "Anchored to the 2nd 'term' in P3",
 # range covers the paragraph's full visible text (pending insertions included).
 # Do not anchor on the paragraph's first words as a workaround.
 # The range runs first text character to last: a picture or footnote reference
-# at either end is outside it. If the paragraph starts or ends in a pending
-# insertion, the marker sits inside it and REJECTING that insertion removes the
-# marker (the comment stops displaying, or loses its paragraph_ref); accepting
-# keeps it. Same as any comment anchored on inserted text.
+# at either end is outside it. Accepting or rejecting a pending insertion at
+# either end never removes the comment's markers: rejecting moves them to where
+# the inserted text was, so the range shrinks to what survives (a comment wholly
+# on rejected text becomes a point comment there) and it stays listed.
 cid3 = doc.add_comment(comment="Needs a citation", paragraph="P3#b2c4")
 # comment is always required, and a lone positional string is the ANCHOR:
 # add_comment("Needs a citation", paragraph=ref) raises CommentError. So do a

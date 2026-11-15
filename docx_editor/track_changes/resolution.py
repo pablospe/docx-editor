@@ -25,6 +25,112 @@ from .models import (
     iter_revision_elements,
 )
 
+_COMMENT_MARK_TAGS = ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
+
+# Containers whose children are block-level (paragraphs, tables). Resolution
+# never leaves a run or a comment mark directly in one (a bare w:r there is
+# schema-invalid). Wrappers that occur at either level (w:ins, w:sdtContent,
+# w:customXml, ...) are climbed past.
+_BLOCK_CONTAINER_TAGS = frozenset({
+    "w:body",
+    "w:tc",
+    "w:txbxContent",
+    "w:hdr",
+    "w:ftr",
+    "w:footnote",
+    "w:endnote",
+    "w:comment",
+})
+
+
+def _enclosing_block(node) -> Element | None:
+    """The nearest ancestor of ``node`` that is a ``w:p`` or in
+    ``_BLOCK_CONTAINER_TAGS``: a ``w:p`` means a run placed beside ``node``
+    sits inside a paragraph. None only for a node outside every container
+    (non-conforming markup, e.g. a revision directly under ``w:document``)."""
+    node = node.parentNode
+    while node is not None and node.nodeType == node.ELEMENT_NODE:
+        if node.tagName == "w:p" or node.tagName in _BLOCK_CONTAINER_TAGS:
+            return node
+        node = node.parentNode
+    return None
+
+
+def _in_fallback_copy(node, stop) -> bool:
+    """True if ``node`` sits inside an ``mc:Fallback`` below ``stop``: the
+    alternate copy of content whose ``mc:Choice`` copy is the one kept."""
+    node = node.parentNode
+    while node is not None and node is not stop and node.nodeType == node.ELEMENT_NODE:
+        if node.tagName == "mc:Fallback":
+            return True
+        node = node.parentNode
+    return False
+
+
+_RANGE_MARK_TAGS = ("w:commentRangeStart", "w:commentRangeEnd")
+# Pruned from the paragraph search: a text box's paragraphs are not the
+# surrounding flow, and an mc:Fallback copy is not what a modern reader shows.
+_UNSEARCHED_TAGS = ("w:txbxContent", "mc:Fallback")
+
+
+def _edge_paragraph(node, last: bool, passed: list) -> Element | None:
+    """The last (``last=True``) or first ``w:p`` of ``node``'s subtree, found by
+    walking from that edge and stopping at the first hit. Block-level comment
+    range marks walked over on the way are appended to ``passed``."""
+    if node.nodeType != node.ELEMENT_NODE or node.tagName in _UNSEARCHED_TAGS:
+        return None
+    if node.tagName == "w:p":
+        return node
+    if node.tagName in _RANGE_MARK_TAGS:
+        passed.append(node)
+        return None
+    for child in reversed(node.childNodes) if last else node.childNodes:
+        if (paragraph := _edge_paragraph(child, last, passed)) is not None:
+            return paragraph
+    return None
+
+
+def _nearest_paragraph(elem, direction: str) -> tuple[Element | None, list[Element]]:
+    """The nearest ``w:p`` before (``direction="previousSibling"``) or after
+    (``"nextSibling"``) a block-level ``elem`` in document order within its
+    enclosing block container, plus the block-level comment range marks lying
+    between the two (or, with no paragraph, all those walked over), in
+    document order.
+
+    The walk goes sibling by sibling outwards from ``elem``, climbing past
+    wrappers up to the container, and descends into a sibling (a table,
+    another pending wrapper) only from its near edge, so it costs the distance
+    to the hit, not the size of the body. Text boxes and ``mc:Fallback``
+    copies are skipped, and so are the other branches of an
+    ``mc:AlternateContent`` that ``elem`` sits in.
+
+    Document order is what keeps a range's start before its end however many
+    block-level revisions it spans and in whatever order they are resolved: a
+    marker re-homed into a paragraph that is itself pending moves on again
+    when that paragraph's revision is resolved. The range marks passed over
+    must move with the hoisted ones for the same reason.
+    """
+    last = direction == "previousSibling"
+    passed: list[Element] = []
+    node = elem
+    while True:
+        sibling = getattr(node, direction)
+        while sibling is not None:
+            is_branch = sibling.nodeType == sibling.ELEMENT_NODE and sibling.tagName in ("mc:Choice", "mc:Fallback")
+            if not is_branch and (paragraph := _edge_paragraph(sibling, last, passed)) is not None:
+                return paragraph, passed[::-1] if last else passed
+            sibling = getattr(sibling, direction)
+        node = node.parentNode
+        if node is None or node.nodeType != node.ELEMENT_NODE or node.tagName in _BLOCK_CONTAINER_TAGS:
+            return None, passed[::-1] if last else passed
+
+
+def _only_rpr_besides(run, mark) -> bool:
+    """True if ``run``'s only element children are ``mark`` and ``w:rPr``."""
+    return all(
+        child is mark or child.tagName == "w:rPr" for child in run.childNodes if child.nodeType == child.ELEMENT_NODE
+    )
+
 
 class _ResolutionMixin(_RevisionManagerBase):
     def accept_revision(
@@ -92,16 +198,20 @@ class _ResolutionMixin(_RevisionManagerBase):
         if tag == "w:ins":
             # Accept insertion: unwrap the content
             self._unwrap_element(elem)
-        elif tag in ("w:del", "w:pPrChange"):
-            # Accept deletion: remove the element entirely. Accept a property
-            # change: drop the record of the previous properties.
+        elif tag == "w:del":
+            # Accept deletion: remove the element entirely (its comment
+            # markers stay, see _remove_content).
+            self._remove_content(elem)
+        elif tag == "w:pPrChange":
+            # Accept a property change: drop the record of the previous
+            # properties.
             self._remove_element(elem)
         elif tag == "w:moveTo" and not _is_paragraph_mark_marker(elem):
             # Accept the destination half: the moved text stays.
             self._unwrap_element(elem)
         else:  # w:moveFrom, or a paragraph-mark marker of either half
             # Accept the source half: the moved-away text goes.
-            self._remove_element(elem)
+            self._remove_content(elem)
         # Unconditional: move content can leave with any resolved host (a
         # w:del wrapping a w:moveFrom, a rejoined paragraph's mark marker),
         # not only when a move half is the element resolved.
@@ -137,6 +247,10 @@ class _ResolutionMixin(_RevisionManagerBase):
 
         A paragraph-mark move marker is dropped, as on accept.
 
+        Comment markers inside removed content are kept (``_remove_content``):
+        a comment wholly on rejected text becomes a point comment where the
+        text was, and its body in ``comments.xml`` is never touched.
+
         A w:id shared by more than one pending revision is refused exactly as
         ``accept_revision`` describes; ``author=`` narrows it.
 
@@ -170,8 +284,9 @@ class _ResolutionMixin(_RevisionManagerBase):
                 # the tail paragraph (the inverse of the tracked split).
                 self._rejoin_paragraph(elem)
             else:
-                # Reject insertion: remove entirely
-                self._remove_element(elem)
+                # Reject insertion: remove entirely (its comment markers
+                # stay, see _remove_content).
+                self._remove_content(elem)
         elif tag == "w:del":
             # Reject deletion: restore the deleted text
             self._restore_deletion(elem)
@@ -182,7 +297,7 @@ class _ResolutionMixin(_RevisionManagerBase):
             self._restore_deletion(elem)
         else:  # w:moveTo, or a paragraph-mark marker of either half
             # Reject the destination half: the moved-in text goes.
-            self._remove_element(elem)
+            self._remove_content(elem)
         self._sweep_after_move()  # unconditional — see accept_revision
         return True
 
@@ -527,6 +642,95 @@ class _ResolutionMixin(_RevisionManagerBase):
     def _remove_element(self, elem) -> None:
         """Detach an element (and its whole subtree) from its parent."""
         elem.parentNode.removeChild(elem)
+
+    def _remove_content(self, elem) -> None:
+        """Remove revision content (a rejected insertion, an accepted
+        deletion) without losing the comment markers inside it.
+
+        Every ``w:commentRangeStart``/``w:commentRangeEnd``/``w:commentReference``
+        in ``elem``'s subtree is first moved, in document order, to the nearest
+        surviving position (see ``_hoist_comment_markers``). Order is kept, so a
+        range wholly inside becomes a point comment where the text was and a
+        range straddling the edge is clipped to the text that survives. Only
+        block-level content with no paragraph left beside it drops markers.
+        The comment itself (``comments.xml``) is never touched by resolution.
+        """
+        self._hoist_comment_markers(elem)
+        self._remove_element(elem)
+
+    def _hoist_comment_markers(self, elem) -> None:
+        """Move ``elem``'s comment markers out of it (see ``_remove_content``).
+
+        Inside a paragraph they go just before ``elem``. A block-level ``elem``
+        (wrapping whole paragraphs, under ``w:body``/``w:tc``/...) cannot leave
+        a run behind there, so they go to the end of the nearest paragraph
+        before it, else the start of the nearest one after it
+        (``_nearest_paragraph``); with neither, each comment they belong to
+        loses its whole marker set (``_drop_comment_markers``).
+
+        A reference moves with its run when that run holds nothing else but
+        ``w:rPr`` (the shape Word and this library write); otherwise it is
+        detached into a new bare ``w:r``, so the run's text is not resurrected.
+        """
+        marks = [
+            node
+            for node in elem.getElementsByTagName("*")  # document order
+            if node.tagName in _COMMENT_MARK_TAGS
+            # A text box's mc:Fallback copy inside elem repeats the
+            # mc:Choice copy's markers: hoisting both would duplicate ids.
+            and not _in_fallback_copy(node, elem)
+        ]
+        if not marks:
+            return
+        target, anchor = None, None
+        enclosing = _enclosing_block(elem)
+        if enclosing is not None and enclosing.tagName == "w:p":
+            target, anchor = elem.parentNode, elem
+        elif _in_fallback_copy(elem, enclosing):
+            # Block content in a block-level mc:Fallback: the walk would leave
+            # the copy and re-home its markers beside those the mc:Choice copy
+            # re-homes, duplicating ids. They go with the content instead.
+            return
+        else:
+            before, back_passed = _nearest_paragraph(elem, "previousSibling")
+            if before is not None:
+                target, marks = before, back_passed + marks  # append: end of the paragraph
+            else:
+                after, passed = _nearest_paragraph(elem, "nextSibling")
+                if after is not None:
+                    target, anchor = after, _first_child_not_in(after, ("w:pPr",))
+                    marks = back_passed + marks + passed
+        if target is None:
+            # No surviving paragraph to re-home into: a half-pair elsewhere
+            # would be worse than no anchor, so the comment keeps its body in
+            # comments.xml but loses every marker, inside elem or not.
+            self._drop_comment_markers({mark.getAttribute("w:id") for mark in marks})
+            return
+        for mark in marks:
+            if mark.tagName == "w:commentReference":
+                run = mark.parentNode
+                if getattr(run, "tagName", "") == "w:r" and _only_rpr_besides(run, mark):
+                    mark = run
+                else:
+                    bare = self.editor.dom.createElement("w:r")
+                    bare.appendChild(mark)  # detaches it from its old run
+                    mark = bare
+            target.insertBefore(mark, anchor)
+
+    def _drop_comment_markers(self, comment_ids: set[str]) -> None:
+        """Remove every comment marker with a ``w:id`` in ``comment_ids``; a
+        reference's run goes with it when it holds nothing else but ``w:rPr``."""
+        doomed = [
+            node
+            for tag in _COMMENT_MARK_TAGS
+            for node in self.editor.dom.getElementsByTagName(tag)
+            if node.getAttribute("w:id") in comment_ids
+        ]
+        for mark in doomed:
+            run = mark.parentNode
+            if mark.tagName == "w:commentReference" and run.tagName == "w:r" and _only_rpr_besides(run, mark):
+                mark = run
+            mark.parentNode.removeChild(mark)
 
     def _restore_paragraph_properties(self, ppr_change) -> None:
         """Reject a ``w:pPrChange``: put the recorded previous properties back.

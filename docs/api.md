@@ -731,7 +731,7 @@ smart-quote splits, `w:ins` wrappers) are found. Text-box content is excluded, a
 
 To comment on a **whole paragraph**, omit `anchor_text` and name the paragraph: `doc.add_comment(comment="Needs a citation", paragraph=ref)`. The range covers the paragraph's full text as it reads with pending changes accepted — tracked insertions included, tracked deletions excluded — with the markers placed exactly where an anchor of that full text would place them. There is no need to anchor on a prefix of the paragraph as a stand-in.
 
-The range runs from the paragraph's first text character to its last, so content with no text of its own at either end — a picture, a footnote reference, a field's code — is outside it. Where that first or last text is a pending tracked insertion the marker sits inside the insertion, as it does for any anchor on inserted text, and rejecting that insertion removes the marker with it: reject the trailing insertion and the comment is no longer displayed, reject the leading one and its [`paragraph_ref`](#comment) becomes `None`. Accepting keeps the comment intact.
+The range runs from the paragraph's first text character to its last, so content with no text of its own at either end — a picture, a footnote reference, a field's code — is outside it. Where that first or last text is a pending tracked insertion the marker sits inside the insertion, as it does for any anchor on inserted text. Resolving that insertion never removes the marker: accepting keeps the range as it is, and rejecting moves the marker to where the insertion was, so the range shrinks to the text that survives and the comment stays listed with its [`paragraph_ref`](#comment).
 
 **Parameters:**
 
@@ -936,6 +936,7 @@ Reject a revision by ID.
 - For `move_from`: restores the moved text at its source
 - For `property_change`: restores the paragraph's recorded previous properties. A record with none (LibreOffice writes a self-closing `w:pPrChange` for "previously no properties") clears them; the recorded style id is restored verbatim even when the document defines no such style (Word falls back to Normal for it)
 - Nested revisions: rejecting an insertion removes everything inside it — deletions another author nested inside it disappear with it
+- Comments: resolving a revision keeps the comment markers inside it. Rejecting an insertion (or `move_to`) moves the markers inside it to where it was, so a comment on part of the inserted text shrinks to the text that survives, and one wholly inside it becomes a point comment at that position; it stays listed and can be deleted with `delete_comment()`. Accepting a deletion (or `move_from`) does the same. Content that is whole paragraphs (a block-level `w:ins`/`w:del`, which Word does not write) moves its markers to the end of the nearest paragraph before it in document order (which can be the last paragraph of a preceding table), else the start of the nearest one after it; with no paragraph left in its body, cell or text box, the comment loses all its markers and is listed with `paragraph_ref` `None`. A `note=` rationale is the exception: it is deleted with its revisions, as described below
 
 Resolve both halves of a move together — see `accept_revision()`, whose
 refusal of a `w:id` shared by several revisions applies here too.
