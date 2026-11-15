@@ -64,7 +64,7 @@ On a document that already ships a `word/comments.xml` whose root does not decla
 
 ### 93. A namespace prefix declared on a non-root ancestor breaks re-serialized runs
 
-`rebuild_run_fragments` and the other `toxml()` round trips assume every prefix used in existing content is declared on the part's root. With `<w:p xmlns:foo="urn:foo"><w:r><foo:mark/>…`, a plain `replace` or `add_comment` raises on the unbound prefix (after #91: a typed `XMLError`). Declarations on the element itself, which is what Word writes for drawings, are fine; only a declaration on an intermediate ancestor breaks. Not seen in the corpus. Fix: carry the in-scope namespace declarations of the source element into the fragment wrapper. Found while planning #91.
+`rebuild_run_fragments` and the other `toxml()` round trips assume every prefix used in existing content is declared on the part's root. With `<w:p xmlns:foo="urn:foo"><w:r><foo:mark/>…`, a plain `replace` or `add_comment` raises on the unbound prefix (after #91: a typed `XMLError`). Declarations on the element itself, which is what Word writes for drawings, are fine; only a declaration on an intermediate ancestor breaks. Not seen in the corpus. Fix: carry the in-scope namespace declarations of the source element into the fragment wrapper. Related, from the review of #91: a `document.xml` root that binds `w14`, `w16du` or `w16cex` to a different URI now raises `XMLError` after the tracked nodes are in the DOM (main wrote into the wrong namespace silently); check the bindings before the edit starts. Found while planning #91.
 
 ### 94. Ambiguity errors say where the matches are  [0.8.4: fewer round trips]
 
@@ -85,6 +85,22 @@ Structured errors already carry fields; what they lack is a uniform, machine-rea
 ### 29. Computed list numbers ("7.2(a)")  [large; after the 0.8.4 batch]
 
 Word computes clause numbers at render time from `numbering.xml`, the style chain and the list's running state, so "clause 7.2(a)" is not text in the file. `ParagraphLocation.list` gives only `(num_id, ilvl)`. An agent asked to "change clause 11.1" on an auto-numbered contract cannot find it; it worked on the docx-agent-bench contracts only because their numbers are typed as text. Compute the rendered label per paragraph (levels, start overrides, restarts, `lvlText` patterns, the common number formats), expose it on `ParagraphInfo`/`ParagraphLocation` and on search results, and allow lookup by label. Mark what is heuristic (legal numbering, custom formats, `w:numPicBullet`) rather than guessing. Design first; validate against real Word on the corpus. Promoted from Later on 2026-11-14: stetdoc ships this and it is the main capability gap for contract work.
+
+### 98. Rejecting a split drops the tail's property change when the head has a numbering revision  [data loss]
+
+Left as on main by #85. When the head paragraph's `w:numPr` holds a tracked revision (`w:ins` or `w:numberingChange`) and the tail carries a `w:pPrChange`, rejecting the split drops the tail's record, uncounted: the record only means something together with the tail's base properties, and adopting those replaces the head's `w:numPr`. Fix: refuse. `reject_revision`/`reject_group` raise a typed `RevisionError` naming the two revisions ("resolve one first") and leave the paragraphs unmerged; bulk `reject_all` leaves the split pending, uncounted, and says so. Design first: the bulk half changes what `reject_all()` promises and touches `_resolve_all`'s ordering and termination, the code behind the 42 GB incident.
+
+### 99. Rejecting a `w:pPrChange` deletes a numbering revision in the same paragraph  [data loss]
+
+`_restore_paragraph_properties` replaces every base property with the recorded ones. A `w:numPr` holding a pending `w:ins`/`w:numberingChange` is not in the record, so it goes, uncounted: a paragraph with numbering revision 21 and its own `w:pPrChange` 11, `reject_revision(11)` leaves neither. Pre-existing; measured while reviewing #85. Fix: keep a revision-bearing `w:numPr` across the restore, or refuse. Check the meaning against Word before choosing.
+
+### 100. Rejecting a split looks only at the next element sibling for the tail
+
+With a `w:bookmarkEnd`, `w:commentRangeEnd`, `w:moveFromRangeEnd` or similar between the two paragraphs, or the tail wrapped in `w:sdt`, rejecting the split removes only the mark, leaves an untracked paragraph break, and returns True. Pre-existing; found by the review of #85. Fix: skip body-level range markup when locating the tail, look inside `w:sdt`, and refuse with a typed error when no tail can be found rather than reporting success.
+
+### 101. A `note=` edit whose note cannot be attached stays applied and raises
+
+`_attach_notes` runs after the edit is in the DOM. When the comment part is rejected (`XMLError`), the caller gets an exception instead of an `EditResult`, so it has no `group_id` to undo with, and a retry applies the edit twice. `batch_edit` rolls back; a single edit does not. Fix: either check the comment parts before the edit starts in every verb that takes `note=`, or keep the edit and report the note through the existing `UnanchoredNoteWarning`. Found by the review of #91.
 
 ### 69. Return-leg reconciliation: which changesets survived?  [design]
 
