@@ -11,6 +11,7 @@ from ..xml_editor import (
     _escape_xml,
     _reject_control_chars,
     build_text_map,
+    field_result_index,
     get_rPr_xml,
     rebuild_run_fragments,
     render_plain_wt,
@@ -24,6 +25,7 @@ from .dom import (
     _paragraph_mark_ins,
     _set_xml_space_preserve,
 )
+from .locate import _refuse_field_result
 from .models import _RUN_TRACK_CHANGE_TAGS
 
 
@@ -262,7 +264,13 @@ class _InsertMixin(_RevisionManagerBase):
         # The first split lands where the match's tail begins (match.end, since
         # the match is deleted and segment 0 reinserted where it was). Reject an
         # unsplittable boundary now, before mutating (no single-op rollback).
-        self._reject_unsplittable_boundary(p1, build_text_map(p1), match.end)
+        text_map = build_text_map(p1)
+        self._reject_unsplittable_boundary(p1, text_map, match.end)
+        # The split cuts before the character at match.end: refuse when that is
+        # a field result (the field's begin would stay behind, its result move).
+        _refuse_field_result(
+            text_map.positions[match.end : match.end + 1], field_result_index(self.editor.dom), replace_with, None, ""
+        )
         start = match.start
         self._delete_across_nodes(match)
         if segments[0]:
@@ -283,7 +291,11 @@ class _InsertMixin(_RevisionManagerBase):
         # The first split lands at the anchor boundary (segment 0 is inserted
         # there, pushing the original content right). Reject an unsplittable
         # boundary now, before mutating (no single-op rollback).
-        self._reject_unsplittable_boundary(p1, build_text_map(p1), base)
+        text_map = build_text_map(p1)
+        self._reject_unsplittable_boundary(p1, text_map, base)
+        # Segment 0 and the split both land before the character at base:
+        # refuse when that is a field result (see _split_replace).
+        _refuse_field_result(text_map.positions[base : base + 1], field_result_index(self.editor.dom), text, None, "")
         if segments[0]:
             self._rewrite_insert_at(p1, build_text_map(p1), base, segments[0])
         return self._apply_paragraph_splits(p1, base + len(segments[0]), segments[1:])

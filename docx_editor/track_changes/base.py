@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from typing import Literal
 from xml.dom.minidom import Element
 
-from ..xml_editor import DocxXMLEditor, ParagraphRef, TextMap, TextMapMatch, TextPosition
+from ..xml_editor import DocxXMLEditor, FieldResultIndex, ParagraphRef, TextMap, TextMapMatch, TextPosition
 from .models import GroupSource, Revision, _GroupCapture, _RegistrySnapshot
 
 
@@ -68,7 +68,7 @@ class _RevisionManagerBase:
         text: str,
         occurrence: int | None,
         *,
-        fields: dict | None = None,
+        fields: FieldResultIndex | None = None,
         ctx: str = "",
     ) -> TextMapMatch:
         raise NotImplementedError

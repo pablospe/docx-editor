@@ -10,6 +10,7 @@ from ..exceptions import (
     RevisionError,
 )
 from ..xml_editor import (
+    FieldResultIndex,
     ParagraphRef,
     TextMap,
     TextMapMatch,
@@ -70,9 +71,11 @@ class _BatchMixin(_RevisionManagerBase):
         # After a rollback the DOM is replaced, but the exception propagates
         # immediately and this list is never used again.
         paragraphs = body_paragraphs(self.editor.dom)
-        # Field results, indexed once for the batch like the paragraph list:
-        # ops never create or remove a field-result node (an op landing in a
-        # result is refused before it mutates).
+        # Field results, indexed once for the batch like the paragraph list.
+        # An op landing in a result is refused before it mutates, but an op
+        # that splits a run re-creates its other w:t nodes — a result node too
+        # when a fldChar shares the run — so the loop below rebuilds the index
+        # after an op on a paragraph holding a fldChar.
         fields = field_result_index(self.editor.dom)
 
         # Parse and validate all refs upfront
@@ -107,7 +110,7 @@ class _BatchMixin(_RevisionManagerBase):
             # so a failed op never bundles a changeset (the generator raises at
             # its yield before bundling) and rollback restores the registry.
             with self._changeset(), self.editor.frozen_timestamp():
-                for original_idx, _ref, op in parsed:
+                for original_idx, ref, op in parsed:
                     try:
                         # Each op is its own logical edit: one group per op, so
                         # callers can accept one op and reject another.
@@ -116,6 +119,8 @@ class _BatchMixin(_RevisionManagerBase):
                     except (ValueError, DocxEditError) as e:
                         raise BatchOperationError(original_idx, str(e), original=e) from e
                     results[original_idx] = change_id
+                    if fields and paragraphs[ref.index - 1].getElementsByTagName("w:fldChar"):
+                        fields = field_result_index(self.editor.dom)
             return results
         except Exception:
             # Restore via the line-tracking parser so parse_position is preserved.
@@ -168,7 +173,7 @@ class _BatchMixin(_RevisionManagerBase):
         else:
             raise ValueError(f"Unknown action: {op.action}")
 
-    def _apply_single_edit(self, op: EditOperation, paragraphs: list[Element], fields: dict) -> int:
+    def _apply_single_edit(self, op: EditOperation, paragraphs: list[Element], fields: FieldResultIndex) -> int:
         """Apply a single edit operation. Paragraph hash was already validated.
 
         ``paragraphs`` and ``fields`` are the batch's shared body-paragraph and
@@ -243,7 +248,7 @@ class _BatchMixin(_RevisionManagerBase):
         return results
 
     def _validate_single(
-        self, op: EditOperation, paragraphs: list[Element] | None = None, fields: dict | None = None
+        self, op: EditOperation, paragraphs: list[Element] | None = None, fields: FieldResultIndex | None = None
     ) -> "_ValidationOutcome":
         """Return why ``op`` would fail, or an all-None outcome if it is valid.
 
@@ -387,7 +392,7 @@ class _BatchMixin(_RevisionManagerBase):
         new_text: str,
         *,
         paragraphs: list[Element] | None = None,
-        fields: dict | None = None,
+        fields: FieldResultIndex | None = None,
     ) -> int | None:
         """Rewrite a paragraph's text, generating fine-grained tracked changes.
 
@@ -438,7 +443,11 @@ class _BatchMixin(_RevisionManagerBase):
         return capture.group_id
 
     def _rewrite_paragraph_inner(
-        self, ref_str: str, new_text: str, paragraphs: list[Element] | None = None, fields: dict | None = None
+        self,
+        ref_str: str,
+        new_text: str,
+        paragraphs: list[Element] | None = None,
+        fields: FieldResultIndex | None = None,
     ) -> None:
         """Diff-and-apply body of ``rewrite_paragraph`` (runs inside _grouped).
 
@@ -470,7 +479,8 @@ class _BatchMixin(_RevisionManagerBase):
 
         # Preflight field results the same way (no rollback below): a
         # replace/delete hunk touches its old span, an insert the character
-        # _rewrite_insert_at attaches to.
+        # _rewrite_insert_at attaches to, and a split replace also the
+        # character its split lands before (a split there would cut the field).
         if fields is None:
             fields = field_result_index(self.editor.dom)
         if fields:
@@ -480,6 +490,8 @@ class _BatchMixin(_RevisionManagerBase):
                     target = frag
                 else:
                     touched = text_map.positions[old_char_start:old_char_end]
+                    if tag == "replace" and "\n" in frag:
+                        touched = touched + text_map.positions[old_char_end : old_char_end + 1]
                     target = old_text[old_char_start:old_char_end]
                 _refuse_field_result(touched, fields, target, ref_str, "rewrite_paragraph(): ")
 

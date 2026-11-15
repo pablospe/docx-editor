@@ -1061,8 +1061,13 @@ def render_plain_wt(wt, rPr_xml: str) -> list[str]:
 _ON_VALUES = ("true", "1", "on")
 """``ST_OnOff`` spellings of true (ECMA-376 §17.18.66)."""
 
-_FIELD_EXEMPT_TYPES = frozenset({"HYPERLINK"})
-"""Field types whose result Word keeps on update: a hyperlink's display text is not computed from its instruction."""
+_FIELD_EXEMPT_TYPES = frozenset({"HYPERLINK", "FORMTEXT"})
+"""Field types whose result Word keeps on update: hyperlink display text and a legacy text form field's typed value."""
+
+FieldResultIndex = dict[object, str]
+"""``field_result_index`` output: result ``w:t`` / ``w:tab`` node -> its field's instruction.
+
+Keyed like :attr:`TextPosition.node` (``object``) so a position's node looks up directly."""
 
 
 @dataclass
@@ -1073,7 +1078,7 @@ class _FieldFrame:
     locked: bool
     in_result: bool = False
     regenerated: bool = False
-    nodes: list = dataclass_field(default_factory=list)
+    nodes: list[Element] = dataclass_field(default_factory=list)
 
 
 def _field_regenerated(instr: str, locked: bool) -> bool:
@@ -1082,7 +1087,12 @@ def _field_regenerated(instr: str, locked: bool) -> bool:
     return not locked and bool(words) and words[0].upper() not in _FIELD_EXEMPT_TYPES
 
 
-def field_result_index(dom) -> dict:
+def _regenerating(frames) -> _FieldFrame | None:
+    """The first frame in ``frames`` that is in its result phase and regenerated."""
+    return next((f for f in frames if f.in_result and f.regenerated), None)
+
+
+def field_result_index(dom) -> FieldResultIndex:
     """Map each ``w:t`` / run-level ``w:tab`` inside a field result to that field's instruction.
 
     A complex field is ``fldChar begin`` → ``instrText`` → ``separate`` →
@@ -1091,17 +1101,23 @@ def field_result_index(dom) -> dict:
     node inside nested results maps to the outermost regenerated field in its
     result phase — the one whose update regenerates it (a TOC's page number
     reports the TOC; a PAGEREF inside HYPERLINK display text reports the
-    PAGEREF). ``w:fldSimple`` results map to ``@w:instr``. Instructions are
-    joined across ``instrText`` runs without a separator (Word splits them
-    mid-word) and whitespace-normalized.
+    PAGEREF). ``w:fldSimple`` results map to ``@w:instr`` (the outermost
+    ``fldSimple`` when they nest). Instructions are joined across
+    ``instrText`` runs without a separator (Word splits them mid-word) and
+    whitespace-normalized.
 
     Not indexed: results Word keeps on update — a locked field
-    (``@w:fldLock``) and ``HYPERLINK`` display text. Unbalanced markup never
-    locks the rest of the document: a stray ``end`` is ignored and fields
-    still open when the walk ends are discarded.
+    (``@w:fldLock``), ``HYPERLINK`` display text and a ``FORMTEXT`` value —
+    and tracked-deleted content (``w:del`` / ``w:moveFrom``: the accepted
+    view, as in :func:`build_text_map`). Unbalanced markup never locks the
+    rest of the document and never unlocks a well-formed field: a stray
+    ``end`` is ignored, a node is recorded when the innermost regenerated
+    field holding it closes, and a field still open when the walk ends drops
+    only its own direct result.
 
     One element-level walk of ``w:body``; edit paths build it once per call
-    (batches once per batch) and check matched positions against it.
+    (batches once per batch, rebuilt after an op on a paragraph holding a
+    ``fldChar``) and check matched positions against it.
     """
     # The body is a child of the root: finding it that way keeps this off the
     # Document-level walk count the batch paths pin (count_dom_walks).
@@ -1109,11 +1125,16 @@ def field_result_index(dom) -> dict:
     bodies = [c for c in root.childNodes if getattr(c, "tagName", "") == "w:body"] if root is not None else []
     if not bodies:
         return {}
-    result: dict = {}
+    result: FieldResultIndex = {}
     stack: list[_FieldFrame] = []
+    deleted: set[Element] = set()
     for node in bodies[0].getElementsByTagName("*"):
+        if node in deleted:
+            continue
         tag = node.tagName
-        if tag == "w:fldChar":
+        if tag in ("w:del", "w:moveFrom"):
+            deleted.update(node.getElementsByTagName("*"))
+        elif tag == "w:fldChar":
             kind = node.getAttribute("w:fldCharType")
             if kind == "begin":
                 stack.append(_FieldFrame([], node.getAttribute("w:fldLock").lower() in _ON_VALUES))
@@ -1126,22 +1147,26 @@ def field_result_index(dom) -> dict:
             elif kind == "end" and stack:
                 frame = stack.pop()
                 if frame.nodes:
-                    result.update(dict.fromkeys(frame.nodes, frame.instr[0]))
+                    # Credit the outermost enclosing regenerated field, if any:
+                    # its update regenerates this whole result too.
+                    owner = _regenerating(stack) or frame
+                    result.update(dict.fromkeys(frame.nodes, owner.instr[0]))
         elif tag == "w:instrText":
             if stack and not stack[-1].in_result:
                 stack[-1].instr.append(get_text_node_data(node))
         elif tag == "w:t" or is_tab_node(node):
-            # The outermost regenerated field in its result phase owns the node:
-            # a PAGEREF nested in a HYPERLINK's display text still updates.
-            owner = next((f for f in stack if f.in_result and f.regenerated), None)
-            if owner is not None:
-                owner.nodes.append(node)
-        elif tag == "w:fldSimple" and not any(f.in_result and f.regenerated for f in stack):
+            # Held by the innermost regenerated field in its result phase and
+            # recorded when that field closes, so an unterminated outer field
+            # cannot swallow a well-formed inner one.
+            holder = _regenerating(reversed(stack))
+            if holder is not None:
+                holder.nodes.append(node)
+        elif tag == "w:fldSimple":
             instr = " ".join(node.getAttribute("w:instr").split())
             if _field_regenerated(instr, node.getAttribute("w:fldLock").lower() in _ON_VALUES):
                 for child in node.getElementsByTagName("*"):
                     if child.tagName == "w:t" or is_tab_node(child):
-                        result[child] = instr
+                        result.setdefault(child, instr)
     return result
 
 

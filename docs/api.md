@@ -507,9 +507,15 @@ if match := doc.find_text("Section 6"):
 > refuses, so a target that merely spans a field (`"section Overview"` where
 > `Overview` is a REF) is refused too: narrow it to the text outside the
 > field, or change what the field shows at its source (the heading, bookmark
-> or property it reads). Two kinds of result stay editable because Word keeps
-> them on update: `HYPERLINK` display text and locked fields
-> (`w:fldLock="true"`). Searching is unaffected — `find_text`/`find_all`
+> or property it reads). A paragraph split (`\n` in an insert, replace or
+> rewrite) right before a field result is refused too, since it would cut the
+> field in two. `rewrite_paragraph` diffs by word, so a changed word that
+> touches a field (`"5."` → `"5!"` after a page number, or an insertion
+> before a field that starts the paragraph) is refused as a whole: make that
+> change with `replace`/`insert_after` on the characters outside the field.
+> Three kinds of result stay editable because Word keeps them on update:
+> `HYPERLINK` display text, a legacy text form field's value (`FORMTEXT`) and
+> locked fields (`w:fldLock="true"`). Searching is unaffected — `find_text`/`find_all`
 > still match field results. Edits *outside* a field leave its result stale
 > until Word updates fields: inserting a page of text above a TOC does not
 > change the page numbers it shows. A comment anchored inside a field result
@@ -1893,12 +1899,15 @@ Raised when an edit target lands inside a field result — see
 - `field_code`: the field's instruction, whitespace-normalized
   (`PAGEREF _Toc123 \h`).
 - `field_type`: the instruction's first word (`PAGEREF`). For a field nested
-  in another's result it is the outer one — a page number inside a TOC entry
-  reports `TOC`, whose update regenerates it.
-- `paragraph_ref`: the paragraph the edit was scoped to.
+  in another's result it is the outermost regenerated one — a page number
+  inside a TOC entry reports `TOC`, whose update regenerates it.
+- `paragraph_ref`: the paragraph the edit was scoped to, or None when
+  document-wide or refused at a split boundary.
 - `next`: always None — no single call resolves it.
 
 ```python
+from docx_editor.exceptions import FieldResultError
+
 try:
     doc.replace("section Overview", "section Summary", paragraph=ref)
 except FieldResultError:

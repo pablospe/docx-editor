@@ -15,6 +15,7 @@ from ..exceptions import (
     _truncate_preview,
 )
 from ..xml_editor import (
+    FieldResultIndex,
     ParagraphRef,
     TextMapMatch,
     TextPosition,
@@ -70,7 +71,7 @@ def _match_locations(
 
 
 def _refuse_field_result(
-    positions: Iterable[TextPosition], fields: dict, text: str, paragraph_ref: str | None, ctx: str
+    positions: Iterable[TextPosition], fields: FieldResultIndex, text: str, paragraph_ref: str | None, ctx: str
 ) -> None:
     """Raise :class:`FieldResultError` if any position sits in a field result (see ``field_result_index``).
 
@@ -119,7 +120,7 @@ class _LocateMixin(_RevisionManagerBase):
         text: str,
         occurrence: int | None,
         *,
-        fields: dict | None = None,
+        fields: FieldResultIndex | None = None,
         ctx: str = "",
     ) -> TextMapMatch:
         """The single scoped find-or-raise path shared by every paragraph-scoped edit.
