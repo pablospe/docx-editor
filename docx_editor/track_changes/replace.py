@@ -9,7 +9,6 @@ from ..xml_editor import (
     TextMapMatch,
     TextPosition,
     _escape_xml,
-    _reject_control_chars,
     get_rPr_xml,
     get_text_node_data,
     is_tab_node,
@@ -19,7 +18,7 @@ from ..xml_editor import (
 from .base import _RevisionManagerBase
 from .diff import _trim_replace_affixes
 from .dom import _node_depth
-from .models import _validate_edit_target
+from .models import _validate_replace_inputs
 
 
 class _ReplaceMixin(_RevisionManagerBase):
@@ -70,10 +69,7 @@ class _ReplaceMixin(_RevisionManagerBase):
                 first line) inside one
             HashMismatchError: If the paragraph hash doesn't match
         """
-        if not isinstance(replace_with, str):
-            raise ValueError(f"'replace_with' must be a string (empty string is allowed), got {replace_with!r}")
-        _validate_edit_target(find, field="'find'", ctx="replace(): ")
-        _reject_control_chars(replace_with, field="'replace_with'", ctx="replace(): ", allow_newline=True)
+        _validate_replace_inputs(find, replace_with, ctx="replace(): ")
         with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
@@ -82,7 +78,7 @@ class _ReplaceMixin(_RevisionManagerBase):
                 self._refuse_split_op(match, "replace", replace_with, None, paragraph, "replace(): ")
                 return self._replace_across_nodes(match, find, replace_with)
 
-            match = self._locate_document_wide(find, occurrence, ctx="replace(): ")
+            match = self._locate_document_wide(find, occurrence, ctx="replace(): ").match
             self._refuse_split_op(match, "replace", replace_with, None, None, "replace(): ")
             return self._replace_across_nodes(match, find, replace_with)
 

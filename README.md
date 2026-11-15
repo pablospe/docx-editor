@@ -119,6 +119,12 @@ with Document.open("contract.docx", author=author) as doc:
     # requires a unique match, else AmbiguousTextError.
     doc.replace("the", "The", paragraph="P4#c5d6", occurrence=2)
 
+    # No ref at hand? Omit paragraph= and the text is searched document-wide:
+    # it must be unique (else AmbiguousTextError lists the matches).
+    doc.replace("Effective Date", "Commencement Date")
+    # Every match at once, refused (nothing written) unless the count is right:
+    doc.replace_all("thirty days", "sixty days", expected_count=4)
+
     # Rewrite entire paragraph (automatic word-level diff)
     doc.rewrite_paragraph("P2#f3c1",
         "The board shall approve the updated proposal.")

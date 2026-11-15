@@ -20,7 +20,7 @@ from typing import Literal
 from xml.dom.minidom import Element
 
 from ..xml_editor import DocxXMLEditor, FieldResultIndex, ParagraphRef, TextMap, TextMapMatch, TextPosition
-from .models import GroupSource, Revision, _GroupCapture, _RegistrySnapshot
+from .models import GroupSource, Revision, _GroupCapture, _LocatedMatch, _RegistrySnapshot
 
 
 class _RevisionManagerBase:
@@ -127,7 +127,7 @@ class _RevisionManagerBase:
     def _apply_paragraph_splits(self, p1, split_pos: int, segments: list[str]) -> int:
         raise NotImplementedError
 
-    def _locate_document_wide(self, text: str, occurrence: int | None = None, *, ctx: str = "") -> TextMapMatch:
+    def _locate_document_wide(self, text: str, occurrence: int | None = None, *, ctx: str = "") -> _LocatedMatch:
         raise NotImplementedError
 
     def _group_positions_by_ins(self, positions: list) -> list[tuple[Element | None, list[TextPosition]]]:

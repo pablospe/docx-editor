@@ -50,7 +50,7 @@ class _DeleteMixin(_RevisionManagerBase):
                 match = self._locate_in_paragraph(p, paragraph, text, occurrence, ctx="delete(): ")
                 return self._delete_across_nodes(match)
 
-            match = self._locate_document_wide(text, occurrence, ctx="delete(): ")
+            match = self._locate_document_wide(text, occurrence, ctx="delete(): ").match
             return self._delete_across_nodes(match)
 
     def _group_positions_by_ins(self, positions: list) -> list[tuple[Element | None, list[TextPosition]]]:

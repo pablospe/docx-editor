@@ -9,7 +9,6 @@ from ..xml_editor import (
     TextMap,
     TextMapMatch,
     _escape_xml,
-    _reject_control_chars,
     build_text_map,
     get_rPr_xml,
     rebuild_run_fragments,
@@ -24,7 +23,7 @@ from .dom import (
     _paragraph_mark_ins,
     _set_xml_space_preserve,
 )
-from .models import _RUN_TRACK_CHANGE_TAGS
+from .models import _RUN_TRACK_CHANGE_TAGS, _validate_insert_inputs
 
 
 class _InsertMixin(_RevisionManagerBase):
@@ -95,10 +94,7 @@ class _InsertMixin(_RevisionManagerBase):
         paragraph: str | None = None,
     ) -> int:
         """Insert text before or after anchor with tracked changes."""
-        if not isinstance(text, str):
-            raise ValueError(f"'text' must be a string (empty string is allowed), got {text!r}")
-        _reject_control_chars(anchor, field="'anchor'", ctx=f"insert_{position}(): ", allow_tab=True)
-        _reject_control_chars(text, field="'text'", ctx=f"insert_{position}(): ", allow_newline=True)
+        _validate_insert_inputs(anchor, text, ctx=f"insert_{position}(): ")
         ctx = f"insert_{position}(): "
         with self._changeset(), self._grouped():
             if paragraph is not None:
@@ -108,7 +104,7 @@ class _InsertMixin(_RevisionManagerBase):
                 self._refuse_split_op(match, f"insert_{position}", text, None, paragraph, ctx)
                 return self._insert_near_match(match, text, position)
 
-            match = self._locate_document_wide(anchor, occurrence, ctx=ctx)
+            match = self._locate_document_wide(anchor, occurrence, ctx=ctx).match
             self._refuse_split_op(match, f"insert_{position}", text, None, None, ctx)
             return self._insert_near_match(match, text, position)
 

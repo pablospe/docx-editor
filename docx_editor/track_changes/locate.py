@@ -8,6 +8,7 @@ from ..exceptions import (
     AmbiguousTextError,
     FieldResultError,
     HashMismatchError,
+    MatchCountError,
     MatchLocation,
     ParagraphIndexError,
     TextNotFoundError,
@@ -31,7 +32,7 @@ from ..xml_editor import (
 )
 from .base import _RevisionManagerBase
 from .dom import _ancestor_paragraph
-from .models import SearchResult, _LocatedMatch
+from .models import SearchResult, _LocatedMatch, _validate_expected_count
 
 
 def _match_locations(
@@ -295,8 +296,12 @@ class _LocateMixin(_RevisionManagerBase):
             count += count_in_text_map(build_text_map(paragraph), text)
         return count
 
-    def _locate_document_wide(self, text: str, occurrence: int | None = None, *, ctx: str = "") -> TextMapMatch:
+    def _locate_document_wide(self, text: str, occurrence: int | None = None, *, ctx: str = "") -> _LocatedMatch:
         """Document-wide nth-occurrence lookup via text maps.
+
+        Returns the match together with its paragraph's identity (index and
+        within-paragraph occurrence), so a caller can re-target it as a
+        scoped, hash-anchored edit.
 
         Totals come from :meth:`count_matches` rather than a single
         ``count_in_text_map`` call (as ``_locate_in_paragraph`` uses) because
@@ -316,8 +321,8 @@ class _LocateMixin(_RevisionManagerBase):
         if not isinstance(text, str) or not text:
             raise ValueError(f"search text must be a non-empty string, got {text!r}")
         occ = occurrence if occurrence is not None else 0
-        match = self._find_across_boundaries(text, occ)
-        if match is None:
+        located = self._find_across_boundaries_located(text, occ)
+        if located is None:
             total = self.count_matches(text)
             if total:
                 raise TextNotFoundError(text, occurrence=occ, total_occurrences=total)
@@ -330,8 +335,8 @@ class _LocateMixin(_RevisionManagerBase):
                     total_occurrences=total,
                     matches=_match_locations(enumerate(body_paragraphs(self.editor.dom), start=1), text),
                 )
-        _refuse_field_result(match.positions, field_result_index(self.editor.dom), text, None, ctx)
-        return match
+        _refuse_field_result(located.match.positions, field_result_index(self.editor.dom), text, None, ctx)
+        return located
 
     def _find_across_boundaries_located(self, text: str, occurrence: int = 0) -> _LocatedMatch | None:
         """Find the nth occurrence of text across element boundaries.
@@ -409,7 +414,9 @@ class _LocateMixin(_RevisionManagerBase):
             query=text,
         )
 
-    def find_all(self, text: str, paragraph: str | None = None) -> list[SearchResult]:
+    def find_all(
+        self, text: str, paragraph: str | None = None, *, expected_count: int | None = None
+    ) -> list[SearchResult]:
         """Enumerate every match of ``text`` as a list of SearchResults.
 
         One call replaces the N+1 ``find_text`` probes needed to enumerate N
@@ -420,19 +427,27 @@ class _LocateMixin(_RevisionManagerBase):
             text: Text to search for (must be non-empty).
             paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope
                 the search. None searches the whole document.
+            expected_count: When given, the number of matches the caller
+                expects; any other count raises MatchCountError.
 
         Returns:
             SearchResults in document order; ``[]`` when nothing matches (it
-            is an enumeration API, not a lookup — no-match is not an error).
+            is an enumeration API, not a lookup — no-match is not an error
+            unless ``expected_count`` says otherwise).
 
         Raises:
-            ValueError: If ``text`` is not a non-empty string, or
+            ValueError: If ``text`` is not a non-empty string,
+                ``expected_count`` is not a non-negative integer, or
                 ``paragraph`` is malformed.
+            MatchCountError: If ``expected_count`` is given and differs from
+                the number of matches.
             ParagraphIndexError: If ``paragraph``'s index is out of range.
             HashMismatchError: If ``paragraph``'s hash is stale.
         """
         if not isinstance(text, str) or not text:
             raise ValueError(f"find_all(): search text must be a non-empty string, got {text!r}")
+        if expected_count is not None:
+            _validate_expected_count(expected_count, ctx="find_all(): ")
 
         if paragraph is not None:
             ref = ParagraphRef.parse(paragraph)
@@ -461,4 +476,12 @@ class _LocateMixin(_RevisionManagerBase):
                     )
                 )
                 local_occ += 1
+        if expected_count is not None and len(results) != expected_count:
+            raise MatchCountError(
+                text,
+                paragraph_ref=paragraph,
+                expected_count=expected_count,
+                total_occurrences=len(results),
+                matches=_match_locations(paragraphs, text, scoped_ref=paragraph),
+            )
         return results
