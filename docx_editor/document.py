@@ -2071,11 +2071,13 @@ class Document:
             CommentError: If no comment with ``comment_id`` exists, or it has
                 no ``w:commentReference`` in the document for the reply to sit
                 on; carries ``comment_id``.
-            XMLError: If an existing comment part cannot take the reply.
-                Raised before the document is changed.
+            XMLError: If an existing comment part cannot take the reply, or
+                the comment has more than one reference or range start in the
+                document. Raised before the document is changed.
 
         Note:
-            Any comment ``list_comments()`` returns can be replied to. One
+            Any comment ``list_comments()`` returns that has a
+            ``w:commentReference`` in the document can be replied to. One
             written without a ``w14:paraId`` (Word 2007/2010, LibreOffice,
             Google Docs) is given one by its first reply, because threading is
             keyed by it.

@@ -266,6 +266,32 @@ class TestMinting:
             (minted, "1"),
         ]
 
+    def test_duplicate_id_deletes_the_registered_comment(self, open_legacy, tmp_path):
+        """delete_comment removes the listed duplicate, not the first element carrying the id."""
+        first = old_comment(0, '<w:p w14:paraId="0000AAAA"><w:r><w:t>first</w:t></w:r></w:p>')
+        comments_xml = comments_part(first, old_comment(0), root_attrs=f' xmlns:w14="{W14_NS}"')
+        doc = open_legacy(
+            comments_xml, {QUICK: (0, "range")}, extended_part('<w15:commentEx w15:paraId="0000AAAA" w15:done="0"/>')
+        )
+        assert [c.text for c in doc.list_comments()] == ["old remark"]
+
+        assert doc.delete_comment(0) is True
+
+        out, comments = reopened_comments(doc, tmp_path)
+        assert [(c.id, c.text) for c in comments] == [(0, "first")]
+        assert para_ids(out) == ["0000AAAA"]
+        assert [row.getAttribute("w15:paraId") for row in elements(out, EXTENDED, "w15:commentEx")] == ["0000AAAA"]
+
+    def test_noncanonical_id_is_deleted_by_its_integer(self, open_legacy, tmp_path):
+        """``w:id="05"`` is listed as 5; delete_comment(5) must remove the element it was listed from."""
+        doc = open_legacy(comments_part(old_comment(5).replace('w:id="5"', 'w:id="05"')), {})
+        assert [c.id for c in doc.list_comments()] == [5]
+
+        assert doc.delete_comment(5) is True
+
+        _, comments = reopened_comments(doc, tmp_path)
+        assert comments == []
+
     def test_comment_without_a_paragraph_gains_one(self, open_legacy, tmp_path):
         doc = open_legacy(comments_part(old_comment(0, "")), {QUICK: (0, "range")})
 

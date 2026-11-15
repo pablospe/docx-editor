@@ -726,8 +726,9 @@ class CommentManager:
             CommentError: If the parent comment is not found, or has no
                 ``w:commentReference`` in the document to seat the reply on;
                 carries ``comment_id``.
-            XMLError: If an existing comment part cannot take the reply.
-                Raised before document.xml is touched.
+            XMLError: If an existing comment part cannot take the reply, or
+                the parent has more than one reference or range start in the
+                document. Raised before document.xml is touched.
         """
         # Reject junk ids before the membership test: None/"1" would surface
         # as a misleading "not found" CommentError, and True aliases comment
@@ -893,11 +894,6 @@ class CommentManager:
         Args:
             comment_id: The comment ID to resolve
 
-        The done flag lives only in commentsExtended.xml, keyed by
-        ``w14:paraId``. A comment from a producer that writes neither (Word
-        2007/2010, LibreOffice, Google Docs) is given a paraId and a
-        ``w15:commentEx`` row here, on first need.
-
         Returns:
             True if resolved, False if the document has no such comment
 
@@ -906,6 +902,12 @@ class CommentManager:
             XMLError: If the comment has no ``w15:commentEx`` row yet and an
                 existing comment part cannot take one. Raised before anything
                 is changed.
+
+        Note:
+            The done flag lives only in commentsExtended.xml, keyed by
+            ``w14:paraId``. A comment from a producer that writes neither
+            (Word 2007/2010, LibreOffice, Google Docs) is given a paraId and a
+            ``w15:commentEx`` row here, on first need.
         """
         # A junk id must not silently return False ("not found"), and True
         # would alias comment id 1 (bool == int).
@@ -955,11 +957,8 @@ class CommentManager:
 
         # Remove from comments.xml — the part exists: the comment was read
         # from it or written into it.
-        editor = self._get_editor(self.comments_path)
-        for comment_elem in editor.dom.getElementsByTagName("w:comment"):
-            if comment_elem.getAttribute("w:id") == str(comment_id):
-                comment_elem.parentNode.removeChild(comment_elem)
-                break
+        comment_elem = self._comment_element(comment_id)
+        comment_elem.parentNode.removeChild(comment_elem)
 
         # A comment with no paraId has no row in the parts keyed by one.
         if para_id is None:
@@ -1148,24 +1147,32 @@ class CommentManager:
         paragraphs = comment_elem.getElementsByTagName("w:p")
         return (paragraphs[-1].getAttribute("w14:paraId") or None) if paragraphs else None
 
+    def _comment_element(self, comment_id: int) -> Element:
+        """The ``w:comment`` element of a registered comment.
+
+        Of several elements sharing the ``w:id``, the last: the one
+        :meth:`_load_existing_comments` registers and ``list_comments`` returns.
+        """
+        comments = self._get_editor(self.comments_path).dom.getElementsByTagName("w:comment")
+        return [elem for elem in comments if _adjudicable_id(elem) == comment_id][-1]
+
     def _ensure_para_id(self, comment_id: int) -> str:
         """Return the paraId of a registered comment, giving it one if it has none.
 
         The new id goes on the comment's last paragraph (an empty one is
-        appended to a comment that has no paragraph). Of several comments
-        sharing the ``w:id``, the last is the registered one and the one
-        marked. Call
+        appended to a comment that has no paragraph). Call
         :meth:`_prepare_comment_parts` first: it declares ``xmlns:w14`` on a
         comments.xml that never used it.
         """
         info = self.existing_comments[comment_id]
         if info["para_id"] is None:
-            editor = self._get_editor(self.comments_path)
-            comment_elem = [
-                elem for elem in editor.dom.getElementsByTagName("w:comment") if _adjudicable_id(elem) == comment_id
-            ][-1]
+            comment_elem = self._comment_element(comment_id)
             paragraphs = comment_elem.getElementsByTagName("w:p")
-            paragraph = paragraphs[-1] if paragraphs else editor.append_to(comment_elem, "<w:p/>")[0]
+            paragraph = (
+                paragraphs[-1]
+                if paragraphs
+                else self._get_editor(self.comments_path).append_to(comment_elem, "<w:p/>")[0]
+            )
             info["para_id"] = _generate_hex_id()
             paragraph.setAttribute("w14:paraId", info["para_id"])
         return info["para_id"]

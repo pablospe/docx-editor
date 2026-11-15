@@ -574,7 +574,8 @@ class TestDeleteCommentErrorHandling:
                 break
         editor.save()
 
-        # Clear editor cache
+        # Flush the new comment, then clear the editor cache
+        doc._comment_manager.save_all()
         doc._comment_manager._editors.clear()
         doc._comment_manager.document_editor = DocxXMLEditor(
             document_path, rsid="00000000", author="Test", initials="T"
@@ -606,7 +607,8 @@ class TestDeleteCommentErrorHandling:
                 break
         editor.save()
 
-        # Clear editor cache
+        # Flush the new comment, then clear the editor cache
+        doc._comment_manager.save_all()
         doc._comment_manager._editors.clear()
         doc._comment_manager.document_editor = DocxXMLEditor(
             document_path, rsid="00000000", author="Test", initials="T"
@@ -638,7 +640,8 @@ class TestDeleteCommentErrorHandling:
                 break
         editor.save()
 
-        # Clear editor cache
+        # Flush the new comment, then clear the editor cache
+        doc._comment_manager.save_all()
         doc._comment_manager._editors.clear()
         doc._comment_manager.document_editor = DocxXMLEditor(
             document_path, rsid="00000000", author="Test", initials="T"

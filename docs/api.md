@@ -762,9 +762,9 @@ Add a reply to an existing comment.
 
 **Returns:** The new comment ID for the reply (int)
 
-**Raises:** `CommentError` (carrying `comment_id`) if no such comment exists, or if it has no `w:commentReference` in the document for the reply to sit on. `XMLError` if an existing comment part cannot take the reply. Either is raised before the document is changed.
+**Raises:** `CommentError` (carrying `comment_id`) if no such comment exists, or if it has no `w:commentReference` in the document for the reply to sit on. `XMLError` if an existing comment part cannot take the reply, or the comment has more than one reference or range start in the document. Either is raised before the document is changed.
 
-Any comment `list_comments()` returns can be replied to, whichever application wrote it. Threading is stored in `commentsExtended.xml` and keyed by `w14:paraId`; a comment written without one (Word 2007/2010, LibreOffice, Google Docs) is given a paraId and a `w15:commentEx` row by its first reply. A reply to a comment anchored by a reference alone, with no range, is anchored the same way.
+Any comment `list_comments()` returns that has a `w:commentReference` in the document can be replied to, whichever application wrote it. Threading is stored in `commentsExtended.xml` and keyed by `w14:paraId`; a comment written without one (Word 2007/2010, LibreOffice, Google Docs) is given a paraId and a `w15:commentEx` row by its first reply. A reply to a comment anchored by a reference alone, with no range, is anchored the same way.
 
 **Example:**
 

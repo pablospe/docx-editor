@@ -555,7 +555,8 @@ doc.reply_to_comment(cid, "I agree, needs clarification")
 
 # Resolve or delete comments (return True if found, False if not).
 # delete_comment takes the whole thread: replies go with their parent.
-# Every id list_comments() returns works with reply/resolve/delete, including
+# Every id list_comments() returns works with resolve/delete, and with reply
+# when the comment has a reference in the document, including
 # comments written by Word 2007/2010, LibreOffice or Google Docs.
 doc.resolve_comment(cid)
 doc.delete_comment(cid2)
