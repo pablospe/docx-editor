@@ -497,6 +497,24 @@ if match := doc.find_text("Section 6"):
 > differ from those computed before tabs were mapped (refs are session-scoped
 > anyway).
 
+> **Field results are not editable.** Text Word generates from a field — a
+> table of contents entry, a page number, a cross-reference, a document
+> property — is refused by `replace`, `delete`, `insert_after`,
+> `insert_before`, `split_paragraph`, `rewrite_paragraph` and both batch
+> methods with a [`FieldResultError`](#fieldresulterror), before anything is
+> written: Word regenerates field results when fields update, so the tracked
+> change would silently disappear. Any matched character inside a result
+> refuses, so a target that merely spans a field (`"section Overview"` where
+> `Overview` is a REF) is refused too: narrow it to the text outside the
+> field, or change what the field shows at its source (the heading, bookmark
+> or property it reads). Two kinds of result stay editable because Word keeps
+> them on update: `HYPERLINK` display text and locked fields
+> (`w:fldLock="true"`). Searching is unaffected — `find_text`/`find_all`
+> still match field results. Edits *outside* a field leave its result stale
+> until Word updates fields: inserting a page of text above a TOC does not
+> change the page numbers it shows. A comment anchored inside a field result
+> (`add_comment` does not refuse) can be lost when Word updates fields.
+
 #### Rationale notes
 
 `note=` on `replace`, `delete`, `insert_after`, `insert_before`,
@@ -671,7 +689,7 @@ stale, the entire batch is rejected before any edits are applied.
 
 **Warns:** [`UnanchoredNoteWarning`](#unanchorednotewarning) if `note=` was given but the edit created no revision to anchor it on — the edit still applies.
 
-**Raises:** [`BatchOperationError`](#batchoperationerror) — the only exception a non-dry-run batch raises for a failing operation, whatever the underlying cause (stale hash, malformed ref, missing text, ambiguous target). `operation_index` names the failing op; `original` (also `__cause__`) holds the underlying typed exception. The batch is atomic: nothing is applied on failure.
+**Raises:** [`BatchOperationError`](#batchoperationerror) — the only exception a non-dry-run batch raises for a failing operation, whatever the underlying cause (stale hash, malformed ref, missing text, ambiguous target, a target inside a field result). `operation_index` names the failing op; `original` (also `__cause__`) holds the underlying typed exception. The batch is atomic: nothing is applied on failure.
 
 **Example:**
 
@@ -1861,6 +1879,30 @@ try:
 except AmbiguousTextError as e:
     m = next(m for m in e.matches if "term of the lease" in m.context)
     doc.replace("term", "clause", paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence)
+```
+
+### `FieldResultError`
+
+Raised when an edit target lands inside a field result — see
+[Field results are not editable](#track-changes-methods). Subclasses both
+`DocxEditError` and `ValueError`. Raised before anything is changed; inside
+`batch_edit`/`batch_rewrite` it arrives as a `BatchOperationError`'s
+`original`, and a dry run reports it as an invalid result. Structured fields:
+
+- `text`: the edit target (search text, anchor, or the rewritten span).
+- `field_code`: the field's instruction, whitespace-normalized
+  (`PAGEREF _Toc123 \h`).
+- `field_type`: the instruction's first word (`PAGEREF`). For a field nested
+  in another's result it is the outer one — a page number inside a TOC entry
+  reports `TOC`, whose update regenerates it.
+- `paragraph_ref`: the paragraph the edit was scoped to.
+- `next`: always None — no single call resolves it.
+
+```python
+try:
+    doc.replace("section Overview", "section Summary", paragraph=ref)
+except FieldResultError:
+    doc.replace("section", "part", paragraph=ref)   # edit only the text outside the field
 ```
 
 ### `HashMismatchError`

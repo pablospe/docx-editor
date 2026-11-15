@@ -833,11 +833,11 @@ class TestBatchRewrite:
         real = mgr.rewrite_paragraph
         calls = {"n": 0}
 
-        def flaky(ref_str, new_text, *, paragraphs=None):
+        def flaky(ref_str, new_text, *, paragraphs=None, fields=None):
             calls["n"] += 1
             if calls["n"] == 2:
                 raise ValueError("simulated mid-batch failure")
-            return real(ref_str, new_text, paragraphs=paragraphs)
+            return real(ref_str, new_text, paragraphs=paragraphs, fields=fields)
 
         monkeypatch.setattr(mgr, "rewrite_paragraph", flaky)
         with pytest.raises(BatchOperationError) as exc:
@@ -860,7 +860,7 @@ class TestBatchRewrite:
         def boom(xml_bytes):
             raise RuntimeError("simulated rollback failure")
 
-        def fail(ref_str, new_text, *, paragraphs=None):
+        def fail(ref_str, new_text, *, paragraphs=None, fields=None):
             raise ValueError("simulated apply failure")
 
         monkeypatch.setattr(doc._document_editor, "_reload_dom_from_bytes", boom)

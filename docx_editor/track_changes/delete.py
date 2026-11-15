@@ -39,6 +39,7 @@ class _DeleteMixin(_RevisionManagerBase):
             TextNotFoundError: If the text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
                 matches more than once in the search scope
+            FieldResultError: If any matched character is inside a field result
             HashMismatchError: If the paragraph hash doesn't match
         """
         _validate_edit_target(text, field="'text'", ctx="delete(): ")
@@ -46,10 +47,10 @@ class _DeleteMixin(_RevisionManagerBase):
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
                 p = self._resolve_paragraph(ref)
-                match = self._locate_in_paragraph(p, paragraph, text, occurrence)
+                match = self._locate_in_paragraph(p, paragraph, text, occurrence, ctx="delete(): ")
                 return self._delete_across_nodes(match)
 
-            match = self._locate_document_wide(text, occurrence)
+            match = self._locate_document_wide(text, occurrence, ctx="delete(): ")
             return self._delete_across_nodes(match)
 
     def _group_positions_by_ins(self, positions: list) -> list[tuple[Element | None, list[TextPosition]]]:

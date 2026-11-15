@@ -6,6 +6,7 @@ from xml.dom.minidom import Element
 from ..exceptions import (
     MAX_REPORTED_MATCHES,
     AmbiguousTextError,
+    FieldResultError,
     HashMismatchError,
     MatchLocation,
     ParagraphIndexError,
@@ -16,11 +17,13 @@ from ..exceptions import (
 from ..xml_editor import (
     ParagraphRef,
     TextMapMatch,
+    TextPosition,
     _require_valid_occurrence,
     body_paragraphs,
     build_text_map,
     compute_paragraph_hash,
     count_in_text_map,
+    field_result_index,
     find_in_text_map,
     fold_quotes,
 )
@@ -66,6 +69,20 @@ def _match_locations(
     return found
 
 
+def _refuse_field_result(
+    positions: Iterable[TextPosition], fields: dict, text: str, paragraph_ref: str | None, ctx: str
+) -> None:
+    """Raise :class:`FieldResultError` if any position sits in a field result (see ``field_result_index``).
+
+    Any matched character counts, for every verb: a target that merely spans
+    a field is refused too, and the message says to narrow it.
+    """
+    for pos in positions:
+        instr = fields.get(pos.node)
+        if instr is not None:
+            raise FieldResultError(text, instr, paragraph_ref=paragraph_ref, ctx=ctx)
+
+
 class _LocateMixin(_RevisionManagerBase):
     def _resolve_paragraph(self, ref: ParagraphRef, paragraphs: list[Element] | None = None):
         """Resolve a ParagraphRef to its <w:p> element, validating the hash.
@@ -95,7 +112,16 @@ class _LocateMixin(_RevisionManagerBase):
             raise HashMismatchError(ref.index, ref.hash, actual_hash, preview)
         return p
 
-    def _locate_in_paragraph(self, paragraph, paragraph_ref: str, text: str, occurrence: int | None) -> TextMapMatch:
+    def _locate_in_paragraph(
+        self,
+        paragraph,
+        paragraph_ref: str,
+        text: str,
+        occurrence: int | None,
+        *,
+        fields: dict | None = None,
+        ctx: str = "",
+    ) -> TextMapMatch:
         """The single scoped find-or-raise path shared by every paragraph-scoped edit.
 
         Args:
@@ -104,6 +130,9 @@ class _LocateMixin(_RevisionManagerBase):
             text: Text to locate.
             occurrence: Which occurrence (0 = first). None means the text must
                 be unique within the paragraph.
+            fields: A ``field_result_index`` snapshot, threaded in by batch
+                callers so a batch builds it once. None builds it fresh.
+            ctx: The calling verb's message prefix (``"replace(): "``).
 
         Raises:
             ValueError: If ``occurrence`` is negative or not an integer, or ``text`` is not a
@@ -112,6 +141,7 @@ class _LocateMixin(_RevisionManagerBase):
                 of range (then with ``occurrence``/``total_occurrences`` set).
             AmbiguousTextError: If ``occurrence`` is None and the text matches
                 more than once in the paragraph.
+            FieldResultError: If any matched character is inside a field result.
         """
         _require_valid_occurrence(occurrence)
         if not isinstance(text, str) or not text:
@@ -144,6 +174,9 @@ class _LocateMixin(_RevisionManagerBase):
                 total_occurrences=total,
                 matches=_match_locations([(0, paragraph)], text, scoped_ref=paragraph_ref),
             )
+        if fields is None:
+            fields = field_result_index(self.editor.dom)
+        _refuse_field_result(match.positions, fields, text, paragraph_ref, ctx)
         return match
 
     def count_matches(self, text: str) -> int:
@@ -162,7 +195,7 @@ class _LocateMixin(_RevisionManagerBase):
             count += count_in_text_map(build_text_map(paragraph), text)
         return count
 
-    def _locate_document_wide(self, text: str, occurrence: int | None = None) -> TextMapMatch:
+    def _locate_document_wide(self, text: str, occurrence: int | None = None, *, ctx: str = "") -> TextMapMatch:
         """Document-wide nth-occurrence lookup via text maps.
 
         Totals come from :meth:`count_matches` rather than a single
@@ -177,6 +210,7 @@ class _LocateMixin(_RevisionManagerBase):
                 exist; ``total_occurrences`` matches :meth:`count_matches`.
             AmbiguousTextError: If ``occurrence`` is None and the text matches
                 more than once in the document.
+            FieldResultError: If any matched character is inside a field result.
         """
         _require_valid_occurrence(occurrence)
         if not isinstance(text, str) or not text:
@@ -196,6 +230,7 @@ class _LocateMixin(_RevisionManagerBase):
                     total_occurrences=total,
                     matches=_match_locations(enumerate(body_paragraphs(self.editor.dom), start=1), text),
                 )
+        _refuse_field_result(match.positions, field_result_index(self.editor.dom), text, None, ctx)
         return match
 
     def _find_across_boundaries_located(self, text: str, occurrence: int = 0) -> _LocatedMatch | None:

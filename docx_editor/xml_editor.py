@@ -12,6 +12,7 @@ import zlib
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from pathlib import Path
@@ -1055,6 +1056,93 @@ def render_plain_wt(wt, rPr_xml: str) -> list[str]:
     if not wt_text:
         return []
     return [f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>"]
+
+
+_ON_VALUES = ("true", "1", "on")
+"""``ST_OnOff`` spellings of true (ECMA-376 §17.18.66)."""
+
+_FIELD_EXEMPT_TYPES = frozenset({"HYPERLINK"})
+"""Field types whose result Word keeps on update: a hyperlink's display text is not computed from its instruction."""
+
+
+@dataclass
+class _FieldFrame:
+    """One open complex field during :func:`field_result_index`'s walk."""
+
+    instr: list[str]
+    locked: bool
+    in_result: bool = False
+    regenerated: bool = False
+    nodes: list = dataclass_field(default_factory=list)
+
+
+def _field_regenerated(instr: str, locked: bool) -> bool:
+    """True when Word rewrites this field's result on update (not locked, not an exempt type)."""
+    words = instr.split()
+    return not locked and bool(words) and words[0].upper() not in _FIELD_EXEMPT_TYPES
+
+
+def field_result_index(dom) -> dict:
+    """Map each ``w:t`` / run-level ``w:tab`` inside a field result to that field's instruction.
+
+    A complex field is ``fldChar begin`` → ``instrText`` → ``separate`` →
+    result runs → ``end``; it may nest and span paragraphs, so the walk runs
+    over the whole body in document order with a stack of open fields. A
+    node inside nested results maps to the outermost regenerated field in its
+    result phase — the one whose update regenerates it (a TOC's page number
+    reports the TOC; a PAGEREF inside HYPERLINK display text reports the
+    PAGEREF). ``w:fldSimple`` results map to ``@w:instr``. Instructions are
+    joined across ``instrText`` runs without a separator (Word splits them
+    mid-word) and whitespace-normalized.
+
+    Not indexed: results Word keeps on update — a locked field
+    (``@w:fldLock``) and ``HYPERLINK`` display text. Unbalanced markup never
+    locks the rest of the document: a stray ``end`` is ignored and fields
+    still open when the walk ends are discarded.
+
+    One element-level walk of ``w:body``; edit paths build it once per call
+    (batches once per batch) and check matched positions against it.
+    """
+    # The body is a child of the root: finding it that way keeps this off the
+    # Document-level walk count the batch paths pin (count_dom_walks).
+    root = dom.documentElement
+    bodies = [c for c in root.childNodes if getattr(c, "tagName", "") == "w:body"] if root is not None else []
+    if not bodies:
+        return {}
+    result: dict = {}
+    stack: list[_FieldFrame] = []
+    for node in bodies[0].getElementsByTagName("*"):
+        tag = node.tagName
+        if tag == "w:fldChar":
+            kind = node.getAttribute("w:fldCharType")
+            if kind == "begin":
+                stack.append(_FieldFrame([], node.getAttribute("w:fldLock").lower() in _ON_VALUES))
+            elif kind == "separate" and stack:
+                # instrText splits anywhere ("PAGE" + "REF _Toc1"), so join without a separator.
+                frame = stack[-1]
+                frame.instr = [" ".join("".join(frame.instr).split())]
+                frame.in_result = True
+                frame.regenerated = _field_regenerated(frame.instr[0], frame.locked)
+            elif kind == "end" and stack:
+                frame = stack.pop()
+                if frame.nodes:
+                    result.update(dict.fromkeys(frame.nodes, frame.instr[0]))
+        elif tag == "w:instrText":
+            if stack and not stack[-1].in_result:
+                stack[-1].instr.append(get_text_node_data(node))
+        elif tag == "w:t" or is_tab_node(node):
+            # The outermost regenerated field in its result phase owns the node:
+            # a PAGEREF nested in a HYPERLINK's display text still updates.
+            owner = next((f for f in stack if f.in_result and f.regenerated), None)
+            if owner is not None:
+                owner.nodes.append(node)
+        elif tag == "w:fldSimple" and not any(f.in_result and f.regenerated for f in stack):
+            instr = " ".join(node.getAttribute("w:instr").split())
+            if _field_regenerated(instr, node.getAttribute("w:fldLock").lower() in _ON_VALUES):
+                for child in node.getElementsByTagName("*"):
+                    if child.tagName == "w:t" or is_tab_node(child):
+                        result[child] = instr
+    return result
 
 
 def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted") -> TextMap:

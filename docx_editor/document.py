@@ -1506,6 +1506,8 @@ class Document:
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
                 matches more than once in the paragraph.
+            FieldResultError: If any character of the target is inside a field
+                result (Word regenerates it, discarding the edit).
             HashMismatchError: If the paragraph hash is stale — including a
                 SearchResult whose paragraph was edited after the search.
 
@@ -1578,6 +1580,8 @@ class Document:
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
                 matches more than once in the paragraph.
+            FieldResultError: If any character of the target is inside a field
+                result (Word regenerates it, discarding the edit).
             HashMismatchError: If the paragraph hash is stale.
 
         Example:
@@ -1646,6 +1650,8 @@ class Document:
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the paragraph.
+            FieldResultError: If any character of the target is inside a field
+                result (Word regenerates it, discarding the edit).
             HashMismatchError: If the paragraph hash is stale.
 
         Example:
@@ -1714,6 +1720,8 @@ class Document:
                 out of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the paragraph.
+            FieldResultError: If any character of the target is inside a field
+                result (Word regenerates it, discarding the edit).
             HashMismatchError: If the paragraph hash is stale.
 
         Example:
@@ -1761,6 +1769,8 @@ class Document:
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``before``
                 matches more than once in the paragraph.
+            FieldResultError: If any character of the target is inside a field
+                result (Word regenerates it, discarding the edit).
             HashMismatchError: If the paragraph hash is stale.
 
         Example:
@@ -1919,6 +1929,8 @@ class Document:
                 ``note`` is neither None nor a
                 non-empty control-character-free string, or ``ref`` is
                 malformed.
+            FieldResultError: If a changed span lands inside a field result;
+                refused before any change is written.
             ParagraphIndexError: If ``ref``'s index is out of range.
             HashMismatchError: If ``ref``'s hash is stale.
 

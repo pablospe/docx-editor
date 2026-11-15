@@ -50,6 +50,7 @@ class _InsertMixin(_RevisionManagerBase):
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the search scope
+            FieldResultError: If any anchor character is inside a field result
             HashMismatchError: If the paragraph hash doesn't match
         """
         return self._insert_text(anchor, text, position="after", occurrence=occurrence, paragraph=paragraph)
@@ -76,6 +77,7 @@ class _InsertMixin(_RevisionManagerBase):
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the search scope
+            FieldResultError: If any anchor character is inside a field result
             HashMismatchError: If the paragraph hash doesn't match
         """
         return self._insert_text(anchor, text, position="before", occurrence=occurrence, paragraph=paragraph)
@@ -97,10 +99,10 @@ class _InsertMixin(_RevisionManagerBase):
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
                 p = self._resolve_paragraph(ref)
-                match = self._locate_in_paragraph(p, paragraph, anchor, occurrence)
+                match = self._locate_in_paragraph(p, paragraph, anchor, occurrence, ctx=f"insert_{position}(): ")
                 return self._insert_near_match(match, text, position)
 
-            match = self._locate_document_wide(anchor, occurrence)
+            match = self._locate_document_wide(anchor, occurrence, ctx=f"insert_{position}(): ")
             return self._insert_near_match(match, text, position)
 
     def _insert_near_match(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:

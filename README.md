@@ -46,6 +46,9 @@ and diffing two arbitrary documents, whose domain-correct version is
 `rewrite_paragraph()`'s own word-level diff. Schema validators are not on the
 roadmap either: the contract that matters is "opens in Word with zero repair
 prompts", which a round-trip corpus tests honestly and a validator does not. Text
+Word generates from a field (a TOC entry, a page number, a cross-reference) is
+read-only: an edit landing inside a field result is refused, because Word would
+discard it on the next field update. Text
 inside shapes and text boxes is excluded rather than half-editable, and container
 parts (headers, footers, footnotes, endnotes) wait for a real demand.
 

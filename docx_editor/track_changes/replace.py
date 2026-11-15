@@ -65,6 +65,7 @@ class _ReplaceMixin(_RevisionManagerBase):
             TextNotFoundError: If the text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
                 matches more than once in the search scope
+            FieldResultError: If any matched character is inside a field result
             HashMismatchError: If the paragraph hash doesn't match
         """
         if not isinstance(replace_with, str):
@@ -75,10 +76,10 @@ class _ReplaceMixin(_RevisionManagerBase):
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
                 p = self._resolve_paragraph(ref)
-                match = self._locate_in_paragraph(p, paragraph, find, occurrence)
+                match = self._locate_in_paragraph(p, paragraph, find, occurrence, ctx="replace(): ")
                 return self._replace_across_nodes(match, find, replace_with)
 
-            match = self._locate_document_wide(find, occurrence)
+            match = self._locate_document_wide(find, occurrence, ctx="replace(): ")
             return self._replace_across_nodes(match, find, replace_with)
 
     def _get_run_info(self, node) -> tuple[Element | None, str]:

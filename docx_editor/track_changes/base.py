@@ -61,7 +61,16 @@ class _RevisionManagerBase:
     def _resolve_paragraph(self, ref: ParagraphRef, paragraphs: list[Element] | None = None):
         raise NotImplementedError
 
-    def _locate_in_paragraph(self, paragraph, paragraph_ref: str, text: str, occurrence: int | None) -> TextMapMatch:
+    def _locate_in_paragraph(
+        self,
+        paragraph,
+        paragraph_ref: str,
+        text: str,
+        occurrence: int | None,
+        *,
+        fields: dict | None = None,
+        ctx: str = "",
+    ) -> TextMapMatch:
         raise NotImplementedError
 
     def _get_run_info(self, node) -> tuple[Element | None, str]:
@@ -107,7 +116,7 @@ class _RevisionManagerBase:
     def _apply_paragraph_splits(self, p1, split_pos: int, segments: list[str]) -> int:
         raise NotImplementedError
 
-    def _locate_document_wide(self, text: str, occurrence: int | None = None) -> TextMapMatch:
+    def _locate_document_wide(self, text: str, occurrence: int | None = None, *, ctx: str = "") -> TextMapMatch:
         raise NotImplementedError
 
     def _group_positions_by_ins(self, positions: list) -> list[tuple[Element | None, list[TextPosition]]]:
