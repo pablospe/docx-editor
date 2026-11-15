@@ -15,7 +15,9 @@ the same as one JSON object on stdout. Exit status: 0 success, 1 refused,
 """
 
 import argparse
+import contextlib
 import json
+import os
 import shlex
 import sys
 import tempfile
@@ -35,6 +37,7 @@ from .exceptions import (
     TextNotFoundError,
     UnanchoredNoteWarning,
     UnhandledRevisionWarning,
+    WorkspaceLockedError,
     WorkspaceSyncError,
     _error_payload,
     _json_default,
@@ -183,7 +186,10 @@ def _quote(arg: str) -> str:
         elif c.isprintable():
             body.append(c)
         else:
-            body.append(f"\\x{ord(c):02x}" if ord(c) < 0x100 else f"\\u{ord(c):04x}")
+            # \x only for ASCII: bash writes \xHH as a raw byte, so U+00A0
+            # needs \u00a0 to come out as UTF-8; above the BMP, \U.
+            code = ord(c)
+            body.append(f"\\x{code:02x}" if code < 0x80 else f"\\u{code:04x}" if code <= 0xFFFF else f"\\U{code:08x}")
     return "$'" + "".join(body) + "'"
 
 
@@ -207,6 +213,8 @@ def _retry_for(error: Exception, args: argparse.Namespace) -> _Retry | None:
             return None
         if error.total_occurrences == 0:
             return _Retry(_other(args, "list"), "nothing matches; read the paragraphs to quote the text")
+        if shared := _split_conflict(args, [m.paragraph_ref for m in error.matches]):
+            return _one_at_a_time(args, shared)
         return _Retry(_command(args, expect=error.total_occurrences), "only if every match listed above should change")
     if isinstance(error, HashMismatchError) and getattr(args, "paragraph", None):
         return _Retry(_command(args, paragraph=f"P{error.paragraph_index}#{error.actual_hash}"))
@@ -219,8 +227,21 @@ def _retry_for(error: Exception, args: argparse.Namespace) -> _Retry | None:
         return _Retry(_other(args, "list"))
     if isinstance(error, ParagraphIndexError):
         return _Retry(_other(args, "list"))
+    if isinstance(error, ValueError) and str(error).startswith("Invalid paragraph reference"):
+        return _Retry(_other(args, "list"), "--paragraph takes a ref like P3#a7b2, as list prints it")
+    if isinstance(error, ValueError) and str(error).startswith("replace_all(): replace_with contains a newline"):
+        return _Retry(
+            [*_other(args, "find"), args.old],
+            "a split goes one match at a time: --paragraph REF --occurrence N, no --expect",
+        )
+    if isinstance(error, WorkspaceLockedError):
+        return _Retry(
+            _command(args), "another session holds this file: close it (doc.close() / docx-session stop), then run this"
+        )
     if isinstance(error, RevisionError) and (error.next or "").startswith("retry with author="):
         return _Retry(_command(args, by="NAME"), "NAME: one of the authors named above")
+    if isinstance(error, RevisionError) and error.next == "list_revisions()":
+        return _Retry(_other(args, "revisions"))
     if isinstance(error, DocumentProtectedError):
         return _Retry(_command(args, allow_protected=True), "the protection stays in place in the saved file")
     if isinstance(error, WorkspaceSyncError):
@@ -228,6 +249,21 @@ def _retry_for(error: Exception, args: argparse.Namespace) -> _Retry | None:
             _command(args, "--force-recreate"), "discards the leftover workspace and any unsaved edits it holds"
         )
     return None
+
+
+def _split_conflict(args: argparse.Namespace, refs: Sequence[str]) -> str | None:
+    """The paragraph a ``--expect`` replace with a newline would split twice, if any."""
+    if args.verb != "replace" or "\n" not in args.new:
+        return None
+    return next((ref for i, ref in enumerate(refs) if ref in refs[:i]), None)
+
+
+def _one_at_a_time(args: argparse.Namespace, ref: str) -> _Retry:
+    return _Retry(
+        _command(args, expect=None, paragraph=ref, occurrence="N"),
+        f"the new text splits the paragraph, and {ref} has more than one match: replace them one at a time "
+        f"(N from the list above, counted within {ref})",
+    )
 
 
 def _paragraphs(doc: Document, refs: Sequence[str]) -> list[dict]:
@@ -418,6 +454,7 @@ def _print_text(verb: str, out: dict) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG,
+        allow_abbrev=False,
         description="One tracked-change edit to a .docx per command. `docx-edit skill` prints the agent guide.",
     )
     verbs = parser.add_subparsers(dest="verb", required=True, metavar="VERB")
@@ -425,6 +462,7 @@ def _parser() -> argparse.ArgumentParser:
     def verb(name: str, summary: str, example: str) -> argparse.ArgumentParser:
         sub = verbs.add_parser(
             name,
+            allow_abbrev=False,
             help=summary,
             description=summary,
             epilog=f"example:\n  {example}",
@@ -548,7 +586,7 @@ def _refusal_output(error: Exception, args: argparse.Namespace) -> None:
         if retry.note:
             print(f"note: {retry.note}", file=sys.stderr)
         print(f"retry: {_render(retry.argv)}", file=sys.stderr)
-    elif hint := getattr(error, "next", None):
+    elif (hint := getattr(error, "next", None)) and args.verb != "find":
         print(f"next (Python API): {hint}", file=sys.stderr)
 
 
@@ -595,7 +633,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     library_warnings = (UnanchoredNoteWarning, UnhandledRevisionWarning)
     cleanup_warnings: list[str] = []
     try:
-        with warnings.catch_warnings(record=True) as caught, tempfile.TemporaryDirectory() as scratch:
+        # A read-only verb's private workspace; an edit needs none. A failure
+        # to remove it is ignored: it never holds anything the caller wants.
+        scratch_dir = (
+            contextlib.nullcontext("") if mutating else tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        )
+        with warnings.catch_warnings(record=True) as caught, scratch_dir as scratch:
             # Only the library's own warnings are the caller's business; a
             # ResourceWarning or DeprecationWarning from a dependency is not.
             for category in library_warnings:
@@ -608,7 +651,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     out["saved"] = str(doc.save(args.file if args.in_place else args.output))
             finally:
                 try:
-                    doc.close(cleanup=True)
+                    # A read-only verb's private workspace goes with its
+                    # temporary directory, whose removal errors are ignored.
+                    doc.close(cleanup=mutating)
                 except OSError as error:
                     # After a save, a workspace that cannot be removed (a file
                     # held open by a scanner) is not a refusal: the edit is done.
@@ -621,10 +666,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     found = (str(w.message) for w in caught if issubclass(w.category, library_warnings))
     out["warnings"] = list(dict.fromkeys([*found, *cleanup_warnings]))
-    if args.json:
-        print(json.dumps({"ok": True, "verb": args.verb, **out}, default=_json_default))
-    else:
-        _print_text(args.verb, out)
+    try:
+        if args.json:
+            print(json.dumps({"ok": True, "verb": args.verb, **out}, default=_json_default))
+        else:
+            _print_text(args.verb, out)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        # The reader went away; the command itself succeeded (and saved).
+        # Point stdout at devnull so the interpreter's exit flush cannot fail.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
     return 0
 
 

@@ -519,3 +519,61 @@ def test_rejecting_a_split_by_id_reports_the_merge_not_a_neighbour(capsys, src):
     shown = [line for line in out.splitlines() if line.startswith("  P")]
     # Only the paragraph the split came from, back to its original text.
     assert shown == [f"  {ref_of(src, 2)}| The quick brown fox jumps over the lazy dog."]
+
+
+@pytest.mark.parametrize("arg", ["a\nb", "nb sp", "e f", "x\U000e0001y", "it's\t\\", "- dash", "plain"])
+def test_retry_words_round_trip_through_bash(arg):
+    from docx_editor.cli import _quote
+
+    if shutil.which("bash") is None:
+        pytest.skip("bash not available")
+    done = subprocess.run(["bash", "-c", "printf '%s' " + _quote(arg)], capture_output=True, check=True)
+    assert done.stdout.decode() == arg
+
+
+class TestRoundThree:
+    def test_read_verb_survives_an_unremovable_private_workspace(self, capsys, src, monkeypatch):
+        real_rmtree = shutil.rmtree
+
+        def busy(path, *args, **kwargs):
+            if kwargs.get("ignore_errors") or kwargs.get("onexc") or kwargs.get("onerror"):
+                return real_rmtree(path, *args, **kwargs)
+            raise PermissionError("held by scanner")
+
+        monkeypatch.setattr(shutil, "rmtree", busy)
+        code, out, _ = run(capsys, "find", src, "fox")
+        assert code == 0 and out.startswith("1 match(es):")
+
+    def test_newline_expect_mismatch_retries_one_match_at_a_time(self, capsys, src):
+        # "ing" occurs twice in P3 ("testing", "editing"): a newline replace
+        # cannot split P3 twice, so --expect=2 would only refuse again.
+        code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 3, "--author", AUTHOR, "--in-place")
+        assert code == 1
+        retry = retry_argv(err, N="0")
+        assert "--expect=2" not in retry and flag_value(retry, "--paragraph").startswith("P3#")
+        code, out, _ = run(capsys, *retry)
+        assert code == 0
+
+    def test_newline_expect_refusal_points_at_find(self, capsys, src):
+        code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 2, "--author", AUTHOR, "--in-place")
+        assert code == 1 and retry_argv(err) == ["find", "--", str(src), "ing"]
+
+    def test_malformed_ref_retries_with_list(self, capsys, src):
+        code, _, err = run(capsys, "replace", src, "fox", "cat", "--paragraph", "P2", "--author", AUTHOR, "--in-place")
+        assert code == 1 and retry_argv(err) == ["list", "--", str(src)]
+
+    def test_find_mismatch_prints_no_python_hint(self, capsys, src):
+        code, _, err = run(capsys, "find", src, "zzz", "--expect", 1)
+        assert code == 1 and "Python API" not in err and "retry:" not in err
+
+    def test_abbreviated_flags_are_refused(self, capsys, src):
+        with pytest.raises(SystemExit) as exc:
+            main(["replace", str(src), "fox", "cat", "--author", AUTHOR, "--in", "--force"])
+        assert exc.value.code == 2
+
+    def test_locked_file_says_how_to_free_it(self, capsys, src):
+        with Document.open(src):
+            code, _, err = run(capsys, "replace", src, "fox", "cat", "--author", AUTHOR, "--in-place")
+        assert code == 1 and "note: another session holds this file" in err
+        code, _, _ = run(capsys, *retry_argv(err))
+        assert code == 0
