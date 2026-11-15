@@ -983,6 +983,35 @@ class TestHandledMarksInsideChangeRecords:
             assert doc.reject_revision(5) is True
             assert doc.list_revisions() == []
 
+    def test_author_filtered_reject_all_surfaces_another_authors_mark_untouched(self, make_docx):
+        """Ann's record holds Bob's recorded mark.
+
+        Rejecting Ann's revisions restores the recorded w:numPr, which makes
+        Bob's mark pending — but it is Bob's, so the call neither resolves nor
+        counts it, and it comes back exactly as it was recorded.
+        """
+        path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_author_ann")
+        with _open(path) as doc:
+            assert doc.reject_all(author="Ann") == 1
+            assert [(r.id, r.type, r.author) for r in doc.list_revisions()] == [(5, "insertion", "Bob")]
+            assert doc.list_revisions(author="Ann") == []
+            body = _body_xml(doc)
+            assert "w:pPrChange" not in body
+            assert "<w:numPr>" in body
+            assert body.count(f'<w:ins w:id="5" {_BOB}/>') == 1
+            # Now that it is pending, its own author's call resolves it.
+            assert doc.reject_all(author="Bob") == 1
+            assert doc.list_revisions() == []
+
+    def test_author_filtered_reject_all_cannot_reach_a_mark_still_recorded(self, make_docx):
+        """While Ann's record is pending, Bob's mark inside it is history."""
+        path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_author_bob")
+        with _open(path) as doc:
+            before = _body_xml(doc)
+            assert doc.reject_all(author="Bob") == 0
+            assert _body_xml(doc) == before
+            assert [(r.id, r.author) for r in doc.list_revisions()] == [(90, "Ann")]
+
     def test_reject_all_rebuilds_the_index_a_bounded_number_of_times(self, make_docx, monkeypatch):
         """The stalled case costs one extra index build, not one per pass."""
         path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_builds")
