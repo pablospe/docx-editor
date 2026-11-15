@@ -413,7 +413,7 @@ class _LocateMixin(_RevisionManagerBase):
             start=located.match.start,
             end=located.match.end,
             text=located.match.text,
-            paragraph_ref=f"P{located.paragraph_index}#{compute_paragraph_hash(located.paragraph)}",
+            paragraph_ref=_located_ref(located),
             paragraph_occurrence=located.paragraph_occurrence,
             spans_revision=located.match.spans_boundary,
             paragraph_index=located.paragraph_index,

@@ -83,7 +83,8 @@ class _ReplaceMixin(_RevisionManagerBase):
                 return self._replace_across_nodes(match, find, replace_with)
 
             located = self._locate_document_wide(find, occurrence, ctx=ctx)
-            self._refuse_split_op(located.match, "replace", replace_with, None, _located_ref(located), ctx)
+            if "\n" in replace_with:
+                self._refuse_split_op(located.match, "replace", replace_with, None, _located_ref(located), ctx)
             return self._replace_across_nodes(located.match, find, replace_with)
 
     def _get_run_info(self, node) -> tuple[Element | None, str]:

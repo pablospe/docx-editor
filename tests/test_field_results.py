@@ -624,6 +624,74 @@ class TestUnscopedRoutes:
             assert [get_text_node_data(t) for t in inserted] == [" extra"]
             assert not any(t in index for t in inserted)
 
+    @pytest.mark.parametrize(
+        "head",
+        [
+            '<w:r><w:t>Contents</w:t><w:fldChar w:fldCharType="begin"/>'
+            '<w:instrText xml:space="preserve"> TOC </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>',
+            _r("Contents") + _fld("begin") + _instr("TOC") + _fld("separate"),
+        ],
+        ids=["same_run", "separate_runs"],
+    )
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda d, ref: d.rewrite_paragraph(ref, "Contents extra"),
+            lambda d, ref: d.batch_rewrite([(ref, "Contents extra")]),
+            lambda d, ref: d.insert_after("Contents", " extra", paragraph=ref),
+            lambda d, ref: d.insert_after("Contents", " extra"),
+        ],
+        ids=["rewrite", "batch_rewrite", "insert_after", "unscoped_insert_after"],
+    )
+    def test_append_inside_a_foreign_insertion_opening_a_field(self, simple_docx, tmp_path, head, call):
+        # Another author inserted "Contents" and the TOC's opening marks; our
+        # text must land before those marks, not after the whole insertion.
+        foreign = f'<w:ins w:id="5" w:author="Other" w:date="2024-01-01T00:00:00Z">{head}</w:ins>'
+        with _open(simple_docx, tmp_path, _p(foreign) + _p(_r("Intro"), _fld("end"))) as d:
+            call(d, find_ref(d, "Contents"))
+            self._assert_own_text_outside_fields(d, [" extra"])
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda d: d.insert_before("tail", "X ", paragraph=find_ref(d, "tail")),
+            lambda d: d.insert_before("tail", "X "),
+        ],
+        ids=["scoped", "unscoped"],
+    )
+    def test_insert_at_a_foreign_insertion_closing_a_field(self, simple_docx, tmp_path, call):
+        # The foreign insertion starts with the PAGEREF's end mark: our text
+        # must land after it, not before the whole insertion.
+        foreign = f'<w:ins w:id="5" w:author="Other" w:date="2024-01-01T00:00:00Z">{_fld("end")}{_r("tail")}</w:ins>'
+        body = _p(_r("See "), _fld("begin"), _instr("PAGEREF x"), _fld("separate"), _r("5"), foreign)
+        with _open(simple_docx, tmp_path, body) as d:
+            call(d)
+            self._assert_own_text_outside_fields(d, ["X "])
+
+    def test_rewrite_append_after_a_trailing_break_stays_after_it(self, simple_docx, tmp_path):
+        # No fldChar in the last run: the append still follows the whole run,
+        # as before (after the page break).
+        body = _p('<w:r><w:t>Body.</w:t><w:br w:type="page"/></w:r>')
+        with _open(simple_docx, tmp_path, body) as d:
+            d.rewrite_paragraph(find_ref(d, "Body."), "Body. Next")
+            p = d._document_editor.dom.getElementsByTagName("w:p")[0]
+            tags = [c.tagName for c in p.childNodes if c.nodeType == c.ELEMENT_NODE]
+            assert tags[-2:] == ["w:r", "w:ins"]
+            assert p.getElementsByTagName("w:r")[0].getElementsByTagName("w:br")
+
+    @staticmethod
+    def _assert_own_text_outside_fields(d, expected):
+        dom = d._document_editor.dom
+        index = field_result_index(dom)
+        own = [
+            t
+            for ins in dom.getElementsByTagName("w:ins")
+            if ins.getAttribute("w:author") == AUTHOR
+            for t in ins.getElementsByTagName("w:t")
+        ]
+        assert [get_text_node_data(t) for t in own] == expected
+        assert not any(t in index for t in own)
+
     def test_unscoped_edit_outside_any_field_applies(self, doc):
         doc.replace("details", "context")
         assert any("for context." in t for t in doc.list_paragraphs(limit=None))

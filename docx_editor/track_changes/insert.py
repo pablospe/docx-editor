@@ -108,7 +108,8 @@ class _InsertMixin(_RevisionManagerBase):
                 return self._insert_near_match(match, text, position)
 
             located = self._locate_document_wide(anchor, occurrence, ctx=ctx)
-            self._refuse_split_op(located.match, f"insert_{position}", text, None, _located_ref(located), ctx)
+            if "\n" in text:
+                self._refuse_split_op(located.match, f"insert_{position}", text, None, _located_ref(located), ctx)
             return self._insert_near_match(located.match, text, position)
 
     def _insert_near_match(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:

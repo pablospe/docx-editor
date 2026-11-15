@@ -14,7 +14,7 @@ from ..xml_editor import (
     render_plain_wt,
 )
 from .base import _RevisionManagerBase
-from .dom import _set_xml_space_preserve
+from .dom import _fld_chars_around, _set_xml_space_preserve
 from .models import _validate_edit_target
 
 
@@ -206,10 +206,14 @@ class _DeleteMixin(_RevisionManagerBase):
         own_ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
         wt_nodes = self._content_nodes_in_ancestor(ins_elem)
         node_text = self._get_node_text(edge_node)
+        # The before/after-the-whole-insertion shortcuts would jump over any
+        # fldChar on that side of the edge inside the foreign insertion, into
+        # the field it opens or closes; split at the character instead.
+        fld_before, fld_after = _fld_chars_around(ins_elem, edge_node)
 
-        if edge_node is wt_nodes[0] and offset == 0:
+        if edge_node is wt_nodes[0] and offset == 0 and not fld_before:
             new_nodes = self.editor.insert_before(ins_elem, own_ins_xml)
-        elif edge_node is wt_nodes[-1] and offset == len(node_text):
+        elif edge_node is wt_nodes[-1] and offset == len(node_text) and not fld_after:
             new_nodes = self.editor.insert_after(ins_elem, own_ins_xml)
         else:
             boundary = self._split_foreign_ins_at(edge_node, offset)

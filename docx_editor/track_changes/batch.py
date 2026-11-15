@@ -24,7 +24,7 @@ from ..xml_editor import (
 )
 from .base import _RevisionManagerBase
 from .diff import _diff_hunks
-from .dom import _set_xml_space_preserve
+from .dom import _fld_chars_around, _set_xml_space_preserve
 from .locate import _refuse_field_result, _refuse_split_edit, _refuse_text_into_field
 from .models import (
     EditOperation,
@@ -624,7 +624,7 @@ class _BatchMixin(_RevisionManagerBase):
             return
 
         if char_pos >= len(text_map.positions):
-            # Insert at end — after last character's run
+            # Insert at end — after the last character
             last_pos = text_map.positions[-1]
             run, rPr_xml = self._get_run_info(last_pos.node)
             if not run:
@@ -644,12 +644,15 @@ class _BatchMixin(_RevisionManagerBase):
                     _set_xml_space_preserve(last_pos.node)
                 return
 
-            # Split the run right after the last character rather than append
-            # after the whole run: a fldChar sharing the run (a field opening at
-            # the paragraph end) must stay after the new text, outside it.
             ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
-            end_offset = 1 if last_pos.is_tab else len(self._get_node_text(last_pos.node))
-            self._insert_into_run(run, rPr_xml, last_pos.node, end_offset, ins_xml)
+            if _fld_chars_around(run, last_pos.node)[1]:
+                # A fldChar after the last character in its run (a field opening
+                # at the paragraph end) must stay after the new text: split the
+                # run there instead of appending after the whole run.
+                end_offset = 1 if last_pos.is_tab else len(self._get_node_text(last_pos.node))
+                self._insert_into_run(run, rPr_xml, last_pos.node, end_offset, ins_xml)
+            else:
+                self.editor.insert_after(run, ins_xml)
             return
 
         # Insert at a position within the text
