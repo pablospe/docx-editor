@@ -161,7 +161,7 @@ Use the **docx_editor** Python library for all editing operations. It handles tr
 
 ### One edit, one command: `docx-edit`
 
-For a single edit, the `docx-edit` command (installed with the base package) needs no Python at all. Run `docx-edit skill` for its compact guide. Each command prints a receipt that is the whole check: the ref, the paragraph as it now reads (`[del#0:Me]old[/del][ins#1:Me]new[/ins]`), and the saved path. A refusal saves nothing and ends in a `retry:` line holding the command to run next.
+For a single edit, the `docx-edit` command (installed with the base package) needs no Python at all. Run `docx-edit skill` for its compact guide. Each command prints a receipt that is the whole check: the ref, the paragraph as it now reads (`[del#0:Me]old[/del][ins#1:Me]new[/ins]`), and the saved path. A refusal saves nothing and, when one command fixes it, ends in a `retry:` line holding that command (fill in `N` from the listed matches when the `note:` line says so).
 
 ```bash
 docx-edit find contract.docx "30 days"                                   # every match, with refs
@@ -170,7 +170,7 @@ docx-edit replace contract.docx "30 days" "60 days" --expect 3 --author Me --in-
 docx-edit revisions out.docx --by Me
 ```
 
-The verbs are the library's method names and the flags are its keywords (`--paragraph`, `--occurrence`, `--note`, `--expect` for `expected_count`). Everything below applies to both.
+The verbs are the library's method names and the flags are its keywords (`--paragraph`, `--occurrence`, `--note`, `--expect` for `expected_count`). The matching and refusal rules below apply to both; batches, rewrites, groups and changesets are Python-only.
 
 ### Which call to use
 

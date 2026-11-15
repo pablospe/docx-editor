@@ -2170,21 +2170,38 @@ The verb is the `Document` method name in kebab-case and the flags are its keywo
 | `revisions F [--by NAME] [--paragraph P]` | `doc.list_revisions(author=NAME, paragraph=P)` | same, through `eval` |
 | `accept F ID... \| --all [--by NAME]`, `reject` likewise | `doc.accept_revision(ID)` per id, or `doc.accept_all(author=NAME)` | same, through `eval` |
 
-**Flags.** Every mutating verb (`replace`, `delete`, `insert-*`, `comment`, `accept`, `reject`) requires `--author NAME` (who is editing) and exactly one of `-o OUT` / `--in-place`; there is no default output. `--by NAME` filters by a revision's author, so it never means "who is editing". `--note TEXT` is `note=`. `accept`/`reject` take revision ids only: group and changeset ids belong to one open `Document` and mean nothing to the next command. Ids are applied in order and the whole command refuses, saving nothing, if any id is not pending.
+**Flags.** Every mutating verb (`replace`, `delete`, `insert-*`, `comment`, `accept`, `reject`) requires `--author NAME` (who is editing) and exactly one of `-o OUT` / `--in-place`; there is no default output. `--by NAME` filters by a revision's author, so it never means "who is editing". `--note TEXT` is `note=`. `accept`/`reject` take revision ids only: group and changeset ids belong to one open `Document` and mean nothing to the next command. Ids are applied in order and the whole command refuses, saving nothing, if any id is not pending. A content move is two ids (`move_from` + `move_to`): pass both, or use `--all`.
 
-**Receipt.** One line per result (`replace P2#a1cf  (revisions 0, 1; comment 0)`), then each touched paragraph as it now reads in `get_markup_text()` markup (`P2#a1cf| The [del#0:Me]quick[/del][ins#1:Me]swift[/ins] brown fox ...`), then any library warning (`UnanchoredNoteWarning`, `UnhandledRevisionWarning`) and `saved OUT`. That is the whole check: no follow-up call is needed.
+**Receipt.** One line per result (`replace P2#a1cf  (revisions 0, 1; comment 0)`), then each touched paragraph as it now reads in `get_markup_text()` markup (`P2#a1cf| The [del#0:Me]quick[/del][ins#1:Me]swift[/ins] brown fox ...`), then any library warning (`UnanchoredNoteWarning`, `UnhandledRevisionWarning`) and `saved OUT`. That is the whole check: no follow-up call is needed. `comment` prints `comment N on REF` and the paragraph. `accept`/`reject` print `accepted 2 revision(s); 0 pending`; by ids they add each touched paragraph under its current ref (resolving changes the text, so the old ref is stale). With `--all` they add only the count of revisions this tool does not resolve, if any.
 
-**Refusals.** Nothing is saved and the workspace is discarded. The exit status is 1 and the library's message goes to stderr, including its pick-list, followed by a `retry:` line holding the next command:
+**Refusals.** Nothing is saved and the workspace is discarded. The exit status is 1 and the library's message goes to stderr, including its pick-list (up to 10 matches; `docx-edit find` lists all). When one command fixes the refusal, a `retry:` line follows, preceded by a `note:` line when something must be filled in or known first. The retry is rebuilt from the parsed command: options first, then `--`, then the positionals, so text starting with `-` stays text.
 
-- ambiguous text: the same command plus `--occurrence N`;
-- a stale `--paragraph`: the same command with the fresh ref;
-- a count mismatch: the same command with the actual `--expect`;
-- text not found: `docx-edit list F`;
-- an unknown revision id: `docx-edit revisions F`.
+| Refusal | `retry:` |
+| --- | --- |
+| ambiguous text | same command with `--occurrence N` (note: N from the list) |
+| `--occurrence` out of range | same command with `--occurrence N` (note: the valid range) |
+| stale `--paragraph` | same command with the fresh ref |
+| `--expect` mismatch on `replace` | same command with the actual count (note: only if every match listed should change) |
+| nothing matches (`--expect`, or text not found) | `docx-edit list -- F`; with `--paragraph`, just that paragraph |
+| unknown revision id | `docx-edit revisions -- F` |
+| revision id shared by two authors | same command with `--by NAME` |
+| editing-protected document | same command with `--allow-protected` (the protection stays in the saved file) |
+| workspace left behind by a crashed session (`WorkspaceSyncError`) | same command with `--force-recreate` (discards that workspace's unsaved edits) |
 
-When no CLI command fixes the error, the library's `next` is printed as `next (Python API): ...`. A bad command line exits 2 (argparse).
+A count mismatch on `find` has no retry (`find` only checks). When no CLI command fixes the error, for example `WorkspaceLockedError` from a `docx-session` holding the file, the library's `next` is printed as `next (Python API): ...` if it has one. A bad command line exits 2 (argparse). `list`, `find` and `revisions` never save, so they read an editing-protected document without `--allow-protected`. The library's "more paragraphs" notice on `list` is rewritten as the next `docx-edit list --start N` command.
 
-**`--json`.** Every verb takes `--json` and prints one object on stdout: `{"ok": true, "verb", "results": [{"ref", "refs", "revision_ids", "comment_id"}], "paragraphs", "saved", "warnings"}` on success, or `{"ok": false, "error": {...}, "retry"}` on refusal. The `error` object has the same shape as `docx-session eval`'s: `type`, `message`, every structured field and `next`.
+**`--json`.** Every verb except `skill` takes `--json` and prints one object on stdout. Success is `{"ok": true, "verb": ..., "warnings": [...]}` plus the verb's fields:
+
+| Verb | Fields |
+| --- | --- |
+| `replace`, `delete`, `insert-after`, `insert-before` | `results`: `[{"ref", "refs", "revision_ids", "comment_id"}]`; `paragraphs`: `[{"ref", "markup"}]`; `saved` |
+| `comment` | `comment_id`, `ref`, `paragraphs`, `saved` |
+| `accept`, `reject` | `resolved`, `pending`, `saved`; by ids `ids` and `paragraphs`; with `--all` `unhandled` and `unhandled_types` |
+| `find` | `matches`: `[{"occurrence", "paragraph_ref", "paragraph_occurrence", "start", "context"}]` |
+| `list` | `lines` (the text output's lines) |
+| `revisions` | `revisions`: the `Revision` records |
+
+A refusal is `{"ok": false, "error": {...}, "retry", "retry_argv", "retry_note"}` (the last three are null when there is no retry). `retry` is the command line and `retry_argv` the same as a list. The `error` object has the same shape as `docx-session eval`'s: `type`, `message`, every structured field and `next`.
 
 **`docx-edit skill`** prints a compact agent guide to the CLI, so a skill file can be the one line "run `docx-edit skill` first". Each verb's `--help` is short and shows one example.
 
@@ -2195,4 +2212,4 @@ docx-edit replace contract.docx "30 days" "60 days" --author Reviewer -o out.doc
 # saved out.docx
 ```
 
-An open `docx-session` (or any open `Document`) on the same file holds its workspace lock, so `docx-edit` on that file refuses with `WorkspaceLockedError` rather than take it over. A workspace left behind by a crashed session is reported as `WorkspaceSyncError`, never discarded silently.
+An open `docx-session` (or any open `Document`) on the same file holds its workspace lock, so `docx-edit` on that file refuses with `WorkspaceLockedError` rather than take it over. A workspace left behind by a crashed session is reported as `WorkspaceSyncError`; it is discarded only by the `--force-recreate` retry, never silently.
