@@ -82,6 +82,10 @@ When a rejected block-level `w:ins` (or an accepted block-level `w:del`) held th
 
 `get_original_text()` and `get_visible_text()` emit a blank line for each inserted or deleted paragraph mark instead of joining the two paragraphs, so the text of a redline with paragraph insertions or deletions does not match what Word shows with all changes rejected or accepted (28 differing lines on a 347-revision compare redline; equal once blank lines are ignored). Found by the head-to-head run against stetdoc on docx-agent-bench. Fix: join across a paragraph mark that the view treats as absent, the way `list_paragraphs` already counts paragraphs. Needs a decision on whether paragraph counts in the two views should then differ from `paragraph_count()`.
 
+### 107. Comment code matches the literal `w14:` / `w15:` prefixes instead of the namespace
+
+A producer may bind the Word 2010 namespace to any prefix. stetdoc 0.9.3 declares it as `ns:` on `comments.xml`, and docx-editor then reads that file wrongly: a resolved comment lists as open and a reply lists as top-level, because the lookups compare attribute names such as `w14:paraId` and `w15:paraIdParent` as text. Renaming the prefix to `w14` in the same file fixes the reading, which confirms the cause. Found by running stetdoc against our hard cases (2026-11-15). Fix: resolve these attributes and elements by namespace URI in the comment read paths (`_get_comment_para_id`, the `commentsExtended` lookups, `list_comments` threading), with a fixture that uses a non-standard prefix. Check the same assumption for `w16cid` / `w16cex` and for `w16du` in `document.xml`.
+
 ### 69. Return-leg reconciliation: which changesets survived?  [design]
 
 The product loop is agent proposes → human adjudicates in Word → document comes back; accepted revisions become plain text, rejected ones vanish, and there is no way to ask "which of my changesets survived?". A propose-time-vs-current compare keyed on changeset `w:date` + content. Design first; large.
