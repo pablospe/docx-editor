@@ -848,7 +848,8 @@ class TestEvalErrorEnvelope:
         assert res.error["type"] == "AmbiguousTextError"
         matches = res.error["matches"]
         assert len(matches) == 10
-        assert all(set(m) == {"occurrence", "paragraph_ref", "context"} for m in matches)
+        fields = {"occurrence", "paragraph_ref", "paragraph_occurrence", "start", "context"}
+        assert all(set(m) == fields for m in matches)
         assert [m["occurrence"] for m in matches] == list(range(10))
         assert res.error["matches_omitted"] == res.error["total_occurrences"] - 10 > 0
         assert res.error["next"] == f"retry with occurrence=N (0..{res.error['total_occurrences'] - 1})"

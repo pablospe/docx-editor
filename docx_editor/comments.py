@@ -550,6 +550,7 @@ class CommentManager:
                 anchor_text,
                 paragraph_ref=paragraph,
                 paragraph_preview=text_map.text,
+                paragraph_index=ParagraphRef.parse(paragraph).index,
             )
 
         # Document-wide search. With an explicit occurrence the scan returns at

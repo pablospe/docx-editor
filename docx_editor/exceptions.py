@@ -1,6 +1,5 @@
 """Custom exceptions and warnings for docx_editor library."""
 
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -300,13 +299,22 @@ class MatchLocation:
         paragraph_ref: Hash-anchored reference (``"P3#a7b2"``) of the
             paragraph holding the match, valid for the document as it was
             when the error was raised.
-        context: The matched text with up to 30 characters of surrounding
-            paragraph text on each side, ``...`` where the paragraph was cut,
-            and a tab mark spelled ``\\t``.
+        paragraph_occurrence: The match's 0-based number within that
+            paragraph. ``paragraph=paragraph_ref, occurrence=paragraph_occurrence``
+            selects this match from any call; it equals ``occurrence`` when the
+            raising call was scoped.
+        start: Character offset of the match in the paragraph's visible text,
+            which tells apart matches whose ``context`` is identical (a word
+            repeated in a short paragraph).
+        context: The matched text with up to ``MATCH_CONTEXT_CHARS`` characters
+            of surrounding paragraph text on each side, ``...`` where the
+            paragraph was cut, and a tab mark spelled ``\\t``.
     """
 
     occurrence: int
     paragraph_ref: str
+    paragraph_occurrence: int
+    start: int
     context: str
 
 
@@ -318,10 +326,8 @@ def _match_context(text: str, start: int, end: int) -> str:
     return ("..." if lo > 0 else "") + snippet + ("..." if hi < len(text) else "")
 
 
-_REF_INDEX_RE = re.compile(r"^P(\d+)#")
-
-
 def _retry_occurrence_hint(total: int) -> str:
+    """The ``next`` hint for an ambiguous or out-of-range ``occurrence``."""
     return f"retry with occurrence=N (0..{total - 1})"
 
 
@@ -345,7 +351,7 @@ class TextNotFoundError(DocxEditError):
             non-occurrence lookups.
         next: ``"retry with occurrence=N (0..K)"`` when the occurrence was out
             of range; ``"get_paragraph(N).text"`` when a scoped search found
-            nothing; ``"find_all(text)"`` when a document-wide one did not.
+            nothing; ``"list_paragraphs()"`` when a document-wide one did not.
     """
 
     def __init__(
@@ -356,6 +362,7 @@ class TextNotFoundError(DocxEditError):
         paragraph_preview: str | None = None,
         occurrence: int | None = None,
         total_occurrences: int | None = None,
+        paragraph_index: int | None = None,
     ):
         self.search_text = search_text
         self.paragraph_ref = paragraph_ref
@@ -363,13 +370,12 @@ class TextNotFoundError(DocxEditError):
         self.occurrence = occurrence
         self.total_occurrences = total_occurrences
 
-        ref_index = _REF_INDEX_RE.match(paragraph_ref) if paragraph_ref is not None else None
         if occurrence is not None and total_occurrences is not None:
             self.next = _retry_occurrence_hint(total_occurrences)
-        elif ref_index is not None:
-            self.next = f"get_paragraph({ref_index.group(1)}).text"
+        elif paragraph_index is not None:
+            self.next = f"get_paragraph({paragraph_index}).text"
         else:
-            self.next = "find_all(text)"
+            self.next = "list_paragraphs()"
 
         if occurrence is not None and total_occurrences is not None:
             msg = (
@@ -407,7 +413,7 @@ class AmbiguousTextError(DocxEditError):
             ``\\t``), or None if unscoped. Kept for compatibility; the
             message shows ``matches`` instead.
         total_occurrences: Number of matches found in the search scope.
-        matches: The first ``MAX_REPORTED_MATCHES`` (10) matches as
+        matches: The first ``MAX_REPORTED_MATCHES`` matches as
             ``MatchLocation`` records, in document order.
         matches_omitted: How many matches ``matches`` leaves out
             (``total_occurrences - len(matches)``); ``find_all()`` lists them.
@@ -432,10 +438,14 @@ class AmbiguousTextError(DocxEditError):
         self.next = _retry_occurrence_hint(total_occurrences)
 
         scope = f"paragraph {paragraph_ref}" if paragraph_ref is not None else "the document"
-        lines = [
-            f"'{search_text}' matches {total_occurrences} times in {scope}. Pass occurrence= (0-based) to pick one:"
+        head = f"'{search_text}' matches {total_occurrences} times in {scope}."
+        if not self.matches:
+            super().__init__(f"{head} Pass occurrence= (0-based) to pick one, or use find_all() to list every match.")
+            return
+        lines = [f"{head} Pass occurrence= (0-based) to pick one:"]
+        lines += [
+            f'  occurrence={m.occurrence}  {m.paragraph_ref} at char {m.start}  "{m.context}"' for m in self.matches
         ]
-        lines += [f'  occurrence={m.occurrence}  {m.paragraph_ref}  "{m.context}"' for m in self.matches]
         if self.matches_omitted:
             lines.append(f"  (+{self.matches_omitted} more; find_all() lists every match)")
         super().__init__("\n".join(lines))

@@ -475,7 +475,9 @@ class TestAmbiguityMatchLocations:
                 doc.replace("alpha", "x", paragraph=ref)
             lines = str(exc.value).splitlines()
             assert lines[0] == f"'alpha' matches 3 times in paragraph {ref}. Pass occurrence= (0-based) to pick one:"
-            assert lines[1:] == [f'  occurrence={m.occurrence}  {ref}  "{m.context}"' for m in exc.value.matches]
+            assert lines[1:] == [
+                f'  occurrence={m.occurrence}  {ref} at char {m.start}  "{m.context}"' for m in exc.value.matches
+            ]
             assert "Current content" not in str(exc.value)
         finally:
             doc.close()
@@ -532,6 +534,42 @@ class TestAmbiguityMatchLocations:
         finally:
             doc.close()
 
+    def test_paragraph_occurrence_selects_docwide_match_from_scoped_call(self, doc_path):
+        """A document-wide pick carries the within-paragraph number its paragraph_ref needs."""
+        doc = _build_doc_with_paragraphs(doc_path, ["alpha one", "two alpha alpha"])
+        try:
+            with pytest.raises(AmbiguousTextError) as exc:
+                doc.add_comment("alpha", "note")
+            m = exc.value.matches[1]  # document-wide occurrence 1: the first "alpha" in P2
+            assert (m.occurrence, m.paragraph_occurrence, m.start) == (1, 0, 4)
+            doc.replace("alpha", "X", paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence)
+            doc.accept_all()
+            assert doc.get_paragraph(2).text == "two X alpha"
+        finally:
+            doc.close()
+
+    def test_identical_context_is_told_apart_by_start(self, doc_path):
+        doc = _build_doc_with_paragraphs(doc_path, ["two alpha alpha"])
+        try:
+            ref = doc.list_paragraphs()[0].split("|")[0]
+            with pytest.raises(AmbiguousTextError) as exc:
+                doc.replace("alpha", "X", paragraph=ref)
+            first, second = exc.value.matches
+            assert first.context == second.context
+            assert (first.start, second.start) == (4, 10)
+            assert (first.paragraph_occurrence, second.paragraph_occurrence) == (0, 1)
+            assert "at char 4" in str(exc.value) and "at char 10" in str(exc.value)
+        finally:
+            doc.close()
+
+    def test_without_matches_message_falls_back_to_one_line(self):
+        err = AmbiguousTextError("alpha", total_occurrences=3)
+        assert str(err) == (
+            "'alpha' matches 3 times in the document. "
+            "Pass occurrence= (0-based) to pick one, or use find_all() to list every match."
+        )
+        assert err.matches == [] and err.matches_omitted == 3
+
     def test_matches_are_capped_at_ten(self, doc_path):
         doc = _build_doc_with_paragraphs(doc_path, [" ".join(["ab"] * 25)])
         try:
@@ -584,8 +622,11 @@ class TestNextHint:
                 doc.replace("absent", "x", paragraph=ref)
             assert exc.value.next == "get_paragraph(1).text"
             with pytest.raises(TextNotFoundError) as exc:
+                doc.replace("absent", "x", paragraph="P01#" + ref.split("#")[1])
+            assert exc.value.next == "get_paragraph(1).text"  # zero-padded ref, valid Python hint
+            with pytest.raises(TextNotFoundError) as exc:
                 doc.add_comment("absent", "c")
-            assert exc.value.next == "find_all(text)"
+            assert exc.value.next == "list_paragraphs()"
         finally:
             doc.close()
 
@@ -676,7 +717,6 @@ class TestNextHint:
             "get_paragraph(2)",
             "get_paragraph(1).text",
             "list_paragraphs()",
-            "find_all(text)",
             "list_revisions()",
             "list_comments()",
             "Document.open(path)",

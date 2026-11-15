@@ -1774,8 +1774,8 @@ genuinely need the internals (raw DOM positions), import them from
 
 ## Exceptions
 
-Every exception below inherits from `DocxEditError` and has a `next`
-attribute: the one call that usually resolves it, as a short string
+Every exception below (the two warnings at the end excepted) inherits from
+`DocxEditError` and has a `next` attribute: the one call that usually resolves it, as a short string
 (`"get_paragraph(3)"`, `"retry with occurrence=N (0..2)"`), or `None` when no
 single call does. It is `None` on every error whose recovery discards data or
 needs the user (`WorkspaceSyncError`, `WorkspaceLockedError`,
@@ -1801,7 +1801,7 @@ Quote from `get_paragraph(i).text` or `list_paragraphs_structured()` instead.
 
 `next`: `"retry with occurrence=N (0..K)"` when the occurrence was out of
 range, `"get_paragraph(N).text"` when a paragraph-scoped search found nothing,
-`"find_all(text)"` when a document-wide one did not
+`"list_paragraphs()"` when a document-wide one did not
 (`list_paragraphs_structured()` is the other way in).
 
 ```python
@@ -1831,9 +1831,9 @@ The message is the same list, one pick per line:
 
 ```
 'alpha' matches 3 times in paragraph P1#ab12. Pass occurrence= (0-based) to pick one:
-  occurrence=0  P1#ab12  "alpha beta alpha gamma alpha."
-  occurrence=1  P1#ab12  "alpha beta alpha gamma alpha."
-  occurrence=2  P1#ab12  "alpha beta alpha gamma alpha."
+  occurrence=0  P1#ab12 at char 0  "alpha beta alpha gamma alpha."
+  occurrence=1  P1#ab12 at char 11  "alpha beta alpha gamma alpha."
+  occurrence=2  P1#ab12 at char 23  "alpha beta alpha gamma alpha."
 ```
 
 followed by `  (+N more; find_all() lists every match)` when the list was cut.
@@ -1844,6 +1844,8 @@ followed by `  (+N more; find_all() lists every match)` when the list was cut.
 | --- | --- |
 | `occurrence` | The value to pass as `occurrence=` **to the same call** to select this match. It counts within the paragraph when that call had `paragraph=`, document-wide when it did not, so do not carry it to a call with a different scope. |
 | `paragraph_ref` | Hash-anchored ref of the paragraph holding the match, current when the error was raised. |
+| `paragraph_occurrence` | The match's 0-based number within that paragraph. `paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence` selects this match from any call; it equals `occurrence` when the raising call had `paragraph=`. |
+| `start` | Character offset of the match in the paragraph's visible text. It tells apart matches whose `context` is identical, such as a word repeated in a short paragraph. |
 | `context` | The match with up to 30 characters either side, `...` where the paragraph was cut, a tab mark spelled `\t`. |
 
 ```python
@@ -1853,7 +1855,7 @@ try:
     doc.replace("term", "clause", paragraph="P2#f3c1")
 except AmbiguousTextError as e:
     m = next(m for m in e.matches if "term of the lease" in m.context)
-    doc.replace("term", "clause", paragraph=m.paragraph_ref, occurrence=m.occurrence)
+    doc.replace("term", "clause", paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence)
 ```
 
 ### `HashMismatchError`
@@ -1919,7 +1921,7 @@ while ops:
 
 ### `CommentError`
 
-Raised when a comment operation fails. Structured field: `comment_id` (the comment id the operation targeted, e.g. the parent id of a failed reply; `None` when no comment id applies). `next`: `"list_comments()"` when the reply's parent id is unknown; `None` for invalid arguments.
+Raised when a comment operation fails. Structured field: `comment_id` (the comment id the operation targeted, e.g. the parent id of a failed reply; `None` when no comment id applies). `next`: `"list_comments()"` when the reply's parent id is unknown; `None` otherwise.
 
 ```python
 from docx_editor.exceptions import CommentError

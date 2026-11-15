@@ -32,9 +32,8 @@ def _match_locations(
     text: str,
     *,
     scoped_ref: str | None = None,
-    limit: int = MAX_REPORTED_MATCHES,
 ) -> list[MatchLocation]:
-    """The first ``limit`` matches of ``text`` as ``MatchLocation`` records, for an ``AmbiguousTextError``.
+    """The first ``MAX_REPORTED_MATCHES`` matches of ``text`` as ``MatchLocation`` records.
 
     ``paragraphs`` is ``(1-based index, <w:p>)`` pairs in document order.
     Matches are found with the same overlapping advance as
@@ -47,18 +46,19 @@ def _match_locations(
     Only the raise path calls this, so a successful edit pays nothing for it.
     """
     found: list[MatchLocation] = []
-    occurrence = 0
     for idx, p in paragraphs:
         visible = build_text_map(p).text
         ref = scoped_ref
+        local = 0
         pos = visible.find(text)
         while pos != -1:
-            if len(found) >= limit:
+            if len(found) >= MAX_REPORTED_MATCHES:
                 return found
             if ref is None:
                 ref = f"P{idx}#{compute_paragraph_hash(p)}"
-            found.append(MatchLocation(occurrence, ref, _match_context(visible, pos, pos + len(text))))
-            occurrence += 1
+            context = _match_context(visible, pos, pos + len(text))
+            found.append(MatchLocation(len(found), ref, local, pos, context))
+            local += 1
             pos = visible.find(text, pos + 1)
     return found
 
@@ -131,6 +131,7 @@ class _LocateMixin(_RevisionManagerBase):
                 text,
                 paragraph_ref=paragraph_ref,
                 paragraph_preview=text_map.text,
+                paragraph_index=ParagraphRef.parse(paragraph_ref).index,
             )
         if occurrence is None and total > 1:
             raise AmbiguousTextError(
