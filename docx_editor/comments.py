@@ -21,6 +21,7 @@ from .exceptions import (
     AmbiguousTextError,
     CommentError,
     HashMismatchError,
+    NodeNotFoundError,
     ParagraphIndexError,
     TextNotFoundError,
     XMLError,
@@ -722,8 +723,9 @@ class CommentManager:
         Raises:
             ValueError: If ``parent_comment_id`` is not an integer (bool
                 included), or ``reply_text`` is not a non-empty string.
-            CommentError: If the parent comment is not found; carries
-                ``comment_id``.
+            CommentError: If the parent comment is not found, or has no
+                ``w:commentReference`` in the document to seat the reply on;
+                carries ``comment_id``.
             XMLError: If an existing comment part cannot take the reply.
                 Raised before document.xml is touched.
         """
@@ -747,29 +749,53 @@ class CommentManager:
                 comment_id=parent_comment_id,
             )
 
-        parent_info = self.existing_comments[parent_comment_id]
         comment_id = self.next_comment_id
 
-        # Find parent comment markers in document.xml
-        parent_start_elem = self.document_editor.get_node(
-            tag="w:commentRangeStart", attrs={"w:id": str(parent_comment_id)}
-        )
-        parent_ref_elem = self.document_editor.get_node(
-            tag="w:commentReference", attrs={"w:id": str(parent_comment_id)}
-        )
+        # Find the parent's markers in document.xml. A point comment (Word
+        # 2007, LibreOffice) has a reference and no range; a comment with no
+        # reference gives the reply nowhere to sit.
+        parent_ref_elem = self._find_marker("w:commentReference", parent_comment_id)
+        if parent_ref_elem is None:
+            raise CommentError(
+                f"Parent comment with id={parent_comment_id} has no w:commentReference in the document; "
+                "cannot anchor a reply",
+                comment_id=parent_comment_id,
+            )
+        parent_start_elem = self._find_marker("w:commentRangeStart", parent_comment_id)
 
+        # Everything that can refuse the reply has now run: the parent is only
+        # given a paraId once the reply is certain to be written.
         self._prepare_comment_parts()
+        parent_para_id = self._ensure_para_id(parent_comment_id)
+        self._ensure_extended_row(parent_para_id)
         self._place_reply_markers(comment_id, parent_start_elem, parent_ref_elem)
 
-        return self._commit_comment(comment_id, reply_text, parent_para_id=parent_info["para_id"])
+        return self._commit_comment(comment_id, reply_text, parent_para_id=parent_para_id)
 
-    def _place_reply_markers(self, comment_id: int, parent_start, parent_ref) -> None:
-        """Seat a reply's markers around its parent's, where Word expects them."""
+    def _find_marker(self, tag: str, comment_id: int) -> Element | None:
+        """The one ``tag`` marker of ``comment_id`` in document.xml, or None when it has none."""
+        try:
+            return self.document_editor.get_node(tag=tag, attrs={"w:id": str(comment_id)})
+        except NodeNotFoundError:
+            return None
+
+    def _place_reply_markers(self, comment_id: int, parent_start: Element | None, parent_ref: Element) -> None:
+        """Seat a reply's markers around its parent's, where Word expects them.
+
+        A parent with no range (``parent_start`` is None) is a point comment;
+        its reply is anchored the same way, by a reference run alone.
+        """
+        # A reference written outside any run is followed directly: its parent
+        # is then a paragraph, and a run placed after that would land in w:body.
+        ref_anchor = _find_ancestor_run(parent_ref) or parent_ref
+        if parent_start is None:
+            self.document_editor.insert_after(ref_anchor, self._comment_ref_run_xml(comment_id))
+            return
         self.document_editor.insert_after(parent_start, self._comment_range_start_xml(comment_id))
         # One fragment, so the range end precedes the reference run: two
         # insert_after calls on the same anchor would land the second ahead
         # of the first and seat the reference run inside its own range.
-        self.document_editor.insert_after(parent_ref.parentNode, self._comment_range_end_xml(comment_id))
+        self.document_editor.insert_after(ref_anchor, self._comment_range_end_xml(comment_id))
 
     def list_comments(self, author: str | None = None) -> list[Comment]:
         """List all comments in the document.
@@ -816,7 +842,8 @@ class CommentManager:
         # Build reply tree
         para_to_id: dict[str, int] = {}
         for comment_id, info in self.existing_comments.items():
-            para_to_id[info["para_id"]] = comment_id
+            if info["para_id"] is not None:
+                para_to_id[info["para_id"]] = comment_id
 
         def parent_of(comment_id: int) -> int | None:
             para_id = self.existing_comments.get(comment_id, {}).get("para_id")
@@ -866,11 +893,19 @@ class CommentManager:
         Args:
             comment_id: The comment ID to resolve
 
+        The done flag lives only in commentsExtended.xml, keyed by
+        ``w14:paraId``. A comment from a producer that writes neither (Word
+        2007/2010, LibreOffice, Google Docs) is given a paraId and a
+        ``w15:commentEx`` row here, on first need.
+
         Returns:
-            True if resolved, False if not found
+            True if resolved, False if the document has no such comment
 
         Raises:
             ValueError: If ``comment_id`` is not an integer (bool included).
+            XMLError: If the comment has no ``w15:commentEx`` row yet and an
+                existing comment part cannot take one. Raised before anything
+                is changed.
         """
         # A junk id must not silently return False ("not found"), and True
         # would alias comment id 1 (bool == int).
@@ -880,17 +915,12 @@ class CommentManager:
             return False
 
         para_id = self.existing_comments[comment_id]["para_id"]
-
-        if not self.part_exists(self.comments_extended_path):
-            return False
-
-        editor = self._get_editor(self.comments_extended_path)
-        for ex_elem in editor.dom.getElementsByTagName("w15:commentEx"):
-            if ex_elem.getAttribute("w15:paraId") == para_id:
-                ex_elem.setAttribute("w15:done", "1")
-                return True
-
-        return False
+        row = self._extended_row(para_id) if para_id is not None else None
+        if row is None:
+            self._prepare_comment_parts()
+            row = self._ensure_extended_row(self._ensure_para_id(comment_id))
+        row.setAttribute("w15:done", "1")
+        return True
 
     def delete_comment(self, comment_id: int) -> bool:
         """Delete a comment, and every reply threaded under it, from the document.
@@ -930,6 +960,11 @@ class CommentManager:
             if comment_elem.getAttribute("w:id") == str(comment_id):
                 comment_elem.parentNode.removeChild(comment_elem)
                 break
+
+        # A comment with no paraId has no row in the parts keyed by one.
+        if para_id is None:
+            del self.existing_comments[comment_id]
+            return True
 
         # Remove from commentsExtended.xml
         if self.part_exists(self.comments_extended_path):
@@ -1032,7 +1067,7 @@ class CommentManager:
         if not self.part_exists(self.comments_extended_path):
             return []
         para_of_id = {cid: info["para_id"] for cid, info in self.existing_comments.items()}
-        id_of_para = {para_id: cid for cid, para_id in para_of_id.items()}
+        id_of_para = {para_id: cid for cid, para_id in para_of_id.items() if para_id is not None}
         editor = self._get_editor(self.comments_extended_path)
         children: dict[str, list[int]] = {}
         for ex_elem in editor.dom.getElementsByTagName("w15:commentEx"):
@@ -1046,7 +1081,7 @@ class CommentManager:
         queue = [comment_id]
         while queue:
             current = queue.pop(0)
-            for child_id in children.get(para_of_id.get(current, ""), ()):
+            for child_id in children.get(para_of_id.get(current) or "", ()):
                 # A malformed commentsExtended could name the same child twice,
                 # or point a thread back at itself; either would loop forever.
                 if child_id in seen:
@@ -1080,7 +1115,12 @@ class CommentManager:
         return max_id + 1
 
     def _load_existing_comments(self) -> dict[int, dict]:
-        """Load existing comments for reply support."""
+        """Register every comment that has an integer ``w:id``, with its paraId.
+
+        ``para_id`` is None for a comment whose producer wrote no
+        ``w14:paraId``; :meth:`_ensure_para_id` gives it one when a reply or a
+        resolve first needs it.
+        """
         if not self.part_exists(self.comments_path):
             return {}
 
@@ -1092,24 +1132,62 @@ class CommentManager:
             if not comment_id:
                 continue
 
-            para_id = self._get_comment_para_id(comment_elem)
-            if not para_id:
-                continue
-
             try:
-                existing[int(comment_id)] = {"para_id": para_id}
+                existing[int(comment_id)] = {"para_id": self._get_comment_para_id(comment_elem)}
             except ValueError:
                 continue
 
         return existing
 
     def _get_comment_para_id(self, comment_elem) -> str | None:
-        """Get the para_id from a comment element."""
-        for p_elem in comment_elem.getElementsByTagName("w:p"):
-            para_id = p_elem.getAttribute("w14:paraId")
-            if para_id:
-                return para_id
+        """The ``w14:paraId`` of the comment's last paragraph, or None.
+
+        The last paragraph's is the one commentsExtended.xml and
+        commentsIds.xml refer to a comment by.
+        """
+        paragraphs = comment_elem.getElementsByTagName("w:p")
+        return (paragraphs[-1].getAttribute("w14:paraId") or None) if paragraphs else None
+
+    def _ensure_para_id(self, comment_id: int) -> str:
+        """Return the paraId of a registered comment, giving it one if it has none.
+
+        The new id goes on the comment's last paragraph (an empty one is
+        appended to a comment that has no paragraph). Of several comments
+        sharing the ``w:id``, the last is the registered one and the one
+        marked. Call
+        :meth:`_prepare_comment_parts` first: it declares ``xmlns:w14`` on a
+        comments.xml that never used it.
+        """
+        info = self.existing_comments[comment_id]
+        if info["para_id"] is None:
+            editor = self._get_editor(self.comments_path)
+            comment_elem = [
+                elem for elem in editor.dom.getElementsByTagName("w:comment") if _adjudicable_id(elem) == comment_id
+            ][-1]
+            paragraphs = comment_elem.getElementsByTagName("w:p")
+            paragraph = paragraphs[-1] if paragraphs else editor.append_to(comment_elem, "<w:p/>")[0]
+            info["para_id"] = _generate_hex_id()
+            paragraph.setAttribute("w14:paraId", info["para_id"])
+        return info["para_id"]
+
+    def _extended_row(self, para_id: str) -> Element | None:
+        """The ``w15:commentEx`` row for ``para_id``, or None."""
+        if not self.part_exists(self.comments_extended_path):
+            return None
+        editor = self._get_editor(self.comments_extended_path)
+        for ex_elem in editor.dom.getElementsByTagName("w15:commentEx"):
+            if ex_elem.getAttribute("w15:paraId") == para_id:
+                return ex_elem
         return None
+
+    def _ensure_extended_row(self, para_id: str) -> Element:
+        """Return the ``w15:commentEx`` row for ``para_id``, adding a top-level one if it has none.
+
+        commentsExtended.xml is created when absent. No commentsIds.xml or
+        commentsExtensible.xml row is added: both are optional, and Word 2013
+        documents carry neither.
+        """
+        return self._extended_row(para_id) or self._add_to_comments_extended_xml(para_id, parent_para_id=None)
 
     def _parse_comment(self, comment_elem) -> Comment | None:
         """Parse a w:comment element into a Comment object.
@@ -1217,8 +1295,8 @@ class CommentManager:
 </w:comment>"""
         editor.append_to(root, comment_xml)
 
-    def _add_to_comments_extended_xml(self, para_id: str, parent_para_id: str | None) -> None:
-        """Add a single comment to commentsExtended.xml."""
+    def _add_to_comments_extended_xml(self, para_id: str, parent_para_id: str | None) -> Element:
+        """Add a single comment to commentsExtended.xml and return its new row."""
         self._ensure_comment_file(self.comments_extended_path, "commentsExtended.xml")
 
         editor = self._get_editor(self.comments_extended_path)
@@ -1228,7 +1306,7 @@ class CommentManager:
             xml = f'<w15:commentEx w15:paraId="{para_id}" w15:paraIdParent="{parent_para_id}" w15:done="0"/>'
         else:
             xml = f'<w15:commentEx w15:paraId="{para_id}" w15:done="0"/>'
-        editor.append_to(root, xml)
+        return editor.append_to(root, xml)[0]
 
     def _add_to_comments_ids_xml(self, para_id: str, durable_id: str) -> None:
         """Add a single comment to commentsIds.xml."""

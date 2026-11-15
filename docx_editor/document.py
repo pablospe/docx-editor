@@ -2068,8 +2068,17 @@ class Document:
         Raises:
             ValueError: If ``comment_id`` is not an integer (bool included),
                 or ``reply`` is not a non-empty string.
-            CommentError: If no comment with ``comment_id`` exists; carries
-                ``comment_id``.
+            CommentError: If no comment with ``comment_id`` exists, or it has
+                no ``w:commentReference`` in the document for the reply to sit
+                on; carries ``comment_id``.
+            XMLError: If an existing comment part cannot take the reply.
+                Raised before the document is changed.
+
+        Note:
+            Any comment ``list_comments()`` returns can be replied to. One
+            written without a ``w14:paraId`` (Word 2007/2010, LibreOffice,
+            Google Docs) is given one by its first reply, because threading is
+            keyed by it.
 
         Example:
             doc.reply_to_comment(0, "I agree with this change")
@@ -2104,10 +2113,18 @@ class Document:
             comment_id: ID of the comment to resolve
 
         Returns:
-            True if resolved, False if not found
+            True if resolved, False if the document has no such comment
 
         Raises:
             ValueError: If ``comment_id`` is not an integer (bool included).
+            XMLError: If the comment has no ``w15:commentEx`` row yet and an
+                existing comment part cannot take one. Raised before anything
+                is changed.
+
+        Note:
+            Any comment ``list_comments()`` returns can be resolved. One
+            written without a ``w14:paraId`` or a commentsExtended.xml row
+            (Word 2007/2010, LibreOffice, Google Docs) is given both here.
 
         Example:
             doc.resolve_comment(0)
