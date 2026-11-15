@@ -151,7 +151,9 @@ def _is_inside(path: Path, directory: Path) -> bool:
     """Whether ``path``, with symlinks followed, lies inside ``directory``."""
     try:
         return path.resolve().is_relative_to(directory.resolve())
-    except OSError:
+    except (OSError, RuntimeError):
+        # A link that cannot be followed (a loop raises RuntimeError before
+        # Python 3.13) leads nowhere inside the directory.
         return False
 
 
@@ -205,6 +207,9 @@ class CommentManager:
             self.comments_ids_path,
             self.comments_extensible_path,
         ) = self.part_paths
+        # A part that is a link out of the workspace is never read or written:
+        # it counts as absent, and a new comment is refused.
+        self._outside_parts = frozenset(path for path in self.part_paths if not _is_inside(path, self.workspace_path))
 
         # Cache for lazy-loaded editors
         self._editors: dict[str, DocxXMLEditor] = {}
@@ -212,6 +217,14 @@ class CommentManager:
         # Load existing comments for reply support
         self.existing_comments = self._load_existing_comments()
         self.next_comment_id = self._get_next_comment_id()
+
+    def part_exists(self, path: Path) -> bool:
+        """Whether the comment part at ``path`` is there to be read or written.
+
+        A part that leaves the package (a symlink out of the workspace) counts
+        as absent, so nothing is read from or written through it.
+        """
+        return path not in self._outside_parts and path.exists()
 
     def _resolve_comment_parts(self) -> tuple[tuple[Path, ...], list[str]]:
         """Return each comment part's path (``COMMENT_PARTS`` order) and the relationships that cannot be honoured.
@@ -726,7 +739,7 @@ class CommentManager:
             List of Comment objects (with replies nested), each carrying the
             ``paragraph_ref`` of the paragraph it sits on
         """
-        if not self.comments_path.exists():
+        if not self.part_exists(self.comments_path):
             return []
 
         refs = self._range_start_refs()
@@ -735,7 +748,7 @@ class CommentManager:
         parent_map: dict[str, str] = {}  # para_id -> parent_para_id
 
         # Build parent map from commentsExtended.xml
-        if self.comments_extended_path.exists():
+        if self.part_exists(self.comments_extended_path):
             ext_editor = self._get_editor(self.comments_extended_path)
             for ex_elem in ext_editor.dom.getElementsByTagName("w15:commentEx"):
                 para_id = ex_elem.getAttribute("w15:paraId")
@@ -749,7 +762,7 @@ class CommentManager:
             if comment and (author is None or comment.author == author):
                 # Check if resolved
                 para_id = self._get_comment_para_id(comment_elem)
-                if para_id and self.comments_extended_path.exists():
+                if para_id and self.part_exists(self.comments_extended_path):
                     ext_editor = self._get_editor(self.comments_extended_path)
                     for ex_elem in ext_editor.dom.getElementsByTagName("w15:commentEx"):
                         if ex_elem.getAttribute("w15:paraId") == para_id:
@@ -826,7 +839,7 @@ class CommentManager:
 
         para_id = self.existing_comments[comment_id]["para_id"]
 
-        if not self.comments_extended_path.exists():
+        if not self.part_exists(self.comments_extended_path):
             return False
 
         editor = self._get_editor(self.comments_extended_path)
@@ -868,16 +881,16 @@ class CommentManager:
 
         self._remove_range_markers(comment_id)
 
-        # Remove from comments.xml
-        if self.comments_path.exists():
-            editor = self._get_editor(self.comments_path)
-            for comment_elem in editor.dom.getElementsByTagName("w:comment"):
-                if comment_elem.getAttribute("w:id") == str(comment_id):
-                    comment_elem.parentNode.removeChild(comment_elem)
-                    break
+        # Remove from comments.xml — the part exists: the comment was read
+        # from it or written into it.
+        editor = self._get_editor(self.comments_path)
+        for comment_elem in editor.dom.getElementsByTagName("w:comment"):
+            if comment_elem.getAttribute("w:id") == str(comment_id):
+                comment_elem.parentNode.removeChild(comment_elem)
+                break
 
         # Remove from commentsExtended.xml
-        if self.comments_extended_path.exists():
+        if self.part_exists(self.comments_extended_path):
             editor = self._get_editor(self.comments_extended_path)
             for ex_elem in editor.dom.getElementsByTagName("w15:commentEx"):
                 if ex_elem.getAttribute("w15:paraId") == para_id:
@@ -890,7 +903,7 @@ class CommentManager:
         # A comment authored elsewhere whose commentsIds.xml row is missing
         # leaves no way to reach its extensible entry; that orphan stays.
         durable_id = None
-        if self.comments_ids_path.exists():
+        if self.part_exists(self.comments_ids_path):
             editor = self._get_editor(self.comments_ids_path)
             for id_elem in editor.dom.getElementsByTagName("w16cid:commentId"):
                 if id_elem.getAttribute("w16cid:paraId") == para_id:
@@ -899,7 +912,7 @@ class CommentManager:
                     break
 
         # Remove from commentsExtensible.xml
-        if durable_id and self.comments_extensible_path.exists():
+        if durable_id and self.part_exists(self.comments_extensible_path):
             editor = self._get_editor(self.comments_extensible_path)
             for ex_elem in editor.dom.getElementsByTagName("w16cex:commentExtensible"):
                 if ex_elem.getAttribute("w16cex:durableId") == durable_id:
@@ -974,7 +987,7 @@ class CommentManager:
         lets ``move_comment_markers`` re-seat each reply on its own parent's
         freshly placed markers rather than flattening the thread onto the root.
         """
-        if not self.comments_extended_path.exists():
+        if not self.part_exists(self.comments_extended_path):
             return []
         para_of_id = {cid: info["para_id"] for cid, info in self.existing_comments.items()}
         id_of_para = {para_id: cid for cid, para_id in para_of_id.items()}
@@ -1010,7 +1023,7 @@ class CommentManager:
 
     def _get_next_comment_id(self) -> int:
         """Get the next available comment ID."""
-        if not self.comments_path.exists():
+        if not self.part_exists(self.comments_path):
             return 0
 
         editor = self._get_editor(self.comments_path)
@@ -1026,7 +1039,7 @@ class CommentManager:
 
     def _load_existing_comments(self) -> dict[int, dict]:
         """Load existing comments for reply support."""
-        if not self.comments_path.exists():
+        if not self.part_exists(self.comments_path):
             return {}
 
         editor = self._get_editor(self.comments_path)
@@ -1105,6 +1118,7 @@ class CommentManager:
         that can fail for a pre-existing part fails while the document is still
         untouched:
 
+        - a comment part that is a link out of the workspace;
         - a comment relationship that cannot be honoured (see
           :meth:`_resolve_comment_parts`);
         - a part whose document element is not the expected prefixed element;
@@ -1124,12 +1138,15 @@ class CommentManager:
                 ``MultipleNodesFoundError`` when a part holds the expected
                 element not at all or more than once).
         """
+        if self._outside_parts:
+            names = ", ".join(sorted(path.name for path in self._outside_parts))
+            raise XMLError(f"{names}: comment part leaves the package; cannot add a comment")
         if self._unusable_relationships:
             raise XMLError(f"document.xml.rels: {'; '.join(self._unusable_relationships)}; cannot add a comment")
         existing = [
             (self._get_editor(path), part)
             for path, part in zip(self.part_paths, COMMENT_PARTS, strict=True)
-            if path.exists()
+            if self.part_exists(path)
         ]
         # Check every part before changing any: a rejected part leaves the
         # others exactly as they were.

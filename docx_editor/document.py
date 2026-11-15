@@ -3010,7 +3010,7 @@ class Document:
         return [
             (part, path)
             for part, path in zip(COMMENT_PARTS, paths, strict=True)
-            if path.exists() and paths.count(path) == 1
+            if self._comment_manager.part_exists(path) and paths.count(path) == 1
         ]
 
     def _ensure_comment_relationships(self) -> None:

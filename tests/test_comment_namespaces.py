@@ -20,7 +20,7 @@ from conftest import find_ref, replace_document_xml, replace_docx_parts
 from test_corpus_harness import harness
 
 from docx_editor import Document
-from docx_editor.comments import CommentManager
+from docx_editor.comments import CommentManager, _is_inside
 from docx_editor.exceptions import XMLError
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -173,6 +173,21 @@ class TestNamespacePoorPart:
         assert old is not None
         assert "w14:paraId" not in old.group(0)
         assert "old remark" in old.group(0)
+
+
+def test_delete_comment_when_comments_xml_is_the_only_part(simple_docx, tmp_path):
+    """Word 2010 shape: ``w14:paraId`` on the comment, none of the three sibling parts."""
+    comments_xml = ONE_OLD_COMMENT.replace("<w:p>", f'<w:p xmlns:w14="{W14_NS}" w14:paraId="00000001">')
+    src = make_docx_with_comments(simple_docx, tmp_path, comments_xml)
+    out = tmp_path / "out.docx"
+    with Document.open(src, author="Tester") as doc:
+        assert doc.delete_comment(0) is True
+        assert doc.list_comments() == []
+        doc.save(out)
+
+    assert "old remark" not in read_part(out, "word/comments.xml")
+    with zipfile.ZipFile(out) as z:
+        assert [n for n in z.namelist() if n.startswith("word/comments")] == ["word/comments.xml"]
 
 
 class TestSiblingPartWiring:
@@ -502,18 +517,57 @@ class TestTargetLeavingThePackage:
 
         assert (outside.read_bytes(), outside.stat().st_mtime_ns) == before
 
-    def test_symlinked_default_named_target_is_refused(self, simple_docx, tmp_path):
+    @pytest.mark.parametrize("with_relationship", [True, False], ids=["named-by-relationship", "no-relationship"])
+    def test_symlinked_default_named_part_is_refused(self, simple_docx, tmp_path, with_relationship):
+        """``word/comments.xml`` itself is a link out of the workspace: never read, never written."""
         outside = tmp_path / "outside.xml"
-        outside.write_text(self.OUTSIDE, encoding="utf-8")
-        src = add_relationship(simple_docx, tmp_path / "linked.docx", COMMENTS_REL_TYPE, "comments.xml")
+        outside.write_text(ONE_OLD_COMMENT, encoding="utf-8")
+        before = (outside.read_bytes(), outside.stat().st_mtime_ns)
+        src = simple_docx
+        if with_relationship:
+            src = add_relationship(simple_docx, tmp_path / "linked.docx", COMMENTS_REL_TYPE, "comments.xml")
 
         with Document.open(src, author="Tester", workspace_dir=tmp_path / "ws") as doc:
             workspace = doc._workspace.workspace_path
             (workspace / "word" / "comments.xml").symlink_to(outside)
             manager = CommentManager(workspace, doc._document_editor, "Tester", "T")
 
+            # The comment in the outside file is not read into the listing.
+            assert manager.existing_comments == {}
+            assert manager.list_comments() == []
+            assert not manager.part_exists(manager.comments_path)
             with pytest.raises(XMLError, match="leaves the package"):
                 manager.add_comment("quick brown", "check this")
+            assert marker_count(doc) == 0
+            manager.save_all()
+
+        assert (outside.read_bytes(), outside.stat().st_mtime_ns) == before
+
+    def test_link_that_cannot_be_followed_is_refused(self, simple_docx, tmp_path):
+        src = add_relationship(simple_docx, tmp_path / "loop.docx", COMMENTS_REL_TYPE, "comments1.xml")
+        with Document.open(src, author="Tester", workspace_dir=tmp_path / "ws") as doc:
+            word = doc._workspace.workspace_path / "word"
+            (word / "comments1.xml").symlink_to(word / "comments2.xml")
+            (word / "comments2.xml").symlink_to(word / "comments1.xml")
+            manager = CommentManager(doc._workspace.workspace_path, doc._document_editor, "Tester", "T")
+
+            with pytest.raises(XMLError):
+                manager.add_comment("quick brown", "check this")
+
+    def test_unresolvable_path_counts_as_outside(self, tmp_path, monkeypatch):
+        def refuse(self, strict=False):
+            raise OSError("cannot resolve")
+
+        monkeypatch.setattr(Path, "resolve", refuse)
+        assert not _is_inside(tmp_path / "word" / "comments.xml", tmp_path)
+
+
+def test_package_without_document_rels_has_no_comments(simple_docx, tmp_path):
+    src = tmp_path / "norels.docx"
+    replace_docx_parts(simple_docx, src, {RELS: None})
+    with Document.open(src, author="Tester") as doc:
+        assert doc._comment_manager.part_paths == tuple(doc._workspace.word_path / name for name in COMMENT_PART_NAMES)
+        assert doc.list_comments() == []
 
 
 class TestWiringAtSaveChecksTheRoot:
