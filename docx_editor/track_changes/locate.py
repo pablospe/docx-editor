@@ -26,7 +26,7 @@ from ..xml_editor import (
     fold_quotes,
 )
 from .base import _RevisionManagerBase
-from .models import SearchResult, _LocatedMatch
+from .models import SearchResult, _LocatedMatch, _validate_expected_count
 
 
 def _match_locations(
@@ -311,10 +311,8 @@ class _LocateMixin(_RevisionManagerBase):
         """
         if not isinstance(text, str) or not text:
             raise ValueError(f"find_all(): search text must be a non-empty string, got {text!r}")
-        if expected_count is not None and (
-            isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 0
-        ):
-            raise ValueError(f"find_all(): expected_count must be a non-negative integer, got {expected_count!r}")
+        if expected_count is not None:
+            _validate_expected_count(expected_count, ctx="find_all(): ")
 
         if paragraph is not None:
             ref = ParagraphRef.parse(paragraph)

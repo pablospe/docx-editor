@@ -16,6 +16,7 @@ import defusedxml.minidom
 
 from .comments import COMMENT_PARTS, Comment, CommentManager, CommentPart, has_root
 from .exceptions import (
+    BatchOperationError,
     CommentError,
     DocumentClosedError,
     DocumentProtectedError,
@@ -39,6 +40,7 @@ from .track_changes.models import (
     _paragraph_hint,
     _resolve_search_target,
     _validate_edit_target,
+    _validate_expected_count,
     _validate_insert_inputs,
     _validate_note,
     _validate_replace_inputs,
@@ -1596,7 +1598,8 @@ class Document:
             expected_count: How many matches you expect (``0`` allowed: then
                 the call asserts the text is absent and returns ``[]``).
             note: Rationale anchored as a comment on the revisions, shared by
-                every match (see :meth:`batch_edit`).
+                every match (see :meth:`batch_edit`). Ignored when nothing
+                matches (``expected_count=0``).
 
         Returns:
             One EditResult per match, in document order. Several matches in
@@ -1604,26 +1607,30 @@ class Document:
 
         Raises:
             ValueError: If ``find`` is not a non-empty string or contains a
-                tab, ``replace_with`` is not a string, ``note`` is invalid,
+                tab, ``replace_with`` is not a string, ``note`` is neither
+                None nor a non-empty control-character-free string,
                 ``expected_count`` is not a non-negative integer, or matches
                 of ``find`` overlap one another (e.g. ``"aa"`` in
                 ``"aaaa"``) — the matches are then not independent edits.
             MatchCountError: If the number of matches is not
                 ``expected_count``; it lists the matches it found.
             BatchOperationError: If a replacement fails while applying;
-                ``original`` holds the underlying error. The document is left
-                unchanged.
+                ``operation_index`` is the failing match's position in
+                document order (as in the returned list) and ``original``
+                holds the underlying error. The document is left unchanged.
+                A ``replace_with`` containing ``\n`` fails this way when two
+                matches share a paragraph (a paragraph splits once per batch);
+                split those one at a time with :meth:`replace`.
 
         Example:
             results = doc.replace_all("30 days", "60 days", expected_count=3)
         """
         self._ensure_open()
         # Input errors before the search, so they do not depend on the count.
-        _validate_replace_inputs(find, replace_with, ctx="replace_all(): ")
         _validate_note(note, ctx="replace_all(): ")
+        _validate_replace_inputs(find, replace_with, ctx="replace_all(): ")
         # Required, so None is refused here rather than read by find_all as "no guard".
-        if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 0:
-            raise ValueError(f"replace_all(): expected_count must be a non-negative integer, got {expected_count!r}")
+        _validate_expected_count(expected_count, ctx="replace_all(): ")
         matches = self.find_all(find, expected_count=expected_count)
         for prev, cur in zip(matches, matches[1:], strict=False):
             if cur.paragraph_ref == prev.paragraph_ref and cur.start < prev.end:
@@ -1642,7 +1649,15 @@ class Document:
             )
             for m in reversed(matches)
         ]
-        return self.batch_edit(ops)[::-1]
+        try:
+            return self.batch_edit(ops)[::-1]
+        except BatchOperationError as e:
+            # Re-index into document order: the caller never saw ``ops``.
+            i = len(ops) - 1 - e.operation_index
+            m = matches[i]
+            raise BatchOperationError(
+                i, f"match {i} ({m.paragraph_ref} at char {m.start}): {e.reason}", original=e.original
+            ) from e.original
 
     def delete(
         self,
@@ -1892,7 +1907,7 @@ class Document:
             TextNotFoundError: If ``before`` is absent or ``occurrence`` is out
                 of range for the paragraph.
             AmbiguousTextError: If ``occurrence`` is omitted and ``before``
-                matches more than once in the search scope.
+                matches more than once in the paragraph.
             HashMismatchError: If the paragraph hash is stale.
 
         Example:

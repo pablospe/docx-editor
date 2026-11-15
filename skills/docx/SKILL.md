@@ -484,8 +484,7 @@ d.save("report.docx")
 
 from docx_editor import Document
 doc = Document.open("report.docx", author="Reviewer")
-for r in reversed(doc.find_all("thirty days")):
-    doc.replace(r, "sixty days")                     # the match pins ref+occurrence
+doc.replace_all("thirty days", "sixty days", expected_count=2)  # one per chapter
 
 locs = dict(doc.list_paragraph_locations())          # snapshot AFTER the edits
 report = {}
@@ -933,7 +932,7 @@ refs_only = doc.list_paragraphs(max_chars=0, limit=None)  # every "P1#a7b2", no 
 
 **Reaching the end of the pagination:** a `start` past the last paragraph is a valid request with an empty answer — both listing methods return `[]`, exactly like `lst[500:]` on a 300-item list, and **do not raise**. So `while page := doc.list_paragraphs(start=s, limit=200)` terminates cleanly. (`start=0` or negative *does* raise `ValueError`: those are invalid inputs, not empty ranges.) To know where the end is rather than discovering it, use `paragraph_count()` up front or follow the truncation notice's `start=` hint.
 
-The `paragraph` argument is **required** whenever the target is a plain string — `replace`, `delete`, `insert_after`, `insert_before` (`add_comment` may search document-wide, and with no anchor text at all `paragraph` names the whole paragraph to comment on). Pass a `SearchResult` as the target instead and it supplies the ref itself. Either way, if the paragraph content has changed since the ref was minted, a `HashMismatchError` is raised — preventing edits to the wrong location.
+With a plain-string target, `paragraph` is optional for `replace`, `delete`, `insert_after` and `insert_before`: omit it and the target is searched document-wide and must be unique there (or `occurrence=` picks the match, counted document-wide), else `AmbiguousTextError` — nothing is written. Pass `paragraph=` (or a `SearchResult`, which supplies the ref itself) to pin the edit to a paragraph you have seen: if its content has changed since the ref was minted, a `HashMismatchError` is raised — preventing edits to the wrong location. (`add_comment` with no anchor text uses `paragraph` to name the whole paragraph to comment on.)
 
 **Every edit method returns an `EditResult` — a `str` subclass whose value is the new paragraph ref (plus `group_id`/`revision_ids`).** Chain edits without calling `list_paragraphs()` again:
 
@@ -1075,6 +1074,7 @@ All LLM-facing errors inherit from `DocxEditError` and carry structured fields s
 | `HashMismatchError`    | `paragraph_index`, `expected_hash`, `actual_hash`, `paragraph_preview`                  | `get_paragraph(N)` | Retry with `P{paragraph_index}#{actual_hash}`.                                                   |
 | `TextNotFoundError`    | `search_text`, `paragraph_ref`, `paragraph_preview`, `occurrence`, `total_occurrences`  | `retry with occurrence=N (0..K)`, `get_paragraph(N).text` or `list_paragraphs()` | Re-quote a substring that actually appears from `get_paragraph(i).text`; `paragraph_preview` is a quick look only — it is itself cut at 80 chars with a trailing `...`, and spells a tab mark `\t` (search with a real tab). A common cause is a search string copied from a `list_paragraphs()` preview with its trailing `...`. Quote style is never the cause: straight and curly quotes match each other. If `total_occurrences` is set, retry with an `occurrence` < `total_occurrences`. |
 | `AmbiguousTextError`   | `search_text`, `paragraph_ref`, `paragraph_preview`, `total_occurrences`, `matches`, `matches_omitted` | `retry with occurrence=N (0..K)` | The target matched more than once with no `occurrence` given. `matches` lists the first 10 as `MatchLocation(occurrence, paragraph_ref, paragraph_occurrence, start, context)` — the message prints the same pick-list — and `matches_omitted` counts the rest. Pass the chosen `m.occurrence` back to the **same** call: it counts within the paragraph when you passed `paragraph=`, document-wide when you did not. `paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence` selects the match from any call (inside `batch_edit` the locations describe the paragraph mid-batch and the batch rolls back, so pass `m.occurrence` back to the retried batch); `start` (offset in the paragraph) tells apart matches with identical `context`. `find_all()` lists every match when some were omitted. |
+| `MatchCountError`      | `search_text`, `paragraph_ref`, `expected_count`, `total_occurrences`, `matches`, `matches_omitted` | `find_all('<text>')` (with `paragraph=` when scoped) | A `find_all(..., expected_count=N)` or `replace_all(..., expected_count=N)` found a different number of matches; nothing was changed. The document is not as you believed: read `matches` (same `MatchLocation` records as `AmbiguousTextError`), then re-issue with the right count or scope the edits with `paragraph=`. |
 | `ParagraphIndexError`  | `index`, `total_paragraphs`                                                             | `list_paragraphs()` | Clamp to `1..total_paragraphs` and retry with `get_paragraph(i)`, or call `list_paragraphs()` to pick a valid ref. |
 | `BatchOperationError`  | `operation_index`, `reason`, `original`                                                 | `original.next`, else None | Fix the op at `operations[operation_index]` (or drop it) and retry the batch; `original` is the underlying typed error (e.g. use its `actual_hash` to re-target a stale ref), or None for batch-level rules with no underlying exception (a missing paragraph ref, an element that is not an `EditOperation`, or a duplicate paragraph in `batch_rewrite` — `batch_edit` allows repeats, applied sequentially). Batch methods never raise the inner types directly. |
 | `RevisionError`        | `revision_id`, `group_id`, `changeset_id` (whichever the error is about is set, the rest None) | `retry with author=<name>` or `list_revisions()`, else None | `revision_id` set: `accept_revision()`/`reject_revision()` was given a `w:id` that more than one pending revision carries — nothing was changed; retry with `author=` (the message lists the authors it works for), or use `accept_all(author=…)`/`reject_all(author=…)` when one author duplicated the id. Otherwise: unknown `group_id` passed to `accept_group()`/`reject_group()`, or unknown `changeset_id` passed to `accept_changeset()`/`reject_changeset()`. Group and changeset ids are per-open-Document and renumbered on each open (recorded for this session's edits, inferred for pre-existing revisions): use an id from this session's `EditResult` or `list_revisions()`, never one saved from a previous session. |
@@ -1093,6 +1093,7 @@ from docx_editor import (
     AmbiguousTextError,
     BatchOperationError,
     HashMismatchError,
+    MatchCountError,
     ParagraphIndexError,
     RevisionError,
     TextNotFoundError,

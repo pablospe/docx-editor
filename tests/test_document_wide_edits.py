@@ -12,6 +12,7 @@ from conftest import NS, replace_document_xml
 
 from docx_editor import (
     AmbiguousTextError,
+    BatchOperationError,
     Document,
     MatchCountError,
     TextNotFoundError,
@@ -146,6 +147,9 @@ class TestRefusals:
             (lambda d: d.replace("absent text", 5), "replace_with"),
             (lambda d: d.insert_after("absent text", 5), "'text' must be a string"),
             (lambda d: d.insert_before("absent text", "a\x01b"), "control character"),
+            # A bad anchor is refused as bad search text, not as a missing paragraph.
+            (lambda d: d.insert_after(5, "x"), r"insert_after\(\): search text must be a non-empty string"),
+            (lambda d: d.insert_before("", "x"), r"insert_before\(\): search text must be a non-empty string"),
             (lambda d: d.delete("30 days\t"), "tab"),
         ],
     )
@@ -183,6 +187,12 @@ class TestFindAllExpectedCount:
             doc.find_all("30 days", ref, expected_count=1)
         assert exc.value.paragraph_ref == ref
         assert [m.occurrence for m in exc.value.matches] == [0, 1]
+        # The hint lists the scoped matches, not every match in the document.
+        assert exc.value.next == f"find_all('30 days', paragraph={ref!r})"
+
+    def test_singular_count_reads_naturally(self, doc):
+        with pytest.raises(MatchCountError, match="matches 1 time in the document, expected 2"):
+            doc.find_all("unique clause", expected_count=2)
 
     @pytest.mark.parametrize("bad", [-1, True, 1.0, "2"])
     def test_bad_expected_count(self, doc, bad):
@@ -237,3 +247,16 @@ class TestReplaceAll:
         with pytest.raises(ValueError, match=r"replace_all\(\): expected_count"):
             doc.replace_all("30 days", "60 days", expected_count=bad)
         assert doc.list_revisions() == []
+
+
+def test_replace_all_batch_error_indexes_matches_in_document_order(simple_docx, tmp_path):
+    # Two matches in P1 and a "\n" replacement: P1 can split only once per
+    # batch. The ops run reversed, but the error must name match 0 in P1, the
+    # first match in document order, as in the list replace_all would return.
+    with _open(simple_docx, tmp_path, _p("a X b X c"), _p("X end")) as d:
+        before = _xml(d)
+        with pytest.raises(BatchOperationError) as exc:
+            d.replace_all("X", "Y\nZ", expected_count=3)
+        assert exc.value.operation_index == 0
+        assert str(exc.value).startswith("Operation 0: match 0 (P1#")
+        assert _xml(d) == before

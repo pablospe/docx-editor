@@ -52,7 +52,8 @@ with Document.open("contract.docx", author="Legal Team") as doc:
     # A paragraph over 80 chars is cut and its preview ends in "..." (not document text) —
     # quote search text from list_paragraphs_structured(limit=None) instead.
 
-    # Edit methods require a paragraph ref and return the updated ref.
+    # Edit methods take an optional paragraph ref (omitted: the target is
+    # searched document-wide and must be unique) and return the updated ref.
     # Pass occurrence= (0-based) to disambiguate repeated text; omitting it
     # requires a unique match, else AmbiguousTextError.
     ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")

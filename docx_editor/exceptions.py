@@ -478,7 +478,8 @@ class MatchCountError(DocxEditError):
             ``MatchLocation`` records, in document order (empty when nothing
             matched).
         matches_omitted: How many matches ``matches`` leaves out.
-        next: ``"find_all('<text>')"`` — list the matches, then decide.
+        next: ``"find_all('<text>')"`` (with ``paragraph=`` when the search
+            was scoped) — list the matches, then decide.
     """
 
     def __init__(
@@ -496,11 +497,16 @@ class MatchCountError(DocxEditError):
         self.total_occurrences = total_occurrences
         self.matches = list(matches[:MAX_REPORTED_MATCHES])
         self.matches_omitted = max(0, total_occurrences - len(self.matches))
-        self.next = f"find_all({search_text!r})"
+        self.next = (
+            f"find_all({search_text!r}, paragraph={paragraph_ref!r})"
+            if paragraph_ref is not None
+            else f"find_all({search_text!r})"
+        )
 
         scope = f"paragraph {paragraph_ref}" if paragraph_ref is not None else "the document"
-        head = f"'{search_text}' matches {total_occurrences} times in {scope}, expected {expected_count}."
-        lines = [head + (" Nothing was changed:" if self.matches else " Nothing was changed.")]
+        times = "time" if total_occurrences == 1 else "times"
+        head = f"'{search_text}' matches {total_occurrences} {times} in {scope}, expected {expected_count}."
+        lines = [head + (" Matches:" if self.matches else "")]
         super().__init__("\n".join([*lines, *_match_lines(self.matches, self.matches_omitted)]))
 
 

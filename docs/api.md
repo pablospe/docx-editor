@@ -404,7 +404,7 @@ Replace every match of `find` document-wide as one atomic edit. `expected_count`
 
 **Returns:** list of [`EditResult`](#editresult), one per match in document order; matches in the same paragraph carry that paragraph's final ref.
 
-**Raises:** `ValueError` if `find` is empty or contains `\t`, `replace_with` is not a string, `expected_count` is not a non-negative integer, or matches overlap one another (`"aa"` in `"aaaa"` — replace those one at a time); [`MatchCountError`](#matchcounterror) on a count mismatch; [`BatchOperationError`](#batchoperationerror) if a replacement fails while applying, document unchanged.
+**Raises:** `ValueError` if `find` is empty or contains `\t`, `replace_with` is not a string, `expected_count` is not a non-negative integer, or matches overlap one another (`"aa"` in `"aaaa"` — replace those one at a time); [`MatchCountError`](#matchcounterror) on a count mismatch; [`BatchOperationError`](#batchoperationerror) if a replacement fails while applying, document unchanged — its `operation_index` is the failing match's position in document order. A `replace_with` containing `\n` fails this way when two matches share a paragraph (a paragraph splits once per batch); split those one at a time with `replace()`.
 
 **Example:**
 
@@ -1908,7 +1908,7 @@ except AmbiguousTextError as e:
 
 Raised when a call given `expected_count` — [`find_all()`](#find_alltext-paragraphnone-expected_countnone) or [`replace_all()`](#replace_allfind-replace_with-expected_count-notenone) — finds a different number of matches. Too many and too few raise the same error: either way the document is not as you believed, and nothing was changed. Structured fields: `search_text`, `paragraph_ref` (None when document-wide), `expected_count`, `total_occurrences`, `matches` / `matches_omitted` (the same [`MatchLocation`](#ambiguoustexterror) records as `AmbiguousTextError`; empty when nothing matched).
 
-`next`: `"find_all('<text>')"` — look at the matches, then decide.
+`next`: `"find_all('<text>')"` (with `paragraph=` when the search was scoped) — look at the matches, then decide.
 
 ```
 '30 days' matches 3 times in the document, expected 2. Nothing was changed:

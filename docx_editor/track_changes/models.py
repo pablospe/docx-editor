@@ -44,10 +44,18 @@ def _validate_replace_inputs(find: str, replace_with: str, *, ctx: str) -> None:
 
 def _validate_insert_inputs(anchor: str, text: str, *, ctx: str) -> None:
     """Validate insert_after/insert_before's ``anchor``/``text`` before any search runs."""
+    if not isinstance(anchor, str) or not anchor:
+        raise ValueError(f"{ctx}search text must be a non-empty string, got {anchor!r}")
     if not isinstance(text, str):
         raise ValueError(f"{ctx}'text' must be a string (empty string is allowed), got {text!r}")
     _reject_control_chars(anchor, field="'anchor'", ctx=ctx, allow_tab=True)
     _reject_control_chars(text, field="'text'", ctx=ctx, allow_newline=True)
+
+
+def _validate_expected_count(expected_count: int, *, ctx: str) -> None:
+    """Reject an ``expected_count`` that is not a non-negative int (bool and None included)."""
+    if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 0:
+        raise ValueError(f"{ctx}expected_count must be a non-negative integer, got {expected_count!r}")
 
 
 def _validate_note(note: str | None, *, ctx: str) -> None:
