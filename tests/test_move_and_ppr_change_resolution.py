@@ -906,7 +906,8 @@ class TestRejoinKeepsTailRevisions:
     def test_recorded_mark_insertion_cannot_be_rejected_and_leaves_the_live_mark_alone(self, make_docx):
         """A w:ins in a nonconforming w:pPrChange record is not a paragraph
         break and not pending: it cannot be rejected, and the attempt leaves
-        the live mark and the record as they were."""
+        the live mark beside the record (a pending w:del) and the record
+        itself as they were."""
         live = f'<w:rPr><w:b/><w:del w:id="7" {_ANN}/></w:rPr>'
         record = f'<w:pPrChange w:id="12" {_ANN}><w:pPr><w:rPr><w:ins w:id="30" {_BOB}/></w:rPr></w:pPr></w:pPrChange>'
         body = _document(

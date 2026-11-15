@@ -810,8 +810,9 @@ _MARKUP_KIND_BY_TAG: dict[str, str] = {
 # w:original attribute and has no recorded subtree to skip.
 #
 # Every walk that answers "what is pending" skips these subtrees: the listings
-# (handled and unhandled), the w:id index behind accept_*/reject_*, group
-# membership, nesting (contains_ids) and the move range-mark sweep. Three raw
+# (handled and unhandled), the w:id index and by-id carrier lookup behind
+# accept_*/reject_*, group membership, nesting (contains_ids), the markup view
+# (get_markup_text) and the move range-mark sweep. Three raw
 # walks do not: count_revision_elements() reports what the XML contains, the
 # w:id allocator must still see a recorded id to avoid reusing it, and the
 # duplicate-id pre-scan of _reconstruct_groups must see it because the mark

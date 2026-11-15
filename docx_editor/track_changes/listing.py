@@ -85,10 +85,10 @@ class _ListingMixin(_RevisionManagerBase):
             True on the first ``w:ins``/``w:del`` we authored, False if there
             is none.
         """
-        for tag in ("w:ins", "w:del"):
-            for elem in self.editor.dom.getElementsByTagName(tag):
-                if elem.getAttribute("w:author") == self.editor.author:
-                    return True
+        # Pending only: a mark recorded inside a change record is history.
+        for elem in iter_revision_elements(self.editor.dom, ("w:ins", "w:del"), skip_change_records=True):
+            if elem.getAttribute("w:author") == self.editor.author:
+                return True
         return False
 
     def list_revisions(

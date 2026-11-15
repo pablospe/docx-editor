@@ -236,8 +236,8 @@ RECORDED_MOVE_WITH_STRAY_RANGE_MARK = _document(
     "<w:p><w:r><w:t>Second</w:t></w:r></w:p>"
 )
 
-# Nonconforming: a w:del carrying text, recorded in a run's w:rPrChange. No
-# text view may surface the recorded text.
+# Nonconforming: a w:del carrying text, recorded in a run's w:rPrChange. The
+# markup view must not surface the recorded text, as the visible view does not.
 RECORDED_DELETION_WITH_TEXT = _document(
     "<w:p><w:r><w:rPr>"
     f'<w:rPrChange w:id="60" {_ANN}><w:rPr>'
@@ -631,8 +631,10 @@ class TestListUnhandledRevisions:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UnhandledRevisionWarning)
             with _open(path) as doc:
+                before = _body_xml(doc)
                 assert doc.list_revisions() == []
                 result = doc.accept_all()
+                assert _body_xml(doc) == before
         assert result == 0
 
     def test_census_still_counts_marks_inside_change_records(self):
@@ -971,6 +973,15 @@ class TestHandledMarksInsideChangeRecords:
         with _open(make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_markup")) as doc:
             assert doc.reject_revision(90) is True
             assert doc.get_markup_text() == "[ins#5:Bob][/ins]First\nSecond"
+
+    def test_recorded_mark_by_the_editing_author_is_not_an_own_revision(self, make_docx):
+        """A recorded mark carrying our author name is not a redline of ours."""
+        body = INS_INSIDE_PPRCHANGE_NUMPR.replace('w:author="Bob"', 'w:author="Tester"')
+        with _open(make_docx(body, "own_recorded")) as doc:
+            assert doc._revision_manager.has_own_revisions() is False
+            assert doc.reject_revision(90) is True
+            # Restored into the live w:pPr, it is pending — and ours.
+            assert doc._revision_manager.has_own_revisions() is True
 
     def test_change_record_itself_is_listed_but_its_recorded_mark_is_not(self, make_docx):
         """w:pPrChange is both a handled tag and a change record."""

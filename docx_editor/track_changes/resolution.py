@@ -324,8 +324,9 @@ class _ResolutionMixin(_RevisionManagerBase):
         set:
 
         * **Re-listing each pass is what terminates the loop.** The listing
-          shrinks as revisions are resolved, so an empty (or no-progress) pass
-          ends it. ``_resolve_ids`` can instead lean on ``resolve`` returning
+          shrinks as revisions are resolved, so an empty pass ends it, and so
+          does a no-progress pass on a freshly built index (see the last
+          paragraph). ``_resolve_ids`` can instead lean on ``resolve`` returning
           False, because its members are a fixed set of unique ids. Relying on
           that here would not terminate: a whole-document listing can hand the
           same id back repeatedly.
@@ -357,8 +358,8 @@ class _ResolutionMixin(_RevisionManagerBase):
         index and retries — unless nothing has been resolved since the index
         was built, when a rebuild could not differ and the call ends. Every
         rebuild is therefore followed by a resolution (which detaches an
-        element) or by the return, and a run that ends on an empty listing
-        never rebuilds.
+        element) or by the return, and a run in which no pass stalls never
+        rebuilds.
         """
         count = 0
         element_index = self._revision_element_index(author)

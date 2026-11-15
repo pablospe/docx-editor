@@ -1494,17 +1494,18 @@ second time alongside the change itself.
 
 The resolved count follows the same rule: a `w:ins`, `w:del` or move half
 recorded inside a change record is previous state, so it is not listed by
-`list_revisions()`, `accept_revision()`/`reject_revision()` return `False` for
-its id, `accept_all()`/`reject_all()` do not count it, and
-`get_markup_text()` does not render it. The one exception is
-a mark recorded in a `w:pPrChange`'s previous numbering properties: rejecting
-that change restores them, so the mark becomes a pending revision —
-`reject_all()` resolves it in the same call (when its `author=` filter, if any,
-matches the mark), and after `reject_revision()`,
-`reject_group()` or `reject_changeset()` it appears in `list_revisions()` with
-no group: those calls resolve the revisions they were given and no others. A
-pending revision whose `w:id` is also carried by a recorded mark has no group
-either (`group_id` is `None`), as for any duplicated id; resolve it by id.
+`list_revisions()`, `accept_revision()`/`reject_revision()` cannot target it
+(they return `False` for its id unless a pending revision carries the same id,
+which is then the one resolved), `accept_all()`/`reject_all()` do not count it,
+and `get_markup_text()` does not render it. The one exception is a mark
+recorded in a `w:pPrChange`'s previous numbering properties: rejecting that
+change restores them, so the mark becomes a pending revision — `reject_all()`
+resolves it in the same call (when its `author=` filter, if any, matches the
+mark), and after `reject_revision()`, `reject_group()` or `reject_changeset()`
+it appears in `list_revisions()` with no group: those calls resolve the
+revisions they were given and no others. A pending revision whose `w:id` is
+also carried by a recorded mark has no group either (`group_id` is `None`), as
+for any duplicated id; resolve it by id.
 
 ### Example
 
