@@ -32,6 +32,7 @@ from .exceptions import (
     DocxEditError,
     HashMismatchError,
     MatchCountError,
+    MatchLocation,
     ParagraphIndexError,
     RevisionError,
     TextNotFoundError,
@@ -103,8 +104,7 @@ Rules:
   matches as "occurrence=N  P3#a7b2 ..." (find lists all), and prints a
   retry: line; run it with N replaced. --paragraph P3#a7b2 (a ref from
   list/find) pins the edit to that paragraph as you saw it; a stale ref
-  refuses, and the retry carries the fresh one (or, with --occurrence,
-  lists the paragraph's matches again, since their numbers changed).
+  refuses, and the retry lists the matches again so you pick afresh.
 - --expect N on replace replaces every match, and refuses unless there are
   exactly N. On find it checks the count without editing.
 - --note "why" attaches your rationale as a comment on the change.
@@ -218,18 +218,16 @@ def _retry_for(error: Exception, args: argparse.Namespace) -> _Retry | None:
             return None
         if error.total_occurrences == 0:
             return _Retry(_other(args, "list"), "nothing matches; read the paragraphs to quote the text")
-        if _split_conflict(args, [m.paragraph_ref for m in error.matches]):
-            return _one_at_a_time(args, error.total_occurrences)
+        if _split_conflict(args, error.matches):
+            return _one_at_a_time(args, error.total_occurrences, count_was_wrong=True)
         return _Retry(_command(args, expect=error.total_occurrences), "only if every match listed above should change")
     if isinstance(error, HashMismatchError) and getattr(args, "paragraph", None):
-        fresh = f"P{error.paragraph_index}#{error.actual_hash}"
-        if args.occurrence is None:
-            return _Retry(_command(args, paragraph=fresh))
-        # The paragraph changed, so --occurrence may now name another match:
-        # list them again rather than guess which one was meant.
+        # The paragraph changed or moved, so neither its index nor an
+        # --occurrence can be trusted to name what was meant: list the
+        # matches again instead of re-issuing the edit.
         return _Retry(
-            [*_other(args, "find", f"--paragraph={fresh}"), _target(args)],
-            "the paragraph changed, so its matches are numbered afresh: pick the --occurrence again",
+            [*_other(args, "find"), _target(args)],
+            "the paragraph changed or moved since you read it: pick --paragraph and --occurrence from this list",
         )
     if isinstance(error, TextNotFoundError):
         if error.total_occurrences:
@@ -271,14 +269,36 @@ def _target(args: argparse.Namespace) -> str:
     return getattr(args, "old", None) or getattr(args, "anchor", None) or args.text
 
 
-def _split_conflict(args: argparse.Namespace, refs: Sequence[str]) -> bool:
-    """Whether a ``--expect`` replace with a newline would split one paragraph twice."""
+def _split_conflict(args: argparse.Namespace, matches: Sequence[MatchLocation]) -> bool:
+    """Whether a ``--expect`` replace with a newline would split one paragraph twice.
+
+    Overlapping matches do not count: they need a choice, which the plain
+    ``--expect`` retry reaches through ``replace_all``'s overlap refusal.
+    """
     if args.verb != "replace" or "\n" not in args.new:
         return False
-    return len(set(refs)) < len(refs)
+    refs = [m.paragraph_ref for m in matches]
+    overlap = any(
+        cur.paragraph_ref == prev.paragraph_ref and cur.start < prev.start + len(args.old)
+        for prev, cur in zip(matches, matches[1:], strict=False)
+    )
+    return not overlap and len(set(refs)) < len(refs)
 
 
-def _one_at_a_time(args: argparse.Namespace, count: int) -> _Retry:
+def _rematches(old: str, new: str) -> bool:
+    """Whether replacing ``old`` with ``new`` can create a new ``old``.
+
+    True when ``new`` contains ``old``, or when an end of ``new`` could join
+    the neighbouring text to spell ``old`` (``ab`` -> ``X\na`` before ``b``).
+    Quote-folded, as matching is.
+    """
+    fo, fn = fold_quotes(old), fold_quotes(new)
+    if fo in fn:
+        return True
+    return any(fo.startswith(fn[-k:]) or fo.endswith(fn[:k]) for k in range(1, min(len(fo), len(fn) + 1)))
+
+
+def _one_at_a_time(args: argparse.Namespace, count: int, *, count_was_wrong: bool = False) -> _Retry:
     """A newline replace that cannot run as one call: the same edit, one match per run.
 
     ``--occurrence=0`` with no ``--paragraph`` takes the first match in the
@@ -287,16 +307,17 @@ def _one_at_a_time(args: argparse.Namespace, count: int) -> _Retry:
     new text cannot match again — otherwise each run must pick its match
     from a fresh find.
     """
-    if fold_quotes(args.old) in fold_quotes(args.new):
+    if _rematches(args.old, args.new):
         return _Retry(
             [*_other(args, "find"), args.old],
-            "the new text contains the old, so a replaced match would match again: "
+            "the new text can form the old text again, so a later run could hit text that was never a match: "
             "run find before each replace and pick its --paragraph and --occurrence",
         )
     then = f"the first time with --output={args.output}, then on that file with --in-place" if args.output else ""
     return _Retry(
         _command(args, expect=None, paragraph=None, occurrence=0),
-        f"a paragraph can split only once per command: run this {count} times, once per match"
+        ("only if every match listed above should change: " if count_was_wrong else "")
+        + f"a paragraph can split only once per command: run this {count} times, once per match"
         + (f" ({then})" if then else ""),
     )
 

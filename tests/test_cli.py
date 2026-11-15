@@ -39,6 +39,22 @@ def src(simple_docx, tmp_path, ws) -> Path:
     return path
 
 
+@pytest.fixture
+def doc_of(simple_docx, tmp_path, ws):
+    """A .docx with one paragraph per argument."""
+    from conftest import NS, replace_document_xml
+
+    def make(*texts: str) -> Path:
+        body = "".join(f'<w:p><w:r><w:t xml:space="preserve">{t}</w:t></w:r></w:p>' for t in texts)
+        path = tmp_path / f"doc{len(list(tmp_path.glob('doc*.docx')))}.docx"
+        replace_document_xml(
+            simple_docx, path, f'<?xml version="1.0"?><w:document {NS}><w:body>{body}</w:body></w:document>'
+        )
+        return path
+
+    return make
+
+
 def run(capsys, *argv: object) -> tuple[int, str, str]:
     code = main([str(a) for a in argv])
     captured = capsys.readouterr()
@@ -174,8 +190,7 @@ class TestRefusals:
             "--in-place",
         )
         assert code == 1
-        code, out, _ = run(capsys, *retry_argv(err))
-        assert code == 0 and "[ins#3:Me]red[/ins]" in out
+        assert retry_argv(err) == ["find", "--", str(src), "brown"]  # the value argparse used: stale, not P9
 
     def test_occurrence_out_of_range_retry_is_runnable(self, capsys, src):
         code, _, err = run(capsys, "replace", src, "the", "THE", "--occurrence", 5, "--author", AUTHOR, "--in-place")
@@ -201,11 +216,10 @@ class TestRefusals:
         argv = ["replace", src, "brown", "red", "--paragraph", stale, "--author", AUTHOR, "--in-place"]
         code, _, err = run(capsys, *argv)
         assert code == 1 and src.read_bytes() == before
-        fresh = ref_of(src, 2)
-        retry = retry_argv(err)
-        assert flag_value(retry, "--paragraph") == fresh
-        code, out, _ = run(capsys, *retry)
-        assert code == 0 and "[ins#3:Me]red[/ins]" in out
+        # A changed paragraph may no longer hold what was meant, at that index
+        # or that occurrence: the retry lists the matches instead of editing.
+        assert retry_argv(err) == ["find", "--", str(src), "brown"]
+        assert "note: the paragraph changed or moved" in err
 
     def test_expect_mismatch_writes_nothing_and_offers_the_actual_count(self, capsys, src):
         before = src.read_bytes()
@@ -572,7 +586,23 @@ class TestRoundThree:
 
     def test_newline_split_count_mismatch_gives_the_same_repeat(self, capsys, src):
         code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 3, "--author", AUTHOR, "--in-place")
-        assert code == 1 and "run this 2 times, once per match" in err
+        assert code == 1 and "only if every match listed above should change: " in err
+        assert "run this 2 times, once per match" in err
+
+    @pytest.mark.parametrize(("text", "new"), [("abb ab", "X\na"), ("aab ab", "b\nZ")])
+    def test_new_text_joining_its_neighbours_falls_back_to_find(self, capsys, doc_of, text, new):
+        # "X\na" before "b" spells "ab" again: a later --occurrence=0 run would
+        # hit text that was never one of the original matches.
+        path = doc_of(text)
+        code, _, err = run(capsys, "replace", path, "ab", new, "--expect", 2, "--author", AUTHOR, "--in-place")
+        assert code == 1 and retry_argv(err) == ["find", "--", str(path), "ab"]
+
+    def test_overlapping_matches_with_a_wrong_count_do_not_get_the_repeat(self, capsys, doc_of):
+        path = doc_of("aaa aa")
+        code, _, err = run(capsys, "replace", path, "aa", "Q\nR", "--expect", 1, "--author", AUTHOR, "--in-place")
+        assert code == 1 and "run this" not in err
+        code, _, err = run(capsys, *retry_argv(err))  # the --expect=3 retry reaches the overlap refusal
+        assert code == 1 and "these matches overlap" in err
 
     def test_one_at_a_time_note_says_to_continue_on_the_output(self, capsys, src, tmp_path):
         out_path = tmp_path / "o.docx"
@@ -597,8 +627,17 @@ class TestRoundThree:
         code, _, err = run(
             capsys, "replace", src, "o", "0", "--paragraph", stale, "--occurrence", 1, "--author", AUTHOR, "--in-place"
         )
-        assert code == 1 and "numbered afresh" in err
-        assert retry_argv(err) == ["find", f"--paragraph={ref_of(src, 2)}", "--", str(src), "o"]
+        assert code == 1 and "changed or moved" in err
+        assert retry_argv(err) == ["find", "--", str(src), "o"]
+
+    def test_stale_ref_after_a_paragraph_moved_never_edits_its_neighbour(self, capsys, doc_of):
+        path = doc_of("Fee 10", "Rate 10")
+        rate = ref_of(path, 2)
+        run(capsys, "replace", path, "Fee", "Intro\nFee", "--author", "B", "--in-place")  # Rate moves to P3
+        code, _, err = run(capsys, "replace", path, "10", "20", "--paragraph", rate, "--author", AUTHOR, "--in-place")
+        assert code == 1
+        retry = retry_argv(err)
+        assert retry[0] == "find" and not any(a.startswith("--paragraph") for a in retry)
 
     def test_malformed_ref_retries_with_list(self, capsys, src):
         code, _, err = run(capsys, "replace", src, "fox", "cat", "--paragraph", "P2", "--author", AUTHOR, "--in-place")

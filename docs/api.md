@@ -2180,14 +2180,13 @@ The verb is the `Document` method name in kebab-case and the flags are its keywo
 | --- | --- |
 | ambiguous text | same command with `--occurrence N` (note: N from the list) |
 | `--occurrence` out of range | same command with `--occurrence N` (note: the valid range) |
-| stale `--paragraph` (no `--occurrence`) | same command with the fresh ref |
 | `--expect` mismatch on `replace` | same command with the actual count (note: only if every match listed should change) |
 | nothing matches (`--expect`, text not found, paragraph index out of range) | `docx-edit list -- F` |
 | text not in the `--paragraph` given | `docx-edit find -- F TEXT` (where it is) |
 | unknown revision id | `docx-edit revisions -- F` |
 | malformed `--paragraph` (not `P3#a7b2`) | `docx-edit list -- F` |
-| `--paragraph` stale and `--occurrence` given | `docx-edit find --paragraph=FRESH -- F TEXT` (the paragraph changed, so its matches are numbered afresh) |
-| a newline replacement that would split one paragraph twice | the same edit with `--occurrence=0` and no `--expect`, to run once per match (note: the count; with `-o OUT`, later runs go on `OUT` with `--in-place`). Each run takes the next match, since replaced text is a tracked deletion that no search matches. If the new text contains the old, `docx-edit find -- F OLD` instead, run before each replace |
+| stale `--paragraph` | `docx-edit find -- F TEXT` (the paragraph changed or moved, so neither its index nor an `--occurrence` can be trusted: pick the pair again) |
+| a newline replacement that would split one paragraph twice | the same edit with `--occurrence=0` and no `--expect`, to run once per match (note: the count; with `-o OUT`, later runs go on `OUT` with `--in-place`). Each run takes the next match, since replaced text is a tracked deletion that no search matches. If the new text contains the old or could join its neighbours to spell it, `docx-edit find -- F OLD` instead, run before each replace. After a wrong `--expect` the note starts "only if every match listed above should change" |
 | overlapping matches (`aa` in `aaaa`) | `docx-edit find -- F OLD` (replacing one removes its neighbours: choose, and run find again before each replace) |
 | revision id shared by two authors | same command with `--by NAME` |
 | editing-protected document | same command with `--allow-protected` (the protection stays in the saved file) |
