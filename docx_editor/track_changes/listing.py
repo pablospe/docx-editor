@@ -28,6 +28,7 @@ from .dom import (
 from .models import (
     _MARKUP_KIND_BY_TAG,
     _REVISION_TYPE_BY_TAG,
+    CHANGE_RECORD_TAGS,
     HANDLED_REVISION_TAGS,
     UNHANDLED_REVISION_TAGS,
     Revision,
@@ -84,10 +85,10 @@ class _ListingMixin(_RevisionManagerBase):
             True on the first ``w:ins``/``w:del`` we authored, False if there
             is none.
         """
-        for tag in ("w:ins", "w:del"):
-            for elem in self.editor.dom.getElementsByTagName(tag):
-                if elem.getAttribute("w:author") == self.editor.author:
-                    return True
+        # Pending only: a mark recorded inside a change record is history.
+        for elem in iter_revision_elements(self.editor.dom, ("w:ins", "w:del"), skip_change_records=True):
+            if elem.getAttribute("w:author") == self.editor.author:
+                return True
         return False
 
     def list_revisions(
@@ -108,6 +109,13 @@ class _ListingMixin(_RevisionManagerBase):
         invisible here and is listed instead by ``list_unhandled_revisions()``.
         A move's range marks are scaffolding: never listed, swept with their
         content.
+
+        A mark recorded inside a change record (a ``w:ins`` in a paragraph-mark
+        ``w:rPrChange``'s recorded ``w:rPr``, or in a ``w:pPrChange``'s
+        recorded ``w:numPr``) is previous state, not a pending revision: it is
+        not listed and no id-based call can reach it. The ``w:pPrChange``
+        itself is. Rejecting one restores its recorded properties, so a mark
+        recorded in them is listed from then on.
 
         Args:
             author: If provided, filter by author name
@@ -149,7 +157,7 @@ class _ListingMixin(_RevisionManagerBase):
             return paragraph_filter is None or rev.paragraph_ref == paragraph_filter
 
         revisions = []
-        for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
+        for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS, skip_change_records=True):
             rev = self._parse_revision(elem, _REVISION_TYPE_BY_TAG[elem.tagName], ctx)
             if matches(rev):
                 revisions.append(rev)
@@ -165,14 +173,14 @@ class _ListingMixin(_RevisionManagerBase):
         ``[ins#{id}:{author}]...[/ins]`` / ``[del#{id}:{author}]...[/del]``,
         where ``{id}`` is the id ``accept_revision``/``reject_revision`` take
         (so a raw ``w:id="007"`` renders ``#7``) and ``#?`` marks one they
-        cannot reach at all (outside a change record those are
-        ``list_unhandled_revisions()`` rows; a mark recorded *inside* one
-        renders here but is not listed there — ROADMAP.md #86) —
+        cannot reach at all (those are ``list_unhandled_revisions()`` rows) —
         nesting included (e.g. ``[ins#1:A]kept [del#9:B]gone[/del][/ins]``).
         The two halves of a content move render the same way as
         ``[moveFrom#{id}:{author}]...[/moveFrom]`` /
         ``[moveTo#{id}:{author}]...[/moveTo]``. A ``w:pPrChange`` has no text
-        and does not appear.
+        and does not appear, and neither does anything recorded inside
+        a change record: that is previous state, which no listing reports and
+        no id reaches.
 
         A human/agent verification view, not a parseable format: author
         names are not escaped and tabs/breaks are not rendered (unlike
@@ -204,6 +212,8 @@ class _ListingMixin(_RevisionManagerBase):
                     parts.append(get_text_node_data(child))
                 elif child.tagName == _TEXTBOX_CONTENT:
                     continue  # box content belongs to the box, not this paragraph
+                elif child.tagName in CHANGE_RECORD_TAGS:
+                    continue  # recorded previous state, not pending markup
                 else:
                     parts.append(render(child))
             return "".join(parts)
@@ -312,6 +322,12 @@ class _ListingMixin(_RevisionManagerBase):
         serve every same-id element, so they resolve within a single pass
         instead of costing a rebuilt index and a whole extra pass each.
 
+        Like ``list_revisions``, the walk skips a change record's recorded
+        subtree, so a historical mark has no entry and cannot be resolved. A
+        build is therefore a superset of what is pending only until a
+        ``w:pPrChange`` is rejected — that can turn a recorded mark into a live
+        one, which is why ``_resolve_all`` rebuilds when a pass stalls.
+
         ``author`` scopes the index to that author's elements, which is what
         makes an author-filtered ``_resolve_all`` unable to reach another
         author's same-id revision: the lookup has no other candidate to
@@ -336,7 +352,7 @@ class _ListingMixin(_RevisionManagerBase):
         decide, so that path refuses instead (``_sole_revision_carrier``).
         """
         element_index: dict[str, list[Element]] = {}
-        for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS):
+        for elem in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS, skip_change_records=True):
             rev_id = _adjudicable_id(elem)
             if rev_id is None:
                 continue
@@ -438,7 +454,11 @@ class _ListingMixin(_RevisionManagerBase):
             rev_id = _adjudicable_id(elem)
             return rev_id is not None and str(rev_id) == wanted
 
-        handled = [e for e in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS) if carries(e)]
+        handled = [
+            e
+            for e in iter_revision_elements(self.editor.dom, HANDLED_REVISION_TAGS, skip_change_records=True)
+            if carries(e)
+        ]
         carriers = handled + [e for e in self._unhandled_elements() if carries(e)]
         chosen = carriers if author is None else [e for e in carriers if _revision_author(e) == author]
         if not chosen:

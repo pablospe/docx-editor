@@ -170,6 +170,82 @@ HANDLED_MARK_INSIDE_CHANGE_RECORD = _document(
     "</w:rPr></w:pPr><w:r><w:t>Paragraph</w:t></w:r></w:p>"
 )
 
+# Handled marks recorded inside a change record, in the shapes that reach the
+# handled walks (ROADMAP.md #86). Each has a second paragraph, so a resolution
+# that wrongly treats the recorded paragraph-mark w:ins as live (and merges the
+# paragraphs) shows up in the body.
+#
+# Conforming: CT_ParaRPrOriginal opens with EG_ParaRPrTrackChanges.
+INS_INSIDE_PARA_RPRCHANGE = _document(
+    "<w:p><w:pPr><w:rPr>"
+    f'<w:rPrChange w:id="90" {_ANN}><w:rPr><w:ins w:id="91" {_BOB}/></w:rPr></w:rPrChange>'
+    "</w:rPr></w:pPr><w:r><w:t>First</w:t></w:r></w:p>"
+    "<w:p><w:r><w:t>Second</w:t></w:r></w:p>"
+)
+
+# Nonconforming (CT_PPrBase has no w:rPr), but it is what some producers write.
+INS_INSIDE_PPRCHANGE_RPR = _document(
+    "<w:p><w:pPr>"
+    f'<w:pPrChange w:id="90" {_ANN}><w:pPr><w:rPr><w:ins w:id="91" {_BOB}/></w:rPr></w:pPr></w:pPrChange>'
+    "</w:pPr><w:r><w:t>First</w:t></w:r></w:p>"
+    "<w:p><w:r><w:t>Second</w:t></w:r></w:p>"
+)
+
+# Conforming: CT_PPrBase -> w:numPr -> w:ins. Rejecting the w:pPrChange moves
+# the recorded w:pPr back into the paragraph, so this recorded mark is the one
+# that can legitimately *become* live.
+INS_INSIDE_PPRCHANGE_NUMPR = _document(
+    "<w:p><w:pPr>"
+    f'<w:pPrChange w:id="90" {_ANN}><w:pPr><w:numPr>'
+    f'<w:ilvl w:val="0"/><w:numId w:val="1"/><w:ins w:id="5" {_BOB}/>'
+    "</w:numPr></w:pPr></w:pPrChange>"
+    "</w:pPr><w:r><w:t>First</w:t></w:r></w:p>"
+    "<w:p><w:r><w:t>Second</w:t></w:r></w:p>"
+)
+
+# One id, two carriers, only one of them pending: the recorded w:ins must not
+# make the live one ambiguous.
+RECORDED_AND_LIVE_SHARE_ID = _document(
+    "<w:p><w:pPr><w:rPr>"
+    f'<w:rPrChange w:id="90" {_ANN}><w:rPr><w:ins w:id="7" {_BOB}/></w:rPr></w:rPrChange>'
+    "</w:rPr></w:pPr>"
+    "<w:r><w:t>Before </w:t></w:r>"
+    f'<w:ins w:id="7" {_ANN}><w:r><w:t>live insertion</w:t></w:r></w:ins>'
+    "</w:p>"
+    "<w:p><w:r><w:t>Second</w:t></w:r></w:p>"
+)
+
+# A live insertion whose subtree holds a change record with a recorded mark.
+RECORD_INSIDE_LIVE_INSERTION = _document(
+    "<w:p><w:r><w:t>Before</w:t></w:r></w:p>"
+    f'<w:ins w:id="20" {_ANN}>'
+    "<w:p><w:pPr><w:rPr>"
+    f'<w:rPrChange w:id="90" {_ANN}><w:rPr><w:ins w:id="91" {_BOB}/></w:rPr></w:rPrChange>'
+    "</w:rPr></w:pPr><w:r><w:t>Inserted paragraph</w:t></w:r></w:p>"
+    "</w:ins>"
+)
+
+# The only w:moveFrom is a recorded one; the range Start beside it has no End.
+# Nothing of the From family is pending, so the stray mark is sweepable.
+RECORDED_MOVE_WITH_STRAY_RANGE_MARK = _document(
+    "<w:p><w:pPr><w:rPr>"
+    f'<w:rPrChange w:id="90" {_ANN}><w:rPr><w:moveFrom w:id="91" {_BOB}/></w:rPr></w:rPrChange>'
+    "</w:rPr></w:pPr>"
+    f'<w:moveFromRangeStart w:id="10" {_ANN} w:name="move1"/>'
+    "<w:r><w:t>First</w:t></w:r></w:p>"
+    "<w:p><w:r><w:t>Second</w:t></w:r></w:p>"
+)
+
+# Nonconforming: a w:del carrying text, recorded in a run's w:rPrChange. The
+# markup view must not surface the recorded text, as the visible view does not.
+RECORDED_DELETION_WITH_TEXT = _document(
+    "<w:p><w:r><w:rPr>"
+    f'<w:rPrChange w:id="60" {_ANN}><w:rPr>'
+    f'<w:del w:id="61" {_BOB}><w:r><w:delText>GHOST</w:delText></w:r></w:del>'
+    "</w:rPr></w:rPrChange>"
+    "</w:rPr><w:t>Real</w:t></w:r></w:p>"
+)
+
 # w:ins/w:del as *structural* markers: a deleted paragraph mark and a pair of
 # table-row markers. These are handled tags, so they never enter .unhandled —
 # the census's ins_del_contexts is what makes them visible (ISSUES.md #68).
@@ -215,6 +291,11 @@ def make_docx(simple_docx, tmp_path):
 
 def _open(path: Path) -> Document:
     return Document.open(path, author="Tester", force_recreate=True)
+
+
+def _body_xml(doc: Document) -> str:
+    """The live ``w:body``, serialized — for "this call changed nothing"."""
+    return doc._revision_manager.editor.dom.getElementsByTagName("w:body")[0].toxml()
 
 
 # --------------------------------------------------------------------------
@@ -539,26 +620,21 @@ class TestListUnhandledRevisions:
         assert result.unhandled_types == {"w:tcPrChange": 1}
         assert [r.tag for r in rows] == ["w:tcPrChange"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="list_revisions/accept_all still walk every handled tag, including "
-        "ones recorded inside a change record. Flip to passing when the handled "
-        "path is routed through skip_change_records too.",
-    )
-    def test_handled_path_still_adjudicates_marks_inside_change_records(self, make_docx):
-        """Known gap the honesty floor does NOT close (pre-existing).
+    def test_handled_mark_inside_a_change_record_is_not_listed_or_resolved(self, make_docx):
+        """A historical w:del inside a w:rPrChange is not a pending revision.
 
-        The unhandled path skips a change record's recorded subtree; the
-        handled path does not. So a historical w:del inside a w:rPrChange is
-        listed as live and accept_all() resolves it — destroying the recorded
-        previous state and over-claiming the count by one.
+        The handled walks skip a change record's recorded subtree exactly as
+        the unhandled path does, so the mark is not listed and accept_all()
+        neither counts it nor destroys the recorded previous state.
         """
         path = make_docx(HANDLED_MARK_INSIDE_CHANGE_RECORD, "handled_in_record")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UnhandledRevisionWarning)
             with _open(path) as doc:
+                before = _body_xml(doc)
                 assert doc.list_revisions() == []
                 result = doc.accept_all()
+                assert _body_xml(doc) == before
         assert result == 0
 
     def test_census_still_counts_marks_inside_change_records(self):
@@ -822,3 +898,280 @@ class TestHandledTagsWithoutAnAdjudicableId:
             assert doc.get_visible_text() == " tail\ngone"
             assert [r.tag for r in doc.list_unhandled_revisions(author="Ann")] == ["w:moveFrom", "w:moveTo"]
             assert doc.list_unhandled_revisions(author="Bob") == []
+
+
+# --------------------------------------------------------------------------
+# Handled marks recorded inside a change record are history (ROADMAP.md #86)
+# --------------------------------------------------------------------------
+
+
+class TestHandledMarksInsideChangeRecords:
+    """A change record's subtree is the recorded previous state.
+
+    A w:ins/w:del/w:moveFrom found there is not pending: it is not listed, no
+    id-based call can reach it, and no bulk call counts it. The one way out is
+    rejecting a w:pPrChange, which moves the recorded w:pPr back into the
+    paragraph and so makes a recorded numbering mark live again.
+    """
+
+    @pytest.mark.parametrize("method", ["accept_revision", "reject_revision"])
+    @pytest.mark.parametrize(
+        ("body", "listed"),
+        [(INS_INSIDE_PARA_RPRCHANGE, []), (INS_INSIDE_PPRCHANGE_RPR, [90])],
+        ids=["conforming-rPrChange", "nonconforming-pPrChange"],
+    )
+    def test_recorded_mark_is_not_listed_and_not_resolvable_by_id(self, make_docx, body, listed, method):
+        path = make_docx(body, "recorded_by_id")
+        with _open(path) as doc:
+            before = _body_xml(doc)
+            assert [r.id for r in doc.list_revisions()] == listed
+            assert getattr(doc, method)(91) is False
+            # The other author's record and both paragraphs are untouched.
+            assert _body_xml(doc) == before
+
+    @pytest.mark.parametrize("method", ["accept_all", "reject_all"])
+    def test_bulk_resolution_neither_counts_nor_edits_a_recorded_mark(self, make_docx, method):
+        path = make_docx(INS_INSIDE_PARA_RPRCHANGE, "recorded_bulk")
+        with _open(path) as doc:
+            before = _body_xml(doc)
+            with pytest.warns(UnhandledRevisionWarning):
+                result = getattr(doc, method)()
+            assert result == 0
+            assert result.unhandled_types == {"w:rPrChange": 1}
+            assert _body_xml(doc) == before
+
+    def test_recorded_mark_does_not_make_a_live_id_ambiguous(self, make_docx):
+        path = make_docx(RECORDED_AND_LIVE_SHARE_ID, "shared_id")
+        with _open(path) as doc:
+            assert [(r.id, r.author) for r in doc.list_revisions()] == [(7, "Ann")]
+            assert doc.accept_revision(7) is True
+            assert doc.list_revisions() == []
+            body = _body_xml(doc)
+        # The live insertion is unwrapped; the recorded one is still recorded.
+        assert "live insertion" in body
+        assert body.count('<w:ins w:id="7"') == 1
+        assert '<w:rPrChange w:id="90"' in body
+
+    @pytest.mark.parametrize(
+        ("body", "markup"),
+        [
+            (INS_INSIDE_PARA_RPRCHANGE, "First\nSecond"),
+            (INS_INSIDE_PPRCHANGE_RPR, "First\nSecond"),
+            (INS_INSIDE_PPRCHANGE_NUMPR, "First\nSecond"),
+            (RECORDED_AND_LIVE_SHARE_ID, "Before [ins#7:Ann]live insertion[/ins]\nSecond"),
+            (RECORDED_DELETION_WITH_TEXT, "Real"),
+        ],
+        ids=["para-rPrChange", "pPrChange-rPr", "pPrChange-numPr", "shared-id", "recorded-text"],
+    )
+    def test_markup_text_does_not_render_a_recorded_mark(self, make_docx, body, markup):
+        """Every id the markup view shows is one accept/reject_revision takes."""
+        with _open(make_docx(body, "recorded_markup")) as doc:
+            assert doc.get_markup_text() == markup
+            assert doc.get_visible_text() == markup.replace("[ins#7:Ann]", "").replace("[/ins]", "")
+
+    def test_markup_text_shows_a_mark_once_rejection_made_it_live(self, make_docx):
+        with _open(make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_markup")) as doc:
+            assert doc.reject_revision(90) is True
+            assert doc.get_markup_text() == "[ins#5:Bob][/ins]First\nSecond"
+
+    def test_recorded_mark_by_the_editing_author_is_not_an_own_revision(self, make_docx):
+        """A recorded mark carrying our author name is not a redline of ours."""
+        body = INS_INSIDE_PPRCHANGE_NUMPR.replace('w:author="Bob"', 'w:author="Tester"')
+        with _open(make_docx(body, "own_recorded")) as doc:
+            assert doc._revision_manager.has_own_revisions() is False
+            assert doc.reject_revision(90) is True
+            # Restored into the live w:pPr, it is pending — and ours.
+            assert doc._revision_manager.has_own_revisions() is True
+
+    def test_change_record_itself_is_listed_but_its_recorded_mark_is_not(self, make_docx):
+        """w:pPrChange is both a handled tag and a change record."""
+        path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_listing")
+        with _open(path) as doc:
+            assert [(r.id, r.contains_ids) for r in doc.list_revisions()] == [(90, ())]
+
+    def test_contains_ids_does_not_name_a_recorded_mark(self, make_docx):
+        path = make_docx(RECORD_INSIDE_LIVE_INSERTION, "contains_ids")
+        with _open(path) as doc:
+            assert [(r.id, r.contains_ids) for r in doc.list_revisions()] == [(20, ())]
+
+    def test_accept_all_discards_the_record_with_its_recorded_mark(self, make_docx):
+        path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_accept")
+        with _open(path) as doc:
+            result = doc.accept_all()
+            assert result == 1
+            assert result.unhandled == 0
+            assert doc.list_revisions() == []
+            assert count_revision_elements(doc._revision_manager.editor.dom).by_tag == {}
+
+    def test_reject_all_resolves_a_mark_the_rejection_made_live(self, make_docx):
+        """Rejecting the w:pPrChange restores w:numPr/w:ins into the live w:pPr.
+
+        The id index was built before that mark was pending, so the same call
+        has to notice the stall and rebuild it: one call still leaves nothing.
+        """
+        path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_reject")
+        with _open(path) as doc:
+            result = doc.reject_all()
+            assert result == 2
+            assert result.unhandled == 0
+            assert doc.list_revisions() == []
+            assert count_revision_elements(doc._revision_manager.editor.dom).by_tag == {}
+
+    def test_rejecting_the_record_by_id_surfaces_its_mark_as_live(self, make_docx):
+        path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_by_id")
+        with _open(path) as doc:
+            assert doc.reject_revision(5) is False
+            assert doc.reject_revision(90) is True
+            assert [(r.id, r.type, r.author) for r in doc.list_revisions()] == [(5, "insertion", "Bob")]
+            assert doc.reject_revision(5) is True
+            assert doc.list_revisions() == []
+
+    def test_author_filtered_reject_all_surfaces_another_authors_mark_untouched(self, make_docx):
+        """Ann's record holds Bob's recorded mark.
+
+        Rejecting Ann's revisions restores the recorded w:numPr, which makes
+        Bob's mark pending — but it is Bob's, so the call neither resolves nor
+        counts it, and it comes back exactly as it was recorded.
+        """
+        path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_author_ann")
+        with _open(path) as doc:
+            assert doc.reject_all(author="Ann") == 1
+            assert [(r.id, r.type, r.author) for r in doc.list_revisions()] == [(5, "insertion", "Bob")]
+            assert doc.list_revisions(author="Ann") == []
+            body = _body_xml(doc)
+            assert "w:pPrChange" not in body
+            assert "<w:numPr>" in body
+            assert body.count(f'<w:ins w:id="5" {_BOB}/>') == 1
+            # Now that it is pending, its own author's call resolves it.
+            assert doc.reject_all(author="Bob") == 1
+            assert doc.list_revisions() == []
+
+    def test_author_filtered_reject_all_cannot_reach_a_mark_still_recorded(self, make_docx):
+        """While Ann's record is pending, Bob's mark inside it is history."""
+        path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_author_bob")
+        with _open(path) as doc:
+            before = _body_xml(doc)
+            assert doc.reject_all(author="Bob") == 0
+            assert _body_xml(doc) == before
+            assert [(r.id, r.author) for r in doc.list_revisions()] == [(90, "Ann")]
+
+    def test_reject_group_leaves_the_mark_it_made_live_pending_and_ungrouped(self, make_docx):
+        """A group call resolves its members and nothing else, like a by-id call."""
+        body = _document(
+            "<w:p><w:pPr>"
+            f'<w:pPrChange w:id="90" {_ANN}><w:pPr><w:numPr>'
+            f'<w:ilvl w:val="0"/><w:numId w:val="1"/><w:ins w:id="5" {_ANN}/>'
+            "</w:numPr></w:pPr></w:pPrChange>"
+            "</w:pPr><w:r><w:t>First </w:t></w:r>"
+            f'<w:ins w:id="6" {_ANN}><w:r><w:t>live</w:t></w:r></w:ins></w:p>'
+        )
+        with _open(make_docx(body, "numpr_group")) as doc:
+            groups = {r.id: r.group_id for r in doc.list_revisions()}
+            assert set(groups) == {6, 90}
+            assert groups[6] is not None and groups[6] == groups[90]
+            assert doc.reject_group(groups[6]) == 2
+            assert [(r.id, r.type, r.group_id) for r in doc.list_revisions()] == [(5, "insertion", None)]
+            assert doc.reject_revision(5) is True
+            assert doc.list_revisions() == []
+
+    def test_live_id_shared_with_a_recorded_mark_never_gets_a_group(self, make_docx):
+        """Groups are built once, so a recorded id counts as a duplicate up front.
+
+        Otherwise Ann's live insertion would win a group, rejecting the record
+        would make Bob's same-id mark live, and resolving Ann's group — keyed
+        by id — would resolve Bob's mark with it.
+        """
+        body = _document(
+            "<w:p><w:pPr>"
+            f'<w:pPrChange w:id="90" {_ANN}><w:pPr><w:numPr>'
+            f'<w:ilvl w:val="0"/><w:numId w:val="1"/><w:ins w:id="5" {_BOB}/>'
+            "</w:numPr></w:pPr></w:pPrChange>"
+            "</w:pPr><w:r><w:t>First</w:t></w:r></w:p>"
+            f'<w:p><w:r><w:t>Keep </w:t></w:r><w:ins w:id="5" {_ANN}><w:r><w:t>live</w:t></w:r></w:ins></w:p>'
+        )
+        with _open(make_docx(body, "shared_id_group")) as doc:
+            assert sorted((r.id, r.author, r.group_id is None) for r in doc.list_revisions()) == [
+                (5, "Ann", True),
+                (90, "Ann", False),
+            ]
+            assert doc.reject_revision(90) is True
+            assert sorted((r.id, r.author, r.group_id) for r in doc.list_revisions()) == [
+                (5, "Ann", None),
+                (5, "Bob", None),
+            ]
+            # Each is still reachable by id, narrowed by author; the other stays.
+            assert doc.accept_revision(5, author="Ann") is True
+            assert [(r.id, r.author) for r in doc.list_revisions()] == [(5, "Bob")]
+
+    def test_reject_all_rebuilds_the_index_a_bounded_number_of_times(self, make_docx, monkeypatch):
+        """The stalled case costs one extra index build, not one per pass."""
+        path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_builds")
+        with _open(path) as doc:
+            manager = doc._revision_manager
+            original = manager._revision_element_index
+            builds = []
+
+            def counting(author=None):
+                builds.append(author)
+                if len(builds) > 4:
+                    pytest.fail("reject_all kept rebuilding the w:id index")
+                return original(author)
+
+            monkeypatch.setattr(manager, "_revision_element_index", counting)
+            assert doc.reject_all() == 2
+            assert len(builds) == 2
+
+    @pytest.mark.parametrize(
+        ("successes", "builds", "listings"),
+        [(0, 1, 1), (1, 2, 3)],
+        ids=["nothing-ever-resolves", "stalls-after-progress"],
+    )
+    def test_resolve_all_terminates_when_listed_revisions_stop_resolving(
+        self, make_docx, monkeypatch, successes, builds, listings
+    ):
+        """Loop termination, failing fast rather than hanging if it regresses.
+
+        A first pass that resolves nothing ends the call on the index it was
+        given. A stall after progress costs exactly one rebuild and one retry.
+        """
+        path = make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_stuck")
+        with _open(path) as doc:
+            manager = doc._revision_manager
+            original_index = manager._revision_element_index
+            original_list = manager.list_revisions
+            index_builds, list_calls, resolve_calls = [], [], []
+
+            def counting_index(author=None):
+                index_builds.append(author)
+                if len(index_builds) > 4:
+                    pytest.fail("_resolve_all kept rebuilding the w:id index")
+                return original_index(author)
+
+            def counting_list(**kwargs):
+                list_calls.append(kwargs)
+                if len(list_calls) > 6:
+                    pytest.fail("_resolve_all kept re-listing without progress")
+                return original_list(**kwargs)
+
+            def resolve(rev_id, _index):
+                # Claims success without detaching anything, then never again.
+                resolve_calls.append(rev_id)
+                return len(resolve_calls) <= successes
+
+            monkeypatch.setattr(manager, "_revision_element_index", counting_index)
+            monkeypatch.setattr(manager, "list_revisions", counting_list)
+            assert manager._resolve_all(None, resolve) == successes
+            assert (len(index_builds), len(list_calls)) == (builds, listings)
+            assert [r.id for r in original_list()] == [90]
+
+    def test_recorded_move_content_does_not_keep_stray_range_marks(self, make_docx):
+        path = make_docx(RECORDED_MOVE_WITH_STRAY_RANGE_MARK, "recorded_move")
+        with _open(path) as doc:
+            assert doc.list_revisions() == []
+            with pytest.warns(UnhandledRevisionWarning):
+                result = doc.accept_all()
+            assert result == 0
+            assert result.unhandled_types == {"w:rPrChange": 1}
+            body = _body_xml(doc)
+        assert "w:moveFromRangeStart" not in body
+        assert '<w:moveFrom w:id="91"' in body

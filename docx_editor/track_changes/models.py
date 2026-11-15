@@ -809,12 +809,17 @@ _MARKUP_KIND_BY_TAG: dict[str, str] = {
 # w:numberingChange is deliberately absent: it carries its previous value in a
 # w:original attribute and has no recorded subtree to skip.
 #
-# NOTE: only the unhandled/pending path uses this. list_revisions() and
-# accept_all()/reject_all() still walk every handled tag, so a historical
-# w:del recorded inside a change record is listed and resolved like a live
-# one — pre-existing behavior, pinned as a known gap by
-# tests/test_unhandled_revisions.py::test_handled_path_still_adjudicates_
-# marks_inside_change_records.
+# Every walk that answers "what is pending" skips these subtrees: the listings
+# (handled and unhandled), the w:id index and by-id carrier lookup behind
+# accept_*/reject_*, group membership, nesting (contains_ids), the markup view
+# (get_markup_text) and the move range-mark sweep. Three raw
+# walks do not: count_revision_elements() reports what the XML contains, the
+# w:id allocator must still see a recorded id to avoid reusing it, and the
+# duplicate-id pre-scan of _reconstruct_groups must see it because the mark
+# can become pending after groups are built.
+#
+# A recorded mark can become pending again: rejecting a w:pPrChange moves its
+# recorded w:pPr back into the paragraph, w:numPr/w:ins included.
 CHANGE_RECORD_TAGS: tuple[str, ...] = (
     "w:pPrChange",
     "w:rPrChange",
@@ -836,8 +841,7 @@ def iter_revision_elements(root, tags: Iterable[str], *, skip_change_records: bo
     pin (``tests/test_revision_groups.py``) exists to prevent.
 
     By default no subtree is skipped, so a mark nested inside another revision
-    — a ``w:del`` inside a foreign ``w:ins`` — is yielded after its host,
-    exactly as ``_revision_elements`` does for the handled tags.
+    — a ``w:del`` inside a foreign ``w:ins`` — is yielded after its host.
 
     Args:
         root: any DOM node; its descendants are searched, not itself.

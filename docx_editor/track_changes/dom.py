@@ -4,7 +4,7 @@ from datetime import datetime
 from xml.dom.minidom import Element
 
 from ..xml_editor import _TEXTBOX_CONTENT, TextMap, _inside_textbox, is_tab_node
-from .models import _RUN_TRACK_CHANGE_TAGS, HANDLED_REVISION_TAGS, iter_revision_elements
+from .models import _RUN_TRACK_CHANGE_TAGS, CHANGE_RECORD_TAGS, HANDLED_REVISION_TAGS, iter_revision_elements
 
 
 def _parse_w_date(elem) -> datetime | None:
@@ -103,10 +103,14 @@ def _descendant_revision_ids(elem) -> tuple[int, ...]:
     """ids of all handled-revision descendants of ``elem``, in document order.
 
     Descendants without a numeric w:id are skipped (see
-    ``_nearest_revision_ancestor_id``).
+    ``_nearest_revision_ancestor_id``), and so is everything recorded inside a
+    change record: that is previous state, not a revision nested in this one.
+    A ``w:pPrChange`` is itself such a record, so it contains none.
     """
+    if elem.tagName in CHANGE_RECORD_TAGS:
+        return ()
     ids: list[int] = []
-    for child in iter_revision_elements(elem, HANDLED_REVISION_TAGS):
+    for child in iter_revision_elements(elem, HANDLED_REVISION_TAGS, skip_change_records=True):
         rev_id = _adjudicable_id(child)
         if rev_id is not None:
             ids.append(rev_id)
@@ -114,13 +118,15 @@ def _descendant_revision_ids(elem) -> tuple[int, ...]:
 
 
 def _revision_elements(root) -> list[Element]:
-    """All handled-revision elements under ``root``, in document order.
+    """All pending handled-revision elements under ``root``, in document order.
 
-    Unconditional recursion (``iter_revision_elements`` without
-    ``skip_change_records``): nested revisions (e.g. a w:del inside a w:ins)
-    are included, each appearing right after its host.
+    Nested revisions (e.g. a w:del inside a w:ins) are included, each
+    appearing right after its host. A change record's recorded subtree is not
+    descended into (``skip_change_records``): a mark in there is previous
+    state, so it takes no part in grouping. The record itself — a
+    ``w:pPrChange`` — is still returned.
     """
-    return list(iter_revision_elements(root, HANDLED_REVISION_TAGS))
+    return list(iter_revision_elements(root, HANDLED_REVISION_TAGS, skip_change_records=True))
 
 
 def _revision_elements_in_reading_order(root) -> list[Element]:

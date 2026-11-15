@@ -18,7 +18,7 @@ from .dom import (
     _revision_elements,
     _revision_elements_in_reading_order,
 )
-from .models import _GroupCapture, _RegistrySnapshot
+from .models import HANDLED_REVISION_TAGS, _GroupCapture, _RegistrySnapshot, iter_revision_elements
 
 
 class _RegistryMixin(_RevisionManagerBase):
@@ -66,7 +66,9 @@ class _RegistryMixin(_RevisionManagerBase):
         operation could target them). A duplicated id is wholly ungrouped —
         every occurrence, whether or not individually groupable — because
         id-keyed lookup cannot tell the occurrences apart, so no group may
-        contain an ambiguous member.
+        contain an ambiguous member. An occurrence recorded inside a change
+        record counts too: it is not pending now, but rejecting a
+        ``w:pPrChange`` can make it so.
         """
         # (author, date) of the current run. Paragraph identity is tracked
         # separately in run_para, so it is not part of the key.
@@ -111,10 +113,13 @@ class _RegistryMixin(_RevisionManagerBase):
         # Pre-scan for duplicated ids, independent of groupability: an
         # ungroupable occurrence (e.g. missing its date) must still bar its
         # groupable twin from winning a group that id-keyed lookup would
-        # then report for both elements.
+        # then report for both elements. The raw walk, not ``elements``: a
+        # mark recorded inside a change record is not pending, but rejecting
+        # a w:pPrChange can make it so, and groups are built once — its id
+        # must bar the live twin from a group from the start.
         seen_ids: set[int] = set()
         duplicate_ids: set[int] = set()
-        for elem in elements:
+        for elem in iter_revision_elements(self.editor.dom.documentElement, HANDLED_REVISION_TAGS):
             elem_id = _adjudicable_id(elem)
             if elem_id is None:
                 continue

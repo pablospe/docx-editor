@@ -838,6 +838,9 @@ section and table property changes, table-structure revisions,
 [`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone) instead,
 because none of it can be. A move's range marks (`w:moveFromRangeStart` etc.)
 are scaffolding: never listed, swept once the move they bracket is resolved.
+A mark recorded inside a change record — the previous state a `w:rPrChange` or
+`w:pPrChange` holds — is not pending and is not listed either; see
+[`ResolveResult`](#resolveresult).
 
 **Parameters:**
 
@@ -1495,6 +1498,21 @@ not a census of what the document held on entry.
 They count what is still *pending*, so a mark recorded inside a change record —
 a `w:cellIns` in a `w:tcPrChange`'s historical `w:tcPr` — is not counted a
 second time alongside the change itself.
+
+The resolved count follows the same rule: a `w:ins`, `w:del` or move half
+recorded inside a change record is previous state, so it is not listed by
+`list_revisions()`, `accept_revision()`/`reject_revision()` cannot target it
+(they return `False` for its id unless a pending revision carries the same id,
+which is then the one resolved), `accept_all()`/`reject_all()` do not count it,
+and `get_markup_text()` does not render it. The one exception is a mark
+recorded in a `w:pPrChange`'s previous numbering properties: rejecting that
+change restores them, so the mark becomes a pending revision — `reject_all()`
+resolves it in the same call (when its `author=` filter, if any, matches the
+mark), and after `reject_revision()`, `reject_group()` or `reject_changeset()`
+it appears in `list_revisions()` with no group: those calls resolve the
+revisions they were given and no others. A pending revision whose `w:id` is
+also carried by a recorded mark has no group either (`group_id` is `None`), as
+for any duplicated id; resolve it by id.
 
 ### Example
 

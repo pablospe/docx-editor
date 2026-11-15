@@ -313,19 +313,20 @@ class _ResolutionMixin(_RevisionManagerBase):
     def _resolve_all(self, author: str | None, resolve: Callable[[int, dict[str, list[Element]] | None], bool]) -> int:
         """Apply ``resolve`` to every listed revision, re-listing on each pass.
 
-        "Every listed revision" is every ``HANDLED_REVISION_TAGS`` element,
-        because that is what ``list_revisions`` walks — so the loop terminates
-        as soon as none remains, regardless of what other revision types are
-        still pending. ``_resolve_all_reporting`` is what turns that into an
-        honest count for callers.
+        "Every listed revision" is every pending ``HANDLED_REVISION_TAGS``
+        element, because that is what ``list_revisions`` walks — so the loop
+        terminates as soon as none remains, regardless of what other revision
+        types are still pending. ``_resolve_all_reporting`` is what turns that
+        into an honest count for callers.
 
         The whole-document counterpart to ``_resolve_ids``. Two differences,
         both forced by resolving *every* revision rather than a known member
         set:
 
         * **Re-listing each pass is what terminates the loop.** The listing
-          shrinks as revisions are resolved, so an empty (or no-progress) pass
-          ends it. ``_resolve_ids`` can instead lean on ``resolve`` returning
+          shrinks as revisions are resolved, so an empty pass ends it, and so
+          does a no-progress pass on a freshly built index (see the last
+          paragraph). ``_resolve_ids`` can instead lean on ``resolve`` returning
           False, because its members are a fixed set of unique ids. Relying on
           that here would not terminate: a whole-document listing can hand the
           same id back repeatedly.
@@ -342,15 +343,27 @@ class _ResolutionMixin(_RevisionManagerBase):
           Targeting, not survival: another author's revision nested inside a
           rejected insertion still goes with it, uncounted.
 
-        The index is built once for the whole call, not per pass: resolution
-        only ever detaches elements, so a single build stays a valid superset
-        and ``_is_in_document`` filters what is gone. Each revision then costs
-        a dict lookup instead of a fresh full-document scan (ISSUES.md #56).
-        Per pass this is a constant number of full-DOM walks — the work
-        itself is still linear in the number of revisions listed.
+        The index is built once up front, not per pass: resolution detaches
+        elements, so a build stays a valid superset and ``_is_in_document``
+        filters what is gone. Each revision then costs a dict lookup instead
+        of a fresh full-document scan (ISSUES.md #56). Per pass this is a
+        constant number of full-DOM walks — the work itself is still linear
+        in the number of revisions listed.
+
+        One resolution adds a pending revision instead: rejecting a
+        ``w:pPrChange`` moves its recorded ``w:pPr`` back into the paragraph,
+        and a ``w:numPr/w:ins`` recorded there — skipped by the index as
+        history — is live from then on. The next pass lists it, finds no index
+        entry and makes no progress. So a pass without progress rebuilds the
+        index and retries — unless nothing has been resolved since the index
+        was built, when a rebuild could not differ and the call ends. Every
+        rebuild is therefore followed by a resolution (which detaches an
+        element) or by the return, and a run in which no pass stalls never
+        rebuilds.
         """
         count = 0
         element_index = self._revision_element_index(author)
+        index_is_fresh = True
         with self._deferred_range_sweep():
             while True:
                 revisions = self.list_revisions(author=author, with_location=False)
@@ -361,8 +374,13 @@ class _ResolutionMixin(_RevisionManagerBase):
                     if resolve(rev.id, element_index):
                         count += 1
                         progressed = True
-                if not progressed:
+                if progressed:
+                    index_is_fresh = False
+                elif index_is_fresh:
                     return count
+                else:
+                    element_index = self._revision_element_index(author)
+                    index_is_fresh = True
 
     def _resolve_all_reporting(
         self,
@@ -615,7 +633,9 @@ class _ResolutionMixin(_RevisionManagerBase):
         tags = MOVE_RANGE_TAGS + ("w:moveFrom", "w:moveTo")
         marks_seen = 0
         removed: list[Element] = []
-        for elem in list(iter_revision_elements(self.editor.dom, tags)):
+        # A w:moveFrom/w:moveTo recorded inside a change record is previous
+        # state, not pending content: it must not keep stray marks alive.
+        for elem in list(iter_revision_elements(self.editor.dom, tags, skip_change_records=True)):
             tag = elem.tagName
             family = "From" if tag.startswith("w:moveFrom") else "To"
             if tag in MOVE_RANGE_TAGS:
@@ -742,8 +762,9 @@ class _ResolutionMixin(_RevisionManagerBase):
         on_live_mark = rPr.parentNode.parentNode is p1
         rPr.removeChild(mark_ins)
         if not on_live_mark:
-            # A w:ins in a nonconforming record's w:pPr/w:rPr is not p1's
-            # mark: there is no break to undo, so only the marker goes.
+            # A w:pPr/w:rPr/w:ins somewhere other than directly under p1 (a
+            # nonconforming w:pPr inside a run, say) is not p1's mark: there
+            # is no break to undo, so only the marker goes.
             if _next_element_sibling(rPr.firstChild) is None:
                 rPr.parentNode.removeChild(rPr)
             return
