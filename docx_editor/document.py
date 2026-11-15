@@ -1603,7 +1603,8 @@ class Document:
             note: Rationale for the edit: one comment, anchored on the first
                 match in document order that has a revision, and carried as
                 ``comment_id`` by every result. Ignored when nothing matches
-                (``expected_count=0``).
+                (``expected_count=0``) — the one dropped note that does not
+                warn, since the call asserted there was nothing to edit.
 
         Returns:
             One EditResult per match, in document order. Several matches in
@@ -1625,6 +1626,10 @@ class Document:
                 ``operation_index`` is the failing match's position in
                 document order (as in the returned list) and ``original``
                 holds the underlying error. The document is left unchanged.
+
+        Warns:
+            UnanchoredNoteWarning: Once per match, if ``note`` was given and
+                no match created a revision to anchor it.
 
         Example:
             results = doc.replace_all("30 days", "60 days", expected_count=3)

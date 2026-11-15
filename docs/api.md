@@ -400,7 +400,7 @@ Replace every match of `find` document-wide as one atomic edit. `expected_count`
 - `find` (str): Text to find (non-empty; straight and curly quotes match each other)
 - `replace_with` (str): Replacement text
 - `expected_count` (int, keyword-only, required): How many matches you expect. `0` asserts the text is absent and returns `[]`.
-- `note` (str | None): Rationale as one comment, anchored on the first match in document order and carried as `comment_id` by every result — see [Rationale notes](#rationale-notes)
+- `note` (str | None): Rationale as one comment, anchored on the first match in document order that creates a revision and carried as `comment_id` by every result; when no match creates one, `UnanchoredNoteWarning` is raised once per match, and with `expected_count=0` the note is ignored — see [Rationale notes](#rationale-notes)
 
 **Returns:** list of [`EditResult`](#editresult), one per match in document order; matches in the same paragraph carry that paragraph's final ref.
 
