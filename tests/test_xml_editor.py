@@ -1,9 +1,11 @@
 """Tests for XMLEditor and DocxXMLEditor classes."""
 
+from xml.parsers.expat import ExpatError
+
 import pytest
 from conftest import count_dom_walks, parse_paragraph
 
-from docx_editor.exceptions import MultipleNodesFoundError, NodeNotFoundError
+from docx_editor.exceptions import MultipleNodesFoundError, NodeNotFoundError, XMLError
 from docx_editor.xml_editor import (
     DocxXMLEditor,
     XMLEditor,
@@ -369,6 +371,13 @@ class TestXMLEditorParseFragment:
         with pytest.raises(AssertionError):
             editor._parse_fragment("   ")
 
+    def test_parse_fragment_unbound_prefix_raises_xml_error(self, sample_xml_file):
+        """A prefix the part's root does not declare is a typed failure."""
+        editor = XMLEditor(sample_xml_file)
+        with pytest.raises(XMLError, match="cannot parse XML fragment") as exc_info:
+            editor._parse_fragment('<w:p nope:attr="1"/>')
+        assert isinstance(exc_info.value.__cause__, ExpatError)
+
 
 class TestXMLEditorSave:
     """Tests for XMLEditor.save method."""
@@ -506,6 +515,12 @@ class TestDocxXMLEditorNamespaces:
         editor._ensure_w14_namespace()
         root = editor.dom.documentElement
         assert root.hasAttribute("xmlns:w14")
+
+    def test_ensure_namespace_rejects_a_prefix_bound_elsewhere(self, docx_xml_file):
+        editor = DocxXMLEditor(docx_xml_file, rsid="00AABBCC", author="Test")
+        editor.dom.documentElement.setAttribute("xmlns:w14", "urn:not-w14")
+        with pytest.raises(XMLError, match="prefix 'w14' is bound to 'urn:not-w14'"):
+            editor.ensure_namespace("w14", "http://schemas.microsoft.com/office/word/2010/wordml")
 
 
 class TestDocxXMLEditorAttributeInjection:

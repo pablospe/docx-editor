@@ -4,12 +4,18 @@ Provides CommentManager for creating and managing document comments.
 """
 
 import html
+import posixpath
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 from xml.dom.minidom import Element
+from xml.parsers.expat import ExpatError
+
+import defusedxml.minidom
+from defusedxml.common import DefusedXmlException
 
 from .exceptions import (
     AmbiguousTextError,
@@ -17,11 +23,16 @@ from .exceptions import (
     HashMismatchError,
     ParagraphIndexError,
     TextNotFoundError,
+    XMLError,
     _truncate_preview,
 )
 from .track_changes.dom import _addressable_paragraph, _adjudicable_id
 from .track_changes.listing import _RevisionLocationContext
 from .xml_editor import (
+    W14_NAMESPACE,
+    W15_NAMESPACE,
+    W16CEX_NAMESPACE,
+    W16CID_NAMESPACE,
     DocxXMLEditor,
     ParagraphRef,
     TextMapMatch,
@@ -76,6 +87,76 @@ class Comment:
         return f"Comment({self.id}: {status}'{self.text[:30]}...' by {self.author}{reply_count}{location})"
 
 
+class CommentPart(NamedTuple):
+    """One of the four comment parts: how it is named, wired and rooted."""
+
+    name: str  # default file name in word/
+    rel_type: str  # relationship type in document.xml.rels
+    content_type: str  # override in [Content_Types].xml
+    root_tag: str  # the part's document element
+    prefix: str  # prefix of the markup written into the part
+    namespace: str  # what that prefix must be bound to
+
+
+COMMENT_PARTS = (
+    CommentPart(
+        "comments.xml",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+        "w:comments",
+        "w14",
+        W14_NAMESPACE,
+    ),
+    CommentPart(
+        "commentsExtended.xml",
+        "http://schemas.microsoft.com/office/2011/relationships/commentsExtended",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml",
+        "w15:commentsEx",
+        "w15",
+        W15_NAMESPACE,
+    ),
+    CommentPart(
+        "commentsIds.xml",
+        "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+        "w16cid:commentsIds",
+        "w16cid",
+        W16CID_NAMESPACE,
+    ),
+    CommentPart(
+        "commentsExtensible.xml",
+        "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml",
+        "w16cex:commentsExtensible",
+        "w16cex",
+        W16CEX_NAMESPACE,
+    ),
+)
+
+
+def has_root(path: Path, root_tag: str) -> bool:
+    """Whether ``path`` is a well-formed XML file whose document element is ``root_tag``.
+
+    Parsed on its own, never through an editor: a file that fails this test
+    must not end up in an editor cache.
+    """
+    try:
+        return path.is_file() and defusedxml.minidom.parse(str(path)).documentElement.tagName == root_tag
+    except (OSError, ExpatError, DefusedXmlException):
+        # OSError: a target no file system can hold, e.g. an overlong name.
+        return False
+
+
+def _is_inside(path: Path, directory: Path) -> bool:
+    """Whether ``path``, with symlinks followed, lies inside ``directory``."""
+    try:
+        return path.resolve().is_relative_to(directory.resolve())
+    except (OSError, RuntimeError):
+        # A link that cannot be followed (a loop raises RuntimeError before
+        # Python 3.13) leads nowhere inside the directory.
+        return False
+
+
 class CommentManager:
     """Manages comments in a Word document.
 
@@ -117,11 +198,18 @@ class CommentManager:
         self.initials = initials
         self._on_write = on_write
 
-        # Comment file paths
-        self.comments_path = self.word_path / "comments.xml"
-        self.comments_extended_path = self.word_path / "commentsExtended.xml"
-        self.comments_ids_path = self.word_path / "commentsIds.xml"
-        self.comments_extensible_path = self.word_path / "commentsExtensible.xml"
+        # Comment file paths, in COMMENT_PARTS order, and why a new comment
+        # cannot be wired (empty when it can).
+        self.part_paths, self._unusable_relationships = self._resolve_comment_parts()
+        (
+            self.comments_path,
+            self.comments_extended_path,
+            self.comments_ids_path,
+            self.comments_extensible_path,
+        ) = self.part_paths
+        # A part that is a link out of the workspace is never read or written:
+        # it counts as absent, and a new comment is refused.
+        self._outside_parts = frozenset(path for path in self.part_paths if not _is_inside(path, self.workspace_path))
 
         # Cache for lazy-loaded editors
         self._editors: dict[str, DocxXMLEditor] = {}
@@ -129,6 +217,76 @@ class CommentManager:
         # Load existing comments for reply support
         self.existing_comments = self._load_existing_comments()
         self.next_comment_id = self._get_next_comment_id()
+
+    def part_exists(self, path: Path) -> bool:
+        """Whether the comment part at ``path`` is there to be read or written.
+
+        A part that leaves the package (a symlink out of the workspace) counts
+        as absent, so nothing is read from or written through it.
+        """
+        return path not in self._outside_parts and path.exists()
+
+    def _resolve_comment_parts(self) -> tuple[tuple[Path, ...], list[str]]:
+        """Return each comment part's path (``COMMENT_PARTS`` order) and the relationships that cannot be honoured.
+
+        A comment part is the one ``document.xml.rels`` names for its
+        relationship type, whatever its file name (``word/comments1.xml``).
+        A type with no relationship, or one that names the default file, gets
+        the default name, where the part is created on the first comment and
+        wired at save.
+
+        A target under another name is adopted only when it is a file whose
+        document element is the part's expected root. Anything else — a
+        missing file, another kind of part such as ``document.xml``, an
+        external target, a target with a backslash or one that resolves
+        outside the workspace, two different parts for one type, one file for
+        two types — cannot be honoured: adopting it would put a second editor on a
+        part the document already edits, and a part created under the default
+        name instead would stay unwired, because its type already has a
+        relationship. Each such relationship is described in the second list,
+        and :meth:`_prepare_comment_parts` refuses to add a comment while it
+        is non-empty.
+        """
+        resolved: dict[str, set[Path]] = {part.rel_type: set() for part in COMMENT_PARTS}
+        unusable: list[str] = []
+        rels_path = self.word_path / "_rels" / "document.xml.rels"
+        if rels_path.exists():
+            parts_by_type = {part.rel_type: part for part in COMMENT_PARTS}
+            rels = defusedxml.minidom.parse(str(rels_path))
+            for rel_elem in rels.getElementsByTagName("Relationship"):
+                part = parts_by_type.get(rel_elem.getAttribute("Type"))
+                if part is None:
+                    continue
+                target = rel_elem.getAttribute("Target")
+                if rel_elem.getAttribute("TargetMode") == "External":
+                    unusable.append(f"{part.name} relationship has the external target {target!r}")
+                    continue
+                # A backslash is not a separator in an OPC part name, but a
+                # file system may treat it as one and climb out of the package.
+                if "\\" in target:
+                    unusable.append(f"{part.name} relationship target {target!r} contains a backslash")
+                    continue
+                # An OPC target is a reference relative to the source part,
+                # /word/document.xml. normpath cannot climb above the root of
+                # an absolute path; a symlink in the workspace still can.
+                part_name = posixpath.normpath(posixpath.join("/word", target))
+                part_path = self.workspace_path / part_name.lstrip("/")
+                if not _is_inside(part_path, self.workspace_path):
+                    unusable.append(f"{part.name} relationship target {target!r} leaves the package")
+                elif part_path == self.word_path / part.name or has_root(part_path, part.root_tag):
+                    resolved[part.rel_type].add(part_path)
+                else:
+                    unusable.append(f"{part.name} relationship target {target!r} is not a comment part of this package")
+        paths = []
+        for part in COMMENT_PARTS:
+            candidates = resolved[part.rel_type]
+            if len(candidates) > 1:
+                unusable.append(f"{part.name} relationships name more than one part")
+            paths.append(candidates.pop() if len(candidates) == 1 else self.word_path / part.name)
+        for part, path in zip(COMMENT_PARTS, paths, strict=True):
+            if paths.count(path) > 1:
+                unusable.append(f"{part.name} resolves to {path.name}, which another comment part also resolves to")
+        return tuple(paths), unusable
 
     def _get_editor(self, xml_path: Path) -> DocxXMLEditor:
         """Get or create an editor for the specified XML file."""
@@ -181,6 +339,9 @@ class CommentManager:
                 character (``anchor_text`` may contain ``\\t`` — a tab mark is
                 one text-map character — but ``comment_text`` may not).
             ValueError: If ``occurrence`` is negative or not an integer.
+            XMLError: If an existing comment part cannot take the comment (its
+                root is not the expected element, or it binds ``w14`` to
+                another namespace). Raised before document.xml is touched.
         """
         if not isinstance(anchor_text, str) or not anchor_text:
             raise CommentError(f"anchor_text must be a non-empty string, got {anchor_text!r}")
@@ -197,6 +358,7 @@ class CommentManager:
         _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id
+        self._prepare_comment_parts()
 
         # Place range markers at character-precise positions in document.xml
         self._place_markers(match, comment_id)
@@ -256,10 +418,13 @@ class CommentManager:
         Raises:
             CommentError: If ``comment_text`` is not a string or holds a
                 control character.
+            XMLError: If an existing comment part cannot take the comment.
+                Raised before document.xml is touched.
         """
         self._validate_comment_text(comment_text, field="comment_text", ctx="add_comment_on_elements(): ")
 
         comment_id = self.next_comment_id
+        self._prepare_comment_parts()
         self.document_editor.insert_before(first, self._comment_range_start_xml(comment_id))
         # _comment_range_end_xml emits the end marker *and* the reference run.
         self.document_editor.insert_after(last, self._comment_range_end_xml(comment_id))
@@ -517,6 +682,8 @@ class CommentManager:
                 included), or ``reply_text`` is not a non-empty string.
             CommentError: If the parent comment is not found; carries
                 ``comment_id``.
+            XMLError: If an existing comment part cannot take the reply.
+                Raised before document.xml is touched.
         """
         # Reject junk ids before the membership test: None/"1" would surface
         # as a misleading "not found" CommentError, and True aliases comment
@@ -549,6 +716,7 @@ class CommentManager:
             tag="w:commentReference", attrs={"w:id": str(parent_comment_id)}
         )
 
+        self._prepare_comment_parts()
         self._place_reply_markers(comment_id, parent_start_elem, parent_ref_elem)
 
         return self._commit_comment(comment_id, reply_text, parent_para_id=parent_info["para_id"])
@@ -571,7 +739,7 @@ class CommentManager:
             List of Comment objects (with replies nested), each carrying the
             ``paragraph_ref`` of the paragraph it sits on
         """
-        if not self.comments_path.exists():
+        if not self.part_exists(self.comments_path):
             return []
 
         refs = self._range_start_refs()
@@ -580,7 +748,7 @@ class CommentManager:
         parent_map: dict[str, str] = {}  # para_id -> parent_para_id
 
         # Build parent map from commentsExtended.xml
-        if self.comments_extended_path.exists():
+        if self.part_exists(self.comments_extended_path):
             ext_editor = self._get_editor(self.comments_extended_path)
             for ex_elem in ext_editor.dom.getElementsByTagName("w15:commentEx"):
                 para_id = ex_elem.getAttribute("w15:paraId")
@@ -594,7 +762,7 @@ class CommentManager:
             if comment and (author is None or comment.author == author):
                 # Check if resolved
                 para_id = self._get_comment_para_id(comment_elem)
-                if para_id and self.comments_extended_path.exists():
+                if para_id and self.part_exists(self.comments_extended_path):
                     ext_editor = self._get_editor(self.comments_extended_path)
                     for ex_elem in ext_editor.dom.getElementsByTagName("w15:commentEx"):
                         if ex_elem.getAttribute("w15:paraId") == para_id:
@@ -671,7 +839,7 @@ class CommentManager:
 
         para_id = self.existing_comments[comment_id]["para_id"]
 
-        if not self.comments_extended_path.exists():
+        if not self.part_exists(self.comments_extended_path):
             return False
 
         editor = self._get_editor(self.comments_extended_path)
@@ -713,16 +881,16 @@ class CommentManager:
 
         self._remove_range_markers(comment_id)
 
-        # Remove from comments.xml
-        if self.comments_path.exists():
-            editor = self._get_editor(self.comments_path)
-            for comment_elem in editor.dom.getElementsByTagName("w:comment"):
-                if comment_elem.getAttribute("w:id") == str(comment_id):
-                    comment_elem.parentNode.removeChild(comment_elem)
-                    break
+        # Remove from comments.xml — the part exists: the comment was read
+        # from it or written into it.
+        editor = self._get_editor(self.comments_path)
+        for comment_elem in editor.dom.getElementsByTagName("w:comment"):
+            if comment_elem.getAttribute("w:id") == str(comment_id):
+                comment_elem.parentNode.removeChild(comment_elem)
+                break
 
         # Remove from commentsExtended.xml
-        if self.comments_extended_path.exists():
+        if self.part_exists(self.comments_extended_path):
             editor = self._get_editor(self.comments_extended_path)
             for ex_elem in editor.dom.getElementsByTagName("w15:commentEx"):
                 if ex_elem.getAttribute("w15:paraId") == para_id:
@@ -735,7 +903,7 @@ class CommentManager:
         # A comment authored elsewhere whose commentsIds.xml row is missing
         # leaves no way to reach its extensible entry; that orphan stays.
         durable_id = None
-        if self.comments_ids_path.exists():
+        if self.part_exists(self.comments_ids_path):
             editor = self._get_editor(self.comments_ids_path)
             for id_elem in editor.dom.getElementsByTagName("w16cid:commentId"):
                 if id_elem.getAttribute("w16cid:paraId") == para_id:
@@ -744,7 +912,7 @@ class CommentManager:
                     break
 
         # Remove from commentsExtensible.xml
-        if durable_id and self.comments_extensible_path.exists():
+        if durable_id and self.part_exists(self.comments_extensible_path):
             editor = self._get_editor(self.comments_extensible_path)
             for ex_elem in editor.dom.getElementsByTagName("w16cex:commentExtensible"):
                 if ex_elem.getAttribute("w16cex:durableId") == durable_id:
@@ -819,7 +987,7 @@ class CommentManager:
         lets ``move_comment_markers`` re-seat each reply on its own parent's
         freshly placed markers rather than flattening the thread onto the root.
         """
-        if not self.comments_extended_path.exists():
+        if not self.part_exists(self.comments_extended_path):
             return []
         para_of_id = {cid: info["para_id"] for cid, info in self.existing_comments.items()}
         id_of_para = {para_id: cid for cid, para_id in para_of_id.items()}
@@ -855,7 +1023,7 @@ class CommentManager:
 
     def _get_next_comment_id(self) -> int:
         """Get the next available comment ID."""
-        if not self.comments_path.exists():
+        if not self.part_exists(self.comments_path):
             return 0
 
         editor = self._get_editor(self.comments_path)
@@ -871,7 +1039,7 @@ class CommentManager:
 
     def _load_existing_comments(self) -> dict[int, dict]:
         """Load existing comments for reply support."""
-        if not self.comments_path.exists():
+        if not self.part_exists(self.comments_path):
             return {}
 
         editor = self._get_editor(self.comments_path)
@@ -886,7 +1054,10 @@ class CommentManager:
             if not para_id:
                 continue
 
-            existing[int(comment_id)] = {"para_id": para_id}
+            try:
+                existing[int(comment_id)] = {"para_id": para_id}
+            except ValueError:
+                continue
 
         return existing
 
@@ -899,9 +1070,14 @@ class CommentManager:
         return None
 
     def _parse_comment(self, comment_elem) -> Comment | None:
-        """Parse a w:comment element into a Comment object."""
-        comment_id = comment_elem.getAttribute("w:id")
-        if not comment_id:
+        """Parse a w:comment element into a Comment object.
+
+        Returns None for a comment with no integer ``w:id``: it cannot be
+        addressed, so it is skipped here as in :meth:`_load_existing_comments`.
+        """
+        try:
+            comment_id = int(comment_elem.getAttribute("w:id"))
+        except ValueError:
             return None
 
         author = comment_elem.getAttribute("w:author") or "Unknown"
@@ -915,7 +1091,7 @@ class CommentManager:
         text_parts = [get_text_node_data(t_elem) for t_elem in comment_elem.getElementsByTagName("w:t")]
 
         return Comment(
-            id=int(comment_id),
+            id=comment_id,
             text="".join(text_parts),
             author=author,
             date=date,
@@ -934,6 +1110,54 @@ class CommentManager:
             if self._on_write is not None:
                 self._on_write()
             shutil.copy(TEMPLATE_DIR / template_name, path)
+
+    def _prepare_comment_parts(self) -> None:
+        """Make the comment parts that already exist ready to receive a comment.
+
+        Called before the first marker goes into document.xml, so everything
+        that can fail for a pre-existing part fails while the document is still
+        untouched:
+
+        - a comment part that is a link out of the workspace;
+        - a comment relationship that cannot be honoured (see
+          :meth:`_resolve_comment_parts`);
+        - a part whose document element is not the expected prefixed element;
+        - a part that binds the prefix its new markup uses to another
+          namespace.
+
+        A ``comments.xml`` written by a producer that never emits
+        ``w14:paraId`` declares no ``xmlns:w14`` at all; it is added here.
+
+        A missing part is not created here: the ``_add_to_*`` helpers copy it
+        from its template once the markers are in. A call that fails therefore
+        leaves no new part behind.
+
+        Raises:
+            XMLError: If a new comment cannot be written and wired
+                (the subclasses ``NodeNotFoundError`` and
+                ``MultipleNodesFoundError`` when a part holds the expected
+                element not at all or more than once).
+        """
+        if self._outside_parts:
+            names = ", ".join(sorted(path.name for path in self._outside_parts))
+            raise XMLError(f"{names}: comment part leaves the package; cannot add a comment")
+        if self._unusable_relationships:
+            raise XMLError(f"document.xml.rels: {'; '.join(self._unusable_relationships)}; cannot add a comment")
+        existing = [
+            (self._get_editor(path), part)
+            for path, part in zip(self.part_paths, COMMENT_PARTS, strict=True)
+            if self.part_exists(path)
+        ]
+        # Check every part before changing any: a rejected part leaves the
+        # others exactly as they were.
+        for editor, part in existing:
+            root = editor.dom.documentElement
+            if editor.get_node(tag=part.root_tag) is not root:
+                raise XMLError(f"{editor.xml_path.name}: root element is <{root.tagName}>, expected <{part.root_tag}>")
+            if root.hasAttribute(f"xmlns:{part.prefix}"):
+                editor.ensure_namespace(part.prefix, part.namespace)
+        for editor, part in existing:
+            editor.ensure_namespace(part.prefix, part.namespace)
 
     def _add_to_comments_xml(self, comment_id: int, para_id: str, text: str, timestamp: str) -> None:
         """Add a single comment to comments.xml."""

@@ -14,7 +14,7 @@ from xml.dom.minidom import Attr, Element
 
 import defusedxml.minidom
 
-from .comments import Comment, CommentManager
+from .comments import COMMENT_PARTS, Comment, CommentManager, CommentPart, has_root
 from .exceptions import (
     DocumentClosedError,
     DocumentProtectedError,
@@ -50,6 +50,7 @@ from .xml_editor import (
     _compute_heading_paths,
     _compute_paragraph_location,
     _compute_section_indexes,
+    _escape_xml,
     _is_inside_element,
     body_paragraphs,
     build_text_map,
@@ -2994,11 +2995,35 @@ class Document:
         editor.append_to(root, person_xml)
         editor.save()
 
+    def _comment_parts_on_disk(self) -> list[tuple[CommentPart, Path]]:
+        """Each comment part that exists, with the file CommentManager resolved it to.
+
+        A file that two part types resolve to is left out: it cannot be both,
+        and CommentManager refuses to write a comment into such a package.
+
+        Existence is all that is tested here. Whether a file really is the
+        comment part its name says is checked by the callers, and only for a
+        part they are about to wire, so a document whose parts are all wired
+        is not parsed again.
+        """
+        paths = self._comment_manager.part_paths
+        return [
+            (part, path)
+            for part, path in zip(COMMENT_PARTS, paths, strict=True)
+            if self._comment_manager.part_exists(path) and paths.count(path) == 1
+        ]
+
     def _ensure_comment_relationships(self) -> None:
-        """Ensure word/_rels/document.xml.rels has comment relationships."""
-        # Only needed if comments.xml exists
-        comments_path = self._workspace.word_path / "comments.xml"
-        if not comments_path.exists():
+        """Ensure every comment part on disk has a relationship from document.xml.
+
+        Each part is wired on its own: a document that ships ``comments.xml``
+        alone gains the three sibling parts on its first new comment, and they
+        need relationships even though ``comments.xml`` already has one.
+        """
+        # A part with no relationship of its type is always at its default
+        # name, so Target=part.name below is the file it resolved to.
+        on_disk = self._comment_parts_on_disk()
+        if not on_disk:
             return
 
         rels_path = self._workspace.word_path / "_rels" / "document.xml.rels"
@@ -3008,52 +3033,33 @@ class Document:
             author=self._workspace.author,
             on_save=self._workspace.mark_dirty,
         )
-
-        # Check if already exists
-        for rel_elem in editor.dom.getElementsByTagName("Relationship"):
-            if rel_elem.getAttribute("Target") == "comments.xml":
-                return
+        # A part is wired when a relationship of its type exists, however the
+        # target is spelled — the rule CommentManager resolves the parts by.
+        wired_types = {rel_elem.getAttribute("Type") for rel_elem in editor.dom.getElementsByTagName("Relationship")}
+        missing = [part for part, path in on_disk if part.rel_type not in wired_types and has_root(path, part.root_tag)]
+        if not missing:
+            return
 
         root = editor.dom.documentElement
         root_tag = root.tagName
         prefix = root_tag.split(":")[0] + ":" if ":" in root_tag else ""
         next_rid_num = int(editor.get_next_rid()[3:])
-
-        # Add relationship elements
-        rels = [
-            (
-                next_rid_num,
-                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
-                "comments.xml",
-            ),
-            (
-                next_rid_num + 1,
-                "http://schemas.microsoft.com/office/2011/relationships/commentsExtended",
-                "commentsExtended.xml",
-            ),
-            (
-                next_rid_num + 2,
-                "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
-                "commentsIds.xml",
-            ),
-            (
-                next_rid_num + 3,
-                "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible",
-                "commentsExtensible.xml",
-            ),
-        ]
-
-        for rel_id, rel_type, target in rels:
-            rel_xml = f'<{prefix}Relationship Id="rId{rel_id}" Type="{rel_type}" Target="{target}"/>'
+        for offset, part in enumerate(missing):
+            rel_xml = (
+                f'<{prefix}Relationship Id="rId{next_rid_num + offset}" Type="{part.rel_type}" Target="{part.name}"/>'
+            )
             editor.append_to(root, rel_xml)
 
         editor.save()
 
     def _ensure_comment_content_types(self) -> None:
-        """Ensure [Content_Types].xml has comment content types."""
-        # Only needed if comments.xml exists
-        comments_path = self._workspace.word_path / "comments.xml"
-        if not comments_path.exists():
+        """Ensure every comment part on disk has a content-type override.
+
+        That includes a part the package keeps under another name: comments
+        are written into it, and a consumer finds it by its content type.
+        """
+        on_disk = self._comment_parts_on_disk()
+        if not on_disk:
             return
 
         content_types_path = self._workspace.workspace_path / "[Content_Types].xml"
@@ -3063,36 +3069,22 @@ class Document:
             author=self._workspace.author,
             on_save=self._workspace.mark_dirty,
         )
-
-        # Check if already exists
-        for override_elem in editor.dom.getElementsByTagName("Override"):
-            if override_elem.getAttribute("PartName") == "/word/comments.xml":
-                return
+        # OPC part names compare case-insensitively.
+        declared = {
+            override_elem.getAttribute("PartName").lower()
+            for override_elem in editor.dom.getElementsByTagName("Override")
+        }
+        missing = []
+        for part, path in on_disk:
+            part_name = "/" + path.relative_to(self._workspace.workspace_path).as_posix()
+            if part_name.lower() not in declared and has_root(path, part.root_tag):
+                missing.append((part_name, part.content_type))
+        if not missing:
+            return
 
         root = editor.dom.documentElement
-
-        # Add Override elements
-        overrides = [
-            (
-                "/word/comments.xml",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
-            ),
-            (
-                "/word/commentsExtended.xml",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml",
-            ),
-            (
-                "/word/commentsIds.xml",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
-            ),
-            (
-                "/word/commentsExtensible.xml",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml",
-            ),
-        ]
-
-        for part_name, content_type in overrides:
-            override_xml = f'<Override PartName="{part_name}" ContentType="{content_type}"/>'
+        for part_name, content_type in missing:
+            override_xml = f'<Override PartName="{_escape_xml(part_name)}" ContentType="{content_type}"/>'
             editor.append_to(root, override_xml)
 
         editor.save()
