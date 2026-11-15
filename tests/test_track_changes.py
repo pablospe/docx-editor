@@ -2055,18 +2055,15 @@ class TestSearchResultAsEditTarget:
                 call()
         doc.close()
 
-    def test_plain_text_still_requires_a_paragraph(self, clean_workspace):
-        """The doc-wide RevisionManager branch stays unreachable, and the error
-        teaches the SearchResult form."""
+    def test_non_string_paragraph_still_teaches_the_search_result_form(self, clean_workspace):
+        """A wrong-typed ref is refused, and the error teaches the SearchResult form."""
         doc = Document.open(clean_workspace)
-        with pytest.raises(ValueError, match="must be a paragraph ref string"):
-            doc.replace("quick", "swift")
         with pytest.raises(ValueError, match="or pass a SearchResult as 'find'"):
-            doc.replace("quick", "swift")
+            doc.replace("quick", "swift", paragraph=3)  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="or pass a SearchResult as 'text'"):
-            doc.delete("quick")
+            doc.delete("quick", paragraph=3)  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="or pass a SearchResult as 'anchor'"):
-            doc.insert_after("quick", "x")
+            doc.insert_after("quick", "x", paragraph=3)  # type: ignore[arg-type]
         assert doc.list_revisions() == []
         doc.close()
 
@@ -2074,6 +2071,6 @@ class TestSearchResultAsEditTarget:
         """Passing an unchecked find_text() result through is a clear error."""
         doc = Document.open(clean_workspace)
         assert doc.find_text("no such text") is None
-        with pytest.raises(ValueError, match="must be a paragraph ref string"):
+        with pytest.raises(ValueError, match=r"replace\(\): search text must be a non-empty string, got None"):
             doc.replace(doc.find_text("no such text"), "x")  # type: ignore[arg-type]
         doc.close()

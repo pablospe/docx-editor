@@ -896,28 +896,24 @@ class TestEmptySearchTextRejected:
 
 class TestNonStringParagraphRefRejected:
     """
-    Before: ``Document.replace(..., paragraph=None)`` didn't error at all —
-    None slipped through the keyword-only ``paragraph: str`` signature into
-    the RevisionManager, silently selecting its document-wide search branch.
-
-    After: the four Document edit methods reject non-string paragraph refs
-    up front. (RevisionManager keeps ``paragraph=None`` as its intended
-    document-wide mode.)
+    The four Document edit methods reject a paragraph ref that is not a string
+    up front. (``paragraph=None`` means "search the whole document",
+    ROADMAP.md #95 — see tests/test_document_wide_edits.py.)
     """
 
-    def test_all_edit_methods_reject_none(self, doc_path):
+    def test_all_edit_methods_reject_a_non_string_ref(self, doc_path):
         doc = _build_doc_with_paragraphs(doc_path, ["one needle only."])
         try:
             calls = [
-                lambda: doc.replace("needle", "x", paragraph=None),
-                lambda: doc.delete("needle", paragraph=None),
-                lambda: doc.insert_after("needle", "x", paragraph=None),
-                lambda: doc.insert_before("needle", "x", paragraph=None),
+                lambda: doc.replace("needle", "x", paragraph=1),  # type: ignore[arg-type]
+                lambda: doc.delete("needle", paragraph=1),  # type: ignore[arg-type]
+                lambda: doc.insert_after("needle", "x", paragraph=1),  # type: ignore[arg-type]
+                lambda: doc.insert_before("needle", "x", paragraph=1),  # type: ignore[arg-type]
             ]
             for call in calls:
                 with pytest.raises(ValueError, match="'paragraph' must be a paragraph ref string"):
                     call()
-            assert doc.list_revisions() == []  # the doc-wide fallback never fired
+            assert doc.list_revisions() == []
         finally:
             doc.close()
 

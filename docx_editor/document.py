@@ -16,6 +16,7 @@ import defusedxml.minidom
 
 from .comments import COMMENT_PARTS, Comment, CommentManager, CommentPart, has_root
 from .exceptions import (
+    BatchOperationError,
     CommentError,
     DocumentClosedError,
     DocumentProtectedError,
@@ -35,7 +36,15 @@ from .track_changes import (
     UnhandledRevision,
 )
 from .track_changes.dom import _ancestor_paragraph
-from .track_changes.models import _paragraph_hint, _resolve_search_target, _validate_note
+from .track_changes.models import (
+    _paragraph_hint,
+    _resolve_search_target,
+    _validate_edit_target,
+    _validate_expected_count,
+    _validate_insert_inputs,
+    _validate_note,
+    _validate_replace_inputs,
+)
 from .workspace import Workspace
 from .xml_editor import (
     _TEXTBOX_CONTENT,
@@ -53,6 +62,7 @@ from .xml_editor import (
     _compute_section_indexes,
     _escape_xml,
     _is_inside_element,
+    _require_valid_occurrence,
     body_paragraphs,
     build_text_map,
     compute_paragraph_hash,
@@ -178,12 +188,11 @@ def _unanchored_note_message(note: str, reason: str) -> str:
 
 
 def _require_ref_string(paragraph: str | None, field: str | None = None) -> str:
-    """Reject a missing or non-string paragraph ref before it can silently select
-    the RevisionManager's document-wide search branch (its ``paragraph=None``
-    mode is intentional at that layer, not at this one).
+    """Reject a missing or non-string paragraph ref.
 
-    ``paragraph`` is Optional in the edit methods' signatures only so a
-    SearchResult target can supply it; those callers pass ``field`` (the name of
+    The edit methods resolve an omitted ``paragraph`` document-wide
+    (:meth:`Document._locate_unscoped`) before calling this, so here it only
+    rejects a ref of the wrong type; those callers pass ``field`` (the name of
     their target parameter) to get the "or pass a SearchResult as …" hint.
     Callers whose ref is genuinely required and positional (split_paragraph)
     omit it. Returns the ref, narrowed to ``str`` for the call that follows.
@@ -510,8 +519,7 @@ class Document:
               until that paragraph is edited.
             - ``paragraph_occurrence``: occurrence index of this match within
               its paragraph — pass as the ``occurrence=`` of a follow-up edit
-              (edit methods count occurrences within the paragraph, not
-              document-wide).
+              scoped with ``paragraph=paragraph_ref``.
             - ``spans_revision``: True if the match crosses a tracked-revision
               boundary (e.g. part of it is inside a tracked insertion).
             - ``paragraph_index``: 1-based index of the containing paragraph —
@@ -540,7 +548,9 @@ class Document:
         self._ensure_open()
         return self._revision_manager.find_text(text, occurrence, paragraph=paragraph)
 
-    def find_all(self, text: str, paragraph: str | None = None) -> list[SearchResult]:
+    def find_all(
+        self, text: str, paragraph: str | None = None, *, expected_count: int | None = None
+    ) -> list[SearchResult]:
         """Find every match of ``text``, in document order.
 
         Straight and curly quotes match each other (``'`` = ``‘ ’``,
@@ -556,14 +566,22 @@ class Document:
             text: Text to search for (must be non-empty).
             paragraph: Optional paragraph reference (e.g., "P2#f3c1") to scope
                 the search. None searches the whole document.
+            expected_count: The number of matches you expect. When given, any
+                other count raises MatchCountError instead of returning — a
+                one-call guard before acting on every result (see
+                :meth:`replace_all`). ``0`` asserts the text is absent.
 
         Returns:
             A list of SearchResult (see :meth:`find_text` for the fields),
-            empty when nothing matches — no-match is not an error here.
+            empty when nothing matches — no-match is not an error here unless
+            ``expected_count`` says otherwise.
 
         Raises:
-            ValueError: If ``text`` is not a non-empty string, or
+            ValueError: If ``text`` is not a non-empty string,
+                ``expected_count`` is not a non-negative integer, or
                 ``paragraph`` is malformed.
+            MatchCountError: If ``expected_count`` is given and the number of
+                matches differs; it lists the matches it found.
             ParagraphIndexError: If ``paragraph``'s index is out of range.
             HashMismatchError: If ``paragraph``'s hash is stale.
 
@@ -592,7 +610,7 @@ class Document:
         overlap themselves, e.g. "aa" in "aaaa".)
         """
         self._ensure_open()
-        return self._revision_manager.find_all(text, paragraph=paragraph)
+        return self._revision_manager.find_all(text, paragraph=paragraph, expected_count=expected_count)
 
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.
@@ -615,6 +633,29 @@ class Document:
         """
         self._ensure_open()
         return self._revision_manager.count_matches(text)
+
+    def _locate_unscoped(
+        self, text: str, paragraph: str | None, occurrence: int | None, *, ctx: str
+    ) -> tuple[str | None, int | None]:
+        """Resolve an edit call's omitted ``paragraph`` to the one match it names.
+
+        With ``paragraph`` given this returns the pair unchanged. Otherwise it
+        finds ``text`` document-wide — the unique match, or the
+        ``occurrence``-th one counted across the whole document — and returns
+        that match's paragraph ref and within-paragraph occurrence, so the
+        edit runs through the same hash-anchored scoped path as an explicit
+        call and its result ref names the paragraph it touched. Raises
+        AmbiguousTextError / TextNotFoundError (document-wide, as
+        ``find_text`` counts) before anything is written. Callers validate
+        ``text`` first, and ``occurrence`` is checked here, so a bad argument
+        is a ValueError (prefixed with ``ctx``) whatever the document holds.
+        """
+        if paragraph is not None:
+            return paragraph, occurrence
+        _require_valid_occurrence(occurrence, ctx)
+        located = self._revision_manager._locate_document_wide(text, occurrence)
+        ref = f"P{located.paragraph_index}#{compute_paragraph_hash(located.paragraph)}"
+        return ref, located.paragraph_occurrence
 
     def _compute_new_ref(self, old_ref: str, paragraphs: list[Element]) -> str:
         """Compute a fresh paragraph reference after mutation.
@@ -1467,11 +1508,15 @@ class Document:
                 ``paragraph`` nor ``occurrence`` with one.
             replace_with: Replacement text
             paragraph: Paragraph reference from list_paragraphs() (e.g.,
-                "P2#f3c1"). Required unless ``find`` is a SearchResult.
-            occurrence: Which occurrence within the paragraph (0 = first,
-                1 = second, etc.). Omitted → ``find`` must be unique in the
-                paragraph, else AmbiguousTextError (use find_all() to
-                enumerate the matches, or pass an explicit occurrence).
+                "P2#f3c1"). Omitted with a string ``find`` → ``find`` is
+                searched document-wide and must be unique there (or
+                ``occurrence`` picks the match, counted document-wide); the
+                result is the touched paragraph's new ref.
+            occurrence: Which occurrence (0 = first, 1 = second, etc.),
+                counted within ``paragraph`` when given and document-wide
+                otherwise. Omitted → ``find`` must be unique in that scope,
+                else AmbiguousTextError (use find_all() to enumerate the
+                matches, or pass an explicit occurrence).
             note: Rationale for this edit, anchored as a comment bracketing
                 the revisions it creates, with its id on the result's
                 ``comment_id``. The comment is revision-scoped: it is deleted
@@ -1497,15 +1542,15 @@ class Document:
         Raises:
             ValueError: If ``find`` is not a non-empty string or contains a
                 tab (``\\t`` — a tab mark can be matched but not replaced yet,
-                ISSUES.md #6), ``replace_with`` is not a string, ``paragraph`` is missing or
-                not a ref string, ``occurrence`` is negative or not an integer,
+                ISSUES.md #6), ``replace_with`` is not a string, ``paragraph``
+                is not a ref string, ``occurrence`` is negative or not an integer,
                 ``note`` is neither None nor a non-empty control-character-free
                 string, or ``find`` is a SearchResult and
                 ``paragraph``/``occurrence`` was given too.
             TextNotFoundError: If ``find`` is absent or ``occurrence`` is out
-                of range for the paragraph.
+                of range for the search scope.
             AmbiguousTextError: If ``occurrence`` is omitted and ``find``
-                matches more than once in the paragraph.
+                matches more than once in the search scope.
             HashMismatchError: If the paragraph hash is stale — including a
                 SearchResult whose paragraph was edited after the search.
 
@@ -1516,19 +1561,144 @@ class Document:
             # Straight from a search — no ref or occurrence bookkeeping:
             match = doc.find_text("30 days")
             doc.replace(match, "60 days")
+
+            # No ref at all: "Effective Date" must occur once in the document.
+            doc.replace("Effective Date", "Commencement Date")
         """
         self._ensure_open()
         find, paragraph, occurrence = _resolve_search_target(
             find, paragraph, occurrence, ctx="replace(): ", field="'find'"
         )
-        paragraph = _require_ref_string(paragraph, "'find'")
         # Before the edit: a bad note must not leave an applied edit behind it.
         _validate_note(note, ctx="replace(): ")
+        _validate_replace_inputs(find, replace_with, ctx="replace(): ")
+        paragraph, occurrence = self._locate_unscoped(find, paragraph, occurrence, ctx="replace(): ")
+        paragraph = _require_ref_string(paragraph, "'find'")
         change_id = self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
         group_id = self._revision_manager.group_id_of(change_id)
         reason = _NOTE_NOOP_REPLACE if find == replace_with else _NOTE_AMENDED_INSERTION
         comment_id = self._attach_notes([(group_id, note, reason)])[0]
         return self._edit_result(paragraph, group_id, comment_id=comment_id)
+
+    def replace_all(
+        self, find: str, replace_with: str, *, expected_count: int, note: str | None = None
+    ) -> list[EditResult]:
+        """Replace every match of ``find`` document-wide, as one atomic edit.
+
+        ``expected_count`` is required: state how many matches you mean to
+        replace, and any other count raises MatchCountError with nothing
+        written — the guard that keeps a bulk edit from touching text you did
+        not see. The edits run as one :meth:`batch_edit`: each match gets its
+        own revision group, all of them share one changeset, every paragraph
+        hash is checked first, and a failing match rolls the whole call back.
+
+        What is atomic: every refusal listed under Raises — input errors, a
+        count mismatch, overlapping or same-paragraph newline matches, a
+        comment part that cannot take ``note`` (checked before the first
+        replacement), and a replacement failing while it applies — leaves the
+        document exactly as it was. What is not: ``note`` is attached after
+        the replacements commit, so an unexpected failure while writing the
+        comment itself (beyond those up-front checks) leaves the replacements
+        applied with no comment.
+        A match inside your own pending insertion amends it in place, like
+        :meth:`replace` (``group_id``/``changeset_id`` None on that result).
+
+        Args:
+            find: Text to find (must be non-empty; straight and curly quotes
+                match each other, as in :meth:`find_text`).
+            replace_with: Replacement text.
+            expected_count: How many matches you expect (``0`` allowed: then
+                the call asserts the text is absent and returns ``[]``).
+            note: Rationale for the edit: one comment, anchored on the first
+                match in document order that has a revision, and carried as
+                ``comment_id`` by every result. Ignored when nothing matches
+                (``expected_count=0``) — the one dropped note that does not
+                warn, since the call asserted there was nothing to edit.
+
+        Returns:
+            One EditResult per match, in document order. Several matches in
+            one paragraph each carry that paragraph's final ref.
+
+        Raises:
+            ValueError: If ``find`` is not a non-empty string or contains a
+                tab, ``replace_with`` is not a string, ``note`` is neither
+                None nor a non-empty control-character-free string,
+                ``expected_count`` is not a non-negative integer, or matches
+                of ``find`` overlap one another (e.g. ``"aa"`` in
+                ``"aaaa"``) — the matches are then not independent edits — or
+                ``replace_with`` contains ``\n`` and two matches share a
+                paragraph (a paragraph splits once per batch; split those one
+                at a time with :meth:`replace`).
+            MatchCountError: If the number of matches is not
+                ``expected_count``; it lists the matches it found.
+            XMLError: If ``note`` is given and an existing comment part
+                cannot receive a comment (the check :meth:`add_comment` runs
+                first); nothing is replaced.
+            BatchOperationError: If a replacement fails while applying;
+                ``operation_index`` is the failing match's position in
+                document order (as in the returned list) and ``original``
+                holds the underlying error. The document is left unchanged.
+
+        Warns:
+            UnanchoredNoteWarning: Once per match, if ``note`` was given and
+                no match created a revision to anchor it.
+
+        Example:
+            results = doc.replace_all("30 days", "60 days", expected_count=3)
+        """
+        self._ensure_open()
+        # Input errors before the search, so they do not depend on the count.
+        _validate_note(note, ctx="replace_all(): ")
+        _validate_replace_inputs(find, replace_with, ctx="replace_all(): ")
+        # Required, so None is refused here rather than read by find_all as "no guard".
+        _validate_expected_count(expected_count, ctx="replace_all(): ")
+        matches = self.find_all(find, expected_count=expected_count)
+        for prev, cur in zip(matches, matches[1:], strict=False):
+            if cur.paragraph_ref == prev.paragraph_ref and cur.start < prev.end:
+                raise ValueError(
+                    f"replace_all(): matches of {find!r} overlap in paragraph {cur.paragraph_ref} "
+                    f"(at chars {prev.start} and {cur.start}), so they cannot all be replaced; "
+                    f"replace them one at a time with replace(..., paragraph=, occurrence=)."
+                )
+            if "\n" in replace_with and cur.paragraph_ref == prev.paragraph_ref:
+                raise ValueError(
+                    f"replace_all(): replace_with contains a newline and {find!r} matches more than once in "
+                    f"paragraph {cur.paragraph_ref}, which can split only once per call; "
+                    f"replace those matches one at a time with replace(..., paragraph=, occurrence=)."
+                )
+        if not matches:
+            return []
+        if note is not None:
+            # The comment-part checks add_comment runs first, run before any
+            # replacement: an unusable comment part refuses the whole call
+            # while document.xml is still untouched.
+            self._comment_manager._prepare_comment_parts()
+        # Reversed: same-paragraph ops must run in descending occurrence order,
+        # so no edit shifts the occurrence numbers of the matches still to come.
+        ops = [
+            # The caller's ``find``, not ``m.text``: the scoped lookup folds
+            # quotes the same way, and affix trimming needs the caller's
+            # spelling to keep a word typed identically on both sides (#96).
+            EditOperation.replace(find, replace_with, paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence)
+            for m in reversed(matches)
+        ]
+        try:
+            results = self.batch_edit(ops)[::-1]
+        except BatchOperationError as e:
+            # Re-index into document order: the caller never saw ``ops``.
+            i = len(ops) - 1 - e.operation_index
+            m = matches[i]
+            raise BatchOperationError(
+                i, f"match at {m.paragraph_ref} char {m.start}: {e.reason}", original=e.original
+            ) from e.original
+        # The note is attached here, in document order, rather than on the
+        # reversed ops: the shared comment lands on the first match.
+        if note is not None:
+            reason = _NOTE_NOOP_REPLACE if find == replace_with else _NOTE_AMENDED_INSERTION
+            comment_ids = self._attach_notes([(r.group_id, note, reason) for r in results])
+            for r, cid in zip(results, comment_ids, strict=True):
+                r.comment_id = cid
+        return results
 
     def delete(
         self,
@@ -1547,10 +1717,14 @@ class Document:
                 the paragraph and the occurrence, so pass neither
                 ``paragraph`` nor ``occurrence`` with one.
             paragraph: Paragraph reference from list_paragraphs() (e.g.,
-                "P2#f3c1"). Required unless ``text`` is a SearchResult.
-            occurrence: Which occurrence within the paragraph (0 = first,
-                1 = second, etc.). Omitted → ``text`` must be unique in the
-                paragraph, else AmbiguousTextError.
+                "P2#f3c1"). Omitted with a string ``text`` → ``text`` is
+                searched document-wide and must be unique there (or
+                ``occurrence`` picks the match, counted document-wide); the
+                result is the touched paragraph's new ref.
+            occurrence: Which occurrence (0 = first, 1 = second, etc.),
+                counted within ``paragraph`` when given and document-wide
+                otherwise. Omitted → ``text`` must be unique in that scope,
+                else AmbiguousTextError.
             note: Rationale for this edit, anchored as a comment bracketing
                 the deletion it creates, and deleted with it when the deletion
                 is resolved (see :meth:`replace`).
@@ -1569,15 +1743,15 @@ class Document:
         Raises:
             ValueError: If ``text`` is not a non-empty string or contains a
                 tab (``\\t`` — a tab mark can be matched but not deleted yet,
-                ISSUES.md #6), ``paragraph`` is missing or not a ref string,
+                ISSUES.md #6), ``paragraph`` is not a ref string,
                 ``occurrence`` is negative or not an integer, ``note`` is
                 neither None nor a non-empty control-character-free string,
                 or ``text`` is a SearchResult
                 and ``paragraph``/``occurrence`` was given too.
             TextNotFoundError: If ``text`` is absent or ``occurrence`` is out
-                of range for the paragraph.
+                of range for the search scope.
             AmbiguousTextError: If ``occurrence`` is omitted and ``text``
-                matches more than once in the paragraph.
+                matches more than once in the search scope.
             HashMismatchError: If the paragraph hash is stale.
 
         Example:
@@ -1588,8 +1762,10 @@ class Document:
         text, paragraph, occurrence = _resolve_search_target(
             text, paragraph, occurrence, ctx="delete(): ", field="'text'"
         )
-        paragraph = _require_ref_string(paragraph, "'text'")
         _validate_note(note, ctx="delete(): ")
+        _validate_edit_target(text, field="'text'", ctx="delete(): ")
+        paragraph, occurrence = self._locate_unscoped(text, paragraph, occurrence, ctx="delete(): ")
+        paragraph = _require_ref_string(paragraph, "'text'")
         change_id = self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
         group_id = self._revision_manager.group_id_of(change_id)
         comment_id = self._attach_notes([(group_id, note, _NOTE_AMENDED_INSERTION)])[0]
@@ -1614,10 +1790,14 @@ class Document:
                 ``paragraph`` nor ``occurrence`` with one.
             text: Text to insert after the anchor
             paragraph: Paragraph reference from list_paragraphs() (e.g.,
-                "P2#f3c1"). Required unless ``anchor`` is a SearchResult.
-            occurrence: Which occurrence of anchor within the paragraph
-                (0 = first). Omitted → ``anchor`` must be unique in the
-                paragraph, else AmbiguousTextError.
+                "P2#f3c1"). Omitted with a string ``anchor`` → ``anchor`` is
+                searched document-wide and must be unique there (or
+                ``occurrence`` picks the match, counted document-wide); the
+                result is the touched paragraph's new ref.
+            occurrence: Which occurrence of anchor (0 = first), counted
+                within ``paragraph`` when given and document-wide otherwise.
+                Omitted → ``anchor`` must be unique in that scope, else
+                AmbiguousTextError.
             note: Rationale for this edit, anchored as a comment bracketing
                 the insertion it creates, and deleted with it when the
                 insertion is resolved (see :meth:`replace`).
@@ -1637,15 +1817,15 @@ class Document:
 
         Raises:
             ValueError: If ``anchor`` is not a non-empty string, ``text`` is
-                not a string, ``paragraph`` is missing or not a ref string,
+                not a string, ``paragraph`` is not a ref string,
                 ``occurrence`` is negative or not an integer, ``note`` is
                 neither None nor a non-empty control-character-free string, or
                 ``anchor`` is a SearchResult and ``paragraph``/``occurrence``
                 was given too.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
-                out of range for the paragraph.
+                out of range for the search scope.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
-                matches more than once in the paragraph.
+                matches more than once in the search scope.
             HashMismatchError: If the paragraph hash is stale.
 
         Example:
@@ -1656,8 +1836,10 @@ class Document:
         anchor, paragraph, occurrence = _resolve_search_target(
             anchor, paragraph, occurrence, ctx="insert_after(): ", field="'anchor'"
         )
-        paragraph = _require_ref_string(paragraph, "'anchor'")
         _validate_note(note, ctx="insert_after(): ")
+        _validate_insert_inputs(anchor, text, ctx="insert_after(): ")
+        paragraph, occurrence = self._locate_unscoped(anchor, paragraph, occurrence, ctx="insert_after(): ")
+        paragraph = _require_ref_string(paragraph, "'anchor'")
         change_id = self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
         group_id = self._revision_manager.group_id_of(change_id)
         comment_id = self._attach_notes([(group_id, note, _NOTE_AMENDED_INSERTION)])[0]
@@ -1682,10 +1864,14 @@ class Document:
                 ``paragraph`` nor ``occurrence`` with one.
             text: Text to insert before the anchor
             paragraph: Paragraph reference from list_paragraphs() (e.g.,
-                "P2#f3c1"). Required unless ``anchor`` is a SearchResult.
-            occurrence: Which occurrence of anchor within the paragraph
-                (0 = first). Omitted → ``anchor`` must be unique in the
-                paragraph, else AmbiguousTextError.
+                "P2#f3c1"). Omitted with a string ``anchor`` → ``anchor`` is
+                searched document-wide and must be unique there (or
+                ``occurrence`` picks the match, counted document-wide); the
+                result is the touched paragraph's new ref.
+            occurrence: Which occurrence of anchor (0 = first), counted
+                within ``paragraph`` when given and document-wide otherwise.
+                Omitted → ``anchor`` must be unique in that scope, else
+                AmbiguousTextError.
             note: Rationale for this edit, anchored as a comment bracketing
                 the insertion it creates, and deleted with it when the
                 insertion is resolved (see :meth:`replace`).
@@ -1705,15 +1891,15 @@ class Document:
 
         Raises:
             ValueError: If ``anchor`` is not a non-empty string, ``text`` is
-                not a string, ``paragraph`` is missing or not a ref string,
+                not a string, ``paragraph`` is not a ref string,
                 ``occurrence`` is negative or not an integer, ``note`` is
                 neither None nor a non-empty control-character-free string, or
                 ``anchor`` is a SearchResult and ``paragraph``/``occurrence``
                 was given too.
             TextNotFoundError: If ``anchor`` is absent or ``occurrence`` is
-                out of range for the paragraph.
+                out of range for the search scope.
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
-                matches more than once in the paragraph.
+                matches more than once in the search scope.
             HashMismatchError: If the paragraph hash is stale.
 
         Example:
@@ -1724,8 +1910,10 @@ class Document:
         anchor, paragraph, occurrence = _resolve_search_target(
             anchor, paragraph, occurrence, ctx="insert_before(): ", field="'anchor'"
         )
-        paragraph = _require_ref_string(paragraph, "'anchor'")
         _validate_note(note, ctx="insert_before(): ")
+        _validate_insert_inputs(anchor, text, ctx="insert_before(): ")
+        paragraph, occurrence = self._locate_unscoped(anchor, paragraph, occurrence, ctx="insert_before(): ")
+        paragraph = _require_ref_string(paragraph, "'anchor'")
         change_id = self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
         group_id = self._revision_manager.group_id_of(change_id)
         comment_id = self._attach_notes([(group_id, note, _NOTE_AMENDED_INSERTION)])[0]

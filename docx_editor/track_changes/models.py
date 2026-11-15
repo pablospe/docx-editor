@@ -26,12 +26,38 @@ def _validate_edit_target(value: str, *, field: str, ctx: str) -> None:
     (ISSUES.md #6). Exact by construction: ``replace_with`` can never hold a
     tab, so affix trimming cannot narrow a tab-free target onto a tab.
     """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{ctx}search text must be a non-empty string, got {value!r}")
     _reject_control_chars(value, field=field, ctx=ctx, allow_tab=True)
-    if isinstance(value, str) and "\t" in value:
+    if "\t" in value:
         raise ValueError(
             f"{ctx}{field} contains a tab ('\\t') — tabs can be searched and matched but not deleted "
             f"or replaced yet; target the text on either side of the tab instead (ISSUES.md #6)."
         )
+
+
+def _validate_replace_inputs(find: str, replace_with: str, *, ctx: str) -> None:
+    """Validate replace()'s ``find``/``replace_with`` before any search runs."""
+    if not isinstance(replace_with, str):
+        raise ValueError(f"{ctx}'replace_with' must be a string (empty string is allowed), got {replace_with!r}")
+    _validate_edit_target(find, field="'find'", ctx=ctx)
+    _reject_control_chars(replace_with, field="'replace_with'", ctx=ctx, allow_newline=True)
+
+
+def _validate_insert_inputs(anchor: str, text: str, *, ctx: str) -> None:
+    """Validate insert_after/insert_before's ``anchor``/``text`` before any search runs."""
+    if not isinstance(anchor, str) or not anchor:
+        raise ValueError(f"{ctx}search text must be a non-empty string, got {anchor!r}")
+    if not isinstance(text, str):
+        raise ValueError(f"{ctx}'text' must be a string (empty string is allowed), got {text!r}")
+    _reject_control_chars(anchor, field="'anchor'", ctx=ctx, allow_tab=True)
+    _reject_control_chars(text, field="'text'", ctx=ctx, allow_newline=True)
+
+
+def _validate_expected_count(expected_count: int, *, ctx: str) -> None:
+    """Reject an ``expected_count`` that is not a non-negative int (bool and None included)."""
+    if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 0:
+        raise ValueError(f"{ctx}expected_count must be a non-negative integer, got {expected_count!r}")
 
 
 def _validate_note(note: str | None, *, ctx: str) -> None:
@@ -464,10 +490,11 @@ class SearchResult:
     ``paragraph=`` argument of follow-up edits; like refs from
     ``list_paragraphs()``, it is valid until that paragraph is edited.
 
-    ``find_text``'s ``occurrence`` counts matches document-wide, while edit
-    methods count within one paragraph — ``paragraph_occurrence`` bridges the
-    two: pass it as the ``occurrence=`` of a follow-up edit to target exactly
-    the match ``find_text`` located.
+    ``find_text``'s ``occurrence`` counts matches document-wide, while an edit
+    scoped with ``paragraph=`` counts within that paragraph —
+    ``paragraph_occurrence`` bridges the two: pass it as the ``occurrence=``
+    of a follow-up edit scoped to ``paragraph_ref`` to target exactly the
+    match ``find_text`` located.
 
     ``paragraph_index`` is the 1-based document-order index of the containing
     paragraph — the same integer embedded in ``paragraph_ref`` — so consumers
@@ -559,8 +586,8 @@ def _paragraph_hint(field: str) -> str:
     """Trailing hint shared by the "paragraph ref is missing" messages.
 
     ``paragraph`` is optional in the *signatures* only because a SearchResult
-    target supplies it (see :func:`_resolve_search_target`); an edit still has to
-    know which paragraph it targets. Document's methods and EditOperation's
+    target supplies it (see :func:`_resolve_search_target`); an EditOperation
+    still has to know which paragraph it targets. Document's methods and EditOperation's
     constructors keep their own long-standing message prefixes (both are pinned
     by tests) and share this recovery hint, so the advice cannot drift.
     """

@@ -289,13 +289,16 @@ def _append_preview(msg: str, preview: str) -> str:
 
 @dataclass(frozen=True)
 class MatchLocation:
-    """One match listed on an ``AmbiguousTextError``.
+    """One match listed on an ``AmbiguousTextError`` or ``MatchCountError``.
 
     Attributes:
         occurrence: The value to pass as ``occurrence=`` to the call that
             raised, to select this match. It counts within the paragraph when
             that call was scoped with ``paragraph=``, and document-wide when it
             was not — so pass it back to the same call, unchanged in scope.
+            ``find_all``/``replace_all`` take no ``occurrence``: there it is
+            the match's number for a single edit in the same scope (e.g.
+            ``replace(text, new, occurrence=m.occurrence)``).
         paragraph_ref: Hash-anchored reference (``"P3#a7b2"``) of the
             paragraph holding the match, valid for the document as it was
             when the error was raised.
@@ -444,13 +447,70 @@ class AmbiguousTextError(DocxEditError):
         if not self.matches:
             super().__init__(f"{head} Pass occurrence= (0-based) to pick one, or use find_all() to list every match.")
             return
-        lines = [f"{head} Pass occurrence= (0-based) to pick one:"]
-        lines += [
-            f'  occurrence={m.occurrence}  {m.paragraph_ref} at char {m.start}  "{m.context}"' for m in self.matches
-        ]
-        if self.matches_omitted:
-            lines.append(f"  (+{self.matches_omitted} more; find_all() lists every match)")
-        super().__init__("\n".join(lines))
+        super().__init__(
+            "\n".join([
+                f"{head} Pass occurrence= (0-based) to pick one:",
+                *_match_lines(self.matches, self.matches_omitted),
+            ])
+        )
+
+
+def _match_lines(matches: Sequence[MatchLocation], omitted: int) -> list[str]:
+    """The pick-list lines an error message shows for its ``matches``."""
+    lines = [f'  occurrence={m.occurrence}  {m.paragraph_ref} at char {m.start}  "{m.context}"' for m in matches]
+    if omitted:
+        lines.append(f"  (+{omitted} more; find_all() lists every match)")
+    return lines
+
+
+class MatchCountError(DocxEditError):
+    """Raised when a call given ``expected_count`` finds a different number of matches.
+
+    ``expected_count`` is the caller's statement of how many matches it means
+    to act on (``find_all(..., expected_count=N)``, ``replace_all``). Too many
+    and too few both raise this one error: either way the document is not as
+    the caller believed, and nothing is changed.
+
+    Attributes:
+        search_text: The text that was searched for.
+        paragraph_ref: Paragraph reference the search was scoped to, or None
+            if the search was document-wide.
+        expected_count: The count the caller stated.
+        total_occurrences: The number of matches actually found.
+        matches: The first ``MAX_REPORTED_MATCHES`` matches as
+            ``MatchLocation`` records, in document order (empty when nothing
+            matched).
+        matches_omitted: How many matches ``matches`` leaves out.
+        next: ``"find_all('<text>')"`` (with ``paragraph=`` when the search
+            was scoped) — list the matches, then decide.
+    """
+
+    def __init__(
+        self,
+        search_text: str,
+        *,
+        paragraph_ref: str | None = None,
+        expected_count: int,
+        total_occurrences: int,
+        matches: Sequence[MatchLocation] = (),
+    ):
+        self.search_text = search_text
+        self.paragraph_ref = paragraph_ref
+        self.expected_count = expected_count
+        self.total_occurrences = total_occurrences
+        self.matches = list(matches[:MAX_REPORTED_MATCHES])
+        self.matches_omitted = max(0, total_occurrences - len(self.matches))
+        self.next = (
+            f"find_all({search_text!r}, paragraph={paragraph_ref!r})"
+            if paragraph_ref is not None
+            else f"find_all({search_text!r})"
+        )
+
+        scope = f"paragraph {paragraph_ref}" if paragraph_ref is not None else "the document"
+        times = "time" if total_occurrences == 1 else "times"
+        head = f"'{search_text}' matches {total_occurrences} {times} in {scope}, expected {expected_count}."
+        lines = [head + (" Matches:" if self.matches else "")]
+        super().__init__("\n".join([*lines, *_match_lines(self.matches, self.matches_omitted)]))
 
 
 class ParagraphIndexError(DocxEditError):
