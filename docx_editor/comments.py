@@ -303,27 +303,36 @@ class CommentManager:
 
     def add_comment(
         self,
-        anchor_text: str,
-        comment_text: str,
+        anchor_text: str | None,
+        comment_text: str | None,
         *,
         paragraph: str | None = None,
         occurrence: int | None = None,
     ) -> int:
-        """Add a comment anchored to specific text.
+        """Add a comment anchored to specific text, or to a whole paragraph.
 
         The anchor lookup uses the same text-map search as ``count_matches`` and
         the tracked-change edit methods, so anchors that span ``w:t`` run
         boundaries (formatting changes, smart-quote splits, ``w:ins`` wrappers)
         are found.
 
+        With ``anchor_text=None`` the comment covers the whole of ``paragraph``:
+        its full accepted-view text (pending insertions included, pending
+        deletions excluded), with the markers placed exactly where an anchor
+        of that full text would place them.
+
         Args:
-            anchor_text: Text to attach the comment to.
-            comment_text: The comment content.
+            anchor_text: Text to attach the comment to. ``None`` comments on
+                the whole paragraph named by ``paragraph``.
+            comment_text: The comment content. ``None`` is refused like any
+                other non-string.
             paragraph: Optional paragraph reference (e.g., ``"P3#a7b2"``) to
                 scope the search. ``None`` searches the whole document.
+                Required when ``anchor_text`` is ``None``.
             occurrence: Which occurrence to anchor (0 = first). Omitted →
                 ``anchor_text`` must be unique in the search scope, else
-                AmbiguousTextError.
+                AmbiguousTextError. Not allowed when ``anchor_text`` is
+                ``None``.
 
         Returns:
             The comment ID.
@@ -334,28 +343,49 @@ class CommentManager:
                 ``anchor_text`` matches more than once in the search scope.
             HashMismatchError: If a paragraph reference's hash is stale.
             ParagraphIndexError: If a paragraph reference's index is out of range.
-            CommentError: If ``anchor_text`` is not a non-empty string,
-                ``comment_text`` is not a string, or either holds a control
-                character (``anchor_text`` may contain ``\\t`` — a tab mark is
-                one text-map character — but ``comment_text`` may not).
-            ValueError: If ``occurrence`` is negative or not an integer.
+            CommentError: If ``anchor_text`` is neither ``None`` nor a
+                non-empty string, ``comment_text`` is not a string, or either
+                holds a control character (``anchor_text`` may contain ``\\t``
+                — a tab mark is one text-map character — but ``comment_text``
+                may not). Also if ``anchor_text`` is ``None`` and ``paragraph``
+                is omitted, or the paragraph has no text to anchor on.
+            ValueError: If ``occurrence`` is negative or not an integer, or is
+                given with ``anchor_text=None``.
             XMLError: If an existing comment part cannot take the comment (its
                 root is not the expected element, or it binds ``w14`` to
                 another namespace). Raised before document.xml is touched.
         """
-        if not isinstance(anchor_text, str) or not anchor_text:
-            raise CommentError(f"anchor_text must be a non-empty string, got {anchor_text!r}")
-        # Both must be validated here, before _place_markers mutates
+        # Everything is validated here, before _place_markers mutates
         # document.xml — a crash later (html.escape) would leave orphaned range
         # markers. Comments carry no split semantics, so '\n' is rejected in
         # both: in the anchor it could never match, and in the body it would be
         # an invisible, unreviewable literal.
-        self._validate_comment_text(comment_text, field="comment_text", ctx="add_comment(): ")
-        try:
-            _reject_control_chars(anchor_text, field="anchor_text", ctx="add_comment(): ", allow_tab=True)
-        except ValueError as e:
-            raise CommentError(str(e)) from e
-        _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
+        if anchor_text is None:
+            if paragraph is None:
+                raise CommentError(
+                    "add_comment(): anchor_text=None comments on a whole paragraph; pass paragraph= to say which one"
+                )
+            if occurrence is not None:
+                raise ValueError(
+                    "add_comment(): occurrence= selects among matches of anchor_text; "
+                    "it cannot be combined with a whole-paragraph comment (anchor_text=None)"
+                )
+            comment_text = self._validate_comment_text(comment_text, field="comment_text", ctx="add_comment(): ")
+            text_map = build_text_map(self._resolve_paragraph(paragraph))
+            # The whole paragraph is the anchored form with the paragraph's full
+            # text as the anchor, so placement is _place_markers' and nothing new.
+            match = find_in_text_map(text_map, text_map.text, 0) if text_map.text else None
+            if match is None:
+                raise CommentError(f"add_comment(): paragraph {paragraph} has no text to anchor a comment on")
+        else:
+            if not isinstance(anchor_text, str) or not anchor_text:
+                raise CommentError(f"anchor_text must be a non-empty string, got {anchor_text!r}")
+            comment_text = self._validate_comment_text(comment_text, field="comment_text", ctx="add_comment(): ")
+            try:
+                _reject_control_chars(anchor_text, field="anchor_text", ctx="add_comment(): ", allow_tab=True)
+            except ValueError as e:
+                raise CommentError(str(e)) from e
+            _, match = self._locate_anchor(anchor_text, paragraph, occurrence)
 
         comment_id = self.next_comment_id
         self._prepare_comment_parts()
@@ -366,7 +396,7 @@ class CommentManager:
         return self._commit_comment(comment_id, comment_text)
 
     @staticmethod
-    def _validate_comment_text(text: str, *, field: str, ctx: str) -> None:
+    def _validate_comment_text(text: str | None, *, field: str, ctx: str) -> str:
         """Reject comment/note text that cannot be written into a comment part.
 
         One rule for the two element-or-text anchored bodies — ``add_comment``'s
@@ -377,6 +407,9 @@ class CommentManager:
         keeps its own check because a reply may not be empty and reports a
         wrong type as ``ValueError``, not ``CommentError``.
 
+        Returns:
+            ``text``, narrowed to ``str``.
+
         Raises:
             CommentError: If ``text`` is not a string or holds a control character.
         """
@@ -386,6 +419,7 @@ class CommentManager:
             _reject_control_chars(text, field=field, ctx=ctx, allow_newline=False)
         except ValueError as e:
             raise CommentError(str(e)) from e
+        return text
 
     def add_comment_on_elements(self, first: Element, last: Element, comment_text: str) -> int:
         """Anchor a comment on the span from ``first`` to ``last`` (document order).
@@ -455,6 +489,23 @@ class CommentManager:
 
         return comment_id
 
+    def _resolve_paragraph(self, paragraph: str) -> Element:
+        """Return the body paragraph a ``P<index>#<hash>`` reference names.
+
+        Raises:
+            ParagraphIndexError: If the index is out of range.
+            HashMismatchError: If the paragraph's content no longer matches the hash.
+        """
+        ref = ParagraphRef.parse(paragraph)
+        paragraphs = body_paragraphs(self.document_editor.dom)
+        if ref.index < 1 or ref.index > len(paragraphs):
+            raise ParagraphIndexError(ref.index, len(paragraphs))
+        p = paragraphs[ref.index - 1]
+        actual = compute_paragraph_hash(p)
+        if actual != ref.hash:
+            raise HashMismatchError(ref.index, ref.hash, actual, _truncate_preview(build_text_map(p).text))
+        return p
+
     def _locate_anchor(
         self, anchor_text: str, paragraph: str | None, occurrence: int | None
     ) -> tuple[Element, TextMapMatch]:
@@ -471,16 +522,7 @@ class CommentManager:
         occ = occurrence if occurrence is not None else 0
 
         if paragraph is not None:
-            ref = ParagraphRef.parse(paragraph)
-            paragraphs = body_paragraphs(self.document_editor.dom)
-            if ref.index < 1 or ref.index > len(paragraphs):
-                raise ParagraphIndexError(ref.index, len(paragraphs))
-            p = paragraphs[ref.index - 1]
-            actual = compute_paragraph_hash(p)
-            if actual != ref.hash:
-                tm = build_text_map(p)
-                preview = _truncate_preview(tm.text)
-                raise HashMismatchError(ref.index, ref.hash, actual, preview)
+            p = self._resolve_paragraph(paragraph)
             text_map = build_text_map(p)
             total = count_in_text_map(text_map, anchor_text)
             match = find_in_text_map(text_map, anchor_text, occ)
