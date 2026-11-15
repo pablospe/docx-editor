@@ -43,7 +43,7 @@ from .exceptions import (
     _json_default,
     _match_context,
 )
-from .xml_editor import body_paragraphs
+from .xml_editor import body_paragraphs, fold_quotes
 
 PROG = "docx-edit"
 _EDIT_VERBS = ("replace", "delete", "insert-after", "insert-before")
@@ -103,7 +103,8 @@ Rules:
   matches as "occurrence=N  P3#a7b2 ..." (find lists all), and prints a
   retry: line; run it with N replaced. --paragraph P3#a7b2 (a ref from
   list/find) pins the edit to that paragraph as you saw it; a stale ref
-  refuses and the retry carries the fresh one.
+  refuses, and the retry carries the fresh one (or, with --occurrence,
+  lists the paragraph's matches again, since their numbers changed).
 - --expect N on replace replaces every match, and refuses unless there are
   exactly N. On find it checks the count without editing.
 - --note "why" attaches your rationale as a comment on the change.
@@ -189,6 +190,10 @@ def _quote(arg: str) -> str:
             # \x only for ASCII: bash writes \xHH as a raw byte, so U+00A0
             # needs \u00a0 to come out as UTF-8; above the BMP, \U.
             code = ord(c)
+            if 0xDC80 <= code <= 0xDCFF:
+                # A filename byte that was not UTF-8 (surrogateescape): the byte itself.
+                body.append(f"\\x{code - 0xDC00:02x}")
+                continue
             body.append(f"\\x{code:02x}" if code < 0x80 else f"\\u{code:04x}" if code <= 0xFFFF else f"\\U{code:08x}")
     return "$'" + "".join(body) + "'"
 
@@ -213,27 +218,37 @@ def _retry_for(error: Exception, args: argparse.Namespace) -> _Retry | None:
             return None
         if error.total_occurrences == 0:
             return _Retry(_other(args, "list"), "nothing matches; read the paragraphs to quote the text")
-        if shared := _split_conflict(args, [m.paragraph_ref for m in error.matches]):
-            return _one_at_a_time(args, shared)
+        if _split_conflict(args, [m.paragraph_ref for m in error.matches]):
+            return _one_at_a_time(args, error.total_occurrences)
         return _Retry(_command(args, expect=error.total_occurrences), "only if every match listed above should change")
     if isinstance(error, HashMismatchError) and getattr(args, "paragraph", None):
-        return _Retry(_command(args, paragraph=f"P{error.paragraph_index}#{error.actual_hash}"))
+        fresh = f"P{error.paragraph_index}#{error.actual_hash}"
+        if args.occurrence is None:
+            return _Retry(_command(args, paragraph=fresh))
+        # The paragraph changed, so --occurrence may now name another match:
+        # list them again rather than guess which one was meant.
+        return _Retry(
+            [*_other(args, "find", f"--paragraph={fresh}"), _target(args)],
+            "the paragraph changed, so its matches are numbered afresh: pick the --occurrence again",
+        )
     if isinstance(error, TextNotFoundError):
         if error.total_occurrences:
             return _Retry(_command(args, occurrence="N"), f"N: 0..{error.total_occurrences - 1}")
         if getattr(args, "paragraph", None):
-            target = getattr(args, "old", None) or getattr(args, "anchor", None) or args.text
-            return _Retry([*_other(args, "find"), target], "not in that paragraph; find lists where it is")
+            return _Retry([*_other(args, "find"), _target(args)], "not in that paragraph; find lists where it is")
         return _Retry(_other(args, "list"))
     if isinstance(error, ParagraphIndexError):
         return _Retry(_other(args, "list"))
     if isinstance(error, ValueError) and str(error).startswith("Invalid paragraph reference"):
         return _Retry(_other(args, "list"), "--paragraph takes a ref like P3#a7b2, as list prints it")
-    if isinstance(error, ValueError) and str(error).startswith((
-        "replace_all(): replace_with contains a newline",
-        "replace_all(): matches of",
-    )):
-        return _one_at_a_time(args)
+    if isinstance(error, ValueError) and str(error).startswith("replace_all(): replace_with contains a newline"):
+        return _one_at_a_time(args, args.expect)
+    if isinstance(error, ValueError) and str(error).startswith("replace_all(): matches of"):
+        return _Retry(
+            [*_other(args, "find"), args.old],
+            "these matches overlap, so replacing one removes its neighbours: choose which to change, "
+            "and run find again before each replace",
+        )
     if isinstance(error, WorkspaceLockedError):
         return _Retry(
             _command(args), "another session holds this file: close it (doc.close() / docx-session stop), then run this"
@@ -251,25 +266,38 @@ def _retry_for(error: Exception, args: argparse.Namespace) -> _Retry | None:
     return None
 
 
-def _split_conflict(args: argparse.Namespace, refs: Sequence[str]) -> str | None:
-    """The paragraph a ``--expect`` replace with a newline would split twice, if any."""
+def _target(args: argparse.Namespace) -> str:
+    """The text the verb searches for."""
+    return getattr(args, "old", None) or getattr(args, "anchor", None) or args.text
+
+
+def _split_conflict(args: argparse.Namespace, refs: Sequence[str]) -> bool:
+    """Whether a ``--expect`` replace with a newline would split one paragraph twice."""
     if args.verb != "replace" or "\n" not in args.new:
-        return None
-    return next((ref for i, ref in enumerate(refs) if ref in refs[:i]), None)
+        return False
+    return len(set(refs)) < len(refs)
 
 
-def _one_at_a_time(args: argparse.Namespace, ref: str | None = None) -> _Retry:
-    """Matches that cannot go in one call: list them, then edit each in its own command."""
-    scope = [f"--paragraph={ref}"] if ref else []
-    then = (
-        f"; after the first, continue on {args.output} with --in-place, since each run reads its FILE"
-        if args.output
-        else ""
-    )
+def _one_at_a_time(args: argparse.Namespace, count: int) -> _Retry:
+    """A newline replace that cannot run as one call: the same edit, one match per run.
+
+    ``--occurrence=0`` with no ``--paragraph`` takes the first match in the
+    document; the replaced text becomes a tracked deletion, which no search
+    matches, so the next run takes the next match. That holds only when the
+    new text cannot match again — otherwise each run must pick its match
+    from a fresh find.
+    """
+    if fold_quotes(args.old) in fold_quotes(args.new):
+        return _Retry(
+            [*_other(args, "find"), args.old],
+            "the new text contains the old, so a replaced match would match again: "
+            "run find before each replace and pick its --paragraph and --occurrence",
+        )
+    then = f"the first time with --output={args.output}, then on that file with --in-place" if args.output else ""
     return _Retry(
-        [*_other(args, "find", *scope), args.old],
-        "these matches cannot all change in one command; find prints each one's --paragraph and --occurrence: "
-        f"replace them one per command, without --expect{then}",
+        _command(args, expect=None, paragraph=None, occurrence=0),
+        f"a paragraph can split only once per command: run this {count} times, once per match"
+        + (f" ({then})" if then else ""),
     )
 
 
@@ -671,8 +699,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             _refusal_output(error, args)
             sys.stdout.flush()
+            sys.stderr.flush()
         except BrokenPipeError:
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+            os.dup2(devnull, sys.stderr.fileno())
         return 1
 
     found = (str(w.message) for w in caught if issubclass(w.category, library_warnings))

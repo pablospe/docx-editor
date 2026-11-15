@@ -531,6 +531,16 @@ def test_retry_words_round_trip_through_bash(arg):
     assert done.stdout.decode() == arg
 
 
+def test_non_utf8_filename_byte_round_trips_through_bash():
+    from docx_editor.cli import _quote
+
+    if shutil.which("bash") is None:
+        pytest.skip("bash not available")
+    name = b"caf\xff.docx".decode("utf-8", "surrogateescape")
+    done = subprocess.run(["bash", "-c", "printf '%s' " + _quote(name)], capture_output=True, check=True)
+    assert done.stdout == b"caf\xff.docx"
+
+
 class TestRoundThree:
     def test_read_verb_survives_an_unremovable_private_workspace(self, capsys, src, monkeypatch):
         real_rmtree = shutil.rmtree
@@ -544,33 +554,51 @@ class TestRoundThree:
         code, out, _ = run(capsys, "find", src, "fox")
         assert code == 0 and out.startswith("1 match(es):")
 
-    def test_newline_expect_mismatch_retries_one_match_at_a_time(self, capsys, src):
+    def test_newline_split_retry_run_once_per_match_reaches_the_goal(self, capsys, src):
         # "ing" occurs twice in P3 ("testing", "editing"): a newline replace
-        # cannot split P3 twice, so --expect=2 would only refuse again.
-        code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 3, "--author", AUTHOR, "--in-place")
-        assert code == 1
+        # cannot split P3 twice in one command.
+        code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 2, "--author", AUTHOR, "--in-place")
+        assert code == 1 and "run this 2 times, once per match" in err
         retry = retry_argv(err)
-        assert retry[0] == "find" and flag_value(retry, "--paragraph").startswith("P3#") and retry[-1] == "ing"
-        # find prints each match's own --paragraph/--occurrence pair: one edit per command.
-        code, out, _ = run(capsys, *retry)
-        pair = out.splitlines()[1].rsplit("(", 1)[1].rstrip(")").split()
-        code, out, _ = run(capsys, "replace", src, "ing", "ING\nZ", *pair, "--author", AUTHOR, "--in-place")
-        assert code == 0
+        assert flag_value(retry, "--occurrence") == "0"
+        assert not any(a.startswith(("--expect", "--paragraph")) for a in retry)
+        for _ in range(2):
+            code, _, _ = run(capsys, *retry)
+            assert code == 0
+        code, out, _ = run(capsys, "find", src, "ing")
+        assert out.startswith("0 match(es)")
+        with Document.open(src) as doc:
+            assert doc.get_visible_text().count("INGZ") == 0 and doc.get_visible_text().count("ING") == 2
+
+    def test_newline_split_count_mismatch_gives_the_same_repeat(self, capsys, src):
+        code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 3, "--author", AUTHOR, "--in-place")
+        assert code == 1 and "run this 2 times, once per match" in err
 
     def test_one_at_a_time_note_says_to_continue_on_the_output(self, capsys, src, tmp_path):
         out_path = tmp_path / "o.docx"
         code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 2, "--author", AUTHOR, "-o", out_path)
-        assert code == 1 and f"continue on {out_path} with --in-place" in err
+        assert code == 1 and f"the first time with --output={out_path}, then on that file with --in-place" in err
+
+    def test_new_text_containing_the_old_falls_back_to_find(self, capsys, src):
+        code, _, err = run(capsys, "replace", src, "ing", "ing\nZ", "--expect", 2, "--author", AUTHOR, "--in-place")
+        assert code == 1 and retry_argv(err) == ["find", "--", str(src), "ing"]
+        assert "run find before each replace" in err
 
     def test_overlapping_matches_retry_with_find(self, capsys, src):
         run(capsys, "replace", src, "lazy", "banana", "--author", AUTHOR, "--in-place")
         run(capsys, "accept", src, "--all", "--author", AUTHOR, "--in-place")
         code, _, err = run(capsys, "replace", src, "ana", "X", "--expect", 2, "--author", AUTHOR, "--in-place")
         assert code == 1 and retry_argv(err) == ["find", "--", str(src), "ana"]
+        assert "these matches overlap" in err
 
-    def test_newline_expect_refusal_points_at_find(self, capsys, src):
-        code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 2, "--author", AUTHOR, "--in-place")
-        assert code == 1 and retry_argv(err) == ["find", "--", str(src), "ing"]
+    def test_stale_ref_with_occurrence_relists_instead_of_guessing(self, capsys, src):
+        stale = ref_of(src, 2)
+        run(capsys, "replace", src, "quick", "swift", "--author", AUTHOR, "--in-place")
+        code, _, err = run(
+            capsys, "replace", src, "o", "0", "--paragraph", stale, "--occurrence", 1, "--author", AUTHOR, "--in-place"
+        )
+        assert code == 1 and "numbered afresh" in err
+        assert retry_argv(err) == ["find", f"--paragraph={ref_of(src, 2)}", "--", str(src), "o"]
 
     def test_malformed_ref_retries_with_list(self, capsys, src):
         code, _, err = run(capsys, "replace", src, "fox", "cat", "--paragraph", "P2", "--author", AUTHOR, "--in-place")
