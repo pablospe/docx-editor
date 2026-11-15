@@ -73,6 +73,17 @@ class _RevisionManagerBase:
     ) -> TextMapMatch:
         raise NotImplementedError
 
+    def _refuse_split_op(
+        self,
+        match: TextMapMatch,
+        action: str,
+        new_text: str,
+        fields: FieldResultIndex | None,
+        paragraph_ref: str | None,
+        ctx: str,
+    ) -> None:
+        raise NotImplementedError
+
     def _get_run_info(self, node) -> tuple[Element | None, str]:
         raise NotImplementedError
 

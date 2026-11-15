@@ -1114,8 +1114,8 @@ def field_result_index(dom) -> FieldResultIndex:
 
     Not indexed: results Word keeps on update — a locked field
     (``@w:fldLock``), ``HYPERLINK`` display text and a ``FORMTEXT`` value —
-    and tracked-deleted content (``w:del`` / ``w:moveFrom``: the accepted
-    view, as in :func:`build_text_map`). Unbalanced markup never locks the
+    tracked-deleted content (``w:del`` / ``w:moveFrom``: the accepted view,
+    as in :func:`build_text_map`) and text boxes (``w:txbxContent``). Unbalanced markup never locks the
     rest of the document: an ``end`` with no field open is ignored, a node is
     recorded when the innermost regenerated field holding it closes, and a
     field still open when the walk ends drops only its own direct result
@@ -1123,8 +1123,8 @@ def field_result_index(dom) -> FieldResultIndex:
     ``begin`` is tracked-deleted closes the innermost open field early.
 
     One element-level walk of ``w:body``; edit paths build it once per call
-    (batches once per batch; ``batch_edit`` rebuilds it after an op on a
-    paragraph holding a ``fldChar``) and check matched positions against it.
+    (batches once per batch; ``batch_edit`` rebuilds it before a second op
+    on a paragraph holding a ``fldChar``) and check matched positions against it.
     """
     # The body is a child of the root: finding it that way keeps this off the
     # Document-level walk count the batch paths pin (count_dom_walks).
@@ -1134,20 +1134,23 @@ def field_result_index(dom) -> FieldResultIndex:
         return {}
     result: FieldResultIndex = {}
     stack: list[_FieldFrame] = []
-    deleted: set[Element] = set()
+    # Tracked-deleted content is not in the accepted view, and a text box is
+    # its own story (and not editable): neither takes part in the walk.
+    skipped: set[Element] = set()
     last_p = None
     for node in bodies[0].getElementsByTagName("*"):
-        if node in deleted:
+        if node in skipped:
             continue
         tag = node.tagName
-        if tag in ("w:del", "w:moveFrom"):
-            deleted.update(node.getElementsByTagName("*"))
+        if tag in ("w:del", "w:moveFrom", "w:txbxContent"):
+            skipped.update(node.getElementsByTagName("*"))
         elif tag == "w:p":
             # A field still open when the next paragraph starts spans the
             # previous paragraph's end: a split there lands inside its result.
-            owner = _regenerating(stack)
-            if last_p is not None and owner is not None:
-                result[last_p] = owner.instr[0]
+            # Held like a result node, so only a field that closes records it.
+            holder = _regenerating(reversed(stack))
+            if last_p is not None and holder is not None:
+                holder.nodes.append(last_p)
             last_p = node
         elif tag == "w:fldChar":
             kind = node.getAttribute("w:fldCharType")

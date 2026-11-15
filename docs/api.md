@@ -513,9 +513,10 @@ if match := doc.find_text("Section 6"):
 > touches a field (`"5."` → `"5!"` after a page number, or an insertion
 > before a field that starts the paragraph) is refused as a whole: make that
 > change with `replace`/`insert_after` on the characters outside the field.
-> Text cannot be appended after a field that ends its paragraph (`"Page 3"` →
-> `"Page 3 of 10"` with `3` a PAGE field): every verb would write it inside the
-> field's result, so it is refused, and there is no outside anchor to use.
+> Text cannot be appended to a paragraph that ends in a field (`"Page 3"` →
+> `"Page 3 of 10"` with `3` a PAGE field): it would be written inside the
+> field's result, so it is refused. A new paragraph after it is fine:
+> `rewrite_paragraph(ref, old_text + "\nNew paragraph")`.
 > Three kinds of result stay editable because Word keeps them on update:
 > `HYPERLINK` display text, a legacy text form field's value (`FORMTEXT`) and
 > locked fields (`w:fldLock="true"`). Searching is unaffected — `find_text`/`find_all`
@@ -1898,14 +1899,15 @@ Raised when an edit target lands inside a field result — see
 `batch_edit`/`batch_rewrite` it arrives as a `BatchOperationError`'s
 `original`, and a dry run reports it as an invalid result. Structured fields:
 
-- `text`: the edit target (search text, anchor, or the rewritten span).
+- `text`: the edit target (search text, anchor, or the rewritten span), or
+  the new text when a `\n` edit is refused for where it would land.
 - `field_code`: the field's instruction, whitespace-normalized
   (`PAGEREF _Toc123 \h`).
 - `field_type`: the instruction's first word (`PAGEREF`). For a field nested
   in another's result it is the outermost regenerated one — a page number
   inside a TOC entry reports `TOC`, whose update regenerates it.
 - `paragraph_ref`: the paragraph the edit was scoped to, or None when
-  document-wide or refused at a split boundary.
+  document-wide.
 - `next`: always None — no single call resolves it.
 
 ```python

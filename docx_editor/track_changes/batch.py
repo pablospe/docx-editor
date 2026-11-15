@@ -25,7 +25,7 @@ from ..xml_editor import (
 from .base import _RevisionManagerBase
 from .diff import _diff_hunks
 from .dom import _set_xml_space_preserve
-from .locate import _refuse_field_result, _refuse_split_into_field
+from .locate import _refuse_field_result, _refuse_split_edit, _refuse_text_into_field
 from .models import (
     EditOperation,
     EditValidationResult,
@@ -111,6 +111,14 @@ class _BatchMixin(_RevisionManagerBase):
             # its yield before bundling) and rollback restores the registry.
             with self._changeset(), self.editor.frozen_timestamp():
                 for k, (original_idx, ref, op) in enumerate(parsed):
+                    # Only a later op on this same paragraph can meet a node this
+                    # op re-creates (ops run in descending order; a split's tail is
+                    # never targeted), and same-paragraph ops are adjacent after
+                    # the sort. Probed before the op: a split may move fldChars out.
+                    same_next = k + 1 < len(parsed) and parsed[k + 1][1].index == ref.index
+                    rebuild = (
+                        bool(fields) and same_next and bool(paragraphs[ref.index - 1].getElementsByTagName("w:fldChar"))
+                    )
                     try:
                         # Each op is its own logical edit: one group per op, so
                         # callers can accept one op and reject another.
@@ -119,11 +127,7 @@ class _BatchMixin(_RevisionManagerBase):
                     except (ValueError, DocxEditError) as e:
                         raise BatchOperationError(original_idx, str(e), original=e) from e
                     results[original_idx] = change_id
-                    # Only a later op on this same paragraph can meet a re-created
-                    # node (ops run in descending order; a split's tail is never
-                    # targeted), and same-paragraph ops are adjacent after the sort.
-                    same_next = k + 1 < len(parsed) and parsed[k + 1][1].index == ref.index
-                    if fields and same_next and paragraphs[ref.index - 1].getElementsByTagName("w:fldChar"):
+                    if rebuild:
                         fields = field_result_index(self.editor.dom)
             return results
         except Exception:
@@ -187,7 +191,11 @@ class _BatchMixin(_RevisionManagerBase):
         p = paragraphs[ref.index - 1]
 
         target = self._resolve_action_target(op)
-        match = self._locate_in_paragraph(p, op.paragraph, target, op.occurrence, fields=fields, ctx=f"{op.action}(): ")
+        ctx = f"{op.action}(): "
+        match = self._locate_in_paragraph(p, op.paragraph, target, op.occurrence, fields=fields, ctx=ctx)
+        new_text = {"replace": op.replace_with, "insert_after": op.text, "insert_before": op.text}.get(op.action)
+        if new_text is not None:
+            self._refuse_split_op(match, op.action, new_text, fields, op.paragraph, ctx)
 
         if op.action == "replace":
             assert op.replace_with is not None  # guaranteed by _resolve_action_target
@@ -295,12 +303,10 @@ class _BatchMixin(_RevisionManagerBase):
             fields = field_result_index(self.editor.dom)
         try:
             match = self._locate_in_paragraph(p, op.paragraph, target, op.occurrence, fields=fields, ctx=ctx)
-            # A \n replace / insert_after splits before the character after the
-            # match, as _split_replace/_split_insert check on apply (an
-            # insert_before splits at its anchor, already checked above).
-            new_text = {"replace": op.replace_with, "insert_after": op.text}.get(op.action)
-            if new_text and "\n" in new_text:
-                _refuse_split_into_field(p, build_text_map(p), match.end, fields, new_text, op.paragraph, ctx)
+            # The same split check _apply_single_edit runs.
+            new_text = {"replace": op.replace_with, "insert_after": op.text, "insert_before": op.text}.get(op.action)
+            if new_text is not None:
+                self._refuse_split_op(match, op.action, new_text, fields, op.paragraph, ctx)
         except (ValueError, DocxEditError) as e:
             return _ValidationOutcome(error=str(e))
 
@@ -436,8 +442,9 @@ class _BatchMixin(_RevisionManagerBase):
             ValueError: If ``new_text`` is not a string, or does not hold the
                 same number of tab marks (``\\t``) as the paragraph — a rewrite
                 keeps every tab and changes the text between them (ISSUES.md #6)
-            FieldResultError: If a changed span lands inside a field result —
-                refused before any hunk is applied
+            FieldResultError: If a changed word (the diff is word-level) touches
+                a field result, or inserted text or a split would land inside
+                one — refused before any hunk is applied
             HashMismatchError: If the paragraph hash doesn't match
             IndexError: If paragraph index is out of range
         """
@@ -498,19 +505,18 @@ class _BatchMixin(_RevisionManagerBase):
         if fields is None:
             fields = field_result_index(self.editor.dom)
         if fields:
+            ctx = "rewrite_paragraph(): "
             for tag, old_char_start, old_char_end, frag in hunks:
-                ctx = "rewrite_paragraph(): "
-                if tag == "insert":
-                    touched = text_map.positions[min(old_char_start, len(text_map.positions) - 1) :][:1]
-                    target = frag
-                else:
+                if tag != "insert":
+                    # A replace/delete deletes its old span.
                     touched = text_map.positions[old_char_start:old_char_end]
-                    target = old_text[old_char_start:old_char_end]
-                _refuse_field_result(touched, fields, target, ref_str, ctx)
-                if tag != "delete" and "\n" in frag:
-                    # A replace splits at its old end, an insert at its start.
-                    split_at = old_char_end if tag == "replace" else old_char_start
-                    _refuse_split_into_field(p, text_map, split_at, fields, frag, ref_str, ctx)
+                    _refuse_field_result(touched, fields, old_text[old_char_start:old_char_end], ref_str, ctx)
+                if tag == "delete":
+                    continue
+                if "\n" in frag:
+                    _refuse_split_edit(p, text_map, old_char_start, old_char_end, frag, fields, ref_str, ctx)
+                elif tag == "insert":
+                    _refuse_text_into_field(p, text_map, old_char_start, old_char_start, fields, frag, ref_str, ctx)
 
         # Preflight the split (\n) hunks against the pre-mutation state: the
         # reversed hunk loop below has no rollback, so anything that can't split

@@ -213,6 +213,34 @@ class TestRefusal:
             assert isinstance(exc.value.original, FieldResultError)
             assert _xml(d) == before
 
+    def test_split_replace_after_a_closing_field_refuses(self, doc):
+        # Replacing the paragraph's tail after the field: segment 0 would be
+        # appended after the last character before the match — the REF result.
+        ref = find_ref(doc, "See section")
+        before = _xml(doc)
+        with pytest.raises(FieldResultError) as exc:
+            doc.replace(" for details.", ", below.\nNew paragraph", paragraph=ref)
+        assert exc.value.paragraph_ref == ref
+        assert _xml(doc) == before
+        op = EditOperation.replace(" for details.", ", below.\nNew paragraph", paragraph=ref)
+        [result] = doc.batch_edit([op], dry_run=True)
+        assert not result.valid
+
+    def test_new_paragraph_after_a_trailing_field_applies(self, simple_docx, tmp_path):
+        body = _p(_r("As shown in Figure "), _complex("SEQ Figure", _r("3")))
+        with _open(simple_docx, tmp_path, body) as d:
+            d.rewrite_paragraph(find_ref(d, "As shown"), "As shown in Figure 3\nNew paragraph")
+            assert d.list_paragraphs(limit=None)[-1].endswith("New paragraph")
+
+    def test_rewrite_into_an_empty_paragraph_inside_a_field_refuses(self, simple_docx, tmp_path):
+        body = _p(_r("Contents"), _fld("begin"), _instr("TOC"), _fld("separate")) + _p() + _p(_r("Intro"), _fld("end"))
+        with _open(simple_docx, tmp_path, body) as d:
+            empty = d.list_paragraphs(limit=None)[1].split("|")[0]
+            before = _xml(d)
+            with pytest.raises(FieldResultError):
+                d.rewrite_paragraph(empty, "Injected")
+            assert _xml(d) == before
+
     def test_found_then_scoped_edit_refuses(self, doc):
         # The locate-document-wide-then-scoped route: the guard lives in
         # _locate_in_paragraph, which every scoped edit passes through.
@@ -259,10 +287,13 @@ class TestOutsideTheFieldStillEdits:
         assert any("March 2021" in t for t in texts) and any("the site" in t for t in texts)
 
     def test_unterminated_field_does_not_lock_the_rest(self, simple_docx, tmp_path):
-        body = _p(_fld("begin"), _instr("TOC"), _fld("separate"), _r("Entry one")) + _p(_r("Plain text."))
+        body = (
+            _p(_fld("begin"), _instr("TOC"), _fld("separate"), _r("Entry one")) + _p(_r("Plain text.")) + _p(_r("End."))
+        )
         with _open(simple_docx, tmp_path, body) as d:
             d.replace("Entry", "Item", paragraph=find_ref(d, "Entry"))
             d.replace("Plain", "Simple", paragraph=find_ref(d, "Plain"))
+            d.insert_after("text.", "\nNew", paragraph=find_ref(d, "text."))  # a split at a paragraph end
 
     def test_reads_still_find_field_results(self, doc):
         assert doc.find_text("Overview") is not None
@@ -467,6 +498,19 @@ class TestFieldResultIndex:
         paragraphs = dom.getElementsByTagName("w:p")
         # TOC opens in P2 and closes in P3: only P2's end lies inside it.
         assert [index.get(p) for p in paragraphs] == [None, 'TOC \\o "1-3" \\h', None, None]
+
+    def test_unterminated_field_keys_no_paragraph(self):
+        body = _p(_fld("begin"), _instr("TOC"), _fld("separate"), _r("Entry")) + _p(_r("Plain")) + _p(_r("End"))
+        dom = defusedxml.minidom.parseString(f"<w:document {NS}><w:body>{body}</w:body></w:document>")
+        assert field_result_index(dom) == {}
+
+    def test_text_box_paragraphs_are_skipped(self):
+        box = "<w:r><w:pict><w:txbxContent>" + _p(_r("Box")) + "</w:txbxContent></w:pict></w:r>"
+        body = _p(box, _r("Contents"), _fld("begin"), _instr("TOC"), _fld("separate")) + _p(_r("Entry"), _fld("end"))
+        dom = defusedxml.minidom.parseString(f"<w:document {NS}><w:body>{body}</w:body></w:document>")
+        index = field_result_index(dom)
+        outer = [p for p in dom.getElementsByTagName("w:p") if p.parentNode.tagName == "w:body"]
+        assert index.get(outer[0]) == "TOC" and set(_index_texts(body)) == {"Entry"}
 
     def test_no_fields(self):
         assert _index_texts(_p(_r("plain"))) == {}

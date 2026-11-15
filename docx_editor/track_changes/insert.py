@@ -11,7 +11,6 @@ from ..xml_editor import (
     _escape_xml,
     _reject_control_chars,
     build_text_map,
-    field_result_index,
     get_rPr_xml,
     rebuild_run_fragments,
     render_plain_wt,
@@ -25,7 +24,6 @@ from .dom import (
     _paragraph_mark_ins,
     _set_xml_space_preserve,
 )
-from .locate import _refuse_split_into_field
 from .models import _RUN_TRACK_CHANGE_TAGS
 
 
@@ -52,7 +50,9 @@ class _InsertMixin(_RevisionManagerBase):
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the search scope
-            FieldResultError: If any anchor character is inside a field result
+            FieldResultError: If any anchor character is inside a field result,
+                or a ``\\n`` in the new text would split the paragraph (or write its
+                first line) inside one
             HashMismatchError: If the paragraph hash doesn't match
         """
         return self._insert_text(anchor, text, position="after", occurrence=occurrence, paragraph=paragraph)
@@ -79,7 +79,9 @@ class _InsertMixin(_RevisionManagerBase):
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the search scope
-            FieldResultError: If any anchor character is inside a field result
+            FieldResultError: If any anchor character is inside a field result,
+                or a ``\\n`` in the new text would split the paragraph (or write its
+                first line) inside one
             HashMismatchError: If the paragraph hash doesn't match
         """
         return self._insert_text(anchor, text, position="before", occurrence=occurrence, paragraph=paragraph)
@@ -97,14 +99,17 @@ class _InsertMixin(_RevisionManagerBase):
             raise ValueError(f"'text' must be a string (empty string is allowed), got {text!r}")
         _reject_control_chars(anchor, field="'anchor'", ctx=f"insert_{position}(): ", allow_tab=True)
         _reject_control_chars(text, field="'text'", ctx=f"insert_{position}(): ", allow_newline=True)
+        ctx = f"insert_{position}(): "
         with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
                 p = self._resolve_paragraph(ref)
-                match = self._locate_in_paragraph(p, paragraph, anchor, occurrence, ctx=f"insert_{position}(): ")
+                match = self._locate_in_paragraph(p, paragraph, anchor, occurrence, ctx=ctx)
+                self._refuse_split_op(match, f"insert_{position}", text, None, paragraph, ctx)
                 return self._insert_near_match(match, text, position)
 
-            match = self._locate_document_wide(anchor, occurrence, ctx=f"insert_{position}(): ")
+            match = self._locate_document_wide(anchor, occurrence, ctx=ctx)
+            self._refuse_split_op(match, f"insert_{position}", text, None, None, ctx)
             return self._insert_near_match(match, text, position)
 
     def _insert_near_match(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:
@@ -266,11 +271,6 @@ class _InsertMixin(_RevisionManagerBase):
         # unsplittable boundary now, before mutating (no single-op rollback).
         text_map = build_text_map(p1)
         self._reject_unsplittable_boundary(p1, text_map, match.end)
-        # The split cuts at match.end: refuse when that is inside a field result
-        # (the field's begin would stay behind while its result moves).
-        _refuse_split_into_field(
-            p1, text_map, match.end, field_result_index(self.editor.dom), replace_with, None, "replace(): "
-        )
         start = match.start
         self._delete_across_nodes(match)
         if segments[0]:
@@ -293,10 +293,6 @@ class _InsertMixin(_RevisionManagerBase):
         # boundary now, before mutating (no single-op rollback).
         text_map = build_text_map(p1)
         self._reject_unsplittable_boundary(p1, text_map, base)
-        # Segment 0 and the split both land at base (see _split_replace).
-        _refuse_split_into_field(
-            p1, text_map, base, field_result_index(self.editor.dom), text, None, f"insert_{position}(): "
-        )
         if segments[0]:
             self._rewrite_insert_at(p1, build_text_map(p1), base, segments[0])
         return self._apply_paragraph_splits(p1, base + len(segments[0]), segments[1:])

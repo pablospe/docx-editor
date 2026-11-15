@@ -30,6 +30,7 @@ from ..xml_editor import (
     fold_quotes,
 )
 from .base import _RevisionManagerBase
+from .dom import _ancestor_paragraph
 from .models import SearchResult, _LocatedMatch
 
 
@@ -85,6 +86,34 @@ def _refuse_field_result(
             raise FieldResultError(text, instr, paragraph_ref=paragraph_ref, ctx=ctx)
 
 
+def _raise_if_field(key, fields: FieldResultIndex, text: str, paragraph_ref: str | None, ctx: str) -> None:
+    instr = fields.get(key)
+    if instr is not None:
+        raise FieldResultError(text, instr, paragraph_ref=paragraph_ref, ctx=ctx)
+
+
+def _refuse_text_into_field(
+    paragraph,
+    text_map: TextMap,
+    start: int,
+    end: int,
+    fields: FieldResultIndex,
+    text: str,
+    paragraph_ref: str | None,
+    ctx: str,
+) -> None:
+    """Raise :class:`FieldResultError` if text written in place of ``[start, end)`` lands in a field result.
+
+    ``start == end`` is a plain insertion. As ``_rewrite_insert_at`` places
+    it, the text attaches before the character at ``end``; at the paragraph
+    end, after the character before ``start``; with no text left in the
+    paragraph, at its end — inside whatever field spans it (recorded under
+    the paragraph, see ``field_result_index``).
+    """
+    attach = text_map.positions[end : end + 1] or text_map.positions[:start][-1:]
+    _raise_if_field(attach[0].node if attach else paragraph, fields, text, paragraph_ref, ctx)
+
+
 def _refuse_split_into_field(
     paragraph,
     text_map: TextMap,
@@ -101,9 +130,29 @@ def _refuse_split_into_field(
     this paragraph), which ``field_result_index`` records under the paragraph.
     """
     key = text_map.positions[pos].node if pos < len(text_map.positions) else paragraph
-    instr = fields.get(key)
-    if instr is not None:
-        raise FieldResultError(text, instr, paragraph_ref=paragraph_ref, ctx=ctx)
+    _raise_if_field(key, fields, text, paragraph_ref, ctx)
+
+
+def _refuse_split_edit(
+    paragraph,
+    text_map: TextMap,
+    start: int,
+    end: int,
+    new_text: str,
+    fields: FieldResultIndex,
+    paragraph_ref: str | None,
+    ctx: str,
+) -> None:
+    """Refuse a ``\\n`` edit writing ``new_text`` in place of ``[start, end)`` if any part lands in a field.
+
+    Segment 0 is written like any insertion (:func:`_refuse_text_into_field`)
+    and the split cuts at ``end`` (:func:`_refuse_split_into_field`). Shared by
+    the edit verbs, ``batch_edit`` (apply and dry run) and the rewrite
+    preflight, so the checks cannot drift apart.
+    """
+    if new_text.split("\n", 1)[0]:
+        _refuse_text_into_field(paragraph, text_map, start, end, fields, new_text, paragraph_ref, ctx)
+    _refuse_split_into_field(paragraph, text_map, end, fields, new_text, paragraph_ref, ctx)
 
 
 class _LocateMixin(_RevisionManagerBase):
@@ -201,6 +250,34 @@ class _LocateMixin(_RevisionManagerBase):
             fields = field_result_index(self.editor.dom)
         _refuse_field_result(match.positions, fields, text, paragraph_ref, ctx)
         return match
+
+    def _refuse_split_op(
+        self,
+        match: TextMapMatch,
+        action: str,
+        new_text: str,
+        fields: FieldResultIndex | None,
+        paragraph_ref: str | None,
+        ctx: str,
+    ) -> None:
+        """Refuse a located ``replace``/``insert_*`` whose ``new_text`` holds a ``\\n`` landing in a field.
+
+        Called right after the locate by every path that applies or validates
+        one (the verbs, ``batch_edit`` and its dry run), so they refuse alike.
+        A replace writes in place of the match; an insert at its end or start.
+        None ``fields`` builds the index (only when there is a ``\\n``).
+        """
+        if "\n" not in new_text:
+            return
+        paragraph = _ancestor_paragraph(match.positions[0].node)
+        start, end = {
+            "replace": (match.start, match.end),
+            "insert_after": (match.end, match.end),
+            "insert_before": (match.start, match.start),
+        }[action]
+        if fields is None:
+            fields = field_result_index(self.editor.dom)
+        _refuse_split_edit(paragraph, build_text_map(paragraph), start, end, new_text, fields, paragraph_ref, ctx)
 
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.

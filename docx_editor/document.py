@@ -1508,7 +1508,8 @@ class Document:
                 matches more than once in the paragraph.
             FieldResultError: If any character of the target is inside a field
                 result (Word regenerates it, discarding the edit), or a ``\\n`` in
-                the new text would split the paragraph right before one.
+                the new text would split the paragraph (or write its first
+                line) inside one.
             HashMismatchError: If the paragraph hash is stale — including a
                 SearchResult whose paragraph was edited after the search.
 
@@ -1653,7 +1654,8 @@ class Document:
                 matches more than once in the paragraph.
             FieldResultError: If any character of the target is inside a field
                 result (Word regenerates it, discarding the edit), or a ``\\n`` in
-                the new text would split the paragraph right before one.
+                the new text would split the paragraph (or write its first
+                line) inside one.
             HashMismatchError: If the paragraph hash is stale.
 
         Example:
@@ -1932,8 +1934,8 @@ class Document:
                 non-empty control-character-free string, or ``ref`` is
                 malformed.
             FieldResultError: If a changed word (the diff is word-level) touches
-                a field result, or a split lands right before one; refused before
-                any change is written.
+                a field result, or inserted text or a split would land inside
+                one; refused before any change is written.
             ParagraphIndexError: If ``ref``'s index is out of range.
             HashMismatchError: If ``ref``'s hash is stale.
 

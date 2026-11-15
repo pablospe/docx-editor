@@ -474,7 +474,7 @@ class FieldResultError(DocxEditError, ValueError):
             For a field nested in another's result this is the outermost
             regenerated field — the one whose update regenerates the text.
         paragraph_ref: The paragraph ref the edit was scoped to, or None for
-            a document-wide edit or a refused split boundary.
+            a document-wide edit.
         next: Always None — no single call resolves it.
     """
 
