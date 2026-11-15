@@ -20,6 +20,7 @@ from conftest import find_ref, replace_document_xml, replace_docx_parts
 from test_corpus_harness import harness
 
 from docx_editor import Document
+from docx_editor.comments import CommentManager
 from docx_editor.exceptions import XMLError
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -449,6 +450,112 @@ class TestRelationshipNamingAnotherPart:
 
         rels = read_part(out, RELS)
         assert rels.count(f'Type="{COMMENTS_REL_TYPE}"') == 1
+
+
+class TestTargetLeavingThePackage:
+    """A relationship target is honoured only when it stays inside the package."""
+
+    OUTSIDE = f'{XML_DECL}<w:comments xmlns:w="{W_NS}"><!-- outside the package --></w:comments>'
+
+    def test_backslash_target_is_refused(self, simple_docx, tmp_path):
+        """``..\\..\\outside.xml`` is one file name on POSIX and a climb out of the package on Windows."""
+        src = add_relationship(simple_docx, tmp_path / "backslash.docx", COMMENTS_REL_TYPE, "..\\..\\outside.xml")
+        with Document.open(src, author="Tester", workspace_dir=tmp_path / "ws") as doc:
+            workspace = doc._workspace.workspace_path
+        # Where the target would land if backslashes were path separators.
+        outside = workspace.parent / "outside.xml"
+        outside.write_text(self.OUTSIDE, encoding="utf-8")
+        before = (outside.read_bytes(), outside.stat().st_mtime_ns)
+
+        out = tmp_path / "out.docx"
+        with Document.open(src, author="Tester", workspace_dir=tmp_path / "ws") as doc:
+            assert doc._workspace.workspace_path == workspace
+            assert doc._comment_manager.comments_path == workspace / "word" / "comments.xml"
+            with pytest.raises(XMLError, match="backslash"):
+                doc.add_comment("quick brown", "check this")
+            assert marker_count(doc) == 0
+            doc.save(out)
+
+        assert (outside.read_bytes(), outside.stat().st_mtime_ns) == before
+        with zipfile.ZipFile(out) as z:
+            assert [n for n in z.namelist() if "comments" in n.lower() or "outside" in n] == []
+
+    def test_symlinked_part_pointing_outside_is_refused(self, simple_docx, tmp_path):
+        outside = tmp_path / "outside.xml"
+        outside.write_text(self.OUTSIDE, encoding="utf-8")
+        before = (outside.read_bytes(), outside.stat().st_mtime_ns)
+        src = add_relationship(simple_docx, tmp_path / "linked.docx", COMMENTS_REL_TYPE, "comments1.xml")
+
+        with Document.open(src, author="Tester", workspace_dir=tmp_path / "ws") as doc:
+            workspace = doc._workspace.workspace_path
+            # A zip cannot carry the link (unpack refuses symlink entries), so
+            # plant it in the workspace and resolve the parts again.
+            (workspace / "word" / "comments1.xml").symlink_to(outside)
+            manager = CommentManager(workspace, doc._document_editor, "Tester", "T")
+
+            assert manager.comments_path == workspace / "word" / "comments.xml"
+            assert manager.list_comments() == []
+            with pytest.raises(XMLError, match="leaves the package"):
+                manager.add_comment("quick brown", "check this")
+            assert marker_count(doc) == 0
+            manager.save_all()
+
+        assert (outside.read_bytes(), outside.stat().st_mtime_ns) == before
+
+    def test_symlinked_default_named_target_is_refused(self, simple_docx, tmp_path):
+        outside = tmp_path / "outside.xml"
+        outside.write_text(self.OUTSIDE, encoding="utf-8")
+        src = add_relationship(simple_docx, tmp_path / "linked.docx", COMMENTS_REL_TYPE, "comments.xml")
+
+        with Document.open(src, author="Tester", workspace_dir=tmp_path / "ws") as doc:
+            workspace = doc._workspace.workspace_path
+            (workspace / "word" / "comments.xml").symlink_to(outside)
+            manager = CommentManager(workspace, doc._document_editor, "Tester", "T")
+
+            with pytest.raises(XMLError, match="leaves the package"):
+                manager.add_comment("quick brown", "check this")
+
+
+class TestWiringAtSaveChecksTheRoot:
+    """A default-named file is wired at save only if it is the comment part its name says."""
+
+    def test_default_named_file_with_another_root_is_not_wired(self, simple_docx, tmp_path):
+        src = tmp_path / "stray.docx"
+        shutil.copy(simple_docx, src)
+        with zipfile.ZipFile(src, "a") as z:
+            z.writestr("word/comments.xml", f'{XML_DECL}<w:settings xmlns:w="{W_NS}"/>')
+        out = tmp_path / "out.docx"
+        with Document.open(src, author="Tester") as doc:
+            doc.save(out)
+
+        assert COMMENTS_REL_TYPE not in read_part(out, RELS)
+        assert "/word/comments.xml" not in read_part(out, "[Content_Types].xml")
+
+    def test_unwired_comments_part_is_still_wired(self, simple_docx, tmp_path):
+        src = tmp_path / "unwired.docx"
+        shutil.copy(simple_docx, src)
+        with zipfile.ZipFile(src, "a") as z:
+            z.writestr("word/comments.xml", EMPTY)
+        out = tmp_path / "out.docx"
+        with Document.open(src, author="Tester") as doc:
+            doc.save(out)
+
+        assert read_part(out, RELS).count(f'Type="{COMMENTS_REL_TYPE}"') == 1
+        assert read_part(out, "[Content_Types].xml").count('PartName="/word/comments.xml"') == 1
+
+    def test_wired_parts_are_not_parsed_at_save(self, open_doc, tmp_path, monkeypatch):
+        """An ordinary document, every part already wired, pays no root check on save."""
+        doc = open_doc(EMPTY)
+        doc.add_comment("quick brown", "check this")
+        _, reopened = save_and_reopen(doc, tmp_path)
+        try:
+            checked: list[Path] = []
+            monkeypatch.setattr("docx_editor.document.has_root", lambda path, root_tag: checked.append(path) or True)
+            reopened.save(tmp_path / "again.docx")
+        finally:
+            reopened.close()
+
+        assert checked == []
 
 
 class TestTypedFailureLeavesNoMarkers:

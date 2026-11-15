@@ -134,6 +134,27 @@ COMMENT_PARTS = (
 )
 
 
+def has_root(path: Path, root_tag: str) -> bool:
+    """Whether ``path`` is a well-formed XML file whose document element is ``root_tag``.
+
+    Parsed on its own, never through an editor: a file that fails this test
+    must not end up in an editor cache.
+    """
+    try:
+        return path.is_file() and defusedxml.minidom.parse(str(path)).documentElement.tagName == root_tag
+    except (OSError, ExpatError, DefusedXmlException):
+        # OSError: a target no file system can hold, e.g. an overlong name.
+        return False
+
+
+def _is_inside(path: Path, directory: Path) -> bool:
+    """Whether ``path``, with symlinks followed, lies inside ``directory``."""
+    try:
+        return path.resolve().is_relative_to(directory.resolve())
+    except OSError:
+        return False
+
+
 class CommentManager:
     """Manages comments in a Word document.
 
@@ -204,8 +225,9 @@ class CommentManager:
         A target under another name is adopted only when it is a file whose
         document element is the part's expected root. Anything else — a
         missing file, another kind of part such as ``document.xml``, an
-        external target, two different parts for one type, one file for two
-        types — cannot be honoured: adopting it would put a second editor on a
+        external target, a target with a backslash or one that resolves
+        outside the workspace, two different parts for one type, one file for
+        two types — cannot be honoured: adopting it would put a second editor on a
         part the document already edits, and a part created under the default
         name instead would stay unwired, because its type already has a
         relationship. Each such relationship is described in the second list,
@@ -226,12 +248,19 @@ class CommentManager:
                 if rel_elem.getAttribute("TargetMode") == "External":
                     unusable.append(f"{part.name} relationship has the external target {target!r}")
                     continue
+                # A backslash is not a separator in an OPC part name, but a
+                # file system may treat it as one and climb out of the package.
+                if "\\" in target:
+                    unusable.append(f"{part.name} relationship target {target!r} contains a backslash")
+                    continue
                 # An OPC target is a reference relative to the source part,
                 # /word/document.xml. normpath cannot climb above the root of
-                # an absolute path, so the result stays inside the workspace.
+                # an absolute path; a symlink in the workspace still can.
                 part_name = posixpath.normpath(posixpath.join("/word", target))
                 part_path = self.workspace_path / part_name.lstrip("/")
-                if part_path == self.word_path / part.name or self._has_root(part_path, part.root_tag):
+                if not _is_inside(part_path, self.workspace_path):
+                    unusable.append(f"{part.name} relationship target {target!r} leaves the package")
+                elif part_path == self.word_path / part.name or has_root(part_path, part.root_tag):
                     resolved[part.rel_type].add(part_path)
                 else:
                     unusable.append(f"{part.name} relationship target {target!r} is not a comment part of this package")
@@ -245,19 +274,6 @@ class CommentManager:
             if paths.count(path) > 1:
                 unusable.append(f"{part.name} resolves to {path.name}, which another comment part also resolves to")
         return tuple(paths), unusable
-
-    @staticmethod
-    def _has_root(path: Path, root_tag: str) -> bool:
-        """Whether ``path`` is a well-formed XML file whose document element is ``root_tag``.
-
-        Parsed on its own, never through :meth:`_get_editor`: a file that
-        fails this test must not end up in the editor cache.
-        """
-        try:
-            return path.is_file() and defusedxml.minidom.parse(str(path)).documentElement.tagName == root_tag
-        except (OSError, ExpatError, DefusedXmlException):
-            # OSError: a target no file system can hold, e.g. an overlong name.
-            return False
 
     def _get_editor(self, xml_path: Path) -> DocxXMLEditor:
         """Get or create an editor for the specified XML file."""

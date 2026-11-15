@@ -14,7 +14,7 @@ from xml.dom.minidom import Attr, Element
 
 import defusedxml.minidom
 
-from .comments import COMMENT_PARTS, Comment, CommentManager, CommentPart
+from .comments import COMMENT_PARTS, Comment, CommentManager, CommentPart, has_root
 from .exceptions import (
     DocumentClosedError,
     DocumentProtectedError,
@@ -3000,6 +3000,11 @@ class Document:
 
         A file that two part types resolve to is left out: it cannot be both,
         and CommentManager refuses to write a comment into such a package.
+
+        Existence is all that is tested here. Whether a file really is the
+        comment part its name says is checked by the callers, and only for a
+        part they are about to wire, so a document whose parts are all wired
+        is not parsed again.
         """
         paths = self._comment_manager.part_paths
         return [
@@ -3017,7 +3022,7 @@ class Document:
         """
         # A part with no relationship of its type is always at its default
         # name, so Target=part.name below is the file it resolved to.
-        on_disk = [part for part, _ in self._comment_parts_on_disk()]
+        on_disk = self._comment_parts_on_disk()
         if not on_disk:
             return
 
@@ -3031,7 +3036,7 @@ class Document:
         # A part is wired when a relationship of its type exists, however the
         # target is spelled — the rule CommentManager resolves the parts by.
         wired_types = {rel_elem.getAttribute("Type") for rel_elem in editor.dom.getElementsByTagName("Relationship")}
-        missing = [part for part in on_disk if part.rel_type not in wired_types]
+        missing = [part for part, path in on_disk if part.rel_type not in wired_types and has_root(path, part.root_tag)]
         if not missing:
             return
 
@@ -3053,11 +3058,8 @@ class Document:
         That includes a part the package keeps under another name: comments
         are written into it, and a consumer finds it by its content type.
         """
-        part_names = [
-            ("/" + path.relative_to(self._workspace.workspace_path).as_posix(), part.content_type)
-            for part, path in self._comment_parts_on_disk()
-        ]
-        if not part_names:
+        on_disk = self._comment_parts_on_disk()
+        if not on_disk:
             return
 
         content_types_path = self._workspace.workspace_path / "[Content_Types].xml"
@@ -3072,9 +3074,11 @@ class Document:
             override_elem.getAttribute("PartName").lower()
             for override_elem in editor.dom.getElementsByTagName("Override")
         }
-        missing = [
-            (part_name, content_type) for part_name, content_type in part_names if part_name.lower() not in declared
-        ]
+        missing = []
+        for part, path in on_disk:
+            part_name = "/" + path.relative_to(self._workspace.workspace_path).as_posix()
+            if part_name.lower() not in declared and has_root(path, part.root_tag):
+                missing.append((part_name, part.content_type))
         if not missing:
             return
 
