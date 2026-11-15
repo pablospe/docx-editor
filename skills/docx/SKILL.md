@@ -735,7 +735,10 @@ ordinary content to the editor, so if that move is later rejected your edit
 goes with it — resolve or reject the foreign move first, or edit outside it.
 Rejecting a `property_change` restores the paragraph's recorded previous
 properties — a record with none clears them, and a recorded style id is
-restored verbatim even when the document defines no such style.
+restored verbatim even when the document defines no such style. A revision
+mark recorded in those previous properties is history while the change is
+pending (not listed, not resolvable by id); rejecting the change makes it a
+live revision again — `reject_all()` resolves it in the same call.
 
 Predict the outcome, then verify with `get_markup_text()`.
 

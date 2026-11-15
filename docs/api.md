@@ -831,6 +831,9 @@ section and table property changes, table-structure revisions,
 [`list_unhandled_revisions()`](#list_unhandled_revisionsauthornone) instead,
 because none of it can be. A move's range marks (`w:moveFromRangeStart` etc.)
 are scaffolding: never listed, swept once the move they bracket is resolved.
+A mark recorded inside a change record — the previous state a `w:rPrChange` or
+`w:pPrChange` holds — is not pending and is not listed either; see
+[`ResolveResult`](#resolveresult).
 
 **Parameters:**
 
@@ -1488,6 +1491,15 @@ not a census of what the document held on entry.
 They count what is still *pending*, so a mark recorded inside a change record —
 a `w:cellIns` in a `w:tcPrChange`'s historical `w:tcPr` — is not counted a
 second time alongside the change itself.
+
+The resolved count follows the same rule: a `w:ins`, `w:del` or move half
+recorded inside a change record is previous state, so it is not listed by
+`list_revisions()`, `accept_revision()`/`reject_revision()` return `False` for
+its id, and `accept_all()`/`reject_all()` do not count it. The one exception is
+a mark recorded in a `w:pPrChange`'s previous numbering properties: rejecting
+that change restores them, so the mark becomes a pending revision —
+`reject_all()` resolves it in the same call, and after `reject_revision()` it
+appears in `list_revisions()`.
 
 ### Example
 
