@@ -302,7 +302,7 @@ class TestCommentManagerEdgeCases:
         doc.close()
 
     def test_resolve_comment_when_extended_file_missing(self, clean_workspace):
-        """Test resolve_comment returns False when commentsExtended.xml doesn't exist."""
+        """resolve_comment recreates a missing commentsExtended.xml and resolves the comment."""
         doc = Document.open(clean_workspace)
 
         # Add a comment then delete the commentsExtended.xml file
@@ -322,7 +322,11 @@ class TestCommentManagerEdgeCases:
         doc._comment_manager._editors.clear()
 
         result = doc.resolve_comment(comment_id)
-        assert result is False
+        assert result is True
+        manager = doc._comment_manager
+        row = manager._extended_row(manager.existing_comments[comment_id]["para_id"])
+        assert row is not None
+        assert row.getAttribute("w15:done") == "1"
 
         doc.close()
 
@@ -570,7 +574,8 @@ class TestDeleteCommentErrorHandling:
                 break
         editor.save()
 
-        # Clear editor cache
+        # Flush the new comment, then clear the editor cache
+        doc._comment_manager.save_all()
         doc._comment_manager._editors.clear()
         doc._comment_manager.document_editor = DocxXMLEditor(
             document_path, rsid="00000000", author="Test", initials="T"
@@ -602,7 +607,8 @@ class TestDeleteCommentErrorHandling:
                 break
         editor.save()
 
-        # Clear editor cache
+        # Flush the new comment, then clear the editor cache
+        doc._comment_manager.save_all()
         doc._comment_manager._editors.clear()
         doc._comment_manager.document_editor = DocxXMLEditor(
             document_path, rsid="00000000", author="Test", initials="T"
@@ -634,7 +640,8 @@ class TestDeleteCommentErrorHandling:
                 break
         editor.save()
 
-        # Clear editor cache
+        # Flush the new comment, then clear the editor cache
+        doc._comment_manager.save_all()
         doc._comment_manager._editors.clear()
         doc._comment_manager.document_editor = DocxXMLEditor(
             document_path, rsid="00000000", author="Test", initials="T"
@@ -667,7 +674,7 @@ class TestResolveCommentParaIdNotFound:
     """Tests for resolve_comment when para_id is not found in commentsExtended."""
 
     def test_resolve_comment_para_id_not_in_extended(self, clean_workspace):
-        """Test resolve_comment returns False when para_id not found in commentsExtended."""
+        """resolve_comment adds the missing commentEx row and resolves the comment."""
         doc = Document.open(clean_workspace)
 
         try:
@@ -687,9 +694,13 @@ class TestResolveCommentParaIdNotFound:
         # Clear the editor cache
         doc._comment_manager._editors.clear()
 
-        # resolve_comment should return False since para_id won't be found
+        # The comment has a paraId and no row: resolve_comment writes the row.
         result = doc.resolve_comment(comment_id)
-        assert result is False
+        assert result is True
+        manager = doc._comment_manager
+        row = manager._extended_row(manager.existing_comments[comment_id]["para_id"])
+        assert row is not None
+        assert row.getAttribute("w15:done") == "1"
 
         doc.close()
 
@@ -866,8 +877,8 @@ class TestParseCommentEdgeCases:
 
         doc.close()
 
-    def test_load_existing_comments_skips_comment_without_para_id(self, clean_workspace):
-        """Test that _load_existing_comments skips comments without para_id."""
+    def test_load_existing_comments_registers_comment_without_para_id(self, clean_workspace):
+        """A comment with no paraId is registered, with ``para_id`` None."""
         doc = Document.open(clean_workspace)
 
         try:
@@ -898,10 +909,10 @@ class TestParseCommentEdgeCases:
         doc._comment_manager._editors.clear()
         existing = doc._comment_manager._load_existing_comments()
 
-        # Comment 997 should NOT be in existing_comments (skipped due to no para_id)
-        assert 997 not in existing
-        # But comment 0 should be there
-        assert 0 in existing
+        # Comment 997 is addressable by its w:id alone
+        assert existing[997] == {"para_id": None}
+        # And comment 0 keeps the paraId it was written with
+        assert existing[0]["para_id"]
 
         doc.close()
 

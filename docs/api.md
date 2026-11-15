@@ -762,6 +762,10 @@ Add a reply to an existing comment.
 
 **Returns:** The new comment ID for the reply (int)
 
+**Raises:** `CommentError` (carrying `comment_id`) if no such comment exists, or if it has no `w:commentReference` in the document for the reply to sit on. `XMLError` if an existing comment part cannot take the reply, or the comment has more than one reference or range start in the document. Either is raised before the document is changed.
+
+Any comment `list_comments()` returns that has a `w:commentReference` in the document can be replied to, whichever application wrote it. Threading is stored in `commentsExtended.xml` and keyed by `w14:paraId`; a comment written without one (Word 2007/2010, LibreOffice, Google Docs) is given a paraId and a `w15:commentEx` row by its first reply. A reply to a comment anchored by a reference alone, with no range, is anchored the same way.
+
 **Example:**
 
 ```python
@@ -794,7 +798,11 @@ Mark a comment as resolved.
 
 - `comment_id` (int): ID of the comment to resolve
 
-**Returns:** True if resolved, False if not found (bool)
+**Returns:** True if resolved, False if the document has no comment with that ID (bool)
+
+**Raises:** `XMLError` if the comment has no `w15:commentEx` row yet and an existing comment part cannot take one. Raised before anything is changed.
+
+Any comment `list_comments()` returns can be resolved, whichever application wrote it. The resolved flag is stored in `commentsExtended.xml` and keyed by `w14:paraId`; a comment written without a paraId or without a row there is given both, and `commentsExtended.xml` is created and wired at save when the document has none.
 
 **Example:**
 
@@ -813,7 +821,9 @@ document still holds.
 
 - `comment_id` (int): ID of the comment to delete
 
-**Returns:** True if deleted, False if not found (bool)
+**Returns:** True if deleted, False if the document has no comment with that ID (bool)
+
+Any comment `list_comments()` returns can be deleted, whichever application wrote it; a comment with no `w14:paraId` is removed by its `w:id` alone.
 
 **Example:**
 
