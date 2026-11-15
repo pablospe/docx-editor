@@ -484,6 +484,10 @@ class Document:
     def find_text(self, text: str, occurrence: int = 0, paragraph: str | None = None) -> SearchResult | None:
         """Find text in the document, including across element boundaries.
 
+        Straight and curly quotes match each other (``'`` = ``‘ ’``,
+        ``"`` = ``“ ”``); a result's ``text`` holds the document's own
+        characters.
+
         Args:
             text: Text to search for (must be non-empty; a tab mark is
                 ``\\t``, as in ``get_visible_text()``)
@@ -539,6 +543,10 @@ class Document:
     def find_all(self, text: str, paragraph: str | None = None) -> list[SearchResult]:
         """Find every match of ``text``, in document order.
 
+        Straight and curly quotes match each other (``'`` = ``‘ ’``,
+        ``"`` = ``“ ”``); a result's ``text`` holds the document's own
+        characters.
+
         One call replaces the N+1 ``find_text`` probes needed to enumerate N
         hits, and each result carries exactly what a follow-up edit needs:
         pass ``paragraph_ref`` as ``paragraph=`` and ``paragraph_occurrence``
@@ -588,6 +596,8 @@ class Document:
 
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.
+
+        Straight and curly quotes match each other, as in :meth:`find_text`.
 
         Use this before editing to verify your search text is unique,
         or to determine which occurrence to target.
@@ -1421,18 +1431,22 @@ class Document:
         """Replace text with tracked changes.
 
         Creates a tracked deletion of the old text and insertion of the new
-        text. Words shared by ``find`` and ``replace_with`` at either end are
-        trimmed first, so only the changed words become revisions — a replace
-        that only adds or only removes words is written as a pure insertion
-        or deletion. The insertion carries the formatting (rPr) that covers
+        text. Words ``replace_with`` leaves unchanged at either end (spelled
+        exactly as in ``find`` or exactly as in the document, which can differ
+        in quote style) are trimmed first, so only the changed words become
+        revisions — a replace that only adds or only removes words is written
+        as a pure insertion or deletion. Only leading and trailing words are
+        kept: everything from the first changed word to the last is deleted
+        and reinserted exactly as ``replace_with`` spells it, so an unchanged
+        interior word takes the replacement's quote style. The insertion carries the formatting (rPr) that covers
         the most characters of the replaced span — runs sharing identical
         formatting tally together, with ties breaking to the earliest-seen
         formatting.
 
-        When ``replace_with`` equals the found text, the call is a no-op: no
-        revisions are created and the returned EditResult equals the input
-        ``paragraph`` ref with ``group_id=None`` and ``revision_ids=()`` —
-        that triple is how callers detect the no-op.
+        When ``replace_with`` equals ``find`` or the found text, the call is
+        a no-op: no revisions are created and the returned EditResult equals
+        the input ``paragraph`` ref with ``group_id=None`` and
+        ``revision_ids=()`` — that triple is how callers detect the no-op.
 
         A replace landing wholly inside your own pending insertion *amends*
         that insertion: your unsaved text is rewritten in place rather than
@@ -1448,8 +1462,9 @@ class Document:
             find: Text to find and replace, or a
                 :class:`~docx_editor.track_changes.SearchResult` from
                 :meth:`find_text`/:meth:`find_all`. A SearchResult already
-                carries the matched text, its paragraph and its occurrence, so
-                pass neither ``paragraph`` nor ``occurrence`` with one.
+                carries the search string (its ``query``, else its ``text``),
+                its paragraph and its occurrence, so pass neither
+                ``paragraph`` nor ``occurrence`` with one.
             replace_with: Replacement text
             paragraph: Paragraph reference from list_paragraphs() (e.g.,
                 "P2#f3c1"). Required unless ``find`` is a SearchResult.

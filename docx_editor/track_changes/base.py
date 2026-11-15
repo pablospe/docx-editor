@@ -73,7 +73,7 @@ class _RevisionManagerBase:
     def _set_node_text(self, node, text: str) -> None:
         raise NotImplementedError
 
-    def _replace_across_nodes(self, match: TextMapMatch, replace_with: str) -> int:
+    def _replace_across_nodes(self, match: TextMapMatch, search: str, replace_with: str) -> int:
         raise NotImplementedError
 
     def _find_ancestor(self, node, tag_name: str) -> Element | None:

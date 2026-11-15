@@ -39,9 +39,20 @@ def _diff_hunks(old_text: str, new_text: str) -> list[tuple[str, int, int, str]]
     return hunks
 
 
-def _trim_replace_affixes(find: str, replace_with: str) -> tuple[int, int]:
+def _trim_replace_affixes(document: str, search: str, replace_with: str) -> tuple[int, int]:
     """Compute the character lengths of the word-level common prefix and
-    suffix shared by ``find`` and ``replace_with``.
+    suffix that ``replace_with`` leaves unchanged in the matched text.
+
+    ``document`` is the matched text as the document spells it and ``search``
+    the text the caller searched for. They are equal up to quote style
+    (:func:`~docx_editor.xml_editor.fold_quotes`) and so have the same length
+    and the same word boundaries. A token of ``replace_with`` leaves its word
+    unchanged when it equals that word *exactly* as searched (the caller typed
+    the same thing on both sides, so the document's characters are kept) or
+    exactly as the document has it (already what the caller wants). A token
+    that differs from both is a change, even when it differs only in quote
+    style — so a style-only replace such as ``'"Term"'`` → ``'“Term”'`` is a
+    real tracked change, not a no-op (ROADMAP.md #96).
 
     Trimming is word-granular (tokens from :func:`_tokenize_words`) so a
     replace only revises whole changed words, matching the diff granularity
@@ -61,28 +72,32 @@ def _trim_replace_affixes(find: str, replace_with: str) -> tuple[int, int]:
     Returns:
         ``(prefix_len, suffix_len)`` in characters.
     """
-    f_toks = _tokenize_words(find)
+    d_toks = _tokenize_words(document)
+    s_toks = _tokenize_words(search)
     r_toks = _tokenize_words(replace_with)
 
+    def unchanged(k: int, tok: str) -> bool:
+        return tok == s_toks[k] or tok == d_toks[k]
+
     i = 0
-    while i < len(f_toks) and i < len(r_toks) and f_toks[i] == r_toks[i]:
+    while i < len(d_toks) and i < len(r_toks) and unchanged(i, r_toks[i]):
         i += 1
     j = 0
-    while j < len(f_toks) - i and j < len(r_toks) - i and f_toks[-(j + 1)] == r_toks[-(j + 1)]:
+    while j < len(d_toks) - i and j < len(r_toks) - i and unchanged(-(j + 1), r_toks[-(j + 1)]):
         j += 1
 
-    prefix_len = sum(len(tok) for tok in f_toks[:i])
-    suffix_len = sum(len(tok) for tok in f_toks[len(f_toks) - j :])
+    prefix_len = sum(len(tok) for tok in d_toks[:i])
+    suffix_len = sum(len(tok) for tok in d_toks[len(d_toks) - j :])
 
-    f_rest = find[prefix_len : len(find) - suffix_len]
+    d_rest = document[prefix_len : len(document) - suffix_len]
     r_rest = replace_with[prefix_len : len(replace_with) - suffix_len]
-    if f_rest and r_rest and not f_rest.strip() and not r_rest.strip():
-        prefix_len += _common_prefix_len(f_rest, r_rest)
+    if d_rest and r_rest and not d_rest.strip() and not r_rest.strip():
+        prefix_len += _common_prefix_len(d_rest, r_rest)
         # Re-slice: the prefix just grew, and the shared characters it consumed
         # must not be counted again from the other end.
-        f_rest = find[prefix_len : len(find) - suffix_len]
+        d_rest = document[prefix_len : len(document) - suffix_len]
         r_rest = replace_with[prefix_len : len(replace_with) - suffix_len]
-        suffix_len += _common_prefix_len(f_rest[::-1], r_rest[::-1])
+        suffix_len += _common_prefix_len(d_rest[::-1], r_rest[::-1])
     return prefix_len, suffix_len
 
 

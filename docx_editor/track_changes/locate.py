@@ -22,6 +22,7 @@ from ..xml_editor import (
     compute_paragraph_hash,
     count_in_text_map,
     find_in_text_map,
+    fold_quotes,
 )
 from .base import _RevisionManagerBase
 from .models import SearchResult, _LocatedMatch
@@ -46,11 +47,13 @@ def _match_locations(
     Only the raise path calls this, so a successful edit pays nothing for it.
     """
     found: list[MatchLocation] = []
+    folded = fold_quotes(text)
     for idx, p in paragraphs:
-        visible = build_text_map(p).text
+        tm = build_text_map(p)
+        visible = tm.text
         ref = scoped_ref
         local = 0
-        pos = visible.find(text)
+        pos = tm.folded_text.find(folded)
         while pos != -1:
             if len(found) >= MAX_REPORTED_MATCHES:
                 return found
@@ -59,7 +62,7 @@ def _match_locations(
             context = _match_context(visible, pos, pos + len(text))
             found.append(MatchLocation(len(found), ref, local, pos, context))
             local += 1
-            pos = visible.find(text, pos + 1)
+            pos = tm.folded_text.find(folded, pos + 1)
     return found
 
 
@@ -268,6 +271,7 @@ class _LocateMixin(_RevisionManagerBase):
             paragraph_occurrence=located.paragraph_occurrence,
             spans_revision=located.match.spans_boundary,
             paragraph_index=located.paragraph_index,
+            query=text,
         )
 
     def find_all(self, text: str, paragraph: str | None = None) -> list[SearchResult]:
@@ -318,6 +322,7 @@ class _LocateMixin(_RevisionManagerBase):
                         paragraph_occurrence=local_occ,
                         spans_revision=match.spans_boundary,
                         paragraph_index=idx,
+                        query=text,
                     )
                 )
                 local_occ += 1
