@@ -518,3 +518,80 @@ class TestFieldResultIndex:
     def test_text_map_unchanged(self):
         p = parse_paragraph(REF)
         assert build_text_map(p).text == "See section Overview for details."
+
+
+# The REF fixture plus the same word outside any field, after it in document
+# order: occurrence 0 of "Overview" is the REF result, occurrence 1 is free.
+OVERVIEW_TWICE = BODY + _p(_r("Overview of the plan."))
+
+
+class TestUnscopedRoutes:
+    """The public verbs without ``paragraph=`` (ROADMAP.md #95) and ``replace_all``."""
+
+    @pytest.mark.parametrize(
+        ("verb", "call"),
+        [
+            ("replace", lambda d: d.replace("Overview", "X")),
+            ("delete", lambda d: d.delete("Overview")),
+            ("insert_after", lambda d: d.insert_after("Overview", "X")),
+            ("insert_before", lambda d: d.insert_before("Overview", "X")),
+        ],
+        ids=["replace", "delete", "insert_after", "insert_before"],
+    )
+    def test_unscoped_edit_inside_a_result_refuses(self, doc, verb, call):
+        before = _xml(doc)
+        with pytest.raises(FieldResultError) as exc:
+            call(doc)
+        assert exc.value.field_type == "REF"
+        assert str(exc.value).startswith(f"{verb}(): ")
+        assert _xml(doc) == before
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda d: d.replace("Overview", "X", occurrence=0),
+            lambda d: d.delete("Overview", occurrence=0),
+            lambda d: d.insert_after("Overview", "X", occurrence=0),
+            lambda d: d.insert_before("Overview", "X", occurrence=0),
+        ],
+        ids=["replace", "delete", "insert_after", "insert_before"],
+    )
+    def test_unscoped_occurrence_inside_a_result_refuses(self, simple_docx, tmp_path, call):
+        with _open(simple_docx, tmp_path, OVERVIEW_TWICE) as d:
+            before = _xml(d)
+            with pytest.raises(FieldResultError):
+                call(d)
+            assert _xml(d) == before
+
+    def test_unscoped_occurrence_outside_the_field_applies(self, simple_docx, tmp_path):
+        with _open(simple_docx, tmp_path, OVERVIEW_TWICE) as d:
+            d.replace("Overview", "Summary", occurrence=1)
+            assert "Summary of the plan." in d.list_paragraphs(limit=None)[-1]
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda d: d.insert_after("section ", "X\nY"),
+            lambda d: d.replace(" for details.", ", below.\nNew paragraph"),
+        ],
+        ids=["insert_after", "replace"],
+    )
+    def test_unscoped_split_into_a_field_refuses(self, doc, call):
+        before = _xml(doc)
+        with pytest.raises(FieldResultError):
+            call(doc)
+        assert _xml(doc) == before
+
+    def test_replace_all_with_one_match_in_a_field_writes_nothing(self, simple_docx, tmp_path):
+        with _open(simple_docx, tmp_path, OVERVIEW_TWICE) as d:
+            before = _xml(d)
+            with pytest.raises(BatchOperationError) as exc:
+                d.replace_all("Overview", "Summary", expected_count=2)
+            assert isinstance(exc.value.original, FieldResultError)
+            assert exc.value.operation_index == 0  # document order: the REF match
+            assert _xml(d) == before  # not even the match outside the field
+            assert len(d.find_all("Overview", expected_count=2)) == 2  # reads still count it
+
+    def test_unscoped_edit_outside_any_field_applies(self, doc):
+        doc.replace("details", "context")
+        assert any("for context." in t for t in doc.list_paragraphs(limit=None))
