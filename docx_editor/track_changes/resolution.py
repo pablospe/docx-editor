@@ -23,6 +23,18 @@ from .models import (
     iter_revision_elements,
 )
 
+# Revisions a ``w:numPr`` can hold, and the CT_PPrBase children that precede
+# ``w:numPr`` in schema order.
+_NUM_PR_REVISION_TAGS = ("w:ins", "w:numberingChange")
+_PPR_TAGS_BEFORE_NUM_PR = (
+    "w:pStyle",
+    "w:keepNext",
+    "w:keepLines",
+    "w:pageBreakBefore",
+    "w:framePr",
+    "w:widowControl",
+)
+
 
 class _ResolutionMixin(_RevisionManagerBase):
     def accept_revision(
@@ -447,7 +459,9 @@ class _ResolutionMixin(_RevisionManagerBase):
         one, the tail's ``w:sectPr`` (with any ``w:sectPrChange`` in it)
         when both carry one, and a paragraph-mark revision next to the
         rejected ``w:ins`` (``w:rPrChange`` included) when the tail's mark
-        carries one of the same tag.
+        carries one of the same tag. When the tail's ``w:pPrChange`` brings
+        its base properties over, a revision in the head's ``w:numPr`` stays
+        unless those properties have a ``w:numPr`` of their own.
         The tail's base properties survive only when its ``w:pPrChange``
         moves with them (otherwise the head's are kept), so a
         revision embedded in them — a ``w:ins`` or ``w:numberingChange`` in
@@ -723,6 +737,9 @@ class _ResolutionMixin(_RevisionManagerBase):
         so accepting it keeps them and rejecting it restores the recorded
         ones. A ``w:pPr`` holds one record: when ``p1`` carries its own,
         ``p1``'s record and properties win and ``p2``'s record is dropped.
+        ``p1``'s own base properties are replaced in that move, except a
+        ``w:numPr`` holding a revision (a ``w:ins`` or ``w:numberingChange``),
+        which stays when ``p2``'s properties have no ``w:numPr``.
 
         A section mark (``w:sectPr``) on ``p2`` moves over the same way, with
         any ``w:sectPrChange`` inside it, so the section still ends at the
@@ -781,7 +798,24 @@ class _ResolutionMixin(_RevisionManagerBase):
             p1_pPr.insertBefore(p2_sect, _first_child_element(p1_pPr, "w:pPrChange"))
         p2_change = _first_child_element(p2_pPr, "w:pPrChange") if p2_pPr is not None else None
         if p2_change is not None and _first_child_element(p1_pPr, "w:pPrChange") is None:
+            # p1's numbering goes with its other base properties unless it
+            # holds a revision p2's properties have no slot of their own for.
+            p1_num = _first_child_element(p1_pPr, "w:numPr")
+            if p1_num is not None and not any(
+                _first_child_element(p1_num, tag) is not None for tag in _NUM_PR_REVISION_TAGS
+            ):
+                p1_num = None
             self._replace_base_properties(p1_pPr, p2_pPr)
+            if p1_num is not None and _first_child_element(p1_pPr, "w:numPr") is None:
+                anchor = next(
+                    (
+                        c
+                        for c in p1_pPr.childNodes
+                        if c.nodeType == c.ELEMENT_NODE and c.tagName not in _PPR_TAGS_BEFORE_NUM_PR
+                    ),
+                    None,
+                )
+                p1_pPr.insertBefore(p1_num, anchor)
             p1_pPr.appendChild(p2_change)  # schema order: the record is last
         self._tidy_mark_properties(p1_pPr)
 

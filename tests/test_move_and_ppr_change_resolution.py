@@ -756,6 +756,19 @@ class TestRejoinKeepsTailRevisions:
                 f'<w:pPr><w:jc w:val="{jc}"/><w:sectPr><w:type w:val="nextPage"/></w:sectPr></w:pPr>'
             )
 
+    def test_head_numbering_revision_survives_the_tails_property_change(self, make_docx):
+        """The tail's record brings its base properties over; a revision in the
+        head's w:numPr stays, in schema order, rather than leaving with them."""
+        num = f'<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/><w:ins w:id="21" {_ANN}/></w:numPr>'
+        head_ppr = f'<w:keepNext/>{num}<w:jc w:val="right"/>|'
+        with _open(make_docx(_split('<w:pStyle w:val="Title"/>' + self._TAIL_CHANGE, head_ppr=head_ppr))) as doc:
+            assert doc.reject_revision(30)
+            assert sorted(r.id for r in doc.list_revisions()) == [11, 21]
+            assert _merged_ppr(doc) == (
+                f'<w:pPr><w:pStyle w:val="Title"/>{num}<w:jc w:val="center"/>'
+                f'<w:pPrChange w:id="11" {_ANN}><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange></w:pPr>'
+            )
+
     def test_head_property_change_wins_when_both_paragraphs_carry_one(self, make_docx):
         """A w:pPr holds one record: the tail's is a documented loss."""
         head_change = f'<w:pPrChange w:id="12" {_BOB}><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange>'
