@@ -200,8 +200,7 @@ class _ReplaceMixin(_RevisionManagerBase):
         ``match.text`` (the document's characters) in quote style. Words that
         ``replace_with`` leaves unchanged at either end — see
         :func:`_trim_replace_affixes` — are trimmed first, so only the changed
-        words become revisions. A
-        replace whose span trims to nothing on one side degenerates into a
+        words become revisions. A replace whose span trims to nothing on one side degenerates into a
         pure insertion or deletion; one that trims away entirely (replacement
         equals the match) is a no-op returning -1.
 

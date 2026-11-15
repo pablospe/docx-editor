@@ -72,32 +72,32 @@ def _trim_replace_affixes(document: str, search: str, replace_with: str) -> tupl
     Returns:
         ``(prefix_len, suffix_len)`` in characters.
     """
-    f_toks = _tokenize_words(document)
+    d_toks = _tokenize_words(document)
     s_toks = _tokenize_words(search)
     r_toks = _tokenize_words(replace_with)
 
     def unchanged(k: int, tok: str) -> bool:
-        return tok == s_toks[k] or tok == f_toks[k]
+        return tok == s_toks[k] or tok == d_toks[k]
 
     i = 0
-    while i < len(f_toks) and i < len(r_toks) and unchanged(i, r_toks[i]):
+    while i < len(d_toks) and i < len(r_toks) and unchanged(i, r_toks[i]):
         i += 1
     j = 0
-    while j < len(f_toks) - i and j < len(r_toks) - i and unchanged(-(j + 1), r_toks[-(j + 1)]):
+    while j < len(d_toks) - i and j < len(r_toks) - i and unchanged(-(j + 1), r_toks[-(j + 1)]):
         j += 1
 
-    prefix_len = sum(len(tok) for tok in f_toks[:i])
-    suffix_len = sum(len(tok) for tok in f_toks[len(f_toks) - j :])
+    prefix_len = sum(len(tok) for tok in d_toks[:i])
+    suffix_len = sum(len(tok) for tok in d_toks[len(d_toks) - j :])
 
-    f_rest = document[prefix_len : len(document) - suffix_len]
+    d_rest = document[prefix_len : len(document) - suffix_len]
     r_rest = replace_with[prefix_len : len(replace_with) - suffix_len]
-    if f_rest and r_rest and not f_rest.strip() and not r_rest.strip():
-        prefix_len += _common_prefix_len(f_rest, r_rest)
+    if d_rest and r_rest and not d_rest.strip() and not r_rest.strip():
+        prefix_len += _common_prefix_len(d_rest, r_rest)
         # Re-slice: the prefix just grew, and the shared characters it consumed
         # must not be counted again from the other end.
-        f_rest = document[prefix_len : len(document) - suffix_len]
+        d_rest = document[prefix_len : len(document) - suffix_len]
         r_rest = replace_with[prefix_len : len(replace_with) - suffix_len]
-        suffix_len += _common_prefix_len(f_rest[::-1], r_rest[::-1])
+        suffix_len += _common_prefix_len(d_rest[::-1], r_rest[::-1])
     return prefix_len, suffix_len
 
 

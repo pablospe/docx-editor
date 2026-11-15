@@ -353,8 +353,8 @@ def _occurrence_in_text_map(tm: TextMap, elem, text: str) -> int | None:
 
     Mirrors ``find_in_text_map``'s stepping (``idx + 1`` between matches) so
     the result plugs directly into the ``occurrence=`` parameter of the
-    anchor APIs (quote-folded, like them). Returns None when the revision's span cannot be equated
-    with ``text``: no position in the map belongs to ``elem``, the map
+    anchor APIs (quote-folded, like them). Returns None when the revision's
+    span cannot be equated with ``text``: no position in the map belongs to ``elem``, the map
     text at the span's start doesn't spell ``text``, or the spelled-out
     span extends beyond ``elem`` (e.g. a partially consumed host insertion
     whose missing suffix happens to be spelled by the following text —
