@@ -2185,11 +2185,13 @@ The verb is the `Document` method name in kebab-case and the flags are its keywo
 | nothing matches (`--expect`, text not found, paragraph index out of range) | `docx-edit list -- F` |
 | text not in the `--paragraph` given | `docx-edit find -- F TEXT` (where it is) |
 | unknown revision id | `docx-edit revisions -- F` |
+| malformed `--paragraph` (not `P3#a7b2`) | `docx-edit list -- F` |
+| matches that cannot change in one command: a newline replacement hitting one paragraph twice, or overlapping matches | `docx-edit find [--paragraph=REF] -- F OLD`, which prints each match's `--paragraph`/`--occurrence`; then one `replace` per match (note: continue on `OUT` with `--in-place`) |
 | revision id shared by two authors | same command with `--by NAME` |
 | editing-protected document | same command with `--allow-protected` (the protection stays in the saved file) |
 | workspace left behind by a crashed session (`WorkspaceSyncError`) | same command with `--force-recreate` (discards that workspace's unsaved edits; used only for that error and never against a live session's lock) |
 
-A count mismatch on `find` has no retry (`find` only checks). When no CLI command fixes the error, for example `WorkspaceLockedError` from a `docx-session` holding the file, the library's `next` is printed as `next (Python API): ...` if it has one. A bad command line exits 2 (argparse). `list`, `find` and `revisions` never save: they read the file in a private workspace, so they work beside a live session or a leftover workspace, and on an editing-protected document. They read the saved file, not a live session's unsaved edits. The library's "more paragraphs" notice on `list` is rewritten as the next `docx-edit list --start N` command.
+A count mismatch on `find` has no retry (`find` only checks). A file locked by a live `docx-session` (`WorkspaceLockedError`) gets a note to close that session and the same command as the retry. When no CLI command fixes the error, the library's `next` is printed as `next (Python API): ...` if it has one. A bad command line exits 2 (argparse). `list`, `find` and `revisions` never save: they read the file in a private workspace, so they work beside a live session or a leftover workspace, and on an editing-protected document. They read the saved file, not a live session's unsaved edits. The library's "more paragraphs" notice on `list` is rewritten as the next `docx-edit list --start N` command.
 
 **`--json`.** Every verb except `skill` takes `--json` and prints one object on stdout. Success is `{"ok": true, "verb": ..., "warnings": [...]}` plus the verb's fields:
 

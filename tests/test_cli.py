@@ -549,10 +549,24 @@ class TestRoundThree:
         # cannot split P3 twice, so --expect=2 would only refuse again.
         code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 3, "--author", AUTHOR, "--in-place")
         assert code == 1
-        retry = retry_argv(err, N="0")
-        assert "--expect=2" not in retry and flag_value(retry, "--paragraph").startswith("P3#")
+        retry = retry_argv(err)
+        assert retry[0] == "find" and flag_value(retry, "--paragraph").startswith("P3#") and retry[-1] == "ing"
+        # find prints each match's own --paragraph/--occurrence pair: one edit per command.
         code, out, _ = run(capsys, *retry)
+        pair = out.splitlines()[1].rsplit("(", 1)[1].rstrip(")").split()
+        code, out, _ = run(capsys, "replace", src, "ing", "ING\nZ", *pair, "--author", AUTHOR, "--in-place")
         assert code == 0
+
+    def test_one_at_a_time_note_says_to_continue_on_the_output(self, capsys, src, tmp_path):
+        out_path = tmp_path / "o.docx"
+        code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 2, "--author", AUTHOR, "-o", out_path)
+        assert code == 1 and f"continue on {out_path} with --in-place" in err
+
+    def test_overlapping_matches_retry_with_find(self, capsys, src):
+        run(capsys, "replace", src, "lazy", "banana", "--author", AUTHOR, "--in-place")
+        run(capsys, "accept", src, "--all", "--author", AUTHOR, "--in-place")
+        code, _, err = run(capsys, "replace", src, "ana", "X", "--expect", 2, "--author", AUTHOR, "--in-place")
+        assert code == 1 and retry_argv(err) == ["find", "--", str(src), "ana"]
 
     def test_newline_expect_refusal_points_at_find(self, capsys, src):
         code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 2, "--author", AUTHOR, "--in-place")

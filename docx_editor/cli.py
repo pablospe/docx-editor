@@ -229,11 +229,11 @@ def _retry_for(error: Exception, args: argparse.Namespace) -> _Retry | None:
         return _Retry(_other(args, "list"))
     if isinstance(error, ValueError) and str(error).startswith("Invalid paragraph reference"):
         return _Retry(_other(args, "list"), "--paragraph takes a ref like P3#a7b2, as list prints it")
-    if isinstance(error, ValueError) and str(error).startswith("replace_all(): replace_with contains a newline"):
-        return _Retry(
-            [*_other(args, "find"), args.old],
-            "a split goes one match at a time: --paragraph REF --occurrence N, no --expect",
-        )
+    if isinstance(error, ValueError) and str(error).startswith((
+        "replace_all(): replace_with contains a newline",
+        "replace_all(): matches of",
+    )):
+        return _one_at_a_time(args)
     if isinstance(error, WorkspaceLockedError):
         return _Retry(
             _command(args), "another session holds this file: close it (doc.close() / docx-session stop), then run this"
@@ -258,11 +258,18 @@ def _split_conflict(args: argparse.Namespace, refs: Sequence[str]) -> str | None
     return next((ref for i, ref in enumerate(refs) if ref in refs[:i]), None)
 
 
-def _one_at_a_time(args: argparse.Namespace, ref: str) -> _Retry:
+def _one_at_a_time(args: argparse.Namespace, ref: str | None = None) -> _Retry:
+    """Matches that cannot go in one call: list them, then edit each in its own command."""
+    scope = [f"--paragraph={ref}"] if ref else []
+    then = (
+        f"; after the first, continue on {args.output} with --in-place, since each run reads its FILE"
+        if args.output
+        else ""
+    )
     return _Retry(
-        _command(args, expect=None, paragraph=ref, occurrence="N"),
-        f"the new text splits the paragraph, and {ref} has more than one match: replace them one at a time "
-        f"(N from the list above, counted within {ref})",
+        [*_other(args, "find", *scope), args.old],
+        "these matches cannot all change in one command; find prints each one's --paragraph and --occurrence: "
+        f"replace them one per command, without --expect{then}",
     )
 
 
@@ -661,7 +668,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         raise
                     cleanup_warnings.append(f"saved, but the workspace could not be removed: {error}")
     except (DocxEditError, ValueError, OSError, _Refusal) as error:
-        _refusal_output(error, args)
+        try:
+            _refusal_output(error, args)
+            sys.stdout.flush()
+        except BrokenPipeError:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         return 1
 
     found = (str(w.message) for w in caught if issubclass(w.category, library_warnings))
