@@ -324,9 +324,10 @@ class _InsertMixin(_RevisionManagerBase):
         """Split ``p1`` at visible position ``pos``.
 
         Everything from ``pos`` onward moves into a new following paragraph
-        (a copy of ``p1``'s properties, minus any section mark); ``p1``'s
-        paragraph mark is flagged as an inserted revision. Returns the new
-        paragraph element and the mark insertion's id.
+        (a copy of ``p1``'s properties; see ``_new_tail_paragraph`` for what
+        moves and what stays); ``p1``'s paragraph mark is flagged as an
+        inserted revision. Returns the new paragraph element and the mark
+        insertion's id.
         """
         tail = self._collect_tail_nodes(p1, pos)
         new_p = self._new_tail_paragraph(p1)
@@ -376,9 +377,12 @@ class _InsertMixin(_RevisionManagerBase):
     def _new_tail_paragraph(self, p1) -> Element:
         """Create and insert an empty following paragraph copying ``p1``'s pPr.
 
-        The copy drops any section mark (``w:sectPr`` stays on the last
-        paragraph only), pPr-change tracking, and any inherited paragraph-mark
-        revision. The new ``w:p`` is stamped (paraId/rsids) via injection.
+        The copy drops any section mark and pPr-change tracking (both stay on
+        ``p1``). The new paragraph ends where ``p1`` used to, so ``p1``'s
+        original paragraph mark is now *its* mark: a pending revision of that
+        mark (a tracked-deleted or moved mark) moves onto the copy, leaving
+        ``p1``'s mark free for the split's own ``w:ins``. The new ``w:p`` is
+        stamped (paraId/rsids) via injection.
         """
         doc = self.editor.dom
         new_p = doc.createElement("w:p")
@@ -386,22 +390,40 @@ class _InsertMixin(_RevisionManagerBase):
         if orig_pPr is not None:
             pPr_copy = orig_pPr.cloneNode(True)
             assert pPr_copy is not None  # cloneNode of an element returns an element
-            # A section mark stays on the last paragraph only; pPr-change
-            # tracking and any inherited mark revision do not belong on the copy.
+            # The section mark and pPr-change tracking stay on p1.
             for tag in ("w:sectPr", "w:pPrChange"):
                 child = _first_child_element(pPr_copy, tag)
                 if child is not None:
                     pPr_copy.removeChild(child)
-            rPr = _first_child_element(pPr_copy, "w:rPr")
-            if rPr is not None:
-                for tag in _RUN_TRACK_CHANGE_TAGS:
-                    mark = _first_child_element(rPr, tag)
-                    if mark is not None:
-                        rPr.removeChild(mark)
             new_p.appendChild(pPr_copy)
         p1.parentNode.insertBefore(new_p, p1.nextSibling)
         self.editor._inject_attributes_to_nodes([new_p])
+        self._move_mark_revisions(orig_pPr, new_p)
         return new_p
+
+    @staticmethod
+    def _move_mark_revisions(orig_pPr, new_p) -> None:
+        """Move the paragraph-mark revisions of ``orig_pPr`` onto ``new_p``.
+
+        Each live marker takes the place of its clone in ``new_p``'s copied
+        ``w:rPr``: same position (schema order), the id not duplicated, and
+        the element a revision index already holds stays attached. Done after
+        attribute injection so the existing revision is not stamped as new
+        (the discarded clone is; for a nonconforming marker without a
+        ``w:id`` that uses up one id).
+        """
+        if orig_pPr is None:
+            return
+        orig_rPr = _first_child_element(orig_pPr, "w:rPr")
+        if orig_rPr is None:
+            return
+        copy_rPr = _first_child_element(_first_child_element(new_p, "w:pPr"), "w:rPr")
+        assert copy_rPr is not None  # the copy is a clone of orig_pPr, which has one (narrows for ty)
+        for tag in _RUN_TRACK_CHANGE_TAGS:
+            mark = _first_child_element(orig_rPr, tag)
+            clone = _first_child_element(copy_rPr, tag)
+            if mark is not None and clone is not None:  # clone: always there, narrows for ty
+                copy_rPr.replaceChild(mark, clone)
 
     def _paragraph_mark_rPr(self, p1) -> Element:
         """Return ``p1``'s paragraph-mark ``<w:pPr><w:rPr>``, creating both in

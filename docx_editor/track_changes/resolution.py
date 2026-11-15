@@ -10,12 +10,16 @@ from .base import _RevisionManagerBase
 from .dom import (
     _ancestor_paragraph,
     _first_child_element,
+    _first_child_not_in,
     _is_paragraph_mark_ins,
     _is_paragraph_mark_marker,
     _next_element_sibling,
-    _paragraph_mark_ins,
+    _num_pr_holds_revision,
+    _ppr_base_anchor,
+    _ppr_base_children,
 )
 from .models import (
+    _RUN_TRACK_CHANGE_TAGS,
     MOVE_RANGE_TAGS,
     ResolveResult,
     iter_revision_elements,
@@ -437,10 +441,21 @@ class _ResolutionMixin(_RevisionManagerBase):
         ``docx_editor.track_changes.count_revision_elements`` (``ins_del_contexts``).
 
         A listed revision can also leave the document inside another one's
-        resolution rather than through its own — a ``w:pPrChange`` on the tail
-        paragraph of a rejected tracked split goes with that paragraph's
-        ``w:pPr`` (see ``_rejoin_paragraph``) — and is then counted neither
-        as resolved nor as unhandled.
+        resolution rather than through its own, and is then counted neither
+        as resolved nor as unhandled. Rejecting an insertion removes whatever
+        is nested inside it. Rejecting a tracked paragraph split (see
+        ``_rejoin_paragraph``) removes only what the merged paragraph has no
+        room for. The tail's ``w:pPrChange`` goes when the head carries a
+        record of its own, or a ``w:numPr`` holding a revision that adopting
+        the tail's properties would replace. The tail's ``w:sectPr`` (with
+        any ``w:sectPrChange`` in it) goes when both paragraphs carry one. A
+        paragraph-mark revision next to the rejected ``w:ins`` (``w:rPrChange``
+        included) goes when the tail's mark carries one of the same tag. The
+        tail's base properties survive only when its ``w:pPrChange`` moves
+        with them (otherwise the head's are kept), so a revision embedded in
+        them — a ``w:ins`` or ``w:numberingChange`` in its ``w:numPr`` — is
+        kept or dropped with them. Every other revision on either paragraph stays pending on
+        the merged paragraph.
 
         Args:
             author: If provided, only accept revisions by this author
@@ -515,28 +530,30 @@ class _ResolutionMixin(_RevisionManagerBase):
             # rather than rewrite whatever parent this is.
             self._remove_element(ppr_change)
             return
-        # The live w:pPr's tail — its paragraph-mark w:rPr (which may itself
-        # carry a pending mark revision), section mark and the record — is
-        # kept; everything before it is the base being replaced. The same
-        # tags are skipped on the recorded side because CT_PPrBase cannot
-        # hold them: a nonconforming record's copies are dropped, not
-        # restored over the live ones.
-        tail_tags = ("w:rPr", "w:sectPr", "w:pPrChange")
-        for child in list(ppr.childNodes):
-            if child.nodeType == child.ELEMENT_NODE and child.tagName not in tail_tags:
-                ppr.removeChild(child)
-        anchor = next(
-            (c for c in ppr.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName in tail_tags),
-            None,
-        )
         recorded = _first_child_element(ppr_change, "w:pPr")
-        if recorded is not None:
-            # Same document, so moving the nodes is enough — insertBefore
-            # detaches them from the record first.
-            for child in list(recorded.childNodes):
-                if child.nodeType == child.ELEMENT_NODE and getattr(child, "tagName", "") not in tail_tags:
-                    ppr.insertBefore(child, anchor)
+        self._replace_base_properties(ppr, recorded)
         self._remove_element(ppr_change)
+
+    def _replace_base_properties(self, ppr, source) -> None:
+        """Replace ``ppr``'s base properties with those of ``source`` (another
+        ``w:pPr``, or None for "no properties"), moving the nodes over ahead
+        of ``ppr``'s ``w:rPr``/``w:sectPr``/``w:pPrChange``.
+
+        ``ppr``'s own tail — its paragraph-mark ``w:rPr`` (which may carry a
+        pending mark revision), section mark and record — is kept. The same
+        tags are skipped on the ``source`` side: a record's ``w:pPr``
+        (CT_PPrBase) cannot hold them, so a nonconforming record's copies are
+        dropped, not restored over the live ones.
+        """
+        for child in _ppr_base_children(ppr):
+            ppr.removeChild(child)
+        if source is None:
+            return
+        anchor = _ppr_base_anchor(ppr)
+        # Same document, so moving the nodes is enough — insertBefore
+        # detaches them from their old parent first.
+        for child in _ppr_base_children(source):
+            ppr.insertBefore(child, anchor)
 
     def _sweep_after_move(self) -> None:
         """Sweep range marks now, or note that a deferred bulk sweep is owed.
@@ -680,47 +697,105 @@ class _ResolutionMixin(_RevisionManagerBase):
         """Reject a paragraph-mark insertion: drop the mark and merge the next
         paragraph's content back into this one — the inverse of a tracked split.
 
-        The paragraph owning the mark survives (keeping its original
-        properties, including any section mark); the following paragraph's
-        content is appended and that paragraph is removed.
+        The paragraph owning the mark (``p1``) survives, keeping its base
+        properties and identity; the following paragraph's (``p2``) content
+        is appended and ``p2`` is removed. ``p2``'s base properties, and any
+        revision inside them such as a ``w:numPr``'s ``w:ins``, are dropped
+        unless ``p2``'s ``w:pPrChange`` brings them over (below).
 
-        If that following paragraph is itself an intermediate half of a
-        multi-split, its ``w:pPr`` carries its *own* pending mark (the break to
-        the paragraph after it). That mark is migrated onto the surviving
-        paragraph so the later break stays tracked — otherwise rejecting a
-        non-terminal mark individually (a public ``reject_revision``) would drop
-        it with ``p2``'s ``pPr``, leaving a permanent, untracked break.
-        ``reject_group``/``reject_changeset`` dissolve later (higher-id) marks
-        first, so ``p2`` has no mark by the time it is merged and this migration
-        is a no-op.
+        The merged paragraph ends where ``p2`` ended, so its paragraph mark
+        *is* ``p2``'s mark: ``p2``'s mark ``w:rPr`` becomes the merged mark's.
+        Every revision on ``p2``'s mark therefore stays pending on the merged
+        paragraph — another author's ``w:del``/``w:moveFrom``/``w:moveTo``,
+        an unhandled ``w:rPrChange``, and the ``w:ins`` of the next break when
+        ``p2`` is an intermediate half of a multi-split. The nodes are moved,
+        not copied, so a bulk resolution's element index still finds them.
+
+        ``p1``'s mark formatting is dropped with the rejected mark, but a
+        revision sitting next to the rejected ``w:ins`` (a ``w:del``,
+        ``w:moveFrom`` or ``w:moveTo`` marker, or an unhandled
+        ``w:rPrChange``) is not: it moves onto the merged mark, in schema
+        order, unless ``p2``'s mark already carries one of the same tag (a
+        mark holds one of each; ``p2``'s wins and ``p1``'s is dropped
+        uncounted). A split written by an earlier release left a
+        pre-existing revision of the original mark there, and it cannot be
+        told apart from a revision of the new break, so both are kept: a
+        kept revision can still be rejected, a dropped one is gone.
+
+        A ``w:pPrChange`` on ``p2`` moves to the merged paragraph together
+        with ``p2``'s base properties (the ones the record is a change *to*),
+        replacing ``p1``'s, so accepting it keeps them and rejecting it
+        restores the recorded ones. It does not move — ``p1``'s properties
+        stay and ``p2``'s record is dropped — in two cases: ``p1`` carries a
+        record of its own (a ``w:pPr`` holds one), or ``p1``'s ``w:numPr``
+        holds a revision (a ``w:ins`` or ``w:numberingChange``), which the
+        replacement, or a later rejection of the moved record, would remove.
+
+        A section mark (``w:sectPr``) on ``p2`` moves over the same way, with
+        any ``w:sectPrChange`` inside it, so the section still ends at the
+        merged paragraph. When ``p1`` carries its own, ``p1``'s wins and
+        ``p2``'s is dropped.
         """
         p1 = _ancestor_paragraph(mark_ins)
+        p2 = _next_element_sibling(p1.nextSibling) if p1 is not None else None
         rPr = mark_ins.parentNode
+        on_live_mark = rPr.parentNode.parentNode is p1
         rPr.removeChild(mark_ins)
-        # Tidy the empty property wrappers the split created (keep any that
-        # carried other properties).
-        if not _next_element_sibling(rPr.firstChild):
-            pPr = rPr.parentNode
-            pPr.removeChild(rPr)
-            if not _next_element_sibling(pPr.firstChild):
-                pPr.parentNode.removeChild(pPr)
-        if p1 is None:  # pragma: no cover - a mark-ins always sits in a paragraph
+        if not on_live_mark:
+            # A w:ins in a nonconforming record's w:pPr/w:rPr is not p1's
+            # mark: there is no break to undo, so only the marker goes.
+            if _next_element_sibling(rPr.firstChild) is None:
+                rPr.parentNode.removeChild(rPr)
             return
-        p2 = _next_element_sibling(p1.nextSibling)
-        if p2 is None or getattr(p2, "tagName", "") != "w:p":  # pragma: no cover - a mark implies a following paragraph
-            return  # best effort: no following paragraph to rejoin into
-        downstream_mark = _paragraph_mark_ins(p2)
+        if p1 is None or p2 is None or p2.tagName != "w:p":  # pragma: no cover - no paragraph follows directly
+            # Best effort: nothing to rejoin, so only the mark goes.
+            self._tidy_mark_properties(rPr.parentNode)
+            return
         p2_pPr = _first_child_element(p2, "w:pPr")
         for child in list(p2.childNodes):
-            if child is p2_pPr:
-                continue
-            p1.appendChild(child)
+            if child is not p2_pPr:
+                p1.appendChild(child)
         p2_parent = p2.parentNode
         assert p2_parent is not None  # a live sibling always has a parent (narrows for ty)
         p2_parent.removeChild(p2)
-        if downstream_mark is not None:
-            # p1 now ends where p2 did, so it inherits p2's break-to-successor
-            # mark (same id/author/date, still a live group member). insertBefore
-            # re-parents it out of p2's detached rPr automatically.
-            new_rPr = self._paragraph_mark_rPr(p1)
-            new_rPr.insertBefore(downstream_mark, new_rPr.firstChild)
+
+        # Get-or-create puts the slot in schema order; p2's w:rPr takes it.
+        slot = self._paragraph_mark_rPr(p1)
+        p1_pPr = slot.parentNode
+        assert p1_pPr is not None  # _paragraph_mark_rPr returns an attached w:rPr (narrows for ty)
+        p2_rPr = _first_child_element(p2_pPr, "w:rPr") if p2_pPr is not None else None
+        if p2_rPr is None:
+            p2_rPr = self.editor.dom.createElement("w:rPr")
+        p1_pPr.replaceChild(p2_rPr, slot)
+        # p1's own mark revisions survive unless p2's mark has the same tag.
+        # CT_ParaRPr order: the markers lead, in _RUN_TRACK_CHANGE_TAGS order;
+        # the formatting follows; w:rPrChange is last.
+        for index, tag in enumerate(_RUN_TRACK_CHANGE_TAGS):
+            marker = _first_child_element(slot, tag)
+            if marker is not None and _first_child_element(p2_rPr, tag) is None:
+                p2_rPr.insertBefore(marker, _first_child_not_in(p2_rPr, _RUN_TRACK_CHANGE_TAGS[: index + 1]))
+        rPr_change = _first_child_element(slot, "w:rPrChange")
+        if rPr_change is not None and _first_child_element(p2_rPr, "w:rPrChange") is None:
+            p2_rPr.appendChild(rPr_change)
+        p2_sect = _first_child_element(p2_pPr, "w:sectPr") if p2_pPr is not None else None
+        if p2_sect is not None and _first_child_element(p1_pPr, "w:sectPr") is None:
+            # Schema order: after the w:rPr just placed, before any record.
+            p1_pPr.insertBefore(p2_sect, _first_child_element(p1_pPr, "w:pPrChange"))
+        p2_change = _first_child_element(p2_pPr, "w:pPrChange") if p2_pPr is not None else None
+        if (
+            p2_change is not None
+            and _first_child_element(p1_pPr, "w:pPrChange") is None
+            and not _num_pr_holds_revision(p1_pPr)
+        ):
+            self._replace_base_properties(p1_pPr, p2_pPr)
+            p1_pPr.appendChild(p2_change)  # schema order: the record is last
+        self._tidy_mark_properties(p1_pPr)
+
+    def _tidy_mark_properties(self, pPr) -> None:
+        """Drop the empty ``w:rPr``, then the empty ``w:pPr``, a tracked split
+        leaves behind (either is kept when it carries anything else)."""
+        rPr = _first_child_element(pPr, "w:rPr")
+        if rPr is not None and _next_element_sibling(rPr.firstChild) is None:
+            pPr.removeChild(rPr)
+        if _next_element_sibling(pPr.firstChild) is None:
+            pPr.parentNode.removeChild(pPr)

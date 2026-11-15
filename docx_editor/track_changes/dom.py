@@ -123,6 +123,33 @@ def _revision_elements(root) -> list[Element]:
     return list(iter_revision_elements(root, HANDLED_REVISION_TAGS))
 
 
+def _revision_elements_in_reading_order(root) -> list[Element]:
+    """``_revision_elements`` with each paragraph's mark markers moved to the
+    end of that paragraph.
+
+    The paragraph mark is the paragraph's last character, though its marker
+    is serialized first (in ``w:pPr``). Read in this order, a revision of a
+    paragraph's mark sits between that paragraph's content and the next
+    paragraph's, not between the previous paragraph's mark and its own
+    content.
+    """
+    out: list[Element] = []
+    held: list[tuple[Element, list[Element]]] = []  # open paragraphs and their mark markers
+    for elem in _revision_elements(root):
+        while held and not _has_ancestor(elem, held[-1][0]):
+            out.extend(held.pop()[1])
+        paragraph = _ancestor_paragraph(elem) if _is_paragraph_mark_marker(elem) else None
+        if paragraph is None:
+            out.append(elem)
+        elif held and held[-1][0] is paragraph:
+            held[-1][1].append(elem)
+        else:
+            held.append((paragraph, [elem]))
+    while held:
+        out.extend(held.pop()[1])
+    return out
+
+
 def _insertion_text_nodes(elem) -> list:
     """All <w:t>/<w:delText> descendants and run-level <w:tab/> marks of a
     <w:ins>, <w:moveFrom> or <w:moveTo>, in document order.
@@ -230,6 +257,40 @@ def _first_child_element(parent, tag: str) -> Element | None:
         if child.nodeType == child.ELEMENT_NODE and getattr(child, "tagName", "") == tag:
             return child
     return None
+
+
+# The children of a ``w:pPr`` that are not base paragraph properties
+# (CT_PPrBase): the paragraph-mark run properties, the section mark and the
+# property-change record.
+_PPR_TAIL_TAGS = ("w:rPr", "w:sectPr", "w:pPrChange")
+
+
+def _ppr_base_children(ppr) -> list[Element]:
+    """The base-property children of a ``w:pPr`` (or of a ``w:pPrChange``'s
+    recorded ``w:pPr``): every element child except ``_PPR_TAIL_TAGS``."""
+    return [c for c in ppr.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName not in _PPR_TAIL_TAGS]
+
+
+def _ppr_base_anchor(ppr) -> Element | None:
+    """The first non-base child of a ``w:pPr``: where base properties are
+    inserted before so schema order holds. None when there is none (append)."""
+    return next((c for c in ppr.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName in _PPR_TAIL_TAGS), None)
+
+
+def _first_child_not_in(parent, tags: tuple[str, ...]) -> Element | None:
+    """The first element child of ``parent`` whose tag is not in ``tags``: the
+    anchor to insert before so a child stays behind every ``tags`` sibling.
+    None when there is none (append)."""
+    return next((c for c in parent.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName not in tags), None)
+
+
+def _num_pr_holds_revision(ppr) -> bool:
+    """True if ``ppr``'s ``w:numPr`` holds a revision: a tracked numbering
+    insertion (``w:ins``) or a ``w:numberingChange``."""
+    num_pr = _first_child_element(ppr, "w:numPr")
+    return num_pr is not None and any(
+        _first_child_element(num_pr, tag) is not None for tag in ("w:ins", "w:numberingChange")
+    )
 
 
 def _first_content_child(run) -> Element | None:

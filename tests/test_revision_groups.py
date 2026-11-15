@@ -553,9 +553,9 @@ class TestSplitReconstruction:
     @pytest.mark.parametrize("mark_tag", ["w:del", "w:moveFrom", "w:moveTo"])
     def test_split_formatted_paragraph_copies_and_cleans_pPr(self, temp_xml, mark_tag):
         # Splitting a paragraph with rich properties: the tail copies pStyle +
-        # rPr formatting but drops the tracked pPrChange and the mark revision
-        # (a deleted or moved paragraph mark alike — copying it would duplicate
-        # its id); the original keeps its pPr and takes the inserted split mark.
+        # rPr formatting but drops the tracked pPrChange. The mark revision (a
+        # deleted or moved paragraph mark alike) moves to the tail, whose mark
+        # is the original one; the head's mark takes only the inserted split.
         del_mark = f'<{mark_tag} w:id="7" w:author="X" w:date="2024-01-01T00:00:00Z"/>'
         ppr_change = '<w:pPrChange w:id="8" w:author="X" w:date="2024-01-01T00:00:00Z"><w:pPr/></w:pPrChange>'
         body = (
@@ -573,7 +573,10 @@ class TestSplitReconstruction:
         assert not tail_pPr.getElementsByTagName("w:pPrChange")  # tracked change dropped
         tail_rPr = tail_pPr.getElementsByTagName("w:rPr")
         assert tail_rPr and tail_rPr[0].getElementsByTagName("w:b")  # rPr formatting copied
-        assert not tail_rPr[0].getElementsByTagName(mark_tag)  # mark dropped from the copy
+        (moved,) = tail_rPr[0].getElementsByTagName(mark_tag)  # the original mark's revision
+        assert moved.getAttribute("w:id") == "7"
+        head_rPr = paras[0].getElementsByTagName("w:pPr")[0].getElementsByTagName("w:rPr")[0]
+        assert [c.tagName for c in head_rPr.childNodes if c.nodeType == c.ELEMENT_NODE] == ["w:ins", "w:b"]
 
     def test_split_paragraph_pStyle_without_rPr(self, temp_xml):
         # pPr present but no rPr: the mark check finds no ins mark, and flagging
