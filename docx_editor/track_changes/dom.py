@@ -277,6 +277,22 @@ def _ppr_base_anchor(ppr) -> Element | None:
     return next((c for c in ppr.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName in _PPR_TAIL_TAGS), None)
 
 
+def _first_child_not_in(parent, tags: tuple[str, ...]) -> Element | None:
+    """The first element child of ``parent`` whose tag is not in ``tags``: the
+    anchor to insert before so a child stays behind every ``tags`` sibling.
+    None when there is none (append)."""
+    return next((c for c in parent.childNodes if c.nodeType == c.ELEMENT_NODE and c.tagName not in tags), None)
+
+
+def _num_pr_holds_revision(ppr) -> bool:
+    """True if ``ppr``'s ``w:numPr`` holds a revision: a tracked numbering
+    insertion (``w:ins``) or a ``w:numberingChange``."""
+    num_pr = _first_child_element(ppr, "w:numPr")
+    return num_pr is not None and any(
+        _first_child_element(num_pr, tag) is not None for tag in ("w:ins", "w:numberingChange")
+    )
+
+
 def _first_content_child(run) -> Element | None:
     """First element child of ``run`` that is not its ``w:rPr``."""
     for child in run.childNodes:

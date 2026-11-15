@@ -665,7 +665,7 @@ class TestRejoinKeepsTailRevisions:
     )
     def test_revision_next_to_the_rejected_mark_stays_pending(self, make_docx, tag, rev_type):
         """A revision beside the rejected w:ins moves onto the merged mark (ahead
-        of the tail's formatting, schema order); the head's formatting does not."""
+        of the tail's formatting, schema order); the head's formatting is dropped."""
         head_mark = f'<w:ins w:id="30" {_BOB}/><w:{tag} w:id="11" {_ANN}/><w:i/>'
         with _open(make_docx(_split("<w:rPr><w:b/></w:rPr>", head_mark=head_mark))) as doc:
             assert doc.reject_revision(30)
@@ -756,18 +756,34 @@ class TestRejoinKeepsTailRevisions:
                 f'<w:pPr><w:jc w:val="{jc}"/><w:sectPr><w:type w:val="nextPage"/></w:sectPr></w:pPr>'
             )
 
-    def test_head_numbering_revision_survives_the_tails_property_change(self, make_docx):
-        """The tail's record brings its base properties over; a revision in the
-        head's w:numPr stays, in schema order, rather than leaving with them."""
-        num = f'<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/><w:ins w:id="21" {_ANN}/></w:numPr>'
-        head_ppr = f'<w:keepNext/>{num}<w:jc w:val="right"/>|'
-        with _open(make_docx(_split('<w:pStyle w:val="Title"/>' + self._TAIL_CHANGE, head_ppr=head_ppr))) as doc:
-            assert doc.reject_revision(30)
-            assert sorted(r.id for r in doc.list_revisions()) == [11, 21]
-            assert _merged_ppr(doc) == (
-                f'<w:pPr><w:pStyle w:val="Title"/>{num}<w:jc w:val="center"/>'
-                f'<w:pPrChange w:id="11" {_ANN}><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange></w:pPr>'
-            )
+    @pytest.mark.parametrize("revision", ["ins", "numberingChange"])
+    @pytest.mark.parametrize("tail_num", ["", '<w:numPr><w:ilvl w:val="1"/><w:numId w:val="2"/></w:numPr>'])
+    @pytest.mark.parametrize("split_id", [30, 5])
+    def test_head_numbering_revision_outlives_the_tails_property_change(self, make_docx, revision, tail_num, split_id):
+        """Adopting the tail's properties, or later rejecting its record, would
+        remove a revision in the head's w:numPr; the head's properties stay
+        and the tail's record is the documented loss."""
+        extra = ' w:original="1"' if revision == "numberingChange" else ""
+        num = f'<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/><w:{revision} w:id="21" {_ANN}{extra}/></w:numPr>'
+        head = f'<w:pPr><w:keepNext/>{num}<w:jc w:val="right"/></w:pPr>'
+        body = _split(
+            tail_num + self._TAIL_CHANGE,
+            head_mark=f'<w:ins w:id="{split_id}" {_BOB}/>',
+            head_ppr=f'<w:keepNext/>{num}<w:jc w:val="right"/>|',
+        )
+
+        def pending(doc: Document) -> list[int]:
+            return sorted([r.id for r in doc.list_revisions()] + [u.id for u in doc.list_unhandled_revisions()])
+
+        for bulk in (False, True):
+            with _open(make_docx(body)) as doc, warnings.catch_warnings():
+                warnings.simplefilter("ignore", UnhandledRevisionWarning)
+                if bulk:
+                    doc.reject_all(author="Bob")
+                else:
+                    assert doc.reject_revision(split_id)
+                assert pending(doc) == [21]
+                assert _merged_ppr(doc) == head
 
     def test_head_property_change_wins_when_both_paragraphs_carry_one(self, make_docx):
         """A w:pPr holds one record: the tail's is a documented loss."""
