@@ -26,7 +26,7 @@ from test_comment_namespaces import (
 from test_corpus_harness import harness
 
 from docx_editor import Document
-from docx_editor.exceptions import CommentError, XMLError
+from docx_editor.exceptions import CommentError, MultipleNodesFoundError, XMLError
 
 W15_NS = "http://schemas.microsoft.com/office/word/2012/wordml"
 EXTENDED = "word/commentsExtended.xml"
@@ -50,7 +50,7 @@ def extended_part(*rows: str) -> str:
     return f'{XML_DECL}<w15:commentsEx xmlns:w15="{W15_NS}">{"".join(rows)}</w15:commentsEx>'
 
 
-def anchored(run: str, comment_id: int, shape: str) -> str:
+def anchored(run: str, comment_id: int | str, shape: str) -> str:
     """``run`` carrying comment ``comment_id``: a range with its reference, a reference alone, or nothing."""
     reference = f'<w:r><w:commentReference w:id="{comment_id}"/></w:r>'
     if shape == "range":
@@ -64,7 +64,7 @@ def build(
     simple_docx: Path,
     tmp_path: Path,
     comments_xml: str,
-    anchors: dict[str, tuple[int, str]],
+    anchors: dict[str, tuple[int | str, str]],
     extended_xml: str | None = None,
 ) -> Path:
     """``simple_docx`` with ``comments_xml``, each run in ``anchors`` anchored, and an optional commentsExtended.xml."""
@@ -86,7 +86,9 @@ def open_legacy(simple_docx, tmp_path):
     """Open a document built by :func:`build`; closes on teardown."""
     opened: list[Document] = []
 
-    def _open(comments_xml: str, anchors: dict[str, tuple[int, str]], extended_xml: str | None = None) -> Document:
+    def _open(
+        comments_xml: str, anchors: dict[str, tuple[int | str, str]], extended_xml: str | None = None
+    ) -> Document:
         doc = Document.open(build(simple_docx, tmp_path, comments_xml, anchors, extended_xml), author="Tester")
         opened.append(doc)
         return doc
@@ -291,6 +293,64 @@ class TestMinting:
 
         _, comments = reopened_comments(doc, tmp_path)
         assert comments == []
+
+    @pytest.mark.parametrize("shape", ANCHORED_SHAPES)
+    def test_noncanonical_marker_ids_are_matched_by_integer(self, open_legacy, tmp_path, shape):
+        """Markers written ``w:id="05"`` belong to comment 5: a reply finds them and a delete removes them."""
+
+        doc = open_legacy(comments_part(old_comment(5).replace('w:id="5"', 'w:id="05"')), {QUICK: ("05", shape)})
+        assert marker_count(doc) == (3 if shape == "range" else 1)
+
+        reply_id = doc.reply_to_comment(5, "agreed")
+        for comment in doc.list_comments():
+            assert doc.resolve_comment(comment.id) is True
+        _, comments = reopened_comments(doc, tmp_path)
+        assert [(c.id, c.resolved, [r.id for r in c.replies]) for c in comments] == [(5, True, [reply_id])]
+
+        for comment in doc.list_comments():
+            assert doc.delete_comment(comment.id) is True
+        assert marker_count(doc) == 0
+        assert doc.list_comments() == []
+
+    def test_markers_differing_only_in_spelling_are_duplicates(self, open_legacy):
+        """``w:id="5"`` and ``w:id="05"`` are two references of comment 5: the reply is refused untouched."""
+        doc = open_legacy(comments_part(old_comment(5)), {QUICK: (5, "point")})
+        editor = doc._document_editor
+        reference_run = editor.dom.getElementsByTagName("w:commentReference")[0].parentNode
+        editor.insert_after(reference_run, '<w:r><w:commentReference w:id="05"/></w:r>')
+        document_before = editor.dom.toxml()
+
+        with pytest.raises(MultipleNodesFoundError):
+            doc.reply_to_comment(5, "agreed")
+
+        assert editor.dom.toxml() == document_before
+        assert doc._comment_manager.existing_comments[5]["para_id"] is None
+
+    @pytest.mark.parametrize("survivor_has_para_id", [True, False])
+    def test_surviving_duplicate_stays_actionable_after_a_delete(self, open_legacy, survivor_has_para_id):
+        """Deleting the listed duplicate lists the earlier one at once; its id must still be accepted."""
+        with_para_id = '<w:p w14:paraId="0000AAAA"><w:r><w:t>with paraId</w:t></w:r></w:p>'
+        without = "<w:p><w:r><w:t>without paraId</w:t></w:r></w:p>"
+        first, last = (with_para_id, without) if survivor_has_para_id else (without, with_para_id)
+        doc = open_legacy(
+            comments_part(old_comment(0, first), old_comment(0, last), root_attrs=f' xmlns:w14="{W14_NS}"'),
+            {QUICK: (0, "range")},
+            extended_part('<w15:commentEx w15:paraId="0000AAAA" w15:done="0"/>'),
+        )
+        survivor_text = "with paraId" if survivor_has_para_id else "without paraId"
+
+        assert doc.delete_comment(0) is True
+
+        assert [(c.id, c.text) for c in doc.list_comments()] == [(0, survivor_text)]
+        expected_para_id = "0000AAAA" if survivor_has_para_id else None
+        assert doc._comment_manager.existing_comments == {0: {"para_id": expected_para_id}}
+        for comment in doc.list_comments():
+            assert doc.resolve_comment(comment.id) is True
+        assert [c.resolved for c in doc.list_comments()] == [True]
+        for comment in doc.list_comments():
+            assert doc.delete_comment(comment.id) is True
+        assert doc.list_comments() == []
+        assert doc._comment_manager.existing_comments == {}
 
     def test_comment_without_a_paragraph_gains_one(self, open_legacy, tmp_path):
         doc = open_legacy(comments_part(old_comment(0, "")), {QUICK: (0, "range")})

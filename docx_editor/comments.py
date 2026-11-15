@@ -21,7 +21,7 @@ from .exceptions import (
     AmbiguousTextError,
     CommentError,
     HashMismatchError,
-    NodeNotFoundError,
+    MultipleNodesFoundError,
     ParagraphIndexError,
     TextNotFoundError,
     XMLError,
@@ -776,12 +776,20 @@ class CommentManager:
     def _find_marker(self, tag: str, comment_id: int) -> Element | None:
         """The one ``tag`` marker of ``comment_id`` in document.xml, or None when it has none.
 
-        Several markers for the one id raise ``MultipleNodesFoundError``.
+        Ids are matched by integer value, as the registry reads them:
+        ``w:id="05"`` is a marker of comment 5.
+
+        Raises:
+            MultipleNodesFoundError: If the comment has several ``tag`` markers.
         """
-        try:
-            return self.document_editor.get_node(tag=tag, attrs={"w:id": str(comment_id)})
-        except NodeNotFoundError:
-            return None
+        markers = [
+            marker
+            for marker in self.document_editor.dom.getElementsByTagName(tag)
+            if _adjudicable_id(marker) == comment_id
+        ]
+        if len(markers) > 1:
+            raise MultipleNodesFoundError(f"Multiple <{tag}> markers found for comment id={comment_id}")
+        return markers[0] if markers else None
 
     def _place_reply_markers(self, comment_id: int, parent_start: Element | None, parent_ref: Element) -> None:
         """Seat a reply's markers around its parent's, where Word expects them.
@@ -965,7 +973,7 @@ class CommentManager:
 
         # A comment with no paraId has no row in the parts keyed by one.
         if para_id is None:
-            del self.existing_comments[comment_id]
+            self._unregister(comment_id)
             return True
 
         # Remove from commentsExtended.xml
@@ -998,8 +1006,20 @@ class CommentManager:
                     ex_elem.parentNode.removeChild(ex_elem)
                     break
 
-        del self.existing_comments[comment_id]
+        self._unregister(comment_id)
         return True
+
+    def _unregister(self, comment_id: int) -> None:
+        """Take a deleted comment out of the registry.
+
+        Another ``w:comment`` sharing the ``w:id`` is listed from now on, so
+        the id is re-registered on it rather than dropped.
+        """
+        survivors = self._comment_elements(comment_id)
+        if survivors:
+            self.existing_comments[comment_id] = {"para_id": self._get_comment_para_id(survivors[-1])}
+        else:
+            del self.existing_comments[comment_id]
 
     def _remove_range_markers(self, comment_id: int) -> None:
         """Drop a comment's range markers and reference run from document.xml.
@@ -1010,18 +1030,19 @@ class CommentManager:
         """
         for tag in ("w:commentRangeStart", "w:commentRangeEnd"):
             try:
-                marker = self.document_editor.get_node(tag=tag, attrs={"w:id": str(comment_id)})
-                marker.parentNode.removeChild(marker)
+                marker = self._find_marker(tag, comment_id)
+                if marker is not None:
+                    marker.parentNode.removeChild(marker)
             except Exception:
                 pass
 
         try:
-            ref = self.document_editor.get_node(tag="w:commentReference", attrs={"w:id": str(comment_id)})
-            # Remove the parent run containing the reference
-            if ref.parentNode and ref.parentNode.nodeName == "w:r":
-                ref.parentNode.parentNode.removeChild(ref.parentNode)
-            else:
-                ref.parentNode.removeChild(ref)
+            ref = self._find_marker("w:commentReference", comment_id)
+            if ref is None:
+                return
+            # Remove the run containing the reference, or a bare reference itself
+            target = _find_ancestor_run(ref) or ref
+            target.parentNode.removeChild(target)
         except Exception:
             pass
 
@@ -1156,8 +1177,12 @@ class CommentManager:
         Of several elements sharing the ``w:id``, the last: the one
         :meth:`_load_existing_comments` registers and ``list_comments`` returns.
         """
+        return self._comment_elements(comment_id)[-1]
+
+    def _comment_elements(self, comment_id: int) -> list[Element]:
+        """Every ``w:comment`` element whose integer ``w:id`` is ``comment_id``, in document order."""
         comments = self._get_editor(self.comments_path).dom.getElementsByTagName("w:comment")
-        return [elem for elem in comments if _adjudicable_id(elem) == comment_id][-1]
+        return [elem for elem in comments if _adjudicable_id(elem) == comment_id]
 
     def _ensure_para_id(self, comment_id: int) -> str:
         """Return the paraId of a registered comment, giving it one if it has none.
