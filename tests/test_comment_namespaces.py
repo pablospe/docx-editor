@@ -342,13 +342,21 @@ class TestCommentsPartUnderAnotherName:
 
             assert marker_count(doc) == 0
 
-    def test_non_integer_comment_id_does_not_block_open(self, simple_docx, tmp_path):
+    def test_non_integer_comment_id_is_skipped(self, simple_docx, tmp_path):
+        """A comment with no usable id cannot be addressed: it is not listed, and it blocks nothing."""
         comments_xml = ONE_OLD_COMMENT.replace('w:id="0"', 'w:id="x"').replace(
             "<w:p>", f'<w:p xmlns:w14="{W14_NS}" w14:paraId="00000001">'
         )
         src = make_docx_with_comments(simple_docx, tmp_path, comments_xml, part_name="comments1.xml")
+        out = tmp_path / "out.docx"
         with Document.open(src, author="Tester") as doc:
+            assert doc.list_comments() == []
             assert doc.add_comment("quick brown", "check this") == 0
+            assert [(c.id, c.text) for c in doc.list_comments()] == [(0, "check this")]
+            doc.save(out)
+
+        # Skipped, not dropped: the comment is still in the part.
+        assert 'w:id="x"' in read_part(out, "word/comments1.xml")
 
 
 class TestRelationshipNamingAnotherPart:

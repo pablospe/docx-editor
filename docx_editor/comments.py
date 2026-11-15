@@ -1041,9 +1041,14 @@ class CommentManager:
         return None
 
     def _parse_comment(self, comment_elem) -> Comment | None:
-        """Parse a w:comment element into a Comment object."""
-        comment_id = comment_elem.getAttribute("w:id")
-        if not comment_id:
+        """Parse a w:comment element into a Comment object.
+
+        Returns None for a comment with no integer ``w:id``: it cannot be
+        addressed, so it is skipped here as in :meth:`_load_existing_comments`.
+        """
+        try:
+            comment_id = int(comment_elem.getAttribute("w:id"))
+        except ValueError:
             return None
 
         author = comment_elem.getAttribute("w:author") or "Unknown"
@@ -1057,7 +1062,7 @@ class CommentManager:
         text_parts = [get_text_node_data(t_elem) for t_elem in comment_elem.getElementsByTagName("w:t")]
 
         return Comment(
-            id=int(comment_id),
+            id=comment_id,
             text="".join(text_parts),
             author=author,
             date=date,
