@@ -233,6 +233,15 @@ class TestReplaceAll:
         assert len({r.comment_id for r in results}) == 1
         assert [c.text for c in doc.list_comments()] == ["new term"]
 
+    def test_note_is_anchored_on_the_first_match(self, doc):
+        # The ops run reversed; the comment must still bracket match 0 (P1),
+        # not the last match applied first.
+        results = doc.replace_all("30 days", "60 days", expected_count=3, note="new term")
+        assert results[0].comment_id is not None
+        body = doc._document_editor.dom.getElementsByTagName("w:body")[0]
+        first_p = body.getElementsByTagName("w:p")[0]
+        assert first_p.getElementsByTagName("w:commentRangeStart")
+
     @pytest.mark.parametrize(
         ("find", "new", "message"),
         [("a\tb", "x", "tab"), ("30 days", 5, "replace_with"), ("", "x", "non-empty")],
@@ -251,15 +260,24 @@ class TestReplaceAll:
 
 
 def test_replace_all_batch_error_indexes_matches_in_document_order(simple_docx, tmp_path):
-    # Two matches in P1 and a "\n" replacement: P1 can split only once per
-    # batch. The ops run reversed, but the error must name match 0 in P1, the
-    # first match in document order, as in the list replace_all would return.
-    with _open(simple_docx, tmp_path, _p("a X b X c"), _p("X end")) as d:
+    # P1 already carries a pending split, so splitting it again fails. The ops
+    # run reversed (P1's is the last applied), but the error must name match 0,
+    # the first match in document order, as in the list replace_all returns.
+    with _open(simple_docx, tmp_path, _p("X a b"), _p("b X"), _p("c X")) as d:
+        d.replace("a b", "a\nq")
         before = _xml(d)
         with pytest.raises(BatchOperationError) as exc:
             d.replace_all("X", "Y\nZ", expected_count=3)
         assert exc.value.operation_index == 0
-        assert str(exc.value).startswith("Operation 0: match 0 (P1#")
+        assert str(exc.value).startswith("Operation 0: match at P1#")
+        assert _xml(d) == before
+
+
+def test_replace_all_newline_with_two_matches_in_one_paragraph_is_refused(simple_docx, tmp_path):
+    with _open(simple_docx, tmp_path, _p("a X b X c"), _p("X end")) as d:
+        before = _xml(d)
+        with pytest.raises(ValueError, match=r"replace_all\(\): replace_with contains a newline"):
+            d.replace_all("X", "Y\nZ", expected_count=3)
         assert _xml(d) == before
 
 

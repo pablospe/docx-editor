@@ -1591,6 +1591,8 @@ class Document:
         not see. The edits run as one :meth:`batch_edit`: each match gets its
         own revision group, all of them share one changeset, every paragraph
         hash is checked first, and a failing match rolls the whole call back.
+        A match inside your own pending insertion amends it in place, like
+        :meth:`replace` (``group_id``/``changeset_id`` None on that result).
 
         Args:
             find: Text to find (must be non-empty; straight and curly quotes
@@ -1598,9 +1600,10 @@ class Document:
             replace_with: Replacement text.
             expected_count: How many matches you expect (``0`` allowed: then
                 the call asserts the text is absent and returns ``[]``).
-            note: Rationale anchored as a comment on the revisions, shared by
-                every match (see :meth:`batch_edit`). Ignored when nothing
-                matches (``expected_count=0``).
+            note: Rationale for the edit: one comment, anchored on the first
+                match in document order that has a revision, and carried as
+                ``comment_id`` by every result. Ignored when nothing matches
+                (``expected_count=0``).
 
         Returns:
             One EditResult per match, in document order. Several matches in
@@ -1612,16 +1615,16 @@ class Document:
                 None nor a non-empty control-character-free string,
                 ``expected_count`` is not a non-negative integer, or matches
                 of ``find`` overlap one another (e.g. ``"aa"`` in
-                ``"aaaa"``) — the matches are then not independent edits.
+                ``"aaaa"``) — the matches are then not independent edits — or
+                ``replace_with`` contains ``\n`` and two matches share a
+                paragraph (a paragraph splits once per batch; split those one
+                at a time with :meth:`replace`).
             MatchCountError: If the number of matches is not
                 ``expected_count``; it lists the matches it found.
             BatchOperationError: If a replacement fails while applying;
                 ``operation_index`` is the failing match's position in
                 document order (as in the returned list) and ``original``
                 holds the underlying error. The document is left unchanged.
-                A ``replace_with`` containing ``\n`` fails this way when two
-                matches share a paragraph (a paragraph splits once per batch);
-                split those one at a time with :meth:`replace`.
 
         Example:
             results = doc.replace_all("30 days", "60 days", expected_count=3)
@@ -1640,6 +1643,12 @@ class Document:
                     f"(at chars {prev.start} and {cur.start}), so they cannot all be replaced; "
                     f"replace them one at a time with replace(..., paragraph=, occurrence=)."
                 )
+            if "\n" in replace_with and cur.paragraph_ref == prev.paragraph_ref:
+                raise ValueError(
+                    f"replace_all(): replace_with contains a newline and {find!r} matches more than once in "
+                    f"paragraph {cur.paragraph_ref}, which can split only once per call; "
+                    f"replace those matches one at a time with replace(..., paragraph=, occurrence=)."
+                )
         if not matches:
             return []
         # Reversed: same-paragraph ops must run in descending occurrence order,
@@ -1648,20 +1657,26 @@ class Document:
             # The caller's ``find``, not ``m.text``: the scoped lookup folds
             # quotes the same way, and affix trimming needs the caller's
             # spelling to keep a word typed identically on both sides (#96).
-            EditOperation.replace(
-                find, replace_with, paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence, note=note
-            )
+            EditOperation.replace(find, replace_with, paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence)
             for m in reversed(matches)
         ]
         try:
-            return self.batch_edit(ops)[::-1]
+            results = self.batch_edit(ops)[::-1]
         except BatchOperationError as e:
             # Re-index into document order: the caller never saw ``ops``.
             i = len(ops) - 1 - e.operation_index
             m = matches[i]
             raise BatchOperationError(
-                i, f"match {i} ({m.paragraph_ref} at char {m.start}): {e.reason}", original=e.original
+                i, f"match at {m.paragraph_ref} char {m.start}: {e.reason}", original=e.original
             ) from e.original
+        # The note is attached here, in document order, rather than on the
+        # reversed ops: the shared comment lands on the first match.
+        if note is not None:
+            reason = _NOTE_NOOP_REPLACE if find == replace_with else _NOTE_AMENDED_INSERTION
+            comment_ids = self._attach_notes([(r.group_id, note, reason) for r in results])
+            for r, cid in zip(results, comment_ids, strict=True):
+                r.comment_id = cid
+        return results
 
     def delete(
         self,

@@ -393,24 +393,25 @@ The two forms prove different things. A scoped call proves the paragraph is as y
 
 #### `replace_all(find, replace_with, *, expected_count, note=None)`
 
-Replace every match of `find` document-wide as one atomic edit. `expected_count` is required: state how many matches you mean to replace, and any other count raises [`MatchCountError`](#matchcounterror) with nothing written — the guard that keeps a bulk edit from touching text you did not see. The replacements run as one [`batch_edit()`](#batch_editoperations-dry_runfalse): each match gets its own revision group, all of them share one changeset, and a failure rolls the whole call back.
+Replace every match of `find` document-wide as one atomic edit. `expected_count` is required: state how many matches you mean to replace, and any other count raises [`MatchCountError`](#matchcounterror) with nothing written — the guard that keeps a bulk edit from touching text you did not see. The replacements run as one [`batch_edit()`](#batch_editoperations-dry_runfalse): each match gets its own revision group, all of them share one changeset, and a failure rolls the whole call back. A match inside your own pending insertion amends it in place, as `replace()` does, so that result's `group_id`/`changeset_id` are None.
 
 **Parameters:**
 
 - `find` (str): Text to find (non-empty; straight and curly quotes match each other)
 - `replace_with` (str): Replacement text
 - `expected_count` (int, keyword-only, required): How many matches you expect. `0` asserts the text is absent and returns `[]`.
-- `note` (str | None): Rationale anchored as one comment shared by every replacement — see [Rationale notes](#rationale-notes)
+- `note` (str | None): Rationale as one comment, anchored on the first match in document order and carried as `comment_id` by every result — see [Rationale notes](#rationale-notes)
 
 **Returns:** list of [`EditResult`](#editresult), one per match in document order; matches in the same paragraph carry that paragraph's final ref.
 
-**Raises:** `ValueError` if `find` is empty or contains `\t`, `replace_with` is not a string, `note` is neither None nor a non-empty control-character-free string, `expected_count` is not a non-negative integer, or matches overlap one another (`"aa"` in `"aaaa"` — replace those one at a time); [`MatchCountError`](#matchcounterror) on a count mismatch; [`BatchOperationError`](#batchoperationerror) if a replacement fails while applying, document unchanged — its `operation_index` is the failing match's position in document order. A `replace_with` containing `\n` fails this way when two matches share a paragraph (a paragraph splits once per batch); split those one at a time with `replace()`.
+**Raises:** `ValueError` if `find` is empty or contains `\t`, `replace_with` is not a string, `note` is neither None nor a non-empty control-character-free string, `expected_count` is not a non-negative integer, matches overlap one another (`"aa"` in `"aaaa"`), or `replace_with` contains `\n` and two matches share a paragraph (a paragraph splits once per call) — replace those one at a time; [`MatchCountError`](#matchcounterror) on a count mismatch; [`BatchOperationError`](#batchoperationerror) if a replacement fails while applying, document unchanged — its `operation_index` is the failing match's position in document order.
 
 **Example:**
 
 ```python
 results = doc.replace_all("30 days", "60 days", expected_count=3)
 doc.reject_changeset(results[0].changeset_id)   # undo all three at once
+# (a match inside your own pending insertion is amended instead and has no changeset)
 ```
 
 #### `replace(find, replace_with, *, paragraph=None, occurrence=None, note=None)`
