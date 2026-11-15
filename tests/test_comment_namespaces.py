@@ -4,6 +4,9 @@ Word 2007, LibreOffice and Google Docs exports ship ``word/comments.xml``
 alone, with a root that declares ``xmlns:w`` and nothing else. New comments
 carry ``w14:paraId``, so the part must gain the declaration first, and the
 three sibling parts created on the way must be wired into the package.
+
+Also covered: which file is a comment part at all. It is the one the
+relationship of its type names, which may not be ``word/comments.xml``.
 """
 
 import re
@@ -315,6 +318,38 @@ class TestCommentsPartUnderAnotherName:
 
             assert marker_count(doc) == 0
 
+    def test_adopted_part_without_an_override_gains_one(self, simple_docx, tmp_path):
+        """Word finds a comments part by its content type; a comment must not go into an untyped part."""
+        src = make_docx_with_comments(simple_docx, tmp_path, ONE_OLD_COMMENT, part_name="comments1.xml")
+        override = f'<Override PartName="/word/comments1.xml" ContentType="{COMMENTS_CONTENT_TYPE}"/>'
+        untyped = tmp_path / "untyped.docx"
+        replace_docx_parts(
+            src, untyped, {"[Content_Types].xml": read_part(src, "[Content_Types].xml").replace(override, "")}
+        )
+        out = tmp_path / "out.docx"
+        with Document.open(untyped, author="Tester") as doc:
+            doc.add_comment("quick brown", "check this")
+            doc.save(out)
+
+        assert "check this" in read_part(out, "word/comments1.xml")
+        assert read_part(out, "[Content_Types].xml").count(override) == 1
+
+    def test_overlong_target_refuses_the_comment(self, simple_docx, tmp_path):
+        src = add_relationship(simple_docx, tmp_path / "long.docx", COMMENTS_REL_TYPE, "a" * 300 + ".xml")
+        with Document.open(src, author="Tester") as doc:
+            with pytest.raises(XMLError, match="is not a comment part"):
+                doc.add_comment("quick brown", "check this")
+
+            assert marker_count(doc) == 0
+
+    def test_non_integer_comment_id_does_not_block_open(self, simple_docx, tmp_path):
+        comments_xml = ONE_OLD_COMMENT.replace('w:id="0"', 'w:id="x"').replace(
+            "<w:p>", f'<w:p xmlns:w14="{W14_NS}" w14:paraId="00000001">'
+        )
+        src = make_docx_with_comments(simple_docx, tmp_path, comments_xml, part_name="comments1.xml")
+        with Document.open(src, author="Tester") as doc:
+            assert doc.add_comment("quick brown", "check this") == 0
+
 
 class TestRelationshipNamingAnotherPart:
     """A comment relationship is honoured only when its target is a comment part.
@@ -340,6 +375,35 @@ class TestRelationshipNamingAnotherPart:
         assert "swift" in read_part(out, "word/document.xml")
         with Document.open(out, author="Tester") as reopened:
             assert len(reopened.list_revisions()) == 2
+
+    @pytest.mark.parametrize(
+        ("rel_type", "target", "root"),
+        [
+            (COMMENTS_REL_TYPE, "commentsExtended.xml", f'<w:comments xmlns:w="{W_NS}"/>'),
+            (
+                EXTENDED_REL_TYPE,
+                "comments.xml",
+                '<w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"/>',
+            ),
+        ],
+        ids=["comments-in-commentsExtended.xml", "commentsEx-in-comments.xml"],
+    )
+    def test_part_stored_under_another_types_default_name(self, simple_docx, tmp_path, rel_type, target, root):
+        """Such a file is one type's part by relationship and another's by name: neither is wired or written."""
+        src = tmp_path / "crossed.docx"
+        add_relationship(simple_docx, src, rel_type, target)
+        with zipfile.ZipFile(src, "a") as z:
+            z.writestr(f"word/{target}", XML_DECL + root)
+        out = tmp_path / "out.docx"
+        with Document.open(src, author="Tester") as doc:
+            with pytest.raises(XMLError, match=r"document\.xml\.rels: .* also resolves to"):
+                doc.add_comment("quick brown", "check this")
+            assert marker_count(doc) == 0
+            doc.save(out)
+
+        saved = read_part(out, RELS)
+        assert saved.count("relationships/comments") == 1
+        assert saved.count(f'Target="{target}"') == 1
 
     def test_external_target_with_a_local_looking_name_refuses_the_comment(self, simple_docx, tmp_path):
         src = make_docx_with_comments(simple_docx, tmp_path, EMPTY)
@@ -399,7 +463,7 @@ class TestTypedFailureLeavesNoMarkers:
         assert len(doc._document_editor.dom.getElementsByTagName("w:ins")) == 1
 
     def test_sibling_part_binding_its_prefix_elsewhere(self, simple_docx, tmp_path):
-        """``commentsExtensible.xml`` is the last part written; it is still checked first."""
+        """``commentsExtensible.xml`` is the last part written; it is still checked before anything is."""
         src = make_docx_with_comments(simple_docx, tmp_path, EMPTY)
         with zipfile.ZipFile(src, "a") as z:
             z.writestr(

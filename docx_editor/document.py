@@ -14,7 +14,7 @@ from xml.dom.minidom import Attr, Element
 
 import defusedxml.minidom
 
-from .comments import COMMENT_PARTS, Comment, CommentManager
+from .comments import COMMENT_PARTS, Comment, CommentManager, CommentPart
 from .exceptions import (
     DocumentClosedError,
     DocumentProtectedError,
@@ -50,6 +50,7 @@ from .xml_editor import (
     _compute_heading_paths,
     _compute_paragraph_location,
     _compute_section_indexes,
+    _escape_xml,
     _is_inside_element,
     body_paragraphs,
     build_text_map,
@@ -2994,6 +2995,19 @@ class Document:
         editor.append_to(root, person_xml)
         editor.save()
 
+    def _comment_parts_on_disk(self) -> list[tuple[CommentPart, Path]]:
+        """Each comment part that exists, with the file CommentManager resolved it to.
+
+        A file that two part types resolve to is left out: it cannot be both,
+        and CommentManager refuses to write a comment into such a package.
+        """
+        paths = self._comment_manager.part_paths
+        return [
+            (part, path)
+            for part, path in zip(COMMENT_PARTS, paths, strict=True)
+            if path.exists() and paths.count(path) == 1
+        ]
+
     def _ensure_comment_relationships(self) -> None:
         """Ensure every comment part on disk has a relationship from document.xml.
 
@@ -3001,7 +3015,9 @@ class Document:
         alone gains the three sibling parts on its first new comment, and they
         need relationships even though ``comments.xml`` already has one.
         """
-        on_disk = [part for part in COMMENT_PARTS if (self._workspace.word_path / part.name).exists()]
+        # A part with no relationship of its type is always at its default
+        # name, so Target=part.name below is the file it resolved to.
+        on_disk = [part for part, _ in self._comment_parts_on_disk()]
         if not on_disk:
             return
 
@@ -3032,11 +3048,14 @@ class Document:
         editor.save()
 
     def _ensure_comment_content_types(self) -> None:
-        """Ensure every comment part on disk has a content-type override."""
+        """Ensure every comment part on disk has a content-type override.
+
+        That includes a part the package keeps under another name: comments
+        are written into it, and a consumer finds it by its content type.
+        """
         on_disk = [
-            (f"/word/{part.name}", part.content_type)
-            for part in COMMENT_PARTS
-            if (self._workspace.word_path / part.name).exists()
+            ("/" + path.relative_to(self._workspace.workspace_path).as_posix(), part.content_type)
+            for part, path in self._comment_parts_on_disk()
         ]
         if not on_disk:
             return
@@ -3057,7 +3076,7 @@ class Document:
 
         root = editor.dom.documentElement
         for part_name, content_type in missing:
-            override_xml = f'<Override PartName="{part_name}" ContentType="{content_type}"/>'
+            override_xml = f'<Override PartName="{_escape_xml(part_name)}" ContentType="{content_type}"/>'
             editor.append_to(root, override_xml)
 
         editor.save()

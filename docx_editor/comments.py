@@ -177,15 +177,13 @@ class CommentManager:
 
         # Comment file paths, in COMMENT_PARTS order, and why a new comment
         # cannot be wired (empty when it can).
+        self.part_paths, self._unusable_relationships = self._resolve_comment_parts()
         (
-            (
-                self.comments_path,
-                self.comments_extended_path,
-                self.comments_ids_path,
-                self.comments_extensible_path,
-            ),
-            self._unusable_relationships,
-        ) = self._resolve_comment_parts()
+            self.comments_path,
+            self.comments_extended_path,
+            self.comments_ids_path,
+            self.comments_extensible_path,
+        ) = self.part_paths
 
         # Cache for lazy-loaded editors
         self._editors: dict[str, DocxXMLEditor] = {}
@@ -194,7 +192,7 @@ class CommentManager:
         self.existing_comments = self._load_existing_comments()
         self.next_comment_id = self._get_next_comment_id()
 
-    def _resolve_comment_parts(self) -> tuple[list[Path], list[str]]:
+    def _resolve_comment_parts(self) -> tuple[tuple[Path, ...], list[str]]:
         """Return each comment part's path (``COMMENT_PARTS`` order) and the relationships that cannot be honoured.
 
         A comment part is the one ``document.xml.rels`` names for its
@@ -206,8 +204,8 @@ class CommentManager:
         A target under another name is adopted only when it is a file whose
         document element is the part's expected root. Anything else — a
         missing file, another kind of part such as ``document.xml``, an
-        external target, two different parts for one type — cannot be
-        honoured: adopting it would put a second editor on a part the document
+        external target, two different parts for one type, one file for two
+        types — cannot be honoured: adopting it would put a second editor on a part the document
         already edits, and a part created under the default name instead would
         stay unwired, because its type already has a relationship. Each such
         relationship is described in the second list, and
@@ -243,7 +241,10 @@ class CommentManager:
             if len(candidates) > 1:
                 unusable.append(f"{part.name} relationships name more than one part")
             paths.append(candidates.pop() if len(candidates) == 1 else self.word_path / part.name)
-        return paths, unusable
+        for part, path in zip(COMMENT_PARTS, paths, strict=True):
+            if paths.count(path) > 1:
+                unusable.append(f"{part.name} resolves to {path.name}, which another comment part also resolves to")
+        return tuple(paths), unusable
 
     @staticmethod
     def _has_root(path: Path, root_tag: str) -> bool:
@@ -252,11 +253,10 @@ class CommentManager:
         Parsed on its own, never through :meth:`_get_editor`: a file that
         fails this test must not end up in the editor cache.
         """
-        if not path.is_file():
-            return False
         try:
-            return defusedxml.minidom.parse(str(path)).documentElement.tagName == root_tag
-        except (ExpatError, DefusedXmlException):
+            return path.is_file() and defusedxml.minidom.parse(str(path)).documentElement.tagName == root_tag
+        except (OSError, ExpatError, DefusedXmlException):
+            # OSError: a target no file system can hold, e.g. an overlong name.
             return False
 
     def _get_editor(self, xml_path: Path) -> DocxXMLEditor:
@@ -1025,7 +1025,10 @@ class CommentManager:
             if not para_id:
                 continue
 
-            existing[int(comment_id)] = {"para_id": para_id}
+            try:
+                existing[int(comment_id)] = {"para_id": para_id}
+            except ValueError:
+                continue
 
         return existing
 
@@ -1096,14 +1099,16 @@ class CommentManager:
 
         Raises:
             XMLError: If a new comment cannot be written and wired
-                (``NodeNotFoundError``, a subclass, when a part does not
-                contain the expected element at all).
+                (the subclasses ``NodeNotFoundError`` and
+                ``MultipleNodesFoundError`` when a part holds the expected
+                element not at all or more than once).
         """
         if self._unusable_relationships:
             raise XMLError(f"document.xml.rels: {'; '.join(self._unusable_relationships)}; cannot add a comment")
-        paths = (self.comments_path, self.comments_extended_path, self.comments_ids_path, self.comments_extensible_path)
         existing = [
-            (self._get_editor(path), part) for path, part in zip(paths, COMMENT_PARTS, strict=True) if path.exists()
+            (self._get_editor(path), part)
+            for path, part in zip(self.part_paths, COMMENT_PARTS, strict=True)
+            if path.exists()
         ]
         # Check every part before changing any: a rejected part leaves the
         # others exactly as they were.
