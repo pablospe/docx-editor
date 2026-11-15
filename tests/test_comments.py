@@ -2316,6 +2316,63 @@ class TestResolutionKeepsCommentMarkers:
         finally:
             doc.close()
 
+    _START = '<w:commentRangeStart w:id="0"/>'
+    _END = '<w:commentRangeEnd w:id="0"/><w:r><w:rPr/><w:commentReference w:id="0"/></w:r>'
+    _SPANNING = {
+        # A range starting in block insertion 1 and ending in block insertion 2.
+        "two_insertions": "<w:p><w:r><w:t>P0</w:t></w:r></w:p>"
+        f'<w:ins w:id="1" {_ANN}><w:p>{_START}<w:r><w:t>a</w:t></w:r></w:p></w:ins>'
+        f'<w:ins w:id="2" {_ANN}><w:p><w:r><w:t>b</w:t></w:r>{_END}</w:p></w:ins>'
+        "<w:p><w:r><w:t>P3</w:t></w:r></w:p>",
+        "two_insertions_no_previous": f'<w:ins w:id="1" {_ANN}><w:p>{_START}<w:r><w:t>a</w:t></w:r></w:p></w:ins>'
+        f'<w:ins w:id="2" {_ANN}><w:p><w:r><w:t>b</w:t></w:r>{_END}</w:p></w:ins>'
+        "<w:p><w:r><w:t>P3</w:t></w:r></w:p>",
+        # The range starts in a table cell between P0 and the insertion.
+        "start_in_a_table": "<w:p><w:r><w:t>P0</w:t></w:r></w:p>"
+        f"<w:tbl><w:tr><w:tc><w:p>{_START}<w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+        f'<w:ins w:id="2" {_ANN}><w:p><w:r><w:t>b</w:t></w:r>{_END}</w:p></w:ins>',
+        # The insertion is alone in a block content control: the paragraph
+        # outside it still receives the markers.
+        "inside_a_block_sdt": "<w:p><w:r><w:t>P0</w:t></w:r></w:p>"
+        f'<w:sdt><w:sdtContent><w:ins w:id="2" {_ANN}><w:p>{_START}<w:r><w:t>b</w:t></w:r>{_END}</w:p></w:ins>'
+        "</w:sdtContent></w:sdt>",
+    }
+
+    @pytest.mark.parametrize("body", sorted(_SPANNING))
+    @pytest.mark.parametrize("order", ["reject_all", "ascending", "descending"])
+    def test_rehomed_range_keeps_its_start_before_its_end(self, clean_workspace, tmp_path, body, order):
+        doc = _open_body(clean_workspace, tmp_path, self._SPANNING[body])
+        try:
+            ids = sorted(rev.id for rev in doc.list_revisions())
+            if order == "reject_all":
+                doc.reject_all()
+            else:
+                for rev_id in ids if order == "ascending" else reversed(ids):
+                    assert doc.reject_revision(rev_id)
+            assert doc.list_revisions() == []
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS)}
+            self._assert_nothing_at_block_level(doc)
+        finally:
+            doc.close()
+
+    def test_text_box_fallback_copy_is_not_hoisted_twice(self, clean_workspace, tmp_path):
+        box = f"<w:txbxContent><w:p>{self._START}<w:r><w:t>box</w:t></w:r>{self._END}</w:p></w:txbxContent>"
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            "<w:p><w:r><w:t>keep</w:t></w:r>"
+            f'<w:ins w:id="1" {_ANN}><w:r>'
+            '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+            f'<mc:Choice Requires="wps"><w:drawing>{box}</w:drawing></mc:Choice>'
+            f"<mc:Fallback><w:pict>{box}</w:pict></mc:Fallback>"
+            "</mc:AlternateContent></w:r></w:ins></w:p>",
+        )
+        try:
+            assert doc.reject_revision(1)
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS)}
+        finally:
+            doc.close()
+
     @pytest.mark.skipif(__import__("shutil").which("soffice") is None, reason="LibreOffice not installed")
     def test_libreoffice_opens_a_rejected_block_level_insertion(self, clean_workspace, tmp_path, monkeypatch):
         import shutil

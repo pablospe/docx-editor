@@ -27,9 +27,10 @@ from .models import (
 
 _COMMENT_MARK_TAGS = ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
 
-# Containers whose children are block-level (paragraphs, tables): a run or a
-# comment mark may not sit directly in one. Wrappers that occur at either
-# level (w:ins, w:sdtContent, w:customXml, ...) are climbed past.
+# Containers whose children are block-level (paragraphs, tables). Resolution
+# never leaves a run or a comment mark directly in one (a bare w:r there is
+# schema-invalid). Wrappers that occur at either level (w:ins, w:sdtContent,
+# w:customXml, ...) are climbed past.
 _BLOCK_CONTAINER_TAGS = frozenset({
     "w:body",
     "w:tc",
@@ -54,15 +55,41 @@ def _holds_run_content(node) -> bool:
     return False
 
 
-def _sibling_paragraph(elem, direction: str) -> Element | None:
-    """The nearest ``w:p`` sibling of ``elem`` along ``direction``
-    (``"previousSibling"`` or ``"nextSibling"``), or None."""
-    node = getattr(elem, direction)
-    while node is not None:
-        if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:p":
-            return node
-        node = getattr(node, direction)
-    return None
+def _has_ancestor_below(node, tag: str, stop) -> bool:
+    """True if an ancestor of ``node`` strictly below ``stop`` is a ``tag``."""
+    node = node.parentNode
+    while node is not None and node is not stop:
+        if node.tagName == tag:
+            return True
+        node = node.parentNode
+    return False
+
+
+def _neighbour_paragraphs(elem) -> tuple[Element | None, Element | None]:
+    """The last ``w:p`` before and the first ``w:p`` after ``elem``, in document
+    order within its enclosing block container (paragraphs in tables and in
+    other pending wrappers count; ``elem``'s own and text boxes' do not).
+
+    Document order, not sibling order, is what keeps a range's start before
+    its end however many block-level revisions it spans and in whatever order
+    they are resolved: a marker re-homed into a paragraph that is itself
+    pending is moved on again when that paragraph's revision is resolved.
+    """
+    container = elem.parentNode
+    while container.parentNode is not None and container.tagName not in _BLOCK_CONTAINER_TAGS:
+        container = container.parentNode
+    own = {id(node) for node in elem.getElementsByTagName("w:p")}
+    before, passed = None, False
+    for node in container.getElementsByTagName("*"):
+        if node is elem:
+            passed = True
+        elif node.tagName != "w:p" or id(node) in own or _has_ancestor_below(node, "w:txbxContent", container):
+            continue
+        elif passed:
+            return before, node
+        else:
+            before = node
+    return before, None
 
 
 def _only_rpr_besides(run, mark) -> bool:
@@ -591,8 +618,9 @@ class _ResolutionMixin(_RevisionManagerBase):
         in ``elem``'s subtree is first moved, in document order, to the nearest
         surviving position (see ``_hoist_comment_markers``). Order is kept, so a
         range wholly inside becomes a point comment where the text was and a
-        range straddling the edge is clipped to the text that survives. The
-        comment itself (``comments.xml``) is never touched by resolution.
+        range straddling the edge is clipped to the text that survives. Only
+        block-level content with no paragraph left beside it drops markers.
+        The comment itself (``comments.xml``) is never touched by resolution.
         """
         self._hoist_comment_markers(elem)
         self._remove_element(elem)
@@ -602,9 +630,10 @@ class _ResolutionMixin(_RevisionManagerBase):
 
         Inside a paragraph they go just before ``elem``. A block-level ``elem``
         (wrapping whole paragraphs, under ``w:body``/``w:tc``/...) cannot leave
-        a run behind there, so they go to the end of the previous sibling
-        paragraph, else the start of the next one; with neither, each comment
-        they belong to loses its whole marker set (``_drop_comment_markers``).
+        a run behind there, so they go to the end of the nearest paragraph
+        before it, else the start of the nearest one after it
+        (``_neighbour_paragraphs``); with neither, each comment they belong to
+        loses its whole marker set (``_drop_comment_markers``).
 
         A reference moves with its run when that run holds nothing else but
         ``w:rPr`` (the shape Word and this library write); otherwise it is
@@ -614,16 +643,22 @@ class _ResolutionMixin(_RevisionManagerBase):
             node
             for node in elem.getElementsByTagName("*")  # document order
             if node.tagName in _COMMENT_MARK_TAGS
+            # A text box's mc:Fallback copy repeats the mc:Choice copy's
+            # markers; hoisting both would duplicate the comment's ids.
+            and not _has_ancestor_below(node, "mc:Fallback", elem)
         ]
         if not marks:
             return
+        target, anchor = None, None
         if _holds_run_content(elem.parentNode):
             target, anchor = elem.parentNode, elem
-        elif (paragraph := _sibling_paragraph(elem, "previousSibling")) is not None:
-            target, anchor = paragraph, None  # append: end of the paragraph
-        elif (paragraph := _sibling_paragraph(elem, "nextSibling")) is not None:
-            target, anchor = paragraph, _first_child_not_in(paragraph, ("w:pPr",))
         else:
+            before, after = _neighbour_paragraphs(elem)
+            if before is not None:
+                target, anchor = before, None  # append: end of the paragraph
+            elif after is not None:
+                target, anchor = after, _first_child_not_in(after, ("w:pPr",))
+        if target is None:
             # No surviving paragraph to re-home into: a half-pair elsewhere
             # would be worse than no anchor, so the comment keeps its body in
             # comments.xml but loses every marker, inside elem or not.
