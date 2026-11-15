@@ -177,6 +177,12 @@ comment_id = doc.add_comment("Section 5", "Please review this section")
 print(f"Created comment with ID: {comment_id}")
 ```
 
+To comment on a whole paragraph, leave the anchor out and pass its ref:
+
+```python
+doc.add_comment(comment="Needs a citation", paragraph="P3#a7b2")
+```
+
 ### Reply to a Comment
 
 ```python

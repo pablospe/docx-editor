@@ -16,6 +16,7 @@ import defusedxml.minidom
 
 from .comments import COMMENT_PARTS, Comment, CommentManager, CommentPart, has_root
 from .exceptions import (
+    CommentError,
     DocumentClosedError,
     DocumentProtectedError,
     HashMismatchError,
@@ -1970,31 +1971,45 @@ class Document:
 
     def add_comment(
         self,
-        anchor_text: str | SearchResult,
-        comment: str,
+        anchor_text: str | SearchResult | None = None,
+        comment: str | None = None,
         *,
         paragraph: str | None = None,
         occurrence: int | None = None,
     ) -> int:
-        """Add a comment anchored to specific text.
+        """Add a comment anchored to specific text, or to a whole paragraph.
 
         Anchors are located with the same text-map search used by
         :meth:`count_matches` and the tracked-change edit methods, so anchors
         that span ``w:t`` run boundaries (formatting changes, smart-quote
         splits, ``w:ins`` wrappers) are found.
 
+        Omit ``anchor_text`` and pass ``paragraph`` to comment on a whole
+        paragraph: the range covers the paragraph's full text as it reads with
+        pending changes accepted (tracked insertions included, tracked
+        deletions excluded). It runs from the first text character to the
+        last, so a picture, footnote reference or field code at either end is
+        outside it; and where that first or last text is a pending insertion
+        the marker sits inside it, so rejecting that insertion removes the
+        marker too (as for any anchor on inserted text).
+
         Args:
             anchor_text: Text to attach the comment to, or a
                 :class:`~docx_editor.track_changes.SearchResult` from
                 :meth:`find_text`/:meth:`find_all` — which supplies the anchor
                 text, its paragraph and its occurrence, so pass neither
-                ``paragraph`` nor ``occurrence`` with one.
-            comment: The comment content.
+                ``paragraph`` nor ``occurrence`` with one. ``None`` (the
+                default) comments on the whole of ``paragraph``. A single
+                positional string is always the anchor, never the comment.
+            comment: The comment content. Required, although it has a default
+                so that the whole-paragraph form can be written with keywords.
             paragraph: Optional paragraph reference (e.g., ``"P3#a7b2"``) to
                 scope the search. ``None`` searches the whole document.
+                Required when ``anchor_text`` is ``None``.
             occurrence: Which occurrence to anchor to (0 = first). Omitted →
                 ``anchor_text`` must be unique in the search scope, else
-                AmbiguousTextError.
+                AmbiguousTextError. Not allowed when ``anchor_text`` is
+                ``None``.
 
         Returns:
             The comment ID.
@@ -2005,23 +2020,39 @@ class Document:
             AmbiguousTextError: If ``occurrence`` is omitted and
                 ``anchor_text`` matches more than once in the search scope.
             HashMismatchError: If ``paragraph``'s hash is stale.
-            CommentError: If ``anchor_text`` is not a non-empty string, or
-                ``comment`` is not a string.
-            ValueError: If ``occurrence`` is negative or not an integer, or
+            ParagraphIndexError: If ``paragraph``'s index is out of range.
+            CommentError: If ``comment`` is missing or not a string;
+                ``anchor_text`` is an empty string or not a string; or
+                ``anchor_text`` is ``None`` and ``paragraph`` is omitted or
+                names a paragraph with no text (empty, or only tracked
+                deletions or non-text content such as a picture). Raised before
+                the document is touched.
+            ValueError: If ``paragraph`` is not a well-formed reference;
+                ``occurrence`` is negative or not an integer;
                 ``anchor_text`` is a SearchResult and
-                ``paragraph``/``occurrence`` was given too.
+                ``paragraph``/``occurrence`` was given too; or ``occurrence``
+                is given with ``anchor_text=None``.
 
         Example:
             doc.add_comment("Section 5", "Please review this section")
             doc.add_comment("foo", "Note", paragraph="P3#a7b2", occurrence=1)
 
+            # Comment on a whole paragraph:
+            doc.add_comment(comment="Needs a citation", paragraph="P3#a7b2")
+
             # Comment exactly the match a search found (2nd "foo", say):
             doc.add_comment(doc.find_all("foo")[1], "Note")
         """
         self._ensure_open()
-        anchor_text, paragraph, occurrence = _resolve_search_target(
-            anchor_text, paragraph, occurrence, ctx="add_comment(): ", field="'anchor_text'"
-        )
+        if comment is None:
+            raise CommentError(
+                "add_comment(): comment is required. A single positional string is the anchor_text; "
+                "for a whole-paragraph comment write add_comment(comment=..., paragraph=...)"
+            )
+        if anchor_text is not None:
+            anchor_text, paragraph, occurrence = _resolve_search_target(
+                anchor_text, paragraph, occurrence, ctx="add_comment(): ", field="'anchor_text'"
+            )
         return self._comment_manager.add_comment(anchor_text, comment, paragraph=paragraph, occurrence=occurrence)
 
     def reply_to_comment(self, comment_id: int, reply: str) -> int:

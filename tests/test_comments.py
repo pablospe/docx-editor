@@ -3,7 +3,7 @@
 from typing import Any
 
 import pytest
-from conftest import count_dom_walks, match_for
+from conftest import count_dom_walks, find_ref, match_for
 
 from docx_editor import (
     CommentError,
@@ -1688,3 +1688,369 @@ class TestCommentParagraphRef:
         located = Comment(id=1, text="Located", author="A", date=None, paragraph_ref="P3#b2c4")
         assert repr(located).endswith(" @P3#b2c4)")
         assert "@" not in repr(Comment(id=1, text="Unlocated", author="A", date=None))
+
+
+FOX = "The quick brown fox jumps over the lazy dog."
+
+
+def _commented_text(doc, comment_id: int) -> str:
+    """Accepted-view text between ``comment_id``'s range start and range end."""
+    out: list[str] = []
+    inside = False
+
+    def walk(node) -> None:
+        nonlocal inside
+        for child in node.childNodes:
+            if child.nodeType != child.ELEMENT_NODE:
+                continue
+            name = child.tagName
+            if name in ("w:commentRangeStart", "w:commentRangeEnd"):
+                if child.getAttribute("w:id") == str(comment_id):
+                    inside = name == "w:commentRangeStart"
+            elif name == "w:t":
+                if inside:
+                    out.append("".join(c.data for c in child.childNodes if c.nodeType == c.TEXT_NODE))
+            elif name == "w:tab":
+                if inside:
+                    out.append("\t")
+            elif name != "w:del":
+                walk(child)
+
+    walk(doc._document_editor.dom.documentElement)
+    return "".join(out)
+
+
+def _marker_count(doc) -> int:
+    dom = doc._document_editor.dom
+    return sum(
+        len(dom.getElementsByTagName(tag)) for tag in ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
+    )
+
+
+class TestAddCommentWholeParagraph:
+    """``add_comment(comment=..., paragraph=ref)`` comments on a whole paragraph (ROADMAP.md #89)."""
+
+    def test_keyword_form_brackets_the_whole_paragraph(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            ref = find_ref(doc, "brown fox")
+            comment_id = doc.add_comment(comment="Needs a citation", paragraph=ref)
+
+            assert _commented_text(doc, comment_id) == FOX
+            assert _marker_count(doc) == 3
+            # Markers are not text: the paragraph still answers to the same ref.
+            assert find_ref(doc, "brown fox") == ref
+            (comment,) = doc.list_comments()
+            assert (comment.id, comment.text, comment.paragraph_ref) == (comment_id, "Needs a citation", ref)
+        finally:
+            doc.close()
+
+    def test_explicit_none_anchor_is_the_same_form(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            comment_id = doc.add_comment(None, "Needs a citation", paragraph=find_ref(doc, "brown fox"))
+            assert _commented_text(doc, comment_id) == FOX
+        finally:
+            doc.close()
+
+    def test_same_markup_as_anchoring_on_the_full_text(self, clean_workspace, tmp_path):
+        """The whole-paragraph form is the anchored form with the full text as the anchor."""
+        import re
+        import shutil
+
+        def markup(doc) -> str:
+            # w:rsidR is random per session.
+            return re.sub(r'w:rsidR="[0-9A-F]+"', "", _find_paragraph_with_text(doc, "brown fox").toxml())
+
+        other = tmp_path / "other.docx"
+        shutil.copy(clean_workspace, other)
+        whole = Document.open(clean_workspace)
+        anchored = Document.open(other)
+        try:
+            ref = find_ref(whole, "brown fox")
+            whole.add_comment(comment="c", paragraph=ref)
+            anchored.add_comment(FOX, "c", paragraph=ref)
+            assert markup(whole) == markup(anchored)
+        finally:
+            whole.close()
+            anchored.close()
+
+    def test_paragraph_split_across_runs(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            para = _find_paragraph_with_text(doc, "brown fox")
+            _split_first_run_text(para, FOX.index("brown") + 2)
+            ref = find_ref(doc, "brown fox")
+
+            comment_id = doc.add_comment(comment="spans runs", paragraph=ref)
+
+            assert _commented_text(doc, comment_id) == FOX
+            assert len(para.getElementsByTagName("w:commentRangeStart")) == 1
+            assert len(para.getElementsByTagName("w:commentRangeEnd")) == 1
+        finally:
+            doc.close()
+
+    @staticmethod
+    def _with_edge_insertions(path) -> tuple[Document, str]:
+        """Open ``path`` with tracked insertions at the very start and end of the fox paragraph."""
+        doc = Document.open(path)
+        doc.insert_before("The quick", "START ", paragraph=find_ref(doc, "brown fox"))
+        doc.insert_after("lazy dog.", " END", paragraph=find_ref(doc, "brown fox"))
+        return doc, find_ref(doc, "brown fox")
+
+    @staticmethod
+    def _resolve_edge(doc, action: str) -> None:
+        start_ins, end_ins = doc.list_revisions()
+        if action in ("accept_all", "reject_all"):
+            getattr(doc, action)()
+        else:
+            verb, edge = action.split("_")
+            getattr(doc, f"{verb}_revision")((start_ins if edge == "start" else end_ins).id)
+
+    @staticmethod
+    def _marker_parents(doc) -> list[str | None]:
+        """Parent tag of the range start, the range end and the reference run (None = removed)."""
+        dom = doc._document_editor.dom
+        out: list[str | None] = []
+        for tag in ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference"):
+            found = dom.getElementsByTagName(tag)
+            node = found[0] if found else None
+            if node is not None and tag == "w:commentReference":
+                node = node.parentNode
+            out.append(node.parentNode.tagName if node is not None else None)
+        return out
+
+    def test_covers_tracked_insertions_at_both_ends(self, clean_workspace):
+        doc, ref = self._with_edge_insertions(clean_workspace)
+        try:
+            comment_id = doc.add_comment(comment="all of it", paragraph=ref)
+            assert _commented_text(doc, comment_id) == f"START {FOX} END"
+            # The edge markers sit inside the w:ins wrappers, as they do for
+            # any anchor that starts or ends in inserted text.
+            assert self._marker_parents(doc) == ["w:ins", "w:ins", "w:ins"]
+        finally:
+            doc.close()
+
+    # What resolving the edge insertions does to the markers. A marker inside a
+    # w:ins is unwrapped with it on accept and removed with it on reject, so a
+    # rejected edge takes its marker along: (start parent, end parent,
+    # reference-run parent, paragraph_ref still set). paragraph_ref follows the
+    # range start alone, so reject_end keeps it although the reference run is
+    # gone, and reject_start loses it although the reference run remains.
+    EDGE_OUTCOMES = {
+        "accept_all": ("w:p", "w:p", "w:p", True),
+        "accept_start": ("w:p", "w:ins", "w:ins", True),
+        "accept_end": ("w:ins", "w:p", "w:p", True),
+        "reject_all": (None, None, None, False),
+        "reject_start": (None, "w:ins", "w:ins", False),
+        "reject_end": ("w:ins", None, None, True),
+    }
+
+    @pytest.mark.parametrize("action", list(EDGE_OUTCOMES))
+    def test_resolving_edge_insertions_matches_the_anchored_form(self, clean_workspace, tmp_path, action):
+        """Accepting or rejecting the edge insertions treats a whole-paragraph
+        comment exactly as it treats one anchored on the same full text.
+
+        Pins the inherited behaviour: the markers live inside the edge
+        ``w:ins`` wrappers, so accept keeps them (unwrapped into the paragraph)
+        and reject removes them with the insertion. The comment body stays
+        listed either way; ``paragraph_ref`` is ``None`` exactly when the range
+        start went (``reject_all``, ``reject_start``), and survives
+        ``reject_end`` even though the range end and reference run are gone.
+        """
+        import shutil
+
+        other = tmp_path / "other.docx"
+        shutil.copy(clean_workspace, other)
+        whole, ref = self._with_edge_insertions(clean_workspace)
+        anchored, anchored_ref = self._with_edge_insertions(other)
+        try:
+            whole.add_comment(comment="c", paragraph=ref)
+            anchored.add_comment(f"START {FOX} END", "c", paragraph=anchored_ref)
+
+            self._resolve_edge(whole, action)
+            self._resolve_edge(anchored, action)
+
+            *parents, has_ref = self.EDGE_OUTCOMES[action]
+            assert self._marker_parents(whole) == parents
+            assert self._marker_parents(anchored) == parents
+            (comment,) = whole.list_comments()
+            (anchored_comment,) = anchored.list_comments()
+            expected_ref = find_ref(whole, "brown fox") if has_ref else None
+            assert comment.paragraph_ref == expected_ref
+            assert anchored_comment.paragraph_ref == expected_ref
+            whole.save()
+        finally:
+            whole.close()
+            anchored.close()
+
+        doc = Document.open(clean_workspace)
+        try:
+            (comment,) = doc.list_comments()
+            assert comment.text == "c"
+            assert self._marker_parents(doc) == parents
+            assert comment.paragraph_ref == (find_ref(doc, "brown fox") if has_ref else None)
+        finally:
+            doc.close()
+
+    def test_paragraph_starting_and_ending_with_a_tab(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            para = _find_paragraph_with_text(doc, "brown fox")
+            doc._document_editor.replace_node(
+                para.getElementsByTagName("w:r")[0],
+                '<w:r><w:tab/><w:t xml:space="preserve">between tabs</w:t><w:tab/></w:r>',
+            )
+            ref = find_ref(doc, "between tabs")
+
+            comment_id = doc.add_comment(comment="tabs too", paragraph=ref)
+
+            assert _commented_text(doc, comment_id) == "\tbetween tabs\t"
+            assert len(para.getElementsByTagName("w:tab")) == 2
+        finally:
+            doc.close()
+
+    def test_excludes_tracked_deletions(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            doc.delete("quick ", paragraph=find_ref(doc, "brown fox"))
+            ref = find_ref(doc, "brown fox")
+            comment_id = doc.add_comment(comment="rest", paragraph=ref)
+            assert _commented_text(doc, comment_id) == FOX.replace("quick ", "")
+        finally:
+            doc.close()
+
+    def _assert_refused_untouched(self, doc, ref):
+        before = doc._document_editor.dom.toxml()
+        next_id = doc._comment_manager.next_comment_id
+        with pytest.raises(CommentError, match="has no text to anchor a comment on") as exc:
+            doc.add_comment(comment="nothing here", paragraph=ref)
+        assert ref in str(exc.value)
+        assert doc._document_editor.dom.toxml() == before
+        assert doc._comment_manager.next_comment_id == next_id
+        assert doc.list_comments() == []
+
+    def test_empty_paragraph_is_refused_before_any_mutation(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            para = _find_paragraph_with_text(doc, "brown fox")
+            doc._document_editor.insert_after(para, "<w:p/>")
+            empty = doc.list_paragraphs_structured(limit=None)[2]
+            assert empty.text == ""
+            self._assert_refused_untouched(doc, empty.ref)
+        finally:
+            doc.close()
+
+    def test_paragraph_with_only_deleted_text_is_refused(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            doc.delete(FOX, paragraph=find_ref(doc, "brown fox"))
+            gone = doc.list_paragraphs_structured(limit=None)[1]
+            assert gone.text == ""
+            self._assert_refused_untouched(doc, gone.ref)
+        finally:
+            doc.close()
+
+    def test_whitespace_only_paragraph_is_commentable(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            para = _find_paragraph_with_text(doc, "brown fox")
+            doc._document_editor.insert_after(para, '<w:p><w:r><w:t xml:space="preserve">  </w:t></w:r></w:p>')
+            blank = doc.list_paragraphs_structured(limit=None)[2]
+            comment_id = doc.add_comment(comment="blank", paragraph=blank.ref)
+            assert _commented_text(doc, comment_id) == "  "
+        finally:
+            doc.close()
+
+    def test_none_anchor_without_paragraph_raises(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            with pytest.raises(CommentError, match="pass paragraph="):
+                doc.add_comment(comment="where?")
+            with pytest.raises(CommentError, match="pass paragraph="):
+                doc.add_comment(None, "where?")
+            assert _marker_count(doc) == 0
+        finally:
+            doc.close()
+
+    def test_occurrence_with_none_anchor_raises(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            with pytest.raises(ValueError, match="occurrence="):
+                doc.add_comment(comment="c", paragraph=find_ref(doc, "brown fox"), occurrence=0)
+            assert _marker_count(doc) == 0
+        finally:
+            doc.close()
+
+    def test_missing_comment_raises_naming_the_parameter(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            ref = find_ref(doc, "brown fox")
+            for call in (
+                lambda: doc.add_comment(paragraph=ref),
+                lambda: doc.add_comment("brown fox"),
+                lambda: doc.add_comment("brown fox", None),
+                # A single positional string is the anchor, never the comment.
+                lambda: doc.add_comment("Needs a citation", paragraph=ref),
+            ):
+                with pytest.raises(CommentError, match="comment is required"):
+                    call()
+            assert _marker_count(doc) == 0
+            assert doc.list_comments() == []
+        finally:
+            doc.close()
+
+    def test_manager_rejects_a_missing_comment(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            ref = find_ref(doc, "brown fox")
+            with pytest.raises(CommentError, match="comment_text must be a string"):
+                doc._comment_manager.add_comment(None, None, paragraph=ref)
+            with pytest.raises(CommentError, match="comment_text must be a string"):
+                doc._comment_manager.add_comment("brown fox", None)
+            assert _marker_count(doc) == 0
+        finally:
+            doc.close()
+
+    def test_bad_comment_body_is_refused_before_any_mutation(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            with pytest.raises(CommentError):
+                doc.add_comment(comment="line\nbreak", paragraph=find_ref(doc, "brown fox"))
+            assert _marker_count(doc) == 0
+        finally:
+            doc.close()
+
+    def test_stale_hash_and_out_of_range_index(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            with pytest.raises(HashMismatchError):
+                doc.add_comment(comment="c", paragraph="P2#0000")
+            with pytest.raises(ParagraphIndexError):
+                doc.add_comment(comment="c", paragraph="P999#0000")
+            assert _marker_count(doc) == 0
+        finally:
+            doc.close()
+
+    def test_empty_string_anchor_is_not_whole_paragraph(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        try:
+            with pytest.raises(CommentError, match="anchor_text must be a non-empty string"):
+                doc.add_comment("", "c", paragraph=find_ref(doc, "brown fox"))
+        finally:
+            doc.close()
+
+    def test_survives_save_and_reopen(self, clean_workspace):
+        doc = Document.open(clean_workspace)
+        ref = find_ref(doc, "brown fox")
+        comment_id = doc.add_comment(comment="persisted", paragraph=ref)
+        doc.save()
+        doc.close()
+
+        doc = Document.open(clean_workspace)
+        try:
+            (comment,) = doc.list_comments()
+            assert (comment.id, comment.text, comment.paragraph_ref) == (comment_id, "persisted", ref)
+            assert _commented_text(doc, comment_id) == FOX
+        finally:
+            doc.close()
