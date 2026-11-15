@@ -1591,6 +1591,15 @@ class Document:
         not see. The edits run as one :meth:`batch_edit`: each match gets its
         own revision group, all of them share one changeset, every paragraph
         hash is checked first, and a failing match rolls the whole call back.
+
+        What is atomic: every refusal listed under Raises — input errors, a
+        count mismatch, overlapping or same-paragraph newline matches, a
+        comment part that cannot take ``note`` (checked before the first
+        replacement), and a replacement failing while it applies — leaves the
+        document exactly as it was. What is not: ``note`` is attached after
+        the replacements commit, so an unexpected failure while writing the
+        comment itself (beyond those up-front checks) leaves the replacements
+        applied with no comment.
         A match inside your own pending insertion amends it in place, like
         :meth:`replace` (``group_id``/``changeset_id`` None on that result).
 
@@ -1622,6 +1631,9 @@ class Document:
                 at a time with :meth:`replace`).
             MatchCountError: If the number of matches is not
                 ``expected_count``; it lists the matches it found.
+            XMLError: If ``note`` is given and an existing comment part
+                cannot receive a comment (the check :meth:`add_comment` runs
+                first); nothing is replaced.
             BatchOperationError: If a replacement fails while applying;
                 ``operation_index`` is the failing match's position in
                 document order (as in the returned list) and ``original``
@@ -1656,6 +1668,11 @@ class Document:
                 )
         if not matches:
             return []
+        if note is not None:
+            # The comment-part checks add_comment runs first, run before any
+            # replacement: an unusable comment part refuses the whole call
+            # while document.xml is still untouched.
+            self._comment_manager._prepare_comment_parts()
         # Reversed: same-paragraph ops must run in descending occurrence order,
         # so no edit shifts the occurrence numbers of the matches still to come.
         ops = [

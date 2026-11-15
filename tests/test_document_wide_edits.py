@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from conftest import NS, replace_document_xml
+from test_comment_namespaces import make_docx_with_comments, rewrite_rels
 
 from docx_editor import (
     AmbiguousTextError,
@@ -18,6 +19,7 @@ from docx_editor import (
     MatchCountError,
     TextNotFoundError,
 )
+from docx_editor.exceptions import XMLError
 
 AUTHOR = "Test Author"
 
@@ -313,3 +315,32 @@ def test_bad_unscoped_target_names_the_call_not_the_paragraph(doc, call, message
     with pytest.raises(ValueError, match=message):
         call(doc)
     assert doc.list_revisions() == []
+
+
+def _unusable_comment_part_docx(simple_docx: Path, tmp_path: Path) -> Path:
+    """A document whose comment relationship points outside the package."""
+    src = make_docx_with_comments(simple_docx, tmp_path, None, part_name="comments1.xml")
+    external = tmp_path / "external.docx"
+    rewrite_rels(
+        src, external, 'Target="comments1.xml"', 'Target="https://example.invalid/c.xml" TargetMode="External"'
+    )
+    return external
+
+
+def test_replace_all_note_on_an_unusable_comment_part_writes_nothing(simple_docx, tmp_path):
+    with Document.open(_unusable_comment_part_docx(simple_docx, tmp_path), author=AUTHOR) as d:
+        count = len(d.find_all("quick"))
+        assert count
+        before = _xml(d)
+        with pytest.raises(XMLError, match="external target"):
+            d.replace_all("quick", "slow", expected_count=count, note="why")
+        assert _xml(d) == before
+        assert d.list_revisions() == []
+
+
+def test_replace_all_without_note_edits_the_same_document(simple_docx, tmp_path):
+    with Document.open(_unusable_comment_part_docx(simple_docx, tmp_path), author=AUTHOR) as d:
+        count = len(d.find_all("quick"))
+        results = d.replace_all("quick", "slow", expected_count=count)
+        assert len(results) == count
+        assert "quick" not in d.get_visible_text()
