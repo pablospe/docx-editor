@@ -116,13 +116,6 @@ def _refuse_text_into_field(
     """
     attach = text_map.positions[end : end + 1] or text_map.positions[:start][-1:]
     _raise_if_field(attach[0].node if attach else paragraph, fields, text, paragraph_ref, ctx)
-    if attach and end >= len(text_map.positions):
-        # Appended after the last character's whole run: when that run also
-        # holds fldChars (a field opening at the paragraph end), the text
-        # lands after them, inside whatever field is open there.
-        run = attach[0].node.parentNode
-        if run is not None and run.getElementsByTagName("w:fldChar"):
-            _raise_if_field(paragraph, fields, text, paragraph_ref, ctx)
 
 
 def _refuse_split_into_field(

@@ -594,22 +594,35 @@ class TestUnscopedRoutes:
             assert _xml(d) == before  # not even the match outside the field
             assert len(d.find_all("Overview", expected_count=2)) == 2  # reads still count it
 
-    def test_rewrite_append_after_a_run_opening_a_field_refuses(self, simple_docx, tmp_path):
-        # "Contents" shares its run with the TOC's begin/separate: an append
-        # goes after the whole run, inside the TOC result.
-        run = (
-            '<w:r><w:t>Contents</w:t><w:fldChar w:fldCharType="begin"/>'
-            '<w:instrText xml:space="preserve"> TOC </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>'
-        )
-        body = _p(run) + _p(_r("Intro"), _fld("end"))
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # "Contents" shares its run with a TOC's begin/separate; the TOC ends in P2.
+            _p(
+                '<w:r><w:t>Contents</w:t><w:fldChar w:fldCharType="begin"/>'
+                '<w:instrText xml:space="preserve"> TOC </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>'
+            )
+            + _p(_r("Intro"), _fld("end")),
+            # An empty-result REF opens in the last character's run and closes in P1.
+            _p(
+                '<w:r><w:t>Contents</w:t><w:fldChar w:fldCharType="begin"/>'
+                '<w:instrText xml:space="preserve"> REF _Ref1 </w:instrText>'
+                '<w:fldChar w:fldCharType="separate"/></w:r>',
+                _fld("end"),
+            ),
+        ],
+        ids=["toc_continues", "empty_ref_closes"],
+    )
+    def test_rewrite_append_before_fldchars_sharing_the_last_run(self, simple_docx, tmp_path, body):
+        # The run is split after the last character, so the new text lands
+        # before the fldChars, outside the field.
         with _open(simple_docx, tmp_path, body) as d:
-            ref = find_ref(d, "Contents")
-            before = _xml(d)
-            with pytest.raises(FieldResultError):
-                d.rewrite_paragraph(ref, "Contents extra")
-            with pytest.raises(BatchOperationError):
-                d.batch_rewrite([(ref, "Contents extra")])
-            assert _xml(d) == before
+            d.rewrite_paragraph(find_ref(d, "Contents"), "Contents extra")
+            dom = d._document_editor.dom
+            index = field_result_index(dom)
+            inserted = [t for ins in dom.getElementsByTagName("w:ins") for t in ins.getElementsByTagName("w:t")]
+            assert [get_text_node_data(t) for t in inserted] == [" extra"]
+            assert not any(t in index for t in inserted)
 
     def test_unscoped_edit_outside_any_field_applies(self, doc):
         doc.replace("details", "context")

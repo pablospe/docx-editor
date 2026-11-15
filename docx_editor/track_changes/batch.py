@@ -644,8 +644,12 @@ class _BatchMixin(_RevisionManagerBase):
                     _set_xml_space_preserve(last_pos.node)
                 return
 
+            # Split the run right after the last character rather than append
+            # after the whole run: a fldChar sharing the run (a field opening at
+            # the paragraph end) must stay after the new text, outside it.
             ins_xml = f"<w:ins><w:r>{rPr_xml}<w:t>{_escape_xml(text)}</w:t></w:r></w:ins>"
-            self.editor.insert_after(run, ins_xml)
+            end_offset = 1 if last_pos.is_tab else len(self._get_node_text(last_pos.node))
+            self._insert_into_run(run, rPr_xml, last_pos.node, end_offset, ins_xml)
             return
 
         # Insert at a position within the text
