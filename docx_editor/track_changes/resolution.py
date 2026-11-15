@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from xml.dom.minidom import Element
 
 from ..exceptions import UnhandledRevisionWarning
+from ..xml_editor import _inside_textbox
 from .base import _RevisionManagerBase
 from .dom import (
     _ancestor_paragraph,
@@ -55,41 +56,50 @@ def _holds_run_content(node) -> bool:
     return False
 
 
-def _has_ancestor_below(node, tag: str, stop) -> bool:
-    """True if an ancestor of ``node`` strictly below ``stop`` is a ``tag``."""
+def _in_fallback_copy(node, stop) -> bool:
+    """True if ``node`` sits inside an ``mc:Fallback`` below ``stop``: the
+    alternate copy of content whose ``mc:Choice`` copy is the one kept."""
     node = node.parentNode
-    while node is not None and node is not stop:
-        if node.tagName == tag:
+    while node is not None and node is not stop and node.nodeType == node.ELEMENT_NODE:
+        if node.tagName == "mc:Fallback":
             return True
         node = node.parentNode
     return False
 
 
-def _neighbour_paragraphs(elem) -> tuple[Element | None, Element | None]:
-    """The last ``w:p`` before and the first ``w:p`` after ``elem``, in document
-    order within its enclosing block container (paragraphs in tables and in
-    other pending wrappers count; ``elem``'s own and text boxes' do not).
+def _nearest_paragraph(elem, direction: str) -> Element | None:
+    """The nearest ``w:p`` before (``direction="previousSibling"``) or after
+    (``"nextSibling"``) a block-level ``elem`` in document order, within its
+    enclosing block container: the closest sibling paragraph, or the last
+    (first) paragraph of the closest sibling holding one, such as a table or
+    another pending wrapper; climbs past wrappers up to the container. Text
+    boxes' and ``mc:Fallback`` copies' paragraphs are not candidates.
 
     Document order, not sibling order, is what keeps a range's start before
     its end however many block-level revisions it spans and in whatever order
     they are resolved: a marker re-homed into a paragraph that is itself
     pending is moved on again when that paragraph's revision is resolved.
+    The search stops at the nearest hit, so it costs the distance walked,
+    not the size of the body.
     """
-    container = elem.parentNode
-    while container.parentNode is not None and container.tagName not in _BLOCK_CONTAINER_TAGS:
-        container = container.parentNode
-    own = {id(node) for node in elem.getElementsByTagName("w:p")}
-    before, passed = None, False
-    for node in container.getElementsByTagName("*"):
-        if node is elem:
-            passed = True
-        elif node.tagName != "w:p" or id(node) in own or _has_ancestor_below(node, "w:txbxContent", container):
-            continue
-        elif passed:
-            return before, node
-        else:
-            before = node
-    return before, None
+    node = elem
+    while True:
+        sibling = getattr(node, direction)
+        while sibling is not None:
+            if sibling.nodeType == sibling.ELEMENT_NODE:
+                if sibling.tagName == "w:p":
+                    return sibling
+                inner = [
+                    p
+                    for p in sibling.getElementsByTagName("w:p")
+                    if not _inside_textbox(p, sibling) and not _in_fallback_copy(p, sibling)
+                ]
+                if inner:
+                    return inner[-1] if direction == "previousSibling" else inner[0]
+            sibling = getattr(sibling, direction)
+        node = node.parentNode
+        if node is None or node.nodeType != node.ELEMENT_NODE or node.tagName in _BLOCK_CONTAINER_TAGS:
+            return None
 
 
 def _only_rpr_besides(run, mark) -> bool:
@@ -632,7 +642,7 @@ class _ResolutionMixin(_RevisionManagerBase):
         (wrapping whole paragraphs, under ``w:body``/``w:tc``/...) cannot leave
         a run behind there, so they go to the end of the nearest paragraph
         before it, else the start of the nearest one after it
-        (``_neighbour_paragraphs``); with neither, each comment they belong to
+        (``_nearest_paragraph``); with neither, each comment they belong to
         loses its whole marker set (``_drop_comment_markers``).
 
         A reference moves with its run when that run holds nothing else but
@@ -645,7 +655,7 @@ class _ResolutionMixin(_RevisionManagerBase):
             if node.tagName in _COMMENT_MARK_TAGS
             # A text box's mc:Fallback copy repeats the mc:Choice copy's
             # markers; hoisting both would duplicate the comment's ids.
-            and not _has_ancestor_below(node, "mc:Fallback", elem)
+            and not _in_fallback_copy(node, elem)
         ]
         if not marks:
             return
@@ -653,10 +663,9 @@ class _ResolutionMixin(_RevisionManagerBase):
         if _holds_run_content(elem.parentNode):
             target, anchor = elem.parentNode, elem
         else:
-            before, after = _neighbour_paragraphs(elem)
-            if before is not None:
+            if (before := _nearest_paragraph(elem, "previousSibling")) is not None:
                 target, anchor = before, None  # append: end of the paragraph
-            elif after is not None:
+            elif (after := _nearest_paragraph(elem, "nextSibling")) is not None:
                 target, anchor = after, _first_child_not_in(after, ("w:pPr",))
         if target is None:
             # No surviving paragraph to re-home into: a half-pair elsewhere

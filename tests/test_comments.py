@@ -1,5 +1,6 @@
 """Tests for comment functionality."""
 
+import shutil
 from typing import Any
 
 import pytest
@@ -1767,7 +1768,6 @@ class TestAddCommentWholeParagraph:
     def test_same_markup_as_anchoring_on_the_full_text(self, clean_workspace, tmp_path):
         """The whole-paragraph form is the anchored form with the full text as the anchor."""
         import re
-        import shutil
 
         def markup(doc) -> str:
             # w:rsidR is random per session.
@@ -1864,7 +1864,6 @@ class TestAddCommentWholeParagraph:
         them into the paragraph, reject hoists them out before the insertion
         goes. The comment stays listed with its ``paragraph_ref`` either way.
         """
-        import shutil
 
         other = tmp_path / "other.docx"
         shutil.copy(clean_workspace, other)
@@ -2355,6 +2354,43 @@ class TestResolutionKeepsCommentMarkers:
         finally:
             doc.close()
 
+    def test_rehoming_cost_does_not_grow_with_the_body(self, clean_workspace, tmp_path):
+        # 1000 commented block insertions in a 5000-paragraph body: a search
+        # that walks the whole body per insertion took ~14 s here, the
+        # nearest-first one ~0.25 s.
+        import time
+
+        parts = []
+        for i in range(5000):
+            parts.append(f"<w:p><w:r><w:t>p{i}</w:t></w:r></w:p>")
+            if i % 5 == 0:
+                marks = f'<w:commentRangeStart w:id="{i}"/><w:r><w:t>c</w:t></w:r><w:commentRangeEnd w:id="{i}"/>'
+                parts.append(f'<w:ins w:id="{100000 + i}" {_ANN}><w:p>{marks}</w:p></w:ins>')
+        doc = _open_body(clean_workspace, tmp_path, "".join(parts))
+        try:
+            started = time.perf_counter()
+            assert doc.reject_all() == 1000
+            assert time.perf_counter() - started < 5
+            self._assert_nothing_at_block_level(doc)
+        finally:
+            doc.close()
+
+    def test_block_alternate_content_neighbour_rehomes_into_its_choice_copy(self, clean_workspace, tmp_path):
+        mc = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            f'<mc:AlternateContent {mc}><mc:Choice Requires="w14"><w:p><w:r><w:t>choice</w:t></w:r></w:p></mc:Choice>'
+            "<mc:Fallback><w:p><w:r><w:t>fallback</w:t></w:r></w:p></mc:Fallback></mc:AlternateContent>"
+            f'<w:ins w:id="2" {_ANN}><w:p>{self._START}<w:r><w:t>b</w:t></w:r>{self._END}</w:p></w:ins>',
+        )
+        try:
+            assert doc.reject_revision(2)
+            (start,) = doc._document_editor.dom.getElementsByTagName("w:commentRangeStart")
+            assert start.parentNode.parentNode.tagName == "mc:Choice"
+        finally:
+            doc.close()
+
     def test_text_box_fallback_copy_is_not_hoisted_twice(self, clean_workspace, tmp_path):
         box = f"<w:txbxContent><w:p>{self._START}<w:r><w:t>box</w:t></w:r>{self._END}</w:p></w:txbxContent>"
         doc = _open_body(
@@ -2373,9 +2409,8 @@ class TestResolutionKeepsCommentMarkers:
         finally:
             doc.close()
 
-    @pytest.mark.skipif(__import__("shutil").which("soffice") is None, reason="LibreOffice not installed")
+    @pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice not installed")
     def test_libreoffice_opens_a_rejected_block_level_insertion(self, clean_workspace, tmp_path, monkeypatch):
-        import shutil
 
         from test_corpus_harness import harness
 
@@ -2394,11 +2429,10 @@ class TestResolutionKeepsCommentMarkers:
         record = harness.run_lo_roundtrip(out, False, shutil.which("soffice"), tmp_path / "work")
         assert record["status"] == "pass", record
 
-    @pytest.mark.skipif(__import__("shutil").which("soffice") is None, reason="LibreOffice not installed")
+    @pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice not installed")
     def test_libreoffice_keeps_the_comment_after_rejecting_the_trailing_edge(
         self, clean_workspace, tmp_path, monkeypatch
     ):
-        import shutil
         import zipfile
 
         from test_corpus_harness import harness

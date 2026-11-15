@@ -2297,7 +2297,8 @@ class Document:
         listed; delete it with :meth:`delete_comment` if it no longer applies.
         Rejected content that is whole paragraphs moves the markers to the end
         of the paragraph before it (else the start of the one after); with no
-        paragraph left in its body or cell, the comment loses all its markers.
+        paragraph left in its body, cell or text box, the comment loses all its
+        markers.
 
         Note:
             Any ``note=`` rationale left with no live revision to explain is
