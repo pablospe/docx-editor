@@ -10,6 +10,7 @@ from ..xml_editor import (
     TextMapMatch,
     _escape_xml,
     build_text_map,
+    field_result_index,
     get_rPr_xml,
     rebuild_run_fragments,
     render_plain_wt,
@@ -23,6 +24,7 @@ from .dom import (
     _paragraph_mark_ins,
     _set_xml_space_preserve,
 )
+from .locate import _located_ref
 from .models import _RUN_TRACK_CHANGE_TAGS, _validate_insert_inputs
 
 
@@ -94,19 +96,20 @@ class _InsertMixin(_RevisionManagerBase):
         paragraph: str | None = None,
     ) -> int:
         """Insert text before or after anchor with tracked changes."""
-        _validate_insert_inputs(anchor, text, ctx=f"insert_{position}(): ")
         ctx = f"insert_{position}(): "
+        _validate_insert_inputs(anchor, text, ctx=ctx)
         with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
                 p = self._resolve_paragraph(ref)
-                match = self._locate_in_paragraph(p, paragraph, anchor, occurrence, ctx=ctx)
-                self._refuse_split_op(match, f"insert_{position}", text, None, paragraph, ctx)
+                fields = field_result_index(self.editor.dom)
+                match = self._locate_in_paragraph(p, paragraph, anchor, occurrence, fields=fields, ctx=ctx)
+                self._refuse_split_op(match, f"insert_{position}", text, fields, paragraph, ctx)
                 return self._insert_near_match(match, text, position)
 
-            match = self._locate_document_wide(anchor, occurrence, ctx=ctx).match
-            self._refuse_split_op(match, f"insert_{position}", text, None, None, ctx)
-            return self._insert_near_match(match, text, position)
+            located = self._locate_document_wide(anchor, occurrence, ctx=ctx)
+            self._refuse_split_op(located.match, f"insert_{position}", text, None, _located_ref(located), ctx)
+            return self._insert_near_match(located.match, text, position)
 
     def _insert_near_match(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:
         """Insert text before/after a match, splitting the edge w:t at the match boundary.
@@ -265,8 +268,7 @@ class _InsertMixin(_RevisionManagerBase):
         # The first split lands where the match's tail begins (match.end, since
         # the match is deleted and segment 0 reinserted where it was). Reject an
         # unsplittable boundary now, before mutating (no single-op rollback).
-        text_map = build_text_map(p1)
-        self._reject_unsplittable_boundary(p1, text_map, match.end)
+        self._reject_unsplittable_boundary(p1, build_text_map(p1), match.end)
         start = match.start
         self._delete_across_nodes(match)
         if segments[0]:
@@ -287,8 +289,7 @@ class _InsertMixin(_RevisionManagerBase):
         # The first split lands at the anchor boundary (segment 0 is inserted
         # there, pushing the original content right). Reject an unsplittable
         # boundary now, before mutating (no single-op rollback).
-        text_map = build_text_map(p1)
-        self._reject_unsplittable_boundary(p1, text_map, base)
+        self._reject_unsplittable_boundary(p1, build_text_map(p1), base)
         if segments[0]:
             self._rewrite_insert_at(p1, build_text_map(p1), base, segments[0])
         return self._apply_paragraph_splits(p1, base + len(segments[0]), segments[1:])

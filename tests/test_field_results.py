@@ -108,13 +108,13 @@ class TestRefusal:
         assert field_type in str(e) and "Narrow the target" in str(e)
         assert _xml(doc) == before
 
-    @pytest.mark.parametrize(("_para", "target", "field_type"), TARGETS)
-    def test_document_wide_edit_refuses(self, doc, _para, target, field_type):
+    @pytest.mark.parametrize(("para", "target", "field_type"), TARGETS)
+    def test_document_wide_edit_refuses(self, doc, para, target, field_type):
         before = _xml(doc)
         with pytest.raises(FieldResultError) as exc:
             doc._revision_manager.replace_text(target, "X")
         assert exc.value.field_type == field_type
-        assert exc.value.paragraph_ref is None
+        assert exc.value.paragraph_ref == find_ref(doc, para)  # the located paragraph
         assert _xml(doc) == before
 
     @pytest.mark.parametrize(
@@ -544,6 +544,7 @@ class TestUnscopedRoutes:
             call(doc)
         assert exc.value.field_type == "REF"
         assert str(exc.value).startswith(f"{verb}(): ")
+        assert exc.value.paragraph_ref == find_ref(doc, "See section")  # the located paragraph
         assert _xml(doc) == before
 
     @pytest.mark.parametrize(
@@ -578,8 +579,9 @@ class TestUnscopedRoutes:
     )
     def test_unscoped_split_into_a_field_refuses(self, doc, call):
         before = _xml(doc)
-        with pytest.raises(FieldResultError):
+        with pytest.raises(FieldResultError) as exc:
             call(doc)
+        assert exc.value.paragraph_ref == find_ref(doc, "See section")
         assert _xml(doc) == before
 
     def test_replace_all_with_one_match_in_a_field_writes_nothing(self, simple_docx, tmp_path):
@@ -591,6 +593,23 @@ class TestUnscopedRoutes:
             assert exc.value.operation_index == 0  # document order: the REF match
             assert _xml(d) == before  # not even the match outside the field
             assert len(d.find_all("Overview", expected_count=2)) == 2  # reads still count it
+
+    def test_rewrite_append_after_a_run_opening_a_field_refuses(self, simple_docx, tmp_path):
+        # "Contents" shares its run with the TOC's begin/separate: an append
+        # goes after the whole run, inside the TOC result.
+        run = (
+            '<w:r><w:t>Contents</w:t><w:fldChar w:fldCharType="begin"/>'
+            '<w:instrText xml:space="preserve"> TOC </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>'
+        )
+        body = _p(run) + _p(_r("Intro"), _fld("end"))
+        with _open(simple_docx, tmp_path, body) as d:
+            ref = find_ref(d, "Contents")
+            before = _xml(d)
+            with pytest.raises(FieldResultError):
+                d.rewrite_paragraph(ref, "Contents extra")
+            with pytest.raises(BatchOperationError):
+                d.batch_rewrite([(ref, "Contents extra")])
+            assert _xml(d) == before
 
     def test_unscoped_edit_outside_any_field_applies(self, doc):
         doc.replace("details", "context")

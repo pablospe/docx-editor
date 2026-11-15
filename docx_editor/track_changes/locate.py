@@ -82,9 +82,12 @@ def _refuse_field_result(
     a field is refused too, and the message says to narrow it.
     """
     for pos in positions:
-        instr = fields.get(pos.node)
-        if instr is not None:
-            raise FieldResultError(text, instr, paragraph_ref=paragraph_ref, ctx=ctx)
+        _raise_if_field(pos.node, fields, text, paragraph_ref, ctx)
+
+
+def _located_ref(located: _LocatedMatch) -> str:
+    """The ``P<n>#<hash>`` ref of a document-wide match's paragraph."""
+    return f"P{located.paragraph_index}#{compute_paragraph_hash(located.paragraph)}"
 
 
 def _raise_if_field(key, fields: FieldResultIndex, text: str, paragraph_ref: str | None, ctx: str) -> None:
@@ -113,6 +116,13 @@ def _refuse_text_into_field(
     """
     attach = text_map.positions[end : end + 1] or text_map.positions[:start][-1:]
     _raise_if_field(attach[0].node if attach else paragraph, fields, text, paragraph_ref, ctx)
+    if attach and end >= len(text_map.positions):
+        # Appended after the last character's whole run: when that run also
+        # holds fldChars (a field opening at the paragraph end), the text
+        # lands after them, inside whatever field is open there.
+        run = attach[0].node.parentNode
+        if run is not None and run.getElementsByTagName("w:fldChar"):
+            _raise_if_field(paragraph, fields, text, paragraph_ref, ctx)
 
 
 def _refuse_split_into_field(
@@ -335,7 +345,10 @@ class _LocateMixin(_RevisionManagerBase):
                     total_occurrences=total,
                     matches=_match_locations(enumerate(body_paragraphs(self.editor.dom), start=1), text),
                 )
-        _refuse_field_result(located.match.positions, field_result_index(self.editor.dom), text, None, ctx)
+        fields = field_result_index(self.editor.dom)
+        if any(pos.node in fields for pos in located.match.positions):
+            # Name the paragraph the refused match is in, as a scoped refusal does.
+            _refuse_field_result(located.match.positions, fields, text, _located_ref(located), ctx)
         return located
 
     def _find_across_boundaries_located(self, text: str, occurrence: int = 0) -> _LocatedMatch | None:

@@ -36,6 +36,11 @@ from .models import (
 )
 
 
+def _op_new_text(op: EditOperation) -> str | None:
+    """The text an op writes (``replace_with`` / an insert's ``text``); None for a delete."""
+    return {"replace": op.replace_with, "insert_after": op.text, "insert_before": op.text}.get(op.action)
+
+
 class _BatchMixin(_RevisionManagerBase):
     def batch_edit(self, operations: list[EditOperation]) -> list[int]:
         """Apply multiple edits atomically with upfront hash validation.
@@ -193,7 +198,7 @@ class _BatchMixin(_RevisionManagerBase):
         target = self._resolve_action_target(op)
         ctx = f"{op.action}(): "
         match = self._locate_in_paragraph(p, op.paragraph, target, op.occurrence, fields=fields, ctx=ctx)
-        new_text = {"replace": op.replace_with, "insert_after": op.text, "insert_before": op.text}.get(op.action)
+        new_text = _op_new_text(op)
         if new_text is not None:
             self._refuse_split_op(match, op.action, new_text, fields, op.paragraph, ctx)
 
@@ -304,7 +309,7 @@ class _BatchMixin(_RevisionManagerBase):
         try:
             match = self._locate_in_paragraph(p, op.paragraph, target, op.occurrence, fields=fields, ctx=ctx)
             # The same split check _apply_single_edit runs.
-            new_text = {"replace": op.replace_with, "insert_after": op.text, "insert_before": op.text}.get(op.action)
+            new_text = _op_new_text(op)
             if new_text is not None:
                 self._refuse_split_op(match, op.action, new_text, fields, op.paragraph, ctx)
         except (ValueError, DocxEditError) as e:

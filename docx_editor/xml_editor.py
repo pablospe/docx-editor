@@ -1122,7 +1122,8 @@ def field_result_index(dom) -> FieldResultIndex:
     (it is reported as the owner of fields nested after it). An ``end`` whose
     ``begin`` is tracked-deleted closes the innermost open field early.
 
-    One element-level walk of ``w:body``; edit paths build it once per call
+    One element-level walk of ``w:body``; a single edit builds it per call
+    (once more on the document-wide route, which checks before re-scoping)
     (batches once per batch; ``batch_edit`` rebuilds it before a second op
     on a paragraph holding a ``fldChar``) and check matched positions against it.
     """

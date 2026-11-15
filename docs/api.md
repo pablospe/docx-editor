@@ -404,7 +404,7 @@ Replace every match of `find` document-wide as one atomic edit. `expected_count`
 
 **Returns:** list of [`EditResult`](#editresult), one per match in document order; matches in the same paragraph carry that paragraph's final ref.
 
-**Raises:** `ValueError` if `find` is empty or contains `\t`, `replace_with` is not a string, `note` is neither None nor a non-empty control-character-free string, `expected_count` is not a non-negative integer, matches overlap one another (`"aa"` in `"aaaa"`), or `replace_with` contains `\n` and two matches share a paragraph (a paragraph splits once per call) — replace those one at a time; [`MatchCountError`](#matchcounterror) on a count mismatch; [`BatchOperationError`](#batchoperationerror) if a replacement fails while applying, document unchanged — its `operation_index` is the failing match's position in document order.
+**Raises:** `ValueError` if `find` is empty or contains `\t`, `replace_with` is not a string, `note` is neither None nor a non-empty control-character-free string, `expected_count` is not a non-negative integer, matches overlap one another (`"aa"` in `"aaaa"`), or `replace_with` contains `\n` and two matches share a paragraph (a paragraph splits once per call) — replace those one at a time; [`MatchCountError`](#matchcounterror) on a count mismatch; [`BatchOperationError`](#batchoperationerror) if a replacement fails while applying (a match inside a field result among them: `original` is a [`FieldResultError`](#fieldresulterror)), document unchanged — its `operation_index` is the failing match's position in document order.
 
 **Example:**
 
@@ -1937,8 +1937,9 @@ except AmbiguousTextError as e:
 Raised when an edit target lands inside a field result — see
 [Field results are not editable](#track-changes-methods). Subclasses both
 `DocxEditError` and `ValueError`. Raised before anything is changed; inside
-`batch_edit`/`batch_rewrite` it arrives as a `BatchOperationError`'s
-`original`, and a dry run reports it as an invalid result. Structured fields:
+`batch_edit`/`batch_rewrite`/`replace_all` it arrives as a
+`BatchOperationError`'s `original`, and a dry run reports it as an invalid
+result. Structured fields:
 
 - `text`: the edit target (search text, anchor, or the rewritten span), or
   the new text when a `\n` edit is refused for where it would land.
@@ -1947,8 +1948,8 @@ Raised when an edit target lands inside a field result — see
 - `field_type`: the instruction's first word (`PAGEREF`). For a field nested
   in another's result it is the outermost regenerated one — a page number
   inside a TOC entry reports `TOC`, whose update regenerates it.
-- `paragraph_ref`: the paragraph the edit was scoped to, or None when
-  document-wide.
+- `paragraph_ref`: the ref of the paragraph the refused edit is in — the
+  scoped ref, or the located match's paragraph for a document-wide edit.
 - `next`: always None — no single call resolves it.
 
 ```python

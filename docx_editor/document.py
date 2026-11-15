@@ -1638,7 +1638,9 @@ class Document:
             XMLError: If ``note`` is given and an existing comment part
                 cannot receive a comment (the check :meth:`add_comment` runs
                 first); nothing is replaced.
-            BatchOperationError: If a replacement fails while applying;
+            BatchOperationError: If a replacement fails while applying — for
+                example a match inside a field result (``original`` is a
+                FieldResultError), which refuses the whole call;
                 ``operation_index`` is the failing match's position in
                 document order (as in the returned list) and ``original``
                 holds the underlying error. The document is left unchanged.
@@ -2026,8 +2028,8 @@ class Document:
             BatchOperationError: The only exception a non-dry-run batch raises
                 for a failing operation — validation (element is not an
                 EditOperation, malformed ref, stale hash, bad index) and apply
-                (missing text, ambiguous target)
-                failures alike. ``operation_index`` names the failing op and
+                (missing text, ambiguous target, a target inside a field
+                result) failures alike. ``operation_index`` names the failing op and
                 ``original`` (also ``__cause__``) holds the underlying typed
                 exception (e.g. a HashMismatchError with ``actual_hash``).
                 The document is left unchanged.
@@ -2160,7 +2162,8 @@ class Document:
             ValueError: If ``rewrites`` is not a list at all (e.g. None) —
                 raised before any validation.
             BatchOperationError: The only exception raised for a failing
-                rewrite; carries ``operation_index`` and ``original``.
+                rewrite (a hunk touching a field result among them); carries
+                ``operation_index`` and ``original``.
 
         Example:
             refs = doc.list_paragraphs()

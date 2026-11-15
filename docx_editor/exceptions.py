@@ -533,8 +533,9 @@ class FieldResultError(DocxEditError, ValueError):
         field_type: The instruction's first word, upper-cased (``"PAGEREF"``).
             For a field nested in another's result this is the outermost
             regenerated field — the one whose update regenerates the text.
-        paragraph_ref: The paragraph ref the edit was scoped to, or None for
-            a document-wide edit.
+        paragraph_ref: The ref of the paragraph the refused edit is in —
+            the scoped ref, or the located match's paragraph for a
+            document-wide edit.
         next: Always None — no single call resolves it.
     """
 

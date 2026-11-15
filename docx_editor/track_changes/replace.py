@@ -9,6 +9,7 @@ from ..xml_editor import (
     TextMapMatch,
     TextPosition,
     _escape_xml,
+    field_result_index,
     get_rPr_xml,
     get_text_node_data,
     is_tab_node,
@@ -18,6 +19,7 @@ from ..xml_editor import (
 from .base import _RevisionManagerBase
 from .diff import _trim_replace_affixes
 from .dom import _node_depth
+from .locate import _located_ref
 from .models import _validate_replace_inputs
 
 
@@ -69,18 +71,20 @@ class _ReplaceMixin(_RevisionManagerBase):
                 first line) inside one
             HashMismatchError: If the paragraph hash doesn't match
         """
-        _validate_replace_inputs(find, replace_with, ctx="replace(): ")
+        ctx = "replace(): "
+        _validate_replace_inputs(find, replace_with, ctx=ctx)
         with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
                 p = self._resolve_paragraph(ref)
-                match = self._locate_in_paragraph(p, paragraph, find, occurrence, ctx="replace(): ")
-                self._refuse_split_op(match, "replace", replace_with, None, paragraph, "replace(): ")
+                fields = field_result_index(self.editor.dom)
+                match = self._locate_in_paragraph(p, paragraph, find, occurrence, fields=fields, ctx=ctx)
+                self._refuse_split_op(match, "replace", replace_with, fields, paragraph, ctx)
                 return self._replace_across_nodes(match, find, replace_with)
 
-            match = self._locate_document_wide(find, occurrence, ctx="replace(): ").match
-            self._refuse_split_op(match, "replace", replace_with, None, None, "replace(): ")
-            return self._replace_across_nodes(match, find, replace_with)
+            located = self._locate_document_wide(find, occurrence, ctx=ctx)
+            self._refuse_split_op(located.match, "replace", replace_with, None, _located_ref(located), ctx)
+            return self._replace_across_nodes(located.match, find, replace_with)
 
     def _get_run_info(self, node) -> tuple[Element | None, str]:
         """Get the parent w:r element and its rPr XML for a w:t node."""
