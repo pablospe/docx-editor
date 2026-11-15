@@ -482,11 +482,14 @@ class SearchResult:
 
     start: int  # Start offset in the paragraph's visible text
     end: int  # Exclusive end offset, same coordinate space
-    text: str  # The matched text
+    text: str  # The matched text as the document spells it (curly quotes kept; see fold_quotes)
     paragraph_ref: str  # Hash-anchored ref like "P3#a7b2"
     paragraph_occurrence: int  # Occurrence index of this match within its paragraph
     spans_revision: bool  # True if the match crosses a tracked-revision boundary
     paragraph_index: int  # 1-based index of the containing paragraph (same as in paragraph_ref)
+    # The search string find_text()/find_all() was called with; None when the
+    # result was built another way. Edits given this result search for it.
+    query: str | None = None
 
     def __repr__(self) -> str:
         text = self.text if len(self.text) <= 60 else self.text[:57] + "..."
@@ -506,7 +509,8 @@ def _resolve_search_target(
 
     A plain string passes through untouched, so every existing call site keeps
     its exact semantics. A :class:`SearchResult` supplies all three values —
-    its ``text``, its ``paragraph_ref`` and its ``paragraph_occurrence`` —
+    its ``query`` (or ``text`` when it has none), its ``paragraph_ref`` and its
+    ``paragraph_occurrence`` —
     which is what makes ``doc.replace(match, "60 days")`` mean exactly what
     spelling those three fields out by hand means.
 
@@ -544,7 +548,11 @@ def _resolve_search_target(
             f"{ctx}{field} is a SearchResult, which already pins the paragraph ({target.paragraph_ref!r}) "
             f"and the occurrence ({target.paragraph_occurrence}) — drop {' and '.join(redundant)}"
         )
-    return target.text, target.paragraph_ref, target.paragraph_occurrence
+    # The typed query, not the document's characters, is what the edit searched
+    # for: _trim_replace_affixes needs it to keep `don't` unchanged when the
+    # document has `don’t` (ROADMAP.md #96). Both locate the same match.
+    search = target.query if target.query is not None else target.text
+    return search, target.paragraph_ref, target.paragraph_occurrence
 
 
 def _paragraph_hint(field: str) -> str:

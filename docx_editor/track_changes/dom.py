@@ -3,7 +3,7 @@
 from datetime import datetime
 from xml.dom.minidom import Element
 
-from ..xml_editor import _TEXTBOX_CONTENT, TextMap, _inside_textbox, is_tab_node
+from ..xml_editor import _TEXTBOX_CONTENT, TextMap, _inside_textbox, fold_quotes, is_tab_node
 from .models import _RUN_TRACK_CHANGE_TAGS, CHANGE_RECORD_TAGS, HANDLED_REVISION_TAGS, iter_revision_elements
 
 
@@ -353,7 +353,7 @@ def _occurrence_in_text_map(tm: TextMap, elem, text: str) -> int | None:
 
     Mirrors ``find_in_text_map``'s stepping (``idx + 1`` between matches) so
     the result plugs directly into the ``occurrence=`` parameter of the
-    anchor APIs. Returns None when the revision's span cannot be equated
+    anchor APIs (quote-folded, like them). Returns None when the revision's span cannot be equated
     with ``text``: no position in the map belongs to ``elem``, the map
     text at the span's start doesn't spell ``text``, or the spelled-out
     span extends beyond ``elem`` (e.g. a partially consumed host insertion
@@ -365,15 +365,15 @@ def _occurrence_in_text_map(tm: TextMap, elem, text: str) -> int | None:
     start = next((i for i, pos in enumerate(tm.positions) if _has_ancestor(pos.node, elem)), None)
     if start is None:
         return None
-    if not tm.text.startswith(text, start):
+    if not tm.folded_text.startswith(fold_quotes(text), start):
         return None
     if not all(_has_ancestor(pos.node, elem) for pos in tm.positions[start : start + len(text)]):
         return None
     count = 0
-    idx = tm.text.find(text)
+    idx = tm.find(text)
     while idx != -1 and idx < start:
         count += 1
-        idx = tm.text.find(text, idx + 1)
+        idx = tm.find(text, idx + 1)
     return count
 
 

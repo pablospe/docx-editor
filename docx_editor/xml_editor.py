@@ -13,6 +13,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import cached_property
 from pathlib import Path
 from typing import Literal
 from xml.dom.minidom import Element
@@ -59,6 +60,22 @@ class TextPosition:
         return is_tab_node(self.node)
 
 
+_QUOTE_FOLD = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"'})
+
+
+def fold_quotes(text: str) -> str:
+    """Fold curly single/double quotes (U+2018/U+2019, U+201C/U+201D) to
+    their straight forms, for quote-insensitive matching (ROADMAP.md #96).
+
+    The fold is length-preserving — every character maps to exactly one
+    character — so an index into the folded string is the same index into
+    the original. Every search relies on that: matches are found in folded
+    text and their offsets are used unchanged against ``TextMap.positions``.
+    Never add a fold that changes length (``…`` → ``...``) here.
+    """
+    return text.translate(_QUOTE_FOLD)
+
+
 @dataclass
 class TextMap:
     """Maps visible text to source XML nodes."""
@@ -66,9 +83,15 @@ class TextMap:
     text: str  # Concatenated visible text
     positions: list[TextPosition]  # One per character in `text`
 
+    @cached_property
+    def folded_text(self) -> str:
+        """``text`` with quotes folded by :func:`fold_quotes` (same length)."""
+        return fold_quotes(self.text)
+
     def find(self, search: str, start: int = 0) -> int:
-        """Find text in the visible text string. Returns index or -1."""
-        return self.text.find(search, start)
+        """Find text in the visible text string, treating straight and curly
+        quotes as equal. Returns index or -1."""
+        return self.folded_text.find(fold_quotes(search), start)
 
     def get_nodes_for_range(self, start: int, end: int) -> list[TextPosition]:
         """Get TextPosition entries for a character range."""
@@ -81,7 +104,7 @@ class TextMapMatch:
 
     start: int  # Start index in visible text
     end: int  # End index in visible text
-    text: str  # The matched text
+    text: str  # The matched text, as the document spells it (quotes unfolded)
     positions: list[TextPosition]  # TextPosition entries for the match
     spans_boundary: bool  # True if match spans different revision contexts
 
@@ -196,6 +219,9 @@ def _reject_control_chars(
 def find_in_text_map(text_map: TextMap, search: str, occurrence: int = 0) -> TextMapMatch | None:
     """Find the nth occurrence of text in a text map.
 
+    Straight and curly quotes match each other (see :func:`fold_quotes`);
+    the match's ``text`` is the document's own characters, not ``search``.
+
     Returns TextMapMatch or None if not found.
     """
     start = 0
@@ -219,7 +245,7 @@ def find_in_text_map(text_map: TextMap, search: str, occurrence: int = 0) -> Tex
     return TextMapMatch(
         start=idx,
         end=end,
-        text=search,
+        text=text_map.text[idx:end],
         positions=positions,
         spans_boundary=spans,
     )

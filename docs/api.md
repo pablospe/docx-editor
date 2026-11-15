@@ -298,6 +298,8 @@ text = doc.get_original_text()
 
 Find text in the document, including text spanning XML element boundaries. Text-box content is excluded, as it is from [`paragraph_count()`](#paragraph_count). A tab mark is `\t` in the searchable text: `"Name\tValue"` matches `Name<tab>Value`, while `"NameValue"` does not (the `TextNotFoundError` message and its `paragraph_preview` spell the tab as the two characters `\t`, so it cannot be mistaken for a space).
 
+**Quotes:** straight and curly quotes match each other — `'` matches `‘` and `’`, `"` matches `“` and `”` — in this and every other search: `find_all`, `count_matches`, the edit methods' `find`/`text`/`anchor`, comment anchors, and `batch_edit`. Typing `"Term"` finds the `“Term”` Word autoformatted. Offsets and `occurrence` numbers are unaffected, and [`SearchResult.text`](#searchresult) holds the document's own characters (`“Term”`), not the search string. Other quote-like characters (`‚ „ ′ ″ « »`) still match only themselves. Because the styles are equal, a paragraph holding both `'a'` and `‘a’` has two matches for either spelling. Replacement and inserted text is written exactly as passed, never converted to the document's quote style: to keep curly quotes, copy them from `SearchResult.text`. When `replace()` trims shared words off the ends, a word counts as unchanged only if the replacement spells it exactly as `find` did or exactly as the document does: `replace("don't pay", "don't charge")` on `don’t pay` revises only `pay`, leaving `don’t` untouched. Passing the `SearchResult` from `find_text("don't pay")` instead gives the same result, because the edit uses its [`query`](#searchresult). A word that differs from both is a change even when only its quotes differ, so `replace('"Term"', '“Term”')` on straight-quoted text is a tracked change, not a no-op.
+
 **Parameters:**
 
 - `text` (str): Text to search for (must be non-empty; may contain `\t` to match a tab mark)
@@ -1646,11 +1648,12 @@ from docx_editor import SearchResult
 |-----------|------|-------------|
 | `start` | int | Start offset of the match in the containing paragraph's visible text |
 | `end` | int | Exclusive end offset, same coordinate space |
-| `text` | str | The matched text |
+| `text` | str | The matched text as it appears in the document — with the document's curly quotes even when the search used straight ones |
 | `paragraph_ref` | str | Hash-anchored ref like `P3#a7b2`, usable as the `paragraph=` argument of follow-up edits |
 | `paragraph_occurrence` | int | Occurrence index of this match within its paragraph, usable as the `occurrence=` argument of follow-up edits |
 | `spans_revision` | bool | True if the match crosses a tracked-revision boundary |
 | `paragraph_index` | int | 1-based index of the containing paragraph — the same integer embedded in `paragraph_ref`, so you never string-parse the ref |
+| `query` | str \| None | The search string `find_text()`/`find_all()` was called with (`"don't pay"` even when `text` is `don’t pay`); None for a result built another way. An edit given this result searches for `query`, falling back to `text` when it is None, so `replace(find_text("don't pay"), "don't charge")` revises only `pay`, exactly like the string form |
 
 `start`/`end` are offsets within the matched paragraph's visible text, **not**
 document-wide offsets; a tab mark counts as one character (`\t`), exactly as

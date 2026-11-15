@@ -1771,60 +1771,60 @@ class TestTrimReplaceAffixes:
     """Unit tests for _trim_replace_affixes word-level common affix trimming."""
 
     def test_no_common_affixes(self):
-        assert _trim_replace_affixes("cats", "cat") == (0, 0)
+        assert _trim_replace_affixes("cats", "cats", "cat") == (0, 0)
 
     def test_identical_strings_trim_fully(self):
         find = "same text here"
-        prefix, suffix = _trim_replace_affixes(find, find)
+        prefix, suffix = _trim_replace_affixes(find, find, find)
         assert find[prefix : len(find) - suffix] == ""
 
     def test_prefix_only(self):
-        prefix, suffix = _trim_replace_affixes("term of two", "term of three")
+        prefix, suffix = _trim_replace_affixes("term of two", "term of two", "term of three")
         assert (prefix, suffix) == (len("term of "), 0)
 
     def test_suffix_only(self):
-        prefix, suffix = _trim_replace_affixes("two years remain", "three years remain")
+        prefix, suffix = _trim_replace_affixes("two years remain", "two years remain", "three years remain")
         assert (prefix, suffix) == (0, len(" years remain"))
 
     def test_prefix_and_suffix(self):
         find = "term of two (2) years, unless"
         replace_with = "term of three (3) years, unless"
-        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        prefix, suffix = _trim_replace_affixes(find, find, replace_with)
         assert find[prefix : len(find) - suffix] == "two (2)"
         assert replace_with[prefix : len(replace_with) - suffix] == "three (3)"
 
     def test_whitespace_not_double_consumed(self):
         find, replace_with = "delete this word", "delete word"
-        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        prefix, suffix = _trim_replace_affixes(find, find, replace_with)
         assert find[prefix : len(find) - suffix] == "this "
         assert replace_with[prefix : len(replace_with) - suffix] == ""
 
     def test_empty_replacement_means_no_trimming(self):
-        assert _trim_replace_affixes(" here", "") == (0, 0)
-        assert _trim_replace_affixes("gone", "") == (0, 0)
+        assert _trim_replace_affixes(" here", " here", "") == (0, 0)
+        assert _trim_replace_affixes("gone", "gone", "") == (0, 0)
 
     def test_overlap_bound_shrinking(self):
         find, replace_with = "a a a", "a a"
-        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        prefix, suffix = _trim_replace_affixes(find, find, replace_with)
         assert find[prefix : len(find) - suffix] == " a"
         assert replace_with[prefix : len(replace_with) - suffix] == ""
 
     def test_overlap_bound_growing(self):
         find, replace_with = "a a", "a a a"
-        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        prefix, suffix = _trim_replace_affixes(find, find, replace_with)
         assert find[prefix : len(find) - suffix] == ""
         assert replace_with[prefix : len(replace_with) - suffix] == " a"
 
     def test_word_level_not_char_level(self):
         # "cats"/"cat" share characters but not whole words: no trimming.
-        prefix, suffix = _trim_replace_affixes("two cats sat", "two cat sat")
+        prefix, suffix = _trim_replace_affixes("two cats sat", "two cats sat", "two cat sat")
         assert (prefix, suffix) == (len("two "), len(" sat"))
-        assert _trim_replace_affixes("cats", "cat") == (0, 0)
+        assert _trim_replace_affixes("cats", "cats", "cat") == (0, 0)
 
     def test_unicode_smart_quote_tokens(self):
         find = "“term” of x"
         replace_with = "“term” of y"
-        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        prefix, suffix = _trim_replace_affixes(find, find, replace_with)
         assert (prefix, suffix) == (len("“term” of "), 0)
 
 
@@ -1838,7 +1838,7 @@ class TestTrimReplaceAffixesWhitespaceOnly:
 
     @staticmethod
     def _split(find: str, replace_with: str) -> tuple[str, str]:
-        prefix, suffix = _trim_replace_affixes(find, replace_with)
+        prefix, suffix = _trim_replace_affixes(find, find, replace_with)
         # An affix pair that overlaps would silently corrupt the split.
         assert prefix + suffix <= min(len(find), len(replace_with))
         return find[prefix : len(find) - suffix], replace_with[prefix : len(replace_with) - suffix]

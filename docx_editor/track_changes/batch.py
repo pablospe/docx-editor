@@ -176,7 +176,7 @@ class _BatchMixin(_RevisionManagerBase):
 
         if op.action == "replace":
             assert op.replace_with is not None  # guaranteed by _resolve_action_target
-            return self._replace_across_nodes(match, op.replace_with)
+            return self._replace_across_nodes(match, target, op.replace_with)
         elif op.action == "delete":
             return self._delete_across_nodes(match)
         else:  # insert_after / insert_before
@@ -472,7 +472,7 @@ class _BatchMixin(_RevisionManagerBase):
             if tag == "replace":
                 match_text = old_text[old_char_start:old_char_end]
                 match = self._find_match_at_position(text_map, match_text, old_char_start)
-                self._replace_across_nodes(match, new_fragment)
+                self._replace_across_nodes(match, match_text, new_fragment)
 
             elif tag == "delete":
                 match_text = old_text[old_char_start:old_char_end]
@@ -505,7 +505,7 @@ class _BatchMixin(_RevisionManagerBase):
         return TextMapMatch(
             start=idx,
             end=end,
-            text=search,
+            text=text_map.text[idx:end],
             positions=positions,
             spans_boundary=spans,
         )

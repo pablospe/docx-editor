@@ -76,10 +76,10 @@ class _ReplaceMixin(_RevisionManagerBase):
                 ref = ParagraphRef.parse(paragraph)
                 p = self._resolve_paragraph(ref)
                 match = self._locate_in_paragraph(p, paragraph, find, occurrence)
-                return self._replace_across_nodes(match, replace_with)
+                return self._replace_across_nodes(match, find, replace_with)
 
             match = self._locate_document_wide(find, occurrence)
-            return self._replace_across_nodes(match, replace_with)
+            return self._replace_across_nodes(match, find, replace_with)
 
     def _get_run_info(self, node) -> tuple[Element | None, str]:
         """Get the parent w:r element and its rPr XML for a w:t node."""
@@ -193,11 +193,14 @@ class _ReplaceMixin(_RevisionManagerBase):
             segments.append((current_ins, current_positions))
         return segments
 
-    def _replace_across_nodes(self, match: TextMapMatch, replace_with: str) -> int:
+    def _replace_across_nodes(self, match: TextMapMatch, search: str, replace_with: str) -> int:
         """Replace text spanning multiple w:t elements, handling mixed revision contexts.
 
-        Words shared by the matched text and ``replace_with`` at either end
-        are trimmed first, so only the changed words become revisions. A
+        ``search`` is the text the caller searched for; it can differ from
+        ``match.text`` (the document's characters) in quote style. Words that
+        ``replace_with`` leaves unchanged at either end — see
+        :func:`_trim_replace_affixes` — are trimmed first, so only the changed
+        words become revisions. A
         replace whose span trims to nothing on one side degenerates into a
         pure insertion or deletion; one that trims away entirely (replacement
         equals the match) is a no-op returning -1.
@@ -207,7 +210,7 @@ class _ReplaceMixin(_RevisionManagerBase):
         """
         if "\n" in replace_with:
             return self._split_replace(match, replace_with)
-        prefix, suffix = _trim_replace_affixes(match.text, replace_with)
+        prefix, suffix = _trim_replace_affixes(match.text, search, replace_with)
         del_text = match.text[prefix : len(match.text) - suffix]
         ins_text = replace_with[prefix : len(replace_with) - suffix]
 
