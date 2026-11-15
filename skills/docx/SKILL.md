@@ -161,12 +161,15 @@ Use the **docx_editor** Python library for all editing operations. It handles tr
 
 ### Which call to use
 
-| You want to                          | Call                                             | Not                    |
-| ------------------------------------ | ------------------------------------------------ | ---------------------- |
-| Change text                          | `doc.replace(find, replace_with, paragraph=ref)` |                        |
-| Remove text                          | `doc.delete(text, paragraph=ref)`                | `replace(text, "")`    |
-| Add text after an anchor             | `doc.insert_after(anchor, text, paragraph=ref)`  | `replace(a, a + text)` |
-| Add text before an anchor            | `doc.insert_before(anchor, text, paragraph=ref)` | `replace(a, text + a)` |
+| You want to                          | Call                                                   | Not                           |
+| ------------------------------------ | ------------------------------------------------------ | ----------------------------- |
+| Change text                          | `doc.replace(find, replace_with)`                      |                               |
+| Remove text                          | `doc.delete(text)`                                     | `replace(text, "")`           |
+| Add text after an anchor             | `doc.insert_after(anchor, text)`                       | `replace(a, a + text)`        |
+| Add text before an anchor            | `doc.insert_before(anchor, text)`                      | `replace(a, text + a)`        |
+| Change every match                   | `doc.replace_all(find, replace_with, expected_count=N)` | a loop of `replace` per match |
+
+Without `paragraph=`, the target is searched across the whole document: one match edits it and returns that paragraph's new ref; several raise `AmbiguousTextError` listing them (pass one's `occurrence=N`, counted document-wide, back to the same call); none raises `TextNotFoundError`. Nothing is written when it refuses. Add `paragraph=ref` to scope a call to one paragraph — the hash in `ref` then also proves the paragraph is as you last read it. `replace_all` refuses with `MatchCountError`, writing nothing, unless exactly `expected_count` matches exist.
 
 The `replace` forms in the "Not" column work when the added or removed text is whole words — `replace()` trims the shared words and writes a pure deletion or insertion — but a change inside a word does not trim: `replace("Payment", "Payments")` rewrites the whole word, where `insert_after("Payment", "s")` inserts one letter. Prefer the dedicated verbs: they state the intent, the anchor is quoted once instead of twice (a slip in the second copy of `a` turns an insertion into a real rewrite of the anchor), and `delete` has no empty-string case to get wrong.
 
@@ -311,9 +314,12 @@ doc.replace(match, "60 days")
 # occurrence total (no paragraph scope) without building SearchResults.
 
 # Enumerate EVERY match in one call (returns list[SearchResult], [] if none).
-# Edit them all in one atomic batch; reversed() puts same-paragraph ops in the
-# required DESCENDING occurrence order, safe however the matches are spread:
-ops = [EditOperation.replace(r, "60 days") for r in reversed(doc.find_all("30 days"))]
+# expected_count=N raises MatchCountError (listing the matches) on any other count.
+# Replacing them all is one atomic call, refused unless the count is right:
+doc.replace_all("30 days", "60 days", expected_count=3)
+# Other edits on every match: one atomic batch; reversed() puts same-paragraph
+# ops in the required DESCENDING occurrence order, safe however they are spread:
+ops = [EditOperation.delete(r) for r in reversed(doc.find_all("draft ", expected_count=2))]
 doc.batch_edit(ops)
 # Optionally scope to one paragraph: doc.find_all("term", paragraph="P2#f3c1")
 # One-at-a-time doc.replace() per result also works when every paragraph has
@@ -385,11 +391,10 @@ locations = doc.list_paragraph_locations()
 new_ref = doc.replace("30 days", "60 days", paragraph="P2#f3c1")
 doc.replace("net", "gross", paragraph=new_ref)  # chain without list_paragraphs()
 
-# occurrence is 0-based everywhere (0 = first). Edit methods count occurrences
-# within the target paragraph. find_text and add_comment count within the
-# paragraph when paragraph= is given, and document-wide when paragraph=None.
-# find_all bridges the two conventions: each result's paragraph_occurrence is
-# already in edit-method coordinates.
+# occurrence is 0-based everywhere (0 = first). Every method (edits, find_text,
+# add_comment) counts within the paragraph when paragraph= is given, and
+# document-wide when it is omitted. find_all bridges the two conventions: each
+# result's paragraph_occurrence is the within-paragraph number.
 #
 # OMITTING occurrence means "the target is unique in the search scope".
 # If it matches more than once, the edit raises AmbiguousTextError instead of
@@ -456,7 +461,7 @@ assert len({r.comment_id for r in results}) == 1
 doc.accept_all()          # clean deliverable: revisions applied, notes gone
 ```
 
-**Raises:** `TextNotFoundError` if the text is not found (or the requested `occurrence` is out of range — the error then reports `total_occurrences`). `AmbiguousTextError` if `occurrence` is omitted and the target matches more than once in the search scope. `ValueError` for search/anchor text that is not a non-empty string, replacement/insertion text that is not a string, a non-string `paragraph` ref, or an `occurrence` that is not a non-negative integer — all rejected up front, before any change is made.
+**Raises:** `TextNotFoundError` if the text is not found (or the requested `occurrence` is out of range — the error then reports `total_occurrences`). `AmbiguousTextError` if `occurrence` is omitted and the target matches more than once in the search scope. `ValueError` for search/anchor text that is not a non-empty string, replacement/insertion text that is not a string, a `paragraph` ref that is neither None nor a string, or an `occurrence` that is not a non-negative integer — all rejected up front, before any change is made.
 
 ### Per-section change report
 

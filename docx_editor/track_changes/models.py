@@ -34,6 +34,22 @@ def _validate_edit_target(value: str, *, field: str, ctx: str) -> None:
         )
 
 
+def _validate_replace_inputs(find: str, replace_with: str, *, ctx: str) -> None:
+    """Validate replace()'s ``find``/``replace_with`` before any search runs."""
+    if not isinstance(replace_with, str):
+        raise ValueError(f"{ctx}'replace_with' must be a string (empty string is allowed), got {replace_with!r}")
+    _validate_edit_target(find, field="'find'", ctx=ctx)
+    _reject_control_chars(replace_with, field="'replace_with'", ctx=ctx, allow_newline=True)
+
+
+def _validate_insert_inputs(anchor: str, text: str, *, ctx: str) -> None:
+    """Validate insert_after/insert_before's ``anchor``/``text`` before any search runs."""
+    if not isinstance(text, str):
+        raise ValueError(f"{ctx}'text' must be a string (empty string is allowed), got {text!r}")
+    _reject_control_chars(anchor, field="'anchor'", ctx=ctx, allow_tab=True)
+    _reject_control_chars(text, field="'text'", ctx=ctx, allow_newline=True)
+
+
 def _validate_note(note: str | None, *, ctx: str) -> None:
     """Reject a ``note=`` rationale that could not become a comment body.
 

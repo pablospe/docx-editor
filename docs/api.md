@@ -321,7 +321,7 @@ if match:
     doc.replace(match, "Goal: To")
 ```
 
-#### `find_all(text, paragraph=None)`
+#### `find_all(text, paragraph=None, *, expected_count=None)`
 
 Find every match of `text`, in document order. One call replaces the N+1
 `find_text` probes needed to enumerate N hits, and each result carries exactly
@@ -331,18 +331,22 @@ what a follow-up edit needs. Text-box content is excluded, as it is from [`parag
 
 - `text` (str): Text to search for (must be non-empty)
 - `paragraph` (str, optional): Paragraph reference (e.g. `P2#f3c1`) to scope the search. `None` searches the whole document. Defaults to None.
+- `expected_count` (int | None, keyword-only): The number of matches you expect. When given, any other count raises [`MatchCountError`](#matchcounterror) (listing the matches it found) instead of returning. `0` asserts the text is absent. Defaults to None (no check).
 
-**Returns:** list of [`SearchResult`](#searchresult), empty when nothing matches (no-match is not an error for an enumeration API)
+**Returns:** list of [`SearchResult`](#searchresult), empty when nothing matches (no-match is not an error for an enumeration API, unless `expected_count` says otherwise)
 
-**Raises:** `ValueError` if `text` is empty or `paragraph` is malformed; [`ParagraphIndexError`](#paragraphindexerror) / [`HashMismatchError`](#hashmismatcherror) for an out-of-range or stale `paragraph`.
+**Raises:** `ValueError` if `text` is empty, `expected_count` is not a non-negative integer, or `paragraph` is malformed; [`MatchCountError`](#matchcounterror) on a count mismatch; [`ParagraphIndexError`](#paragraphindexerror) / [`HashMismatchError`](#hashmismatcherror) for an out-of-range or stale `paragraph`.
 
 **Example:**
 
 ```python
-# Edit every match in one atomic batch. reversed() puts same-paragraph ops in
-# the required descending occurrence order, so this is safe however the
-# matches are distributed:
-ops = [EditOperation.replace(r, "60 days") for r in reversed(doc.find_all("30 days"))]
+# Replacing every match is one call — see replace_all():
+doc.replace_all("30 days", "60 days", expected_count=3)
+
+# Other edits on every match, in one atomic batch. reversed() puts
+# same-paragraph ops in the required descending occurrence order, so this is
+# safe however the matches are distributed:
+ops = [EditOperation.delete(r) for r in reversed(doc.find_all("draft ", expected_count=2))]
 doc.batch_edit(ops)
 ```
 
@@ -372,6 +376,43 @@ if doc.count_matches("Section 5") > 1:
     print("Use paragraph refs and occurrence to target the intended match")
 ```
 
+#### Document-wide edits
+
+`replace`, `delete`, `insert_after` and `insert_before` accept a plain-string target with `paragraph` omitted. The target is then searched across the whole document, the same search [`find_text()`](#find_texttext-occurrence0-paragraphnone) runs:
+
+- **One match** → the edit applies, and the returned [`EditResult`](#editresult) is the touched paragraph's new ref, exactly as if you had passed its ref yourself.
+- **Several** → [`AmbiguousTextError`](#ambiguoustexterror) listing them, with `occurrence` counted document-wide; pass one back as `occurrence=N` to the same call to pick it.
+- **None** → [`TextNotFoundError`](#textnotfounderror). Nothing is written in either refusal.
+
+```python
+ref = doc.replace("Effective Date", "Commencement Date")   # unique in the document
+doc.replace("30 days", "60 days", occurrence=2)            # the third match, counted document-wide
+```
+
+The two forms prove different things. A scoped call proves the paragraph is as you last saw it (its hash); a document-wide call proves the text occurs exactly once. Both refuse rather than guess. `EditOperation` still requires `paragraph`: operations in a batch run against the document as earlier operations left it.
+
+#### `replace_all(find, replace_with, *, expected_count, note=None)`
+
+Replace every match of `find` document-wide as one atomic edit. `expected_count` is required: state how many matches you mean to replace, and any other count raises [`MatchCountError`](#matchcounterror) with nothing written — the guard that keeps a bulk edit from touching text you did not see. The replacements run as one [`batch_edit()`](#batch_editoperations-dry_runfalse): each match gets its own revision group, all of them share one changeset, and a failure rolls the whole call back.
+
+**Parameters:**
+
+- `find` (str): Text to find (non-empty; straight and curly quotes match each other)
+- `replace_with` (str): Replacement text
+- `expected_count` (int, keyword-only, required): How many matches you expect. `0` asserts the text is absent and returns `[]`.
+- `note` (str | None): Rationale anchored as one comment shared by every replacement — see [Rationale notes](#rationale-notes)
+
+**Returns:** list of [`EditResult`](#editresult), one per match in document order; matches in the same paragraph carry that paragraph's final ref.
+
+**Raises:** `ValueError` if `find` is empty or contains `\t`, `replace_with` is not a string, `expected_count` is not a non-negative integer, or matches overlap one another (`"aa"` in `"aaaa"` — replace those one at a time); [`MatchCountError`](#matchcounterror) on a count mismatch; [`BatchOperationError`](#batchoperationerror) if a replacement fails while applying, document unchanged.
+
+**Example:**
+
+```python
+results = doc.replace_all("30 days", "60 days", expected_count=3)
+doc.reject_changeset(results[0].changeset_id)   # undo all three at once
+```
+
 #### `replace(find, replace_with, *, paragraph=None, occurrence=None, note=None)`
 
 Replace text with tracked changes. When the target sits inside another author's pending insertion, that insertion is preserved: the matched text gets a nested `<w:del>` under your authorship and the replacement lands in your own sibling `<w:ins>` (Word's behavior), instead of silently rewriting the other author's proposal.
@@ -386,8 +427,8 @@ A replace landing wholly inside **your own** pending insertion **amends** that i
 
 - `find` (str | [`SearchResult`](#searchresult)): Text to find and replace, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it). Must not contain `\t`: a tab mark can be matched but not replaced yet — target the text beside it (`ValueError`, ROADMAP.md #6)
 - `replace_with` (str): Replacement text
-- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `find` is a `SearchResult`.
-- `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
+- `paragraph` (str | None): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Omitted (and `find` a string) → `find` is searched document-wide — see [Document-wide edits](#document-wide-edits).
+- `occurrence` (int | None): Which occurrence, 0-based (0 = first), counted within `paragraph` when given and document-wide otherwise. Omitted → the target must be unique in that scope; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 - `note` (str | None): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`/`comment_id`)
@@ -410,8 +451,8 @@ Mark text as deleted with tracked changes. Deleting text inside another author's
 **Parameters:**
 
 - `text` (str | [`SearchResult`](#searchresult)): Text to mark as deleted, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it). Must not contain `\t`: a tab mark can be matched but not deleted yet — target the text beside it (`ValueError`, ROADMAP.md #6)
-- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `text` is a `SearchResult`.
-- `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
+- `paragraph` (str | None): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Omitted (and `text` a string) → `text` is searched document-wide — see [Document-wide edits](#document-wide-edits).
+- `occurrence` (int | None): Which occurrence, 0-based (0 = first), counted within `paragraph` when given and document-wide otherwise. Omitted → the target must be unique in that scope; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 - `note` (str | None): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`/`comment_id`)
@@ -434,8 +475,8 @@ Insert text after anchor with tracked changes. An anchor inside another author's
 
 - `anchor` (str | [`SearchResult`](#searchresult)): Text to find as insertion point, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it)
 - `text` (str): Text to insert after the anchor
-- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `anchor` is a `SearchResult`.
-- `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
+- `paragraph` (str | None): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Omitted (and `anchor` a string) → `anchor` is searched document-wide — see [Document-wide edits](#document-wide-edits).
+- `occurrence` (int | None): Which occurrence, 0-based (0 = first), counted within `paragraph` when given and document-wide otherwise. Omitted → the target must be unique in that scope; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 - `note` (str | None): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`/`comment_id`)
@@ -458,8 +499,8 @@ Insert text before anchor with tracked changes. Foreign pending insertions are t
 
 - `anchor` (str | [`SearchResult`](#searchresult)): Text to find as insertion point, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it)
 - `text` (str): Text to insert before the anchor
-- `paragraph` (str): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Required unless `anchor` is a `SearchResult`.
-- `occurrence` (int | None): Which occurrence within the paragraph, 0-based (0 = first). Omitted → the target must be unique within the paragraph; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
+- `paragraph` (str | None): Paragraph reference from `list_paragraphs()`, such as `P2#f3c1`. Omitted (and `anchor` a string) → `anchor` is searched document-wide — see [Document-wide edits](#document-wide-edits).
+- `occurrence` (int | None): Which occurrence, 0-based (0 = first), counted within `paragraph` when given and document-wide otherwise. Omitted → the target must be unique in that scope; if it matches more than once, [`AmbiguousTextError`](#ambiguoustexterror) is raised instead of silently editing the first match.
 - `note` (str | None): Rationale for this edit, anchored as a comment on the revisions it creates — see [Rationale notes](#rationale-notes)
 
 **Returns:** Updated paragraph reference ([`EditResult`](#editresult) — a `str` subclass also carrying the edit's `group_id`/`changeset_id`/`revision_ids`/`comment_id`)
@@ -1861,6 +1902,18 @@ try:
 except AmbiguousTextError as e:
     m = next(m for m in e.matches if "term of the lease" in m.context)
     doc.replace("term", "clause", paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence)
+```
+
+### `MatchCountError`
+
+Raised when a call given `expected_count` — [`find_all()`](#find_alltext-paragraphnone-expected_countnone) or [`replace_all()`](#replace_allfind-replace_with-expected_count-notenone) — finds a different number of matches. Too many and too few raise the same error: either way the document is not as you believed, and nothing was changed. Structured fields: `search_text`, `paragraph_ref` (None when document-wide), `expected_count`, `total_occurrences`, `matches` / `matches_omitted` (the same [`MatchLocation`](#ambiguoustexterror) records as `AmbiguousTextError`; empty when nothing matched).
+
+`next`: `"find_all('<text>')"` — look at the matches, then decide.
+
+```
+'30 days' matches 3 times in the document, expected 2. Nothing was changed:
+  occurrence=0  P1#ab12 at char 18  "Payment is due in 30 days."
+  ...
 ```
 
 ### `HashMismatchError`
