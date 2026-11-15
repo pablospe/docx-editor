@@ -43,23 +43,14 @@ _BLOCK_CONTAINER_TAGS = frozenset({
 })
 
 
-def _holds_run_content(node) -> bool:
-    """True if ``node`` is a paragraph or sits inside one before any block
-    container: i.e. a run placed in ``node`` is inside a ``w:p``."""
-    while node is not None and node.nodeType == node.ELEMENT_NODE:
-        if node.tagName == "w:p":
-            return True
-        if node.tagName in _BLOCK_CONTAINER_TAGS:
-            return False
-        node = node.parentNode
-    return False
-
-
-def _block_container(node) -> Element | None:
-    """The nearest ancestor of ``node`` in ``_BLOCK_CONTAINER_TAGS``, or None."""
+def _enclosing_block(node) -> Element | None:
+    """The nearest ancestor of ``node`` that is a ``w:p`` or in
+    ``_BLOCK_CONTAINER_TAGS``: a ``w:p`` means a run placed beside ``node``
+    sits inside a paragraph. None only for a node outside every container
+    (non-conforming markup, e.g. a revision directly under ``w:document``)."""
     node = node.parentNode
     while node is not None and node.nodeType == node.ELEMENT_NODE:
-        if node.tagName in _BLOCK_CONTAINER_TAGS:
+        if node.tagName == "w:p" or node.tagName in _BLOCK_CONTAINER_TAGS:
             return node
         node = node.parentNode
     return None
@@ -692,9 +683,10 @@ class _ResolutionMixin(_RevisionManagerBase):
         if not marks:
             return
         target, anchor = None, None
-        if _holds_run_content(elem.parentNode):
+        enclosing = _enclosing_block(elem)
+        if enclosing is not None and enclosing.tagName == "w:p":
             target, anchor = elem.parentNode, elem
-        elif _in_fallback_copy(elem, _block_container(elem)):
+        elif _in_fallback_copy(elem, enclosing):
             # Block content in a block-level mc:Fallback: the walk would leave
             # the copy and re-home its markers beside those the mc:Choice copy
             # re-homes, duplicating ids. They go with the content instead.

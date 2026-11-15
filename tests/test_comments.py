@@ -2489,6 +2489,47 @@ class TestResolutionKeepsCommentMarkers:
         finally:
             doc.close()
 
+    def test_rehoming_walks_past_a_sibling_holding_no_paragraph(self, clean_workspace, tmp_path):
+        # A body-level bookmark (Word writes these) between P0 and the
+        # insertion has no paragraph to offer; the search moves on to P0.
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            '<w:p><w:r><w:t>P0</w:t></w:r></w:p><w:bookmarkStart w:id="9" w:name="b"/>'
+            f'<w:ins w:id="2" {_ANN}><w:p>{self._START}<w:r><w:t>b</w:t></w:r>{self._END}</w:p></w:ins>',
+        )
+        try:
+            assert doc.reject_revision(2)
+            (paragraph,) = doc._document_editor.dom.getElementsByTagName("w:p")
+            children = [n for n in paragraph.childNodes if n.nodeType == n.ELEMENT_NODE]
+            assert children[-3:] == _marker_nodes(doc)
+            assert doc._document_editor.dom.getElementsByTagName("w:bookmarkStart")[0].parentNode.tagName == "w:body"
+        finally:
+            doc.close()
+
+    def test_revision_outside_every_block_container_still_rehomes_into_a_paragraph(self, clean_workspace, tmp_path):
+        # Non-conforming: a block w:ins directly under w:document, beside
+        # w:body. It is listed and rejectable; its markers must still land in
+        # a paragraph (the body's first), not stay at the document root.
+        from conftest import replace_document_xml
+
+        dest = tmp_path / "stray.docx"
+        replace_document_xml(
+            clean_workspace,
+            dest,
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<w:document {_W_NS}><w:ins w:id="7" {_ANN}><w:p>{self._START}<w:r><w:t>stray</w:t></w:r>'
+            f"{self._END}</w:p></w:ins><w:body><w:p><w:r><w:t>P</w:t></w:r></w:p></w:body></w:document>",
+        )
+        doc = Document.open(dest)
+        try:
+            assert doc.reject_revision(7)
+            assert "stray" not in doc._document_editor.dom.toxml()
+            assert _markers_by_id(doc) == {"0": list(_COMMENT_TAGS)}
+            assert {node.parentNode.tagName for node in _marker_nodes(doc)} == {"w:p"}
+        finally:
+            doc.close()
+
     def test_text_box_fallback_copy_is_not_hoisted_twice(self, clean_workspace, tmp_path):
         box = f"<w:txbxContent><w:p>{self._START}<w:r><w:t>box</w:t></w:r>{self._END}</w:p></w:txbxContent>"
         doc = _open_body(
