@@ -25,6 +25,52 @@ from .models import (
     iter_revision_elements,
 )
 
+_COMMENT_MARK_TAGS = ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
+
+# Containers whose children are block-level (paragraphs, tables): a run or a
+# comment mark may not sit directly in one. Wrappers that occur at either
+# level (w:ins, w:sdtContent, w:customXml, ...) are climbed past.
+_BLOCK_CONTAINER_TAGS = frozenset({
+    "w:body",
+    "w:tc",
+    "w:txbxContent",
+    "w:hdr",
+    "w:ftr",
+    "w:footnote",
+    "w:endnote",
+    "w:comment",
+})
+
+
+def _holds_run_content(node) -> bool:
+    """True if ``node`` is a paragraph or sits inside one before any block
+    container: i.e. a run placed in ``node`` is inside a ``w:p``."""
+    while node is not None and node.nodeType == node.ELEMENT_NODE:
+        if node.tagName == "w:p":
+            return True
+        if node.tagName in _BLOCK_CONTAINER_TAGS:
+            return False
+        node = node.parentNode
+    return False
+
+
+def _sibling_paragraph(elem, direction: str) -> Element | None:
+    """The nearest ``w:p`` sibling of ``elem`` along ``direction``
+    (``"previousSibling"`` or ``"nextSibling"``), or None."""
+    node = getattr(elem, direction)
+    while node is not None:
+        if node.nodeType == node.ELEMENT_NODE and node.tagName == "w:p":
+            return node
+        node = getattr(node, direction)
+    return None
+
+
+def _only_rpr_besides(run, mark) -> bool:
+    """True if ``run``'s only element children are ``mark`` and ``w:rPr``."""
+    return all(
+        child is mark or child.tagName == "w:rPr" for child in run.childNodes if child.nodeType == child.ELEMENT_NODE
+    )
+
 
 class _ResolutionMixin(_RevisionManagerBase):
     def accept_revision(
@@ -542,42 +588,72 @@ class _ResolutionMixin(_RevisionManagerBase):
         deletion) without losing the comment markers inside it.
 
         Every ``w:commentRangeStart``/``w:commentRangeEnd``/``w:commentReference``
-        in ``elem``'s subtree is first moved, in document order, to just before
-        ``elem``: the nearest surviving position. Order is kept, so a range
-        wholly inside becomes a point comment where the text was and a range
-        straddling the edge is clipped to the text that survives. The comment
-        itself (``comments.xml``) is never touched by resolution.
+        in ``elem``'s subtree is first moved, in document order, to the nearest
+        surviving position (see ``_hoist_comment_markers``). Order is kept, so a
+        range wholly inside becomes a point comment where the text was and a
+        range straddling the edge is clipped to the text that survives. The
+        comment itself (``comments.xml``) is never touched by resolution.
         """
         self._hoist_comment_markers(elem)
         self._remove_element(elem)
 
     def _hoist_comment_markers(self, elem) -> None:
-        """Move ``elem``'s comment markers to just before it (see ``_remove_content``).
+        """Move ``elem``'s comment markers out of it (see ``_remove_content``).
+
+        Inside a paragraph they go just before ``elem``. A block-level ``elem``
+        (wrapping whole paragraphs, under ``w:body``/``w:tc``/...) cannot leave
+        a run behind there, so they go to the end of the previous sibling
+        paragraph, else the start of the next one; with neither, each comment
+        they belong to loses its whole marker set (``_drop_comment_markers``).
 
         A reference moves with its run when that run holds nothing else but
         ``w:rPr`` (the shape Word and this library write); otherwise it is
         detached into a new bare ``w:r``, so the run's text is not resurrected.
         """
-        parent = elem.parentNode
         marks = [
             node
             for node in elem.getElementsByTagName("*")  # document order
-            if node.tagName in ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
+            if node.tagName in _COMMENT_MARK_TAGS
         ]
+        if not marks:
+            return
+        if _holds_run_content(elem.parentNode):
+            target, anchor = elem.parentNode, elem
+        elif (paragraph := _sibling_paragraph(elem, "previousSibling")) is not None:
+            target, anchor = paragraph, None  # append: end of the paragraph
+        elif (paragraph := _sibling_paragraph(elem, "nextSibling")) is not None:
+            target, anchor = paragraph, _first_child_not_in(paragraph, ("w:pPr",))
+        else:
+            # No surviving paragraph to re-home into: a half-pair elsewhere
+            # would be worse than no anchor, so the comment keeps its body in
+            # comments.xml but loses every marker, inside elem or not.
+            self._drop_comment_markers({mark.getAttribute("w:id") for mark in marks})
+            return
         for mark in marks:
             if mark.tagName == "w:commentReference":
                 run = mark.parentNode
-                if getattr(run, "tagName", "") == "w:r" and all(
-                    child is mark or child.tagName == "w:rPr"
-                    for child in run.childNodes
-                    if child.nodeType == child.ELEMENT_NODE
-                ):
+                if getattr(run, "tagName", "") == "w:r" and _only_rpr_besides(run, mark):
                     mark = run
                 else:
                     bare = self.editor.dom.createElement("w:r")
                     bare.appendChild(mark)  # detaches it from its old run
                     mark = bare
-            parent.insertBefore(mark, elem)
+            target.insertBefore(mark, anchor)
+
+    def _drop_comment_markers(self, comment_ids: set[str]) -> None:
+        """Remove every comment marker with a ``w:id`` in ``comment_ids``; a
+        reference's run goes with it when it holds nothing else but ``w:rPr``."""
+        doomed = [
+            node
+            for tag in _COMMENT_MARK_TAGS
+            for node in self.editor.dom.getElementsByTagName(tag)
+            if node.getAttribute("w:id") in comment_ids
+        ]
+        for mark in doomed:
+            run = mark.parentNode
+            if mark.tagName == "w:commentReference" and run.tagName == "w:r" and _only_rpr_besides(run, mark):
+                mark = run
+            mark.parentNode.removeChild(mark)
 
     def _restore_paragraph_properties(self, ppr_change) -> None:
         """Reject a ``w:pPrChange``: put the recorded previous properties back.

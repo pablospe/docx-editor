@@ -2247,6 +2247,96 @@ class TestResolutionKeepsCommentMarkers:
         finally:
             doc.close()
 
+    @staticmethod
+    def _assert_nothing_at_block_level(doc) -> None:
+        """No run and no comment mark is a direct child of w:body or w:tc."""
+        for node in doc._document_editor.dom.getElementsByTagName("*"):
+            if node.tagName in ("w:r", "w:commentRangeStart", "w:commentRangeEnd"):
+                assert node.parentNode.tagName not in ("w:body", "w:tc"), node.toxml()
+
+    def _reject_block_insertion(self, clean_workspace, tmp_path, body: str) -> Document:
+        """Open ``body`` (holding a block-level w:ins id 7 around a paragraph
+        "inserted para"), comment that paragraph, and reject the insertion."""
+        doc = _open_body(clean_workspace, tmp_path, body)
+        doc.add_comment("inserted para", "on the inserted paragraph")
+        assert doc.reject_revision(7)
+        assert "inserted para" not in doc._document_editor.dom.toxml()
+        return doc
+
+    _BLOCK_INS = f'<w:ins w:id="7" {_ANN}><w:p><w:r><w:t>inserted para</w:t></w:r></w:p></w:ins>'
+
+    def test_block_level_insertion_rehomes_markers_to_the_previous_paragraph_end(self, clean_workspace, tmp_path):
+        doc = self._reject_block_insertion(
+            clean_workspace, tmp_path, "<w:p><w:r><w:t>before</w:t></w:r></w:p>" + self._BLOCK_INS
+        )
+        try:
+            self._assert_nothing_at_block_level(doc)
+            (paragraph,) = doc._document_editor.dom.getElementsByTagName("w:p")
+            children = [n for n in paragraph.childNodes if n.nodeType == n.ELEMENT_NODE]
+            assert children[-3:] == _marker_nodes(doc)  # point comment at the end
+            assert [c.id for c in doc.list_comments()] == [0]
+        finally:
+            doc.close()
+
+    def test_block_level_insertion_in_a_cell_rehomes_markers_to_the_next_paragraph_start(
+        self, clean_workspace, tmp_path
+    ):
+        doc = self._reject_block_insertion(
+            clean_workspace,
+            tmp_path,
+            "<w:tbl><w:tr><w:tc>"
+            + self._BLOCK_INS
+            + '<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t>after</w:t></w:r></w:p></w:tc></w:tr></w:tbl>',
+        )
+        try:
+            self._assert_nothing_at_block_level(doc)
+            (paragraph,) = doc._document_editor.dom.getElementsByTagName("w:p")
+            children = [n for n in paragraph.childNodes if n.nodeType == n.ELEMENT_NODE]
+            assert [children[0].tagName] + children[1:4] == ["w:pPr", *_marker_nodes(doc)]
+        finally:
+            doc.close()
+
+    def test_block_level_insertion_with_no_surviving_paragraph_drops_the_whole_marker_set(
+        self, clean_workspace, tmp_path
+    ):
+        # The range starts outside the cell; with no paragraph left beside the
+        # insertion, the start goes too rather than survive as a half-pair.
+        doc = _open_body(
+            clean_workspace,
+            tmp_path,
+            '<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>outside</w:t></w:r></w:p>'
+            f'<w:tbl><w:tr><w:tc><w:ins w:id="7" {_ANN}><w:p><w:r><w:t>inside</w:t></w:r>'
+            '<w:commentRangeEnd w:id="0"/><w:r><w:rPr/><w:commentReference w:id="0"/></w:r></w:p>'
+            "</w:ins></w:tc></w:tr></w:tbl>",
+        )
+        try:
+            assert doc.reject_revision(7)
+            assert _markers_by_id(doc) == {}
+            assert "outside" in doc._document_editor.dom.toxml()
+        finally:
+            doc.close()
+
+    @pytest.mark.skipif(__import__("shutil").which("soffice") is None, reason="LibreOffice not installed")
+    def test_libreoffice_opens_a_rejected_block_level_insertion(self, clean_workspace, tmp_path, monkeypatch):
+        import shutil
+
+        from test_corpus_harness import harness
+
+        doc = self._reject_block_insertion(
+            clean_workspace, tmp_path, "<w:p><w:r><w:t>before</w:t></w:r></w:p>" + self._BLOCK_INS
+        )
+        try:
+            out = tmp_path / "out.docx"
+            doc.save(out)
+        finally:
+            doc.close()
+
+        monkeypatch.setattr(harness, "LO_DIR", tmp_path / "lo")
+        (tmp_path / "lo").mkdir()
+        monkeypatch.setattr(harness, "LO_PROFILE", tmp_path / "profile")
+        record = harness.run_lo_roundtrip(out, False, shutil.which("soffice"), tmp_path / "work")
+        assert record["status"] == "pass", record
+
     @pytest.mark.skipif(__import__("shutil").which("soffice") is None, reason="LibreOffice not installed")
     def test_libreoffice_keeps_the_comment_after_rejecting_the_trailing_edge(
         self, clean_workspace, tmp_path, monkeypatch
