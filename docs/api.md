@@ -1780,7 +1780,8 @@ Every exception below (the two warnings at the end excepted) inherits from
 single call does. It is `None` on every error whose recovery discards data or
 needs the user (`WorkspaceSyncError`, `WorkspaceLockedError`,
 `DocumentOpenError`, `DocumentProtectedError`, ...), so never treat a missing
-hint as permission to retry. Each section names its values. Through
+hint as permission to retry. Each section names its non-`None` values; every
+other case has `next = None`. Through
 `docx-session eval` it arrives as `error["next"]`, present (possibly `null`)
 on every library error.
 
@@ -1844,7 +1845,7 @@ followed by `  (+N more; find_all() lists every match)` when the list was cut.
 | --- | --- |
 | `occurrence` | The value to pass as `occurrence=` **to the same call** to select this match. It counts within the paragraph when that call had `paragraph=`, document-wide when it did not, so do not carry it to a call with a different scope. |
 | `paragraph_ref` | Hash-anchored ref of the paragraph holding the match, current when the error was raised. |
-| `paragraph_occurrence` | The match's 0-based number within that paragraph. `paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence` selects this match from any call; it equals `occurrence` when the raising call had `paragraph=`. |
+| `paragraph_occurrence` | The match's 0-based number within that paragraph. `paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence` selects this match from any call; it equals `occurrence` when the raising call had `paragraph=`. Inside `batch_edit`, the locations describe the paragraph as the batch's earlier operations left it, and the batch is rolled back, so there pass `m.occurrence` back in the retried batch instead. |
 | `start` | Character offset of the match in the paragraph's visible text. It tells apart matches whose `context` is identical, such as a word repeated in a short paragraph. |
 | `context` | The match with up to 30 characters either side, `...` where the paragraph was cut, a tab mark spelled `\t`. |
 
@@ -1934,7 +1935,7 @@ except CommentError as e:
 
 ### `RevisionError`
 
-Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`, or an unknown changeset id passed to `accept_changeset()` / `reject_changeset()`. Also raised by `accept_revision()` / `reject_revision()` when the `w:id` is carried by more than one pending revision (`revision_id` is set; the document is untouched): pass `author=`, or use `accept_all(author=…)` / `reject_all(author=…)` when one author duplicated the id. Group and changeset ids are per-open-`Document` and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use an id from the current session's `EditResult` or `list_revisions()` — a stale id from a previous session may raise this, or worse, silently resolve to a different group/changeset. Structured fields: `revision_id`, `group_id`, and `changeset_id` — set when the error is about that specific id (`revision_id` for an ambiguous per-id call, `group_id` for unknown-group errors, `changeset_id` for unknown-changeset errors), `None` otherwise. `next`: `"list_revisions()"` for an unknown group or changeset; for a duplicated id, `"retry with author=<name>"` when `author=` can tell the carriers apart (the message names who) and `"list_revisions()"` when it cannot.
+Raised when a revision operation fails — most commonly an unknown group id passed to `accept_group()` / `reject_group()`, or an unknown changeset id passed to `accept_changeset()` / `reject_changeset()`. Also raised by `accept_revision()` / `reject_revision()` when the `w:id` is carried by more than one pending revision (`revision_id` is set; the document is untouched): pass `author=`, or use `accept_all(author=…)` / `reject_all(author=…)` when one author duplicated the id. Group and changeset ids are per-open-`Document` and renumbered on each open (recorded for this session's edits, inferred by reconstruction for revisions already in the file), so always use an id from the current session's `EditResult` or `list_revisions()` — a stale id from a previous session may raise this, or worse, silently resolve to a different group/changeset. Structured fields: `revision_id`, `group_id`, and `changeset_id` — set when the error is about that specific id (`revision_id` for an ambiguous per-id call, `group_id` for unknown-group errors, `changeset_id` for unknown-changeset errors), `None` otherwise. `next`: `"list_revisions()"` for an unknown group or changeset; for a duplicated id, `"retry with author=<name>"` when `author=` can tell the carriers apart (the message names who) and `"list_revisions()"` when it cannot; `None` otherwise.
 
 ```python
 from docx_editor.exceptions import RevisionError

@@ -302,7 +302,9 @@ class MatchLocation:
         paragraph_occurrence: The match's 0-based number within that
             paragraph. ``paragraph=paragraph_ref, occurrence=paragraph_occurrence``
             selects this match from any call; it equals ``occurrence`` when the
-            raising call was scoped.
+            raising call was scoped. Inside ``batch_edit`` the record describes
+            the paragraph as the batch's earlier operations left it, and the
+            batch rolls back, so there pass ``occurrence`` to the retried batch.
         start: Character offset of the match in the paragraph's visible text,
             which tells apart matches whose ``context`` is identical (a word
             repeated in a short paragraph).
