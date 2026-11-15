@@ -82,6 +82,10 @@ Left over from #92 and #86, all needing hand-built or unusual files. (a) A point
 
 When a rejected block-level `w:ins` (or an accepted block-level `w:del`) held the only paragraph of a `w:tc`, the cell is left with no `w:p`, which the schema forbids and Word may refuse. Pre-existing; found by the review of #102. Word does not write block-level `w:ins`, so this needs a foreign producer. Fix: leave an empty `w:p` in a cell that would otherwise be empty. Related, same rare shape: when markers are re-homed out of a block-level revision next to an `mc:AlternateContent` with more than one compatible `mc:Choice`, the backward walk lands in the last Choice, but a reader displays the first; keep markers out of mutually exclusive branches (CodeRabbit on PR #106).
 
+### 106. Text views leave a blank line for a tracked paragraph mark
+
+`get_original_text()` and `get_visible_text()` emit a blank line for each inserted or deleted paragraph mark instead of joining the two paragraphs, so the text of a redline with paragraph insertions or deletions does not match what Word shows with all changes rejected or accepted (28 differing lines on a 347-revision compare redline; equal once blank lines are ignored). Found by the head-to-head run against stetdoc on docx-agent-bench. Fix: join across a paragraph mark that the view treats as absent, the way `list_paragraphs` already counts paragraphs. Needs a decision on whether paragraph counts in the two views should then differ from `paragraph_count()`.
+
 ### 69. Return-leg reconciliation: which changesets survived?  [design]
 
 The product loop is agent proposes → human adjudicates in Word → document comes back; accepted revisions become plain text, rejected ones vanish, and there is no way to ask "which of my changesets survived?". A propose-time-vs-current compare keyed on changeset `w:date` + content. Design first; large.
