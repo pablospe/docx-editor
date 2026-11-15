@@ -29,6 +29,7 @@ create = ["python-docx>=1.1"]
 session = ["jupyter-client>=8.6", "ipykernel>=6.29"]
 
 [project.scripts]
+docx-edit = "docx_editor.cli:main"
 docx-session = "docx_editor.session:main"
 
 [dependency-groups]

@@ -2149,3 +2149,50 @@ from docx_editor import UnanchoredNoteWarning
 
 warnings.filterwarnings("ignore", category=UnanchoredNoteWarning)
 ```
+
+---
+
+## Command line: `docx-edit`
+
+`docx-edit` makes one tracked-change edit per command: it opens the file, makes one `Document` call, saves (mutating verbs only) and closes. It installs with the base package (`pip install docx-editor`) and needs nothing else. Use it when an edit is one step; for many steps on one document, keep it open with `docx-session` instead (`pip install "docx-editor[session]"`).
+
+The verb is the `Document` method name in kebab-case and the flags are its keywords, so the three transports share one vocabulary:
+
+| `docx-edit` | Python | `docx-session` |
+| --- | --- | --- |
+| `replace F OLD NEW` | `doc.replace(OLD, NEW)` | `docx-session eval 'doc.replace(OLD, NEW)'` |
+| `replace F OLD NEW --paragraph P --occurrence N` | `doc.replace(OLD, NEW, paragraph=P, occurrence=N)` | same, through `eval` |
+| `replace F OLD NEW --expect N` | `doc.replace_all(OLD, NEW, expected_count=N)` | same, through `eval` |
+| `delete F TEXT`, `insert-after F ANCHOR TEXT`, `insert-before F ANCHOR TEXT` | `doc.delete(...)`, `doc.insert_after(...)`, `doc.insert_before(...)` | same, through `eval` |
+| `comment F ANCHOR TEXT` | `doc.add_comment(ANCHOR, TEXT)` | same, through `eval` |
+| `find F TEXT [--expect N]` | `doc.find_all(TEXT, expected_count=N)` | same, through `eval` |
+| `list F [--start S] [--limit L] [--max-chars C]` | `doc.list_paragraphs(...)` (`--limit 0` = all) | same, through `eval` |
+| `revisions F [--by NAME] [--paragraph P]` | `doc.list_revisions(author=NAME, paragraph=P)` | same, through `eval` |
+| `accept F ID... \| --all [--by NAME]`, `reject` likewise | `doc.accept_revision(ID)` per id, or `doc.accept_all(author=NAME)` | same, through `eval` |
+
+**Flags.** Every mutating verb (`replace`, `delete`, `insert-*`, `comment`, `accept`, `reject`) requires `--author NAME` (who is editing) and exactly one of `-o OUT` / `--in-place`; there is no default output. `--by NAME` filters by a revision's author, so it never means "who is editing". `--note TEXT` is `note=`. `accept`/`reject` take revision ids only: group and changeset ids belong to one open `Document` and mean nothing to the next command. Ids are applied in order and the whole command refuses, saving nothing, if any id is not pending.
+
+**Receipt.** One line per result (`replace P2#a1cf  (revisions 0, 1; comment 0)`), then each touched paragraph as it now reads in `get_markup_text()` markup (`P2#a1cf| The [del#0:Me]quick[/del][ins#1:Me]swift[/ins] brown fox ...`), then any library warning (`UnanchoredNoteWarning`, `UnhandledRevisionWarning`) and `saved OUT`. That is the whole check: no follow-up call is needed.
+
+**Refusals.** Nothing is saved and the workspace is discarded. The exit status is 1 and the library's message goes to stderr, including its pick-list, followed by a `retry:` line holding the next command:
+
+- ambiguous text: the same command plus `--occurrence N`;
+- a stale `--paragraph`: the same command with the fresh ref;
+- a count mismatch: the same command with the actual `--expect`;
+- text not found: `docx-edit list F`;
+- an unknown revision id: `docx-edit revisions F`.
+
+When no CLI command fixes the error, the library's `next` is printed as `next (Python API): ...`. A bad command line exits 2 (argparse).
+
+**`--json`.** Every verb takes `--json` and prints one object on stdout: `{"ok": true, "verb", "results": [{"ref", "refs", "revision_ids", "comment_id"}], "paragraphs", "saved", "warnings"}` on success, or `{"ok": false, "error": {...}, "retry"}` on refusal. The `error` object has the same shape as `docx-session eval`'s: `type`, `message`, every structured field and `next`.
+
+**`docx-edit skill`** prints a compact agent guide to the CLI, so a skill file can be the one line "run `docx-edit skill` first". Each verb's `--help` is short and shows one example.
+
+```bash
+docx-edit replace contract.docx "30 days" "60 days" --author Reviewer -o out.docx
+# replace P2#a1cf  (revisions 0, 1)
+#   P2#a1cf| Payment is due in [del#0:Reviewer]30 days[/del][ins#1:Reviewer]60 days[/ins].
+# saved out.docx
+```
+
+An open `docx-session` (or any open `Document`) on the same file holds its workspace lock, so `docx-edit` on that file refuses with `WorkspaceLockedError` rather than take it over. A workspace left behind by a crashed session is reported as `WorkspaceSyncError`, never discarded silently.

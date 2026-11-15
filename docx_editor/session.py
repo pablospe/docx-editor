@@ -653,48 +653,12 @@ def exec_code(code: str, connection_file: Path = DEFAULT_CONNECTION_FILE, timeou
 # call) — same class of pollution as IPython's own In/Out.
 _EVAL_TEMPLATE = """\
 def __docx_session_eval():
-    import dataclasses
-    import datetime
     import json
-    import pathlib
     import traceback
 
-    def _default(o):
-        # Library dataclasses (SearchResult, Revision, Comment, ...) ride out
-        # as real JSON objects instead of opaque reprs. The type guard keeps a
-        # bare dataclass *class* on the repr path.
-        if dataclasses.is_dataclass(o) and not isinstance(o, type):
-            return dataclasses.asdict(o)
-        if isinstance(o, (datetime.datetime, datetime.date)):
-            return o.isoformat()
-        if isinstance(o, pathlib.PurePath):
-            return str(o)
-        raise TypeError(f"{type(o).__name__} is not JSON serializable")
-
-    def _err_payload(exc, depth=0):
-        # type/message plus every structured recovery field the exception
-        # carries (actual_hash, total_occurrences, ...). A nested exception
-        # (BatchOperationError.original) recurses, depth-capped so a
-        # pathological self-referential chain cannot hang the wrapper.
-        payload = {"type": type(exc).__name__, "message": str(exc)}
-        for key, val in vars(exc).items():
-            if key in payload:
-                continue
-            if isinstance(val, BaseException):
-                payload[key] = _err_payload(val, depth + 1) if depth < 3 else repr(val)
-                continue
-            try:
-                json.dumps(val, allow_nan=False, default=_default)
-            except Exception:
-                payload[key] = repr(val)
-            else:
-                payload[key] = val
-        # Every library error carries the "next" key (None when no single call
-        # resolves it); a builtin error, whose class has no such attribute,
-        # stays exactly {"type", "message"}.
-        if "next" not in payload and hasattr(type(exc), "next"):
-            payload["next"] = None
-        return payload
+    # Shared with the docx-edit CLI, so both transports emit one JSON shape.
+    from docx_editor.exceptions import _error_payload as _err_payload
+    from docx_editor.exceptions import _json_default as _default
 
     try:
         value = eval(compile(%s, "<docx-session eval>", "eval"), globals())
