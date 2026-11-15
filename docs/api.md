@@ -727,7 +727,7 @@ visible-text search used by `count_matches()` and the tracked-change edit
 methods, so anchors that span `w:t` run boundaries (formatting changes,
 smart-quote splits, `w:ins` wrappers) are found. Text-box content is excluded, as it is from [`paragraph_count()`](#paragraph_count).
 
-To comment on a **whole paragraph**, omit `anchor_text` and name the paragraph: `doc.add_comment(comment="Needs a citation", paragraph=ref)`. The range covers the paragraph's full text as it reads with pending changes accepted — tracked insertions included, tracked deletions excluded — exactly as if that text had been passed as the anchor. There is no need to anchor on a prefix of the paragraph as a stand-in.
+To comment on a **whole paragraph**, omit `anchor_text` and name the paragraph: `doc.add_comment(comment="Needs a citation", paragraph=ref)`. The range covers the paragraph's full text as it reads with pending changes accepted — tracked insertions included, tracked deletions excluded — with the markers placed exactly where an anchor of that full text would place them. There is no need to anchor on a prefix of the paragraph as a stand-in.
 
 The range runs from the paragraph's first text character to its last, so content with no text of its own at either end — a picture, a footnote reference, a field's code — is outside it. Where that first or last text is a pending tracked insertion the marker sits inside the insertion, as it does for any anchor on inserted text, and rejecting that insertion removes the marker with it: reject the trailing insertion and the comment is no longer displayed, reject the leading one and its [`paragraph_ref`](#comment) becomes `None`. Accepting keeps the comment intact.
 

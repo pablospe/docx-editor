@@ -318,8 +318,8 @@ class CommentManager:
 
         With ``anchor_text=None`` the comment covers the whole of ``paragraph``:
         its full accepted-view text (pending insertions included, pending
-        deletions excluded), placed exactly as if that text had been passed as
-        the anchor.
+        deletions excluded), with the markers placed exactly where an anchor
+        of that full text would place them.
 
         Args:
             anchor_text: Text to attach the comment to. ``None`` comments on
