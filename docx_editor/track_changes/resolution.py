@@ -92,16 +92,20 @@ class _ResolutionMixin(_RevisionManagerBase):
         if tag == "w:ins":
             # Accept insertion: unwrap the content
             self._unwrap_element(elem)
-        elif tag in ("w:del", "w:pPrChange"):
-            # Accept deletion: remove the element entirely. Accept a property
-            # change: drop the record of the previous properties.
+        elif tag == "w:del":
+            # Accept deletion: remove the element entirely (its comment
+            # markers stay, see _remove_content).
+            self._remove_content(elem)
+        elif tag == "w:pPrChange":
+            # Accept a property change: drop the record of the previous
+            # properties.
             self._remove_element(elem)
         elif tag == "w:moveTo" and not _is_paragraph_mark_marker(elem):
             # Accept the destination half: the moved text stays.
             self._unwrap_element(elem)
         else:  # w:moveFrom, or a paragraph-mark marker of either half
             # Accept the source half: the moved-away text goes.
-            self._remove_element(elem)
+            self._remove_content(elem)
         # Unconditional: move content can leave with any resolved host (a
         # w:del wrapping a w:moveFrom, a rejoined paragraph's mark marker),
         # not only when a move half is the element resolved.
@@ -137,6 +141,10 @@ class _ResolutionMixin(_RevisionManagerBase):
 
         A paragraph-mark move marker is dropped, as on accept.
 
+        Comment markers inside removed content are kept (``_remove_content``):
+        a comment wholly on rejected text becomes a point comment where the
+        text was, and its body in ``comments.xml`` is never touched.
+
         A w:id shared by more than one pending revision is refused exactly as
         ``accept_revision`` describes; ``author=`` narrows it.
 
@@ -170,8 +178,9 @@ class _ResolutionMixin(_RevisionManagerBase):
                 # the tail paragraph (the inverse of the tracked split).
                 self._rejoin_paragraph(elem)
             else:
-                # Reject insertion: remove entirely
-                self._remove_element(elem)
+                # Reject insertion: remove entirely (its comment markers
+                # stay, see _remove_content).
+                self._remove_content(elem)
         elif tag == "w:del":
             # Reject deletion: restore the deleted text
             self._restore_deletion(elem)
@@ -182,7 +191,7 @@ class _ResolutionMixin(_RevisionManagerBase):
             self._restore_deletion(elem)
         else:  # w:moveTo, or a paragraph-mark marker of either half
             # Reject the destination half: the moved-in text goes.
-            self._remove_element(elem)
+            self._remove_content(elem)
         self._sweep_after_move()  # unconditional — see accept_revision
         return True
 
@@ -527,6 +536,48 @@ class _ResolutionMixin(_RevisionManagerBase):
     def _remove_element(self, elem) -> None:
         """Detach an element (and its whole subtree) from its parent."""
         elem.parentNode.removeChild(elem)
+
+    def _remove_content(self, elem) -> None:
+        """Remove revision content (a rejected insertion, an accepted
+        deletion) without losing the comment markers inside it.
+
+        Every ``w:commentRangeStart``/``w:commentRangeEnd``/``w:commentReference``
+        in ``elem``'s subtree is first moved, in document order, to just before
+        ``elem``: the nearest surviving position. Order is kept, so a range
+        wholly inside becomes a point comment where the text was and a range
+        straddling the edge is clipped to the text that survives. The comment
+        itself (``comments.xml``) is never touched by resolution.
+        """
+        self._hoist_comment_markers(elem)
+        self._remove_element(elem)
+
+    def _hoist_comment_markers(self, elem) -> None:
+        """Move ``elem``'s comment markers to just before it (see ``_remove_content``).
+
+        A reference moves with its run when that run holds nothing else but
+        ``w:rPr`` (the shape Word and this library write); otherwise it is
+        detached into a new bare ``w:r``, so the run's text is not resurrected.
+        """
+        parent = elem.parentNode
+        marks = [
+            node
+            for node in elem.getElementsByTagName("*")  # document order
+            if node.tagName in ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference")
+        ]
+        for mark in marks:
+            if mark.tagName == "w:commentReference":
+                run = mark.parentNode
+                if getattr(run, "tagName", "") == "w:r" and all(
+                    child is mark or child.tagName == "w:rPr"
+                    for child in run.childNodes
+                    if child.nodeType == child.ELEMENT_NODE
+                ):
+                    mark = run
+                else:
+                    bare = self.editor.dom.createElement("w:r")
+                    bare.appendChild(mark)  # detaches it from its old run
+                    mark = bare
+            parent.insertBefore(mark, elem)
 
     def _restore_paragraph_properties(self, ppr_change) -> None:
         """Reject a ``w:pPrChange``: put the recorded previous properties back.

@@ -2287,6 +2287,11 @@ class Document:
 
         Resolve both halves of a move together — see :meth:`accept_revision`.
 
+        Comment markers inside rejected content are kept, moved to where the
+        content was: a comment on part of it shrinks to the text that
+        survives, one wholly on it becomes a point comment there. It stays
+        listed; delete it with :meth:`delete_comment` if it no longer applies.
+
         Note:
             Any ``note=`` rationale left with no live revision to explain is
             deleted with it, replies included (see :meth:`replace`).
