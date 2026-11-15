@@ -534,7 +534,7 @@ document sees the change and its rationale together. Five rules govern it.
    note goes with the anchor it lost.
 
    For rationale that must survive resolution, use
-   [`add_comment()`](#add_commentanchor_text-comment-paragraphnone-occurrencenone)
+   [`add_comment()`](#add_commentanchor_textnone-commentnone-paragraphnone-occurrencenone)
    instead: plain comments are document-scoped, note comments are
    revision-scoped.
 
@@ -568,7 +568,7 @@ document sees the change and its rationale together. Five rules govern it.
    group leaves it in place, and `delete_comment()` removes it.
 
    A `note=` edit writes the comment parts into the workspace as
-   [`add_comment()`](#add_commentanchor_text-comment-paragraphnone-occurrencenone)
+   [`add_comment()`](#add_commentanchor_textnone-commentnone-paragraphnone-occurrencenone)
    does, where a bare tracked-change edit stays in memory until `save()` — so
    it carries that method's workspace side effect too.
 
@@ -720,19 +720,23 @@ new_refs = doc.batch_rewrite([
 
 ### Comment Methods
 
-#### `add_comment(anchor_text, comment, *, paragraph=None, occurrence=None)`
+#### `add_comment(anchor_text=None, comment=None, *, paragraph=None, occurrence=None)`
 
-Add a comment anchored to specific text. Anchors are located with the same
+Add a comment anchored to specific text, or to a whole paragraph. Anchors are located with the same
 visible-text search used by `count_matches()` and the tracked-change edit
 methods, so anchors that span `w:t` run boundaries (formatting changes,
 smart-quote splits, `w:ins` wrappers) are found. Text-box content is excluded, as it is from [`paragraph_count()`](#paragraph_count).
 
+To comment on a **whole paragraph**, omit `anchor_text` and name the paragraph: `doc.add_comment(comment="Needs a citation", paragraph=ref)`. The range covers the paragraph's full text as it reads with pending changes accepted — tracked insertions included, tracked deletions excluded — exactly as if that text had been passed as the anchor. There is no need to anchor on a prefix of the paragraph as a stand-in.
+
 **Parameters:**
 
-- `anchor_text` (str | [`SearchResult`](#searchresult)): Text to attach the comment to, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it). May contain `\t` (a tab mark) anywhere, including at either end — the comment range brackets the tab
-- `comment` (str): The comment content
-- `paragraph` (str, optional): Paragraph reference (e.g. `P3#a7b2`) to scope the search. `None` searches the whole document. Defaults to None.
-- `occurrence` (int | None): Which occurrence to anchor to, 0-based (0 = first), counted within `paragraph` when given and document-wide otherwise. Omitted → the anchor must be unique in the search scope, else [`AmbiguousTextError`](#ambiguoustexterror).
+- `anchor_text` (str | [`SearchResult`](#searchresult) | None): Text to attach the comment to, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it). May contain `\t` (a tab mark) anywhere, including at either end — the comment range brackets the tab. `None` (the default) comments on the whole of `paragraph`. A single positional string is always the anchor, never the comment; an empty string is an error, not a whole-paragraph request.
+- `comment` (str): The comment content. Required — it has a default only so the whole-paragraph form can be written with keywords; leaving it out raises [`CommentError`](#commenterror).
+- `paragraph` (str, optional): Paragraph reference (e.g. `P3#a7b2`) to scope the search. `None` searches the whole document. Required when `anchor_text` is `None`. Defaults to None.
+- `occurrence` (int | None): Which occurrence to anchor to, 0-based (0 = first), counted within `paragraph` when given and document-wide otherwise. Omitted → the anchor must be unique in the search scope, else [`AmbiguousTextError`](#ambiguoustexterror). Not accepted with `anchor_text=None` (`ValueError`).
+
+**Raises** (whole-paragraph form), all before the document is touched: [`CommentError`](#commenterror) if `paragraph` is omitted or the paragraph has no text to anchor on (empty, or holding only tracked deletions or non-text content such as a picture); [`HashMismatchError`](#hashmismatcherror) / [`ParagraphIndexError`](#paragraphindexerror) for a stale or out-of-range ref. A whitespace-only paragraph has text and is commentable.
 
 **Returns:** The comment ID (int). IDs are allocated sequentially starting at 0 in a document with no existing comments — always use the returned ID rather than guessing.
 
@@ -742,6 +746,7 @@ smart-quote splits, `w:ins` wrappers) are found. Text-box content is excluded, a
 cid = doc.add_comment("Section 5", "Please review this section")
 doc.add_comment("term", "Note on the 2nd 'term'", paragraph="P3#a7b2", occurrence=1)
 doc.add_comment(doc.find_all("term")[1], "Same 2nd 'term', from the search")
+doc.add_comment(comment="Needs a citation", paragraph="P3#a7b2")  # the whole paragraph
 ```
 
 #### `reply_to_comment(comment_id, reply)`
@@ -2006,7 +2011,7 @@ message names which of those causes applied.
 
 Without it a dropped rationale would be indistinguishable from a recorded one.
 See [Rationale notes](#rationale-notes); use
-[`add_comment()`](#add_commentanchor_text-comment-paragraphnone-occurrencenone)
+[`add_comment()`](#add_commentanchor_textnone-commentnone-paragraphnone-occurrencenone)
 to attach the text as an ordinary, document-scoped comment instead.
 
 ```python

@@ -170,7 +170,7 @@ Use the **docx_editor** Python library for all editing operations. It handles tr
 
 The `replace` forms in the "Not" column work when the added or removed text is whole words — `replace()` trims the shared words and writes a pure deletion or insertion — but a change inside a word does not trim: `replace("Payment", "Payments")` rewrites the whole word, where `insert_after("Payment", "s")` inserts one letter. Prefer the dedicated verbs: they state the intent, the anchor is quoted once instead of twice (a slip in the second copy of `a` turns an insertion into a real rewrite of the anchor), and `delete` has no empty-string case to get wrong.
 
-Beyond the four verbs: `doc.batch_edit([...])` applies several edits atomically (see "Batch Editing"), `doc.rewrite_paragraph(ref, new_text)` restructures a whole paragraph (see "Paragraph Rewrite (Fallback for Structural Edits)"), `doc.split_paragraph(ref, before=text)` breaks one in two (see "Paragraph Structure (splitting on `\n`)"), and `doc.add_comment(anchor_text, comment)` comments on text (see "Comments API").
+Beyond the four verbs: `doc.batch_edit([...])` applies several edits atomically (see "Batch Editing"), `doc.rewrite_paragraph(ref, new_text)` restructures a whole paragraph (see "Paragraph Rewrite (Fallback for Structural Edits)"), `doc.split_paragraph(ref, before=text)` breaks one in two (see "Paragraph Structure (splitting on `\n`)"), and `doc.add_comment(anchor_text, comment)` comments on text — or `doc.add_comment(comment=..., paragraph=ref)` on a whole paragraph (see "Comments API").
 
 **Quote full text, never a preview.** `list_paragraphs()` output is a preview for scanning: a paragraph longer than `max_chars` (default 80) is cut and ends in `...`, and that `...` is **not** in the document. Text that will be quoted back as `find` / `text` / `anchor` — by you, or by any model you hand the listing to — must come from an untruncated source: `list_paragraphs_structured(limit=None)` (`info.text`; `print(info)` shows `P{i}#{hash}| full text`), `get_paragraph(i).text`, or a `SearchResult` from `find_text()` / `find_all()` passed straight to the edit. A search string copied from a cut preview, `...` included, can raise `TextNotFoundError` or, when the document happens to contain that text, match the wrong text. The refs themselves (`P2#f3c1`) are safe to take from either listing.
 
@@ -507,7 +507,7 @@ author = os.environ.get("USER") or "Reviewer"
 doc = Document.open("document.docx", author=author)
 
 # Add a comment anchored to text (returns the new comment's ID).
-# Full signature: add_comment(anchor_text, comment, *, paragraph=None, occurrence=None)
+# Full signature: add_comment(anchor_text=None, comment=None, *, paragraph=None, occurrence=None)
 # paragraph=None searches the whole document and counts occurrence document-wide;
 # pass paragraph= to scope both the search and the occurrence count to it.
 # Like the edit methods, an omitted occurrence requires a unique anchor
@@ -517,6 +517,16 @@ doc = Document.open("document.docx", author=author)
 cid = doc.add_comment("ambiguous term", "Please clarify this term")
 cid2 = doc.add_comment("term", "Anchored to the 2nd 'term' in P3",
                        paragraph="P3#b2c4", occurrence=1)
+
+# Comment on a WHOLE paragraph: leave anchor_text out and pass its ref. The
+# range covers the paragraph's full visible text (pending insertions included).
+# Do not anchor on the paragraph's first words as a workaround.
+cid3 = doc.add_comment(comment="Needs a citation", paragraph="P3#b2c4")
+# comment is always required, and a lone positional string is the ANCHOR:
+# add_comment("Needs a citation", paragraph=ref) raises CommentError. So do a
+# missing paragraph= and a paragraph with no text (empty, or only tracked
+# deletions) — all before the document is touched. occurrence= is a ValueError
+# here: there is nothing to choose among.
 
 # Comment IDs are allocated sequentially starting at 0 (in a document with no
 # existing comments) — always use the ID returned by add_comment, don't guess.
@@ -903,7 +913,7 @@ refs_only = doc.list_paragraphs(max_chars=0, limit=None)  # every "P1#a7b2", no 
 
 **Reaching the end of the pagination:** a `start` past the last paragraph is a valid request with an empty answer — both listing methods return `[]`, exactly like `lst[500:]` on a 300-item list, and **do not raise**. So `while page := doc.list_paragraphs(start=s, limit=200)` terminates cleanly. (`start=0` or negative *does* raise `ValueError`: those are invalid inputs, not empty ranges.) To know where the end is rather than discovering it, use `paragraph_count()` up front or follow the truncation notice's `start=` hint.
 
-The `paragraph` argument is **required** whenever the target is a plain string — `replace`, `delete`, `insert_after`, `insert_before` (`add_comment` may search document-wide). Pass a `SearchResult` as the target instead and it supplies the ref itself. Either way, if the paragraph content has changed since the ref was minted, a `HashMismatchError` is raised — preventing edits to the wrong location.
+The `paragraph` argument is **required** whenever the target is a plain string — `replace`, `delete`, `insert_after`, `insert_before` (`add_comment` may search document-wide, and with no anchor text at all `paragraph` names the whole paragraph to comment on). Pass a `SearchResult` as the target instead and it supplies the ref itself. Either way, if the paragraph content has changed since the ref was minted, a `HashMismatchError` is raised — preventing edits to the wrong location.
 
 **Every edit method returns an `EditResult` — a `str` subclass whose value is the new paragraph ref (plus `group_id`/`revision_ids`).** Chain edits without calling `list_paragraphs()` again:
 

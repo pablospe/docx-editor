@@ -519,3 +519,30 @@ def test_run_lo_roundtrip_against_real_libreoffice(edited: Path, tmp_path: Path,
     record = harness.run_lo_roundtrip(edited, True, shutil.which("soffice"), tmp_path / "work")
     assert record == {"status": "pass", "survival": "checked", "flag": "checked"}
     assert (lo_dir / edited.name).exists()
+
+
+@pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice not installed")
+def test_whole_paragraph_comment_survives_libreoffice(edited: Path, tmp_path: Path, monkeypatch):
+    commented = tmp_path / "simple_commented.docx"
+    doc = Document.open(edited, author=harness.AUTHOR, workspace_dir=tmp_path / "work_comment", force_recreate=True)
+    try:
+        target = next(p for p in doc.list_paragraphs_structured(limit=None) if p.text.strip())
+        doc.add_comment(comment="Needs a citation", paragraph=target.ref)
+        doc.save(commented)
+    finally:
+        doc.close(cleanup=True)
+
+    lo_dir = tmp_path / "lo"
+    lo_dir.mkdir()
+    monkeypatch.setattr(harness, "LO_DIR", lo_dir)
+    monkeypatch.setattr(harness, "LO_PROFILE", tmp_path / "profile")
+    record = harness.run_lo_roundtrip(commented, True, shutil.which("soffice"), tmp_path / "work")
+    assert record["status"] == "pass"
+
+    doc = Document.open(lo_dir / commented.name, workspace_dir=tmp_path / "work_reopen", force_recreate=True)
+    try:
+        (comment,) = doc.list_comments()
+        assert comment.text == "Needs a citation"
+        assert comment.paragraph_ref is not None
+    finally:
+        doc.close(cleanup=True)
