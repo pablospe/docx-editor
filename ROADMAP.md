@@ -98,6 +98,10 @@ With a `w:bookmarkEnd`, `w:commentRangeEnd`, `w:moveFromRangeEnd` or similar bet
 
 `_attach_notes` runs after the edit is in the DOM. When the comment part is rejected (`XMLError`), the caller gets an exception instead of an `EditResult`, so it has no `group_id` to undo with, and a retry applies the edit twice. `batch_edit` rolls back; a single edit does not. Fix: either check the comment parts before the edit starts in every verb that takes `note=`, or keep the edit and report the note through the existing `UnanchoredNoteWarning`. Found by the review of #91.
 
+### 102. Rejecting an insertion takes the comment markers inside it  [comment detaches]
+
+`w:commentRangeStart`, `w:commentRangeEnd` and the reference run are placed inside the `w:ins` that wraps the anchored text, so rejecting that insertion removes them with it. A comment anchored wholly inside the insertion loses all three and is left in `comments.xml` with nothing anchoring it (`paragraph_ref` None); an anchor straddling the insertion's edge, or a whole-paragraph comment (#89) with a tracked insertion at one end, loses one marker and leaves half a pair. Accepting is fine. Pre-existing for the anchored form; measured while building #89, which inherits it. Fix in the reject path, not in placement: before a rejected `w:ins` is removed, hoist any comment markers it holds to the nearest surviving position in the paragraph (a comment whose whole anchor is rejected becomes a point comment there), and never leave a start without an end. Decide and document whether a comment whose entire anchor text was rejected should instead be deleted.
+
 ### 69. Return-leg reconciliation: which changesets survived?  [design]
 
 The product loop is agent proposes → human adjudicates in Word → document comes back; accepted revisions become plain text, rejected ones vanish, and there is no way to ask "which of my changesets survived?". A propose-time-vs-current compare keyed on changeset `w:date` + content. Design first; large.
