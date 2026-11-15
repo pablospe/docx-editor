@@ -3053,11 +3053,11 @@ class Document:
         That includes a part the package keeps under another name: comments
         are written into it, and a consumer finds it by its content type.
         """
-        on_disk = [
+        part_names = [
             ("/" + path.relative_to(self._workspace.workspace_path).as_posix(), part.content_type)
             for part, path in self._comment_parts_on_disk()
         ]
-        if not on_disk:
+        if not part_names:
             return
 
         content_types_path = self._workspace.workspace_path / "[Content_Types].xml"
@@ -3067,10 +3067,14 @@ class Document:
             author=self._workspace.author,
             on_save=self._workspace.mark_dirty,
         )
+        # OPC part names compare case-insensitively.
         declared = {
-            override_elem.getAttribute("PartName") for override_elem in editor.dom.getElementsByTagName("Override")
+            override_elem.getAttribute("PartName").lower()
+            for override_elem in editor.dom.getElementsByTagName("Override")
         }
-        missing = [(part_name, content_type) for part_name, content_type in on_disk if part_name not in declared]
+        missing = [
+            (part_name, content_type) for part_name, content_type in part_names if part_name.lower() not in declared
+        ]
         if not missing:
             return
 

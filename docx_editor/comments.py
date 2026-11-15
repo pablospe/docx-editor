@@ -205,12 +205,12 @@ class CommentManager:
         document element is the part's expected root. Anything else — a
         missing file, another kind of part such as ``document.xml``, an
         external target, two different parts for one type, one file for two
-        types — cannot be honoured: adopting it would put a second editor on a part the document
-        already edits, and a part created under the default name instead would
-        stay unwired, because its type already has a relationship. Each such
-        relationship is described in the second list, and
-        :meth:`_prepare_comment_parts` refuses to add a comment while it is
-        non-empty.
+        types — cannot be honoured: adopting it would put a second editor on a
+        part the document already edits, and a part created under the default
+        name instead would stay unwired, because its type already has a
+        relationship. Each such relationship is described in the second list,
+        and :meth:`_prepare_comment_parts` refuses to add a comment while it
+        is non-empty.
         """
         resolved: dict[str, set[Path]] = {part.rel_type: set() for part in COMMENT_PARTS}
         unusable: list[str] = []

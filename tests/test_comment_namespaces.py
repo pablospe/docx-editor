@@ -334,6 +334,21 @@ class TestCommentsPartUnderAnotherName:
         assert "check this" in read_part(out, "word/comments1.xml")
         assert read_part(out, "[Content_Types].xml").count(override) == 1
 
+    def test_override_differing_only_by_case_is_not_duplicated(self, simple_docx, tmp_path):
+        """Part names compare case-insensitively: the part is already typed."""
+        src = make_docx_with_comments(simple_docx, tmp_path, ONE_OLD_COMMENT, part_name="comments1.xml")
+        cased = tmp_path / "cased.docx"
+        types = read_part(src, "[Content_Types].xml")
+        assert 'PartName="/word/comments1.xml"' in types
+        replace_docx_parts(
+            src, cased, {"[Content_Types].xml": types.replace("/word/comments1.xml", "/word/Comments1.xml")}
+        )
+        out = tmp_path / "out.docx"
+        with Document.open(cased, author="Tester") as doc:
+            doc.save(out)
+
+        assert read_part(out, "[Content_Types].xml").lower().count("/word/comments1.xml") == 1
+
     def test_overlong_target_refuses_the_comment(self, simple_docx, tmp_path):
         src = add_relationship(simple_docx, tmp_path / "long.docx", COMMENTS_REL_TYPE, "a" * 300 + ".xml")
         with Document.open(src, author="Tester") as doc:
