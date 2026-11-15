@@ -418,6 +418,7 @@ class _InsertMixin(_RevisionManagerBase):
         if orig_rPr is None:
             return
         copy_rPr = _first_child_element(_first_child_element(new_p, "w:pPr"), "w:rPr")
+        assert copy_rPr is not None  # the copy is a clone of orig_pPr, which has one (narrows for ty)
         for tag in _RUN_TRACK_CHANGE_TAGS:
             mark = _first_child_element(orig_rPr, tag)
             clone = _first_child_element(copy_rPr, tag)

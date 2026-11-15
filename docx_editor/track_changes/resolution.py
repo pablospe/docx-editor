@@ -453,8 +453,8 @@ class _ResolutionMixin(_RevisionManagerBase):
         included) goes when the tail's mark carries one of the same tag. The
         tail's base properties survive only when its ``w:pPrChange`` moves
         with them (otherwise the head's are kept), so a revision embedded in
-        them — a ``w:ins`` or ``w:numberingChange`` in its ``w:numPr`` — goes
-        with them. Every other revision on either paragraph stays pending on
+        them — a ``w:ins`` or ``w:numberingChange`` in its ``w:numPr`` — is
+        kept or dropped with them. Every other revision on either paragraph stays pending on
         the merged paragraph.
 
         Args:
