@@ -2071,6 +2071,6 @@ class TestSearchResultAsEditTarget:
         """Passing an unchecked find_text() result through is a clear error."""
         doc = Document.open(clean_workspace)
         assert doc.find_text("no such text") is None
-        with pytest.raises(ValueError, match="must be a paragraph ref string"):
+        with pytest.raises(ValueError, match=r"replace\(\): search text must be a non-empty string, got None"):
             doc.replace(doc.find_text("no such text"), "x")  # type: ignore[arg-type]
         doc.close()

@@ -5,6 +5,7 @@ match edits, several raise AmbiguousTextError with a document-wide pick-list,
 none raises TextNotFoundError — and nothing is written unless the edit applies.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -260,3 +261,37 @@ def test_replace_all_batch_error_indexes_matches_in_document_order(simple_docx, 
         assert exc.value.operation_index == 0
         assert str(exc.value).startswith("Operation 0: match 0 (P1#")
         assert _xml(d) == before
+
+
+def test_replace_all_keeps_the_documents_quotes_like_replace(simple_docx, tmp_path):
+    # #96: a word typed the same on both sides is unchanged, so the document's
+    # curly apostrophe survives. replace_all must make the same minimal edit
+    # as replace, not rewrite the matched span in the caller's quote style.
+    xmls = []
+    for i, edit in enumerate([
+        lambda d: d.replace("don't say", "don't speak"),
+        lambda d: d.replace_all("don't say", "don't speak", expected_count=1),
+    ]):
+        sub = tmp_path / str(i)
+        sub.mkdir()
+        with _open(simple_docx, sub, _p("I don’t say it.")) as d:
+            edit(d)
+            assert d.get_visible_text().strip() == "I don’t speak it."
+            xmls.append(re.sub(r'w(16du)?:(date|dateUtc|id|rsid\w*)="[^"]*"', "", _xml(d)))
+    assert xmls[0] == xmls[1]
+
+
+@pytest.mark.parametrize(
+    ("call", "message"),
+    [
+        (lambda d: d.replace(123, "x"), r"replace\(\): search text must be a non-empty string"),
+        (lambda d: d.replace("", "x"), r"replace\(\): search text must be a non-empty string"),
+        (lambda d: d.delete(5), r"delete\(\): search text must be a non-empty string"),
+        (lambda d: d.replace_all("", "x", expected_count=1), r"replace_all\(\): search text must be"),
+        (lambda d: d.replace("30 days", "x", occurrence="1"), r"replace\(\): occurrence must be"),
+    ],
+)
+def test_bad_unscoped_target_names_the_call_not_the_paragraph(doc, call, message):
+    with pytest.raises(ValueError, match=message):
+        call(doc)
+    assert doc.list_revisions() == []

@@ -389,7 +389,7 @@ ref = doc.replace("Effective Date", "Commencement Date")   # unique in the docum
 doc.replace("30 days", "60 days", occurrence=2)            # the third match, counted document-wide
 ```
 
-The two forms prove different things. A scoped call proves the paragraph is as you last saw it (its hash); a document-wide call proves the text occurs exactly once. Both refuse rather than guess. `EditOperation` still requires `paragraph`: operations in a batch run against the document as earlier operations left it.
+The two forms prove different things. A scoped call proves the paragraph is as you last saw it (its hash); a document-wide call without `occurrence=` proves the text occurs exactly once (with `occurrence=N` it proves only that the N-th match exists, so prefer it right after reading the pick-list). Both refuse rather than guess. `EditOperation` still requires `paragraph`: operations in a batch run against the document as earlier operations left it.
 
 #### `replace_all(find, replace_with, *, expected_count, note=None)`
 
@@ -404,7 +404,7 @@ Replace every match of `find` document-wide as one atomic edit. `expected_count`
 
 **Returns:** list of [`EditResult`](#editresult), one per match in document order; matches in the same paragraph carry that paragraph's final ref.
 
-**Raises:** `ValueError` if `find` is empty or contains `\t`, `replace_with` is not a string, `expected_count` is not a non-negative integer, or matches overlap one another (`"aa"` in `"aaaa"` — replace those one at a time); [`MatchCountError`](#matchcounterror) on a count mismatch; [`BatchOperationError`](#batchoperationerror) if a replacement fails while applying, document unchanged — its `operation_index` is the failing match's position in document order. A `replace_with` containing `\n` fails this way when two matches share a paragraph (a paragraph splits once per batch); split those one at a time with `replace()`.
+**Raises:** `ValueError` if `find` is empty or contains `\t`, `replace_with` is not a string, `note` is neither None nor a non-empty control-character-free string, `expected_count` is not a non-negative integer, or matches overlap one another (`"aa"` in `"aaaa"` — replace those one at a time); [`MatchCountError`](#matchcounterror) on a count mismatch; [`BatchOperationError`](#batchoperationerror) if a replacement fails while applying, document unchanged — its `operation_index` is the failing match's position in document order. A `replace_with` containing `\n` fails this way when two matches share a paragraph (a paragraph splits once per batch); split those one at a time with `replace()`.
 
 **Example:**
 
@@ -1699,11 +1699,11 @@ from docx_editor import SearchResult
 
 `start`/`end` are offsets within the matched paragraph's visible text, **not**
 document-wide offsets; a tab mark counts as one character (`\t`), exactly as
-in `get_visible_text()`. Coordinate systems differ between search and edit:
-`find_text`'s `occurrence` counts matches document-wide (unless scoped with
-`paragraph=`), while edit methods count within one paragraph —
-`paragraph_occurrence` bridges the two, so always pass it alongside
-`paragraph_ref` when chaining into an edit — or skip the bookkeeping entirely
+in `get_visible_text()`. `occurrence` counts document-wide when `paragraph=`
+is omitted and within the paragraph when it is given, for `find_text` and the
+edit methods alike — `paragraph_occurrence` is the within-paragraph number, so
+always pass it alongside `paragraph_ref` when chaining into a scoped edit — or
+skip the bookkeeping entirely
 and pass the `SearchResult` itself as the edit's target (see below).
 `paragraph_ref` is computed at search time and — like refs from
 `list_paragraphs()` — goes stale once that paragraph is edited.
@@ -1742,11 +1742,8 @@ if match:
     #               paragraph=match.paragraph_ref,
     #               occurrence=match.paragraph_occurrence)
 
-# Sweep every match in one atomic batch (reversed() keeps same-paragraph ops in
-# the required descending-occurrence order):
-from docx_editor import EditOperation
-
-doc.batch_edit([EditOperation.replace(m, "60 days") for m in reversed(doc.find_all("30 days"))])
+# Replace every match in one atomic call, guarded by the count you expect:
+doc.replace_all("30 days", "60 days", expected_count=3)
 ```
 
 ---
@@ -1911,7 +1908,7 @@ Raised when a call given `expected_count` — [`find_all()`](#find_alltext-parag
 `next`: `"find_all('<text>')"` (with `paragraph=` when the search was scoped) — look at the matches, then decide.
 
 ```
-'30 days' matches 3 times in the document, expected 2. Nothing was changed:
+'30 days' matches 3 times in the document, expected 2. Matches:
   occurrence=0  P1#ab12 at char 18  "Payment is due in 30 days."
   ...
 ```

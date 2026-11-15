@@ -289,13 +289,16 @@ def _append_preview(msg: str, preview: str) -> str:
 
 @dataclass(frozen=True)
 class MatchLocation:
-    """One match listed on an ``AmbiguousTextError``.
+    """One match listed on an ``AmbiguousTextError`` or ``MatchCountError``.
 
     Attributes:
         occurrence: The value to pass as ``occurrence=`` to the call that
             raised, to select this match. It counts within the paragraph when
             that call was scoped with ``paragraph=``, and document-wide when it
             was not — so pass it back to the same call, unchanged in scope.
+            ``find_all``/``replace_all`` take no ``occurrence``: there it is
+            the match's number for a single edit in the same scope (e.g.
+            ``replace(text, new, occurrence=m.occurrence)``).
         paragraph_ref: Hash-anchored reference (``"P3#a7b2"``) of the
             paragraph holding the match, valid for the document as it was
             when the error was raised.

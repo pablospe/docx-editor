@@ -26,8 +26,10 @@ def _validate_edit_target(value: str, *, field: str, ctx: str) -> None:
     (ISSUES.md #6). Exact by construction: ``replace_with`` can never hold a
     tab, so affix trimming cannot narrow a tab-free target onto a tab.
     """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{ctx}search text must be a non-empty string, got {value!r}")
     _reject_control_chars(value, field=field, ctx=ctx, allow_tab=True)
-    if isinstance(value, str) and "\t" in value:
+    if "\t" in value:
         raise ValueError(
             f"{ctx}{field} contains a tab ('\\t') — tabs can be searched and matched but not deleted "
             f"or replaced yet; target the text on either side of the tab instead (ISSUES.md #6)."
@@ -488,10 +490,11 @@ class SearchResult:
     ``paragraph=`` argument of follow-up edits; like refs from
     ``list_paragraphs()``, it is valid until that paragraph is edited.
 
-    ``find_text``'s ``occurrence`` counts matches document-wide, while edit
-    methods count within one paragraph — ``paragraph_occurrence`` bridges the
-    two: pass it as the ``occurrence=`` of a follow-up edit to target exactly
-    the match ``find_text`` located.
+    ``find_text``'s ``occurrence`` counts matches document-wide, while an edit
+    scoped with ``paragraph=`` counts within that paragraph —
+    ``paragraph_occurrence`` bridges the two: pass it as the ``occurrence=``
+    of a follow-up edit scoped to ``paragraph_ref`` to target exactly the
+    match ``find_text`` located.
 
     ``paragraph_index`` is the 1-based document-order index of the containing
     paragraph — the same integer embedded in ``paragraph_ref`` — so consumers
@@ -583,8 +586,8 @@ def _paragraph_hint(field: str) -> str:
     """Trailing hint shared by the "paragraph ref is missing" messages.
 
     ``paragraph`` is optional in the *signatures* only because a SearchResult
-    target supplies it (see :func:`_resolve_search_target`); an edit still has to
-    know which paragraph it targets. Document's methods and EditOperation's
+    target supplies it (see :func:`_resolve_search_target`); an EditOperation
+    still has to know which paragraph it targets. Document's methods and EditOperation's
     constructors keep their own long-standing message prefixes (both are pinned
     by tests) and share this recovery hint, so the advice cannot drift.
     """

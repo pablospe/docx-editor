@@ -393,8 +393,8 @@ doc.replace("net", "gross", paragraph=new_ref)  # chain without list_paragraphs(
 
 # occurrence is 0-based everywhere (0 = first). Every method (edits, find_text,
 # add_comment) counts within the paragraph when paragraph= is given, and
-# document-wide when it is omitted. find_all bridges the two conventions: each
-# result's paragraph_occurrence is the within-paragraph number.
+# document-wide when it is omitted. Each find_all result's paragraph_occurrence
+# is the within-paragraph number, to pair with paragraph=paragraph_ref.
 #
 # OMITTING occurrence means "the target is unique in the search scope".
 # If it matches more than once, the edit raises AmbiguousTextError instead of

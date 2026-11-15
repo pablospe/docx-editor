@@ -62,6 +62,7 @@ from .xml_editor import (
     _compute_section_indexes,
     _escape_xml,
     _is_inside_element,
+    _require_valid_occurrence,
     body_paragraphs,
     build_text_map,
     compute_paragraph_hash,
@@ -634,12 +635,11 @@ class Document:
         return self._revision_manager.count_matches(text)
 
     def _locate_unscoped(
-        self, text: str, paragraph: str | None, occurrence: int | None
+        self, text: str, paragraph: str | None, occurrence: int | None, *, ctx: str
     ) -> tuple[str | None, int | None]:
         """Resolve an edit call's omitted ``paragraph`` to the one match it names.
 
-        With ``paragraph`` given (or a non-string target, left for the edit's
-        own validation to reject) this returns the pair unchanged. Otherwise it
+        With ``paragraph`` given this returns the pair unchanged. Otherwise it
         finds ``text`` document-wide — the unique match, or the
         ``occurrence``-th one counted across the whole document — and returns
         that match's paragraph ref and within-paragraph occurrence, so the
@@ -647,11 +647,12 @@ class Document:
         call and its result ref names the paragraph it touched. Raises
         AmbiguousTextError / TextNotFoundError (document-wide, as
         ``find_text`` counts) before anything is written. Callers validate
-        their inputs first, so a bad argument is a ValueError whatever the
-        document holds.
+        ``text`` first, and ``occurrence`` is checked here, so a bad argument
+        is a ValueError (prefixed with ``ctx``) whatever the document holds.
         """
-        if paragraph is not None or not isinstance(text, str):
+        if paragraph is not None:
             return paragraph, occurrence
+        _require_valid_occurrence(occurrence, ctx)
         located = self._revision_manager._locate_document_wide(text, occurrence)
         ref = f"P{located.paragraph_index}#{compute_paragraph_hash(located.paragraph)}"
         return ref, located.paragraph_occurrence
@@ -1571,7 +1572,7 @@ class Document:
         # Before the edit: a bad note must not leave an applied edit behind it.
         _validate_note(note, ctx="replace(): ")
         _validate_replace_inputs(find, replace_with, ctx="replace(): ")
-        paragraph, occurrence = self._locate_unscoped(find, paragraph, occurrence)
+        paragraph, occurrence = self._locate_unscoped(find, paragraph, occurrence, ctx="replace(): ")
         paragraph = _require_ref_string(paragraph, "'find'")
         change_id = self._revision_manager.replace_text(find, replace_with, occurrence=occurrence, paragraph=paragraph)
         group_id = self._revision_manager.group_id_of(change_id)
@@ -1644,8 +1645,11 @@ class Document:
         # Reversed: same-paragraph ops must run in descending occurrence order,
         # so no edit shifts the occurrence numbers of the matches still to come.
         ops = [
+            # The caller's ``find``, not ``m.text``: the scoped lookup folds
+            # quotes the same way, and affix trimming needs the caller's
+            # spelling to keep a word typed identically on both sides (#96).
             EditOperation.replace(
-                m.text, replace_with, paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence, note=note
+                find, replace_with, paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence, note=note
             )
             for m in reversed(matches)
         ]
@@ -1723,7 +1727,7 @@ class Document:
         )
         _validate_note(note, ctx="delete(): ")
         _validate_edit_target(text, field="'text'", ctx="delete(): ")
-        paragraph, occurrence = self._locate_unscoped(text, paragraph, occurrence)
+        paragraph, occurrence = self._locate_unscoped(text, paragraph, occurrence, ctx="delete(): ")
         paragraph = _require_ref_string(paragraph, "'text'")
         change_id = self._revision_manager.suggest_deletion(text, occurrence=occurrence, paragraph=paragraph)
         group_id = self._revision_manager.group_id_of(change_id)
@@ -1797,7 +1801,7 @@ class Document:
         )
         _validate_note(note, ctx="insert_after(): ")
         _validate_insert_inputs(anchor, text, ctx="insert_after(): ")
-        paragraph, occurrence = self._locate_unscoped(anchor, paragraph, occurrence)
+        paragraph, occurrence = self._locate_unscoped(anchor, paragraph, occurrence, ctx="insert_after(): ")
         paragraph = _require_ref_string(paragraph, "'anchor'")
         change_id = self._revision_manager.insert_text_after(anchor, text, occurrence=occurrence, paragraph=paragraph)
         group_id = self._revision_manager.group_id_of(change_id)
@@ -1871,7 +1875,7 @@ class Document:
         )
         _validate_note(note, ctx="insert_before(): ")
         _validate_insert_inputs(anchor, text, ctx="insert_before(): ")
-        paragraph, occurrence = self._locate_unscoped(anchor, paragraph, occurrence)
+        paragraph, occurrence = self._locate_unscoped(anchor, paragraph, occurrence, ctx="insert_before(): ")
         paragraph = _require_ref_string(paragraph, "'anchor'")
         change_id = self._revision_manager.insert_text_before(anchor, text, occurrence=occurrence, paragraph=paragraph)
         group_id = self._revision_manager.group_id_of(change_id)
