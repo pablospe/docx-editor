@@ -521,6 +521,11 @@ cid2 = doc.add_comment("term", "Anchored to the 2nd 'term' in P3",
 # Comment on a WHOLE paragraph: leave anchor_text out and pass its ref. The
 # range covers the paragraph's full visible text (pending insertions included).
 # Do not anchor on the paragraph's first words as a workaround.
+# The range runs first text character to last: a picture or footnote reference
+# at either end is outside it. If the paragraph starts or ends in a pending
+# insertion, the marker sits inside it and REJECTING that insertion removes the
+# marker (the comment stops displaying, or loses its paragraph_ref); accepting
+# keeps it. Same as any comment anchored on inserted text.
 cid3 = doc.add_comment(comment="Needs a citation", paragraph="P3#b2c4")
 # comment is always required, and a lone positional string is the ANCHOR:
 # add_comment("Needs a citation", paragraph=ref) raises CommentError. So do a

@@ -1834,7 +1834,9 @@ class TestAddCommentWholeParagraph:
     # What resolving the edge insertions does to the markers. A marker inside a
     # w:ins is unwrapped with it on accept and removed with it on reject, so a
     # rejected edge takes its marker along: (start parent, end parent,
-    # reference-run parent, paragraph_ref still set).
+    # reference-run parent, paragraph_ref still set). paragraph_ref follows the
+    # range start alone, so reject_end keeps it although the reference run is
+    # gone, and reject_start loses it although the reference run remains.
     EDGE_OUTCOMES = {
         "accept_all": ("w:p", "w:p", "w:p", True),
         "accept_start": ("w:p", "w:ins", "w:ins", True),
@@ -1851,9 +1853,10 @@ class TestAddCommentWholeParagraph:
 
         Pins the inherited behaviour: the markers live inside the edge
         ``w:ins`` wrappers, so accept keeps them (unwrapped into the paragraph)
-        and reject removes them with the insertion, leaving the comment body
-        listed but unanchored (``paragraph_ref`` is ``None`` once the range
-        start is gone).
+        and reject removes them with the insertion. The comment body stays
+        listed either way; ``paragraph_ref`` is ``None`` exactly when the range
+        start went (``reject_all``, ``reject_start``), and survives
+        ``reject_end`` even though the range end and reference run are gone.
         """
         import shutil
 
@@ -2002,9 +2005,9 @@ class TestAddCommentWholeParagraph:
         try:
             ref = find_ref(doc, "brown fox")
             with pytest.raises(CommentError, match="comment_text must be a string"):
-                doc._comment_manager.add_comment(paragraph=ref)
+                doc._comment_manager.add_comment(None, None, paragraph=ref)
             with pytest.raises(CommentError, match="comment_text must be a string"):
-                doc._comment_manager.add_comment("brown fox")
+                doc._comment_manager.add_comment("brown fox", None)
             assert _marker_count(doc) == 0
         finally:
             doc.close()

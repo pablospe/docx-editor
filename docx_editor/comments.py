@@ -303,8 +303,8 @@ class CommentManager:
 
     def add_comment(
         self,
-        anchor_text: str | None = None,
-        comment_text: str | None = None,
+        anchor_text: str | None,
+        comment_text: str | None,
         *,
         paragraph: str | None = None,
         occurrence: int | None = None,
@@ -324,7 +324,8 @@ class CommentManager:
         Args:
             anchor_text: Text to attach the comment to. ``None`` comments on
                 the whole paragraph named by ``paragraph``.
-            comment_text: The comment content. Required.
+            comment_text: The comment content. ``None`` is refused like any
+                other non-string.
             paragraph: Optional paragraph reference (e.g., ``"P3#a7b2"``) to
                 scope the search. ``None`` searches the whole document.
                 Required when ``anchor_text`` is ``None``.

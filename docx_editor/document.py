@@ -1987,7 +1987,11 @@ class Document:
         Omit ``anchor_text`` and pass ``paragraph`` to comment on a whole
         paragraph: the range covers the paragraph's full text as it reads with
         pending changes accepted (tracked insertions included, tracked
-        deletions excluded).
+        deletions excluded). It runs from the first text character to the
+        last, so a picture, footnote reference or field code at either end is
+        outside it; and where that first or last text is a pending insertion
+        the marker sits inside it, so rejecting that insertion removes the
+        marker too (as for any anchor on inserted text).
 
         Args:
             anchor_text: Text to attach the comment to, or a
@@ -2021,8 +2025,10 @@ class Document:
                 ``anchor_text`` is an empty string or not a string; or
                 ``anchor_text`` is ``None`` and ``paragraph`` is omitted or
                 names a paragraph with no text (empty, or only tracked
-                deletions). Raised before the document is touched.
-            ValueError: If ``occurrence`` is negative or not an integer;
+                deletions or non-text content such as a picture). Raised before
+                the document is touched.
+            ValueError: If ``paragraph`` is not a well-formed reference;
+                ``occurrence`` is negative or not an integer;
                 ``anchor_text`` is a SearchResult and
                 ``paragraph``/``occurrence`` was given too; or ``occurrence``
                 is given with ``anchor_text=None``.

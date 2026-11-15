@@ -543,6 +543,8 @@ def test_whole_paragraph_comment_survives_libreoffice(edited: Path, tmp_path: Pa
     try:
         (comment,) = doc.list_comments()
         assert comment.text == "Needs a citation"
-        assert comment.paragraph_ref is not None
+        # Still on the paragraph it was put on, not merely on some paragraph.
+        (reopened,) = [p for p in doc.list_paragraphs_structured(limit=None) if p.text == target.text]
+        assert comment.paragraph_ref == reopened.ref
     finally:
         doc.close(cleanup=True)

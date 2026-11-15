@@ -729,6 +729,8 @@ smart-quote splits, `w:ins` wrappers) are found. Text-box content is excluded, a
 
 To comment on a **whole paragraph**, omit `anchor_text` and name the paragraph: `doc.add_comment(comment="Needs a citation", paragraph=ref)`. The range covers the paragraph's full text as it reads with pending changes accepted — tracked insertions included, tracked deletions excluded — exactly as if that text had been passed as the anchor. There is no need to anchor on a prefix of the paragraph as a stand-in.
 
+The range runs from the paragraph's first text character to its last, so content with no text of its own at either end — a picture, a footnote reference, a field's code — is outside it. Where that first or last text is a pending tracked insertion the marker sits inside the insertion, as it does for any anchor on inserted text, and rejecting that insertion removes the marker with it: reject the trailing insertion and the comment is no longer displayed, reject the leading one and its [`paragraph_ref`](#comment) becomes `None`. Accepting keeps the comment intact.
+
 **Parameters:**
 
 - `anchor_text` (str | [`SearchResult`](#searchresult) | None): Text to attach the comment to, or a match from `find_text()`/`find_all()` — which also supplies `paragraph` and `occurrence` (pass neither with it). May contain `\t` (a tab mark) anywhere, including at either end — the comment range brackets the tab. `None` (the default) comments on the whole of `paragraph`. A single positional string is always the anchor, never the comment; an empty string is an error, not a whole-paragraph request.
@@ -736,7 +738,7 @@ To comment on a **whole paragraph**, omit `anchor_text` and name the paragraph: 
 - `paragraph` (str, optional): Paragraph reference (e.g. `P3#a7b2`) to scope the search. `None` searches the whole document. Required when `anchor_text` is `None`. Defaults to None.
 - `occurrence` (int | None): Which occurrence to anchor to, 0-based (0 = first), counted within `paragraph` when given and document-wide otherwise. Omitted → the anchor must be unique in the search scope, else [`AmbiguousTextError`](#ambiguoustexterror). Not accepted with `anchor_text=None` (`ValueError`).
 
-**Raises** (whole-paragraph form), all before the document is touched: [`CommentError`](#commenterror) if `paragraph` is omitted or the paragraph has no text to anchor on (empty, or holding only tracked deletions or non-text content such as a picture); [`HashMismatchError`](#hashmismatcherror) / [`ParagraphIndexError`](#paragraphindexerror) for a stale or out-of-range ref. A whitespace-only paragraph has text and is commentable.
+**Raises** (whole-paragraph form), all before the document is touched: [`CommentError`](#commenterror) if `paragraph` is omitted or the paragraph has no text to anchor on (empty, or holding only tracked deletions or non-text content such as a picture); [`HashMismatchError`](#hashmismatcherror) / [`ParagraphIndexError`](#paragraphindexerror) for a stale or out-of-range ref; `ValueError` for a malformed `paragraph` ref or any `occurrence=`. A whitespace-only paragraph has text and is commentable.
 
 **Returns:** The comment ID (int). IDs are allocated sequentially starting at 0 in a document with no existing comments — always use the returned ID rather than guessing.
 
