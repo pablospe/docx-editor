@@ -28,6 +28,7 @@ from .dom import (
 from .models import (
     _MARKUP_KIND_BY_TAG,
     _REVISION_TYPE_BY_TAG,
+    CHANGE_RECORD_TAGS,
     HANDLED_REVISION_TAGS,
     UNHANDLED_REVISION_TAGS,
     Revision,
@@ -172,14 +173,14 @@ class _ListingMixin(_RevisionManagerBase):
         ``[ins#{id}:{author}]...[/ins]`` / ``[del#{id}:{author}]...[/del]``,
         where ``{id}`` is the id ``accept_revision``/``reject_revision`` take
         (so a raw ``w:id="007"`` renders ``#7``) and ``#?`` marks one they
-        cannot reach at all (outside a change record those are
-        ``list_unhandled_revisions()`` rows; a mark recorded *inside* one
-        renders here but is not listed there — ROADMAP.md #86) —
+        cannot reach at all (those are ``list_unhandled_revisions()`` rows) —
         nesting included (e.g. ``[ins#1:A]kept [del#9:B]gone[/del][/ins]``).
         The two halves of a content move render the same way as
         ``[moveFrom#{id}:{author}]...[/moveFrom]`` /
         ``[moveTo#{id}:{author}]...[/moveTo]``. A ``w:pPrChange`` has no text
-        and does not appear.
+        and does not appear, and neither does anything recorded inside
+        a change record: that is previous state, which no listing reports and
+        no id reaches.
 
         A human/agent verification view, not a parseable format: author
         names are not escaped and tabs/breaks are not rendered (unlike
@@ -211,6 +212,8 @@ class _ListingMixin(_RevisionManagerBase):
                     parts.append(get_text_node_data(child))
                 elif child.tagName == _TEXTBOX_CONTENT:
                     continue  # box content belongs to the box, not this paragraph
+                elif child.tagName in CHANGE_RECORD_TAGS:
+                    continue  # recorded previous state, not pending markup
                 else:
                     parts.append(render(child))
             return "".join(parts)

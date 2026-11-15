@@ -1495,7 +1495,8 @@ second time alongside the change itself.
 The resolved count follows the same rule: a `w:ins`, `w:del` or move half
 recorded inside a change record is previous state, so it is not listed by
 `list_revisions()`, `accept_revision()`/`reject_revision()` return `False` for
-its id, and `accept_all()`/`reject_all()` do not count it. The one exception is
+its id, `accept_all()`/`reject_all()` do not count it, and
+`get_markup_text()` does not render it. The one exception is
 a mark recorded in a `w:pPrChange`'s previous numbering properties: rejecting
 that change restores them, so the mark becomes a pending revision —
 `reject_all()` resolves it in the same call (when its `author=` filter, if any,

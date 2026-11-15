@@ -236,6 +236,16 @@ RECORDED_MOVE_WITH_STRAY_RANGE_MARK = _document(
     "<w:p><w:r><w:t>Second</w:t></w:r></w:p>"
 )
 
+# Nonconforming: a w:del carrying text, recorded in a run's w:rPrChange. No
+# text view may surface the recorded text.
+RECORDED_DELETION_WITH_TEXT = _document(
+    "<w:p><w:r><w:rPr>"
+    f'<w:rPrChange w:id="60" {_ANN}><w:rPr>'
+    f'<w:del w:id="61" {_BOB}><w:r><w:delText>GHOST</w:delText></w:r></w:del>'
+    "</w:rPr></w:rPrChange>"
+    "</w:rPr><w:t>Real</w:t></w:r></w:p>"
+)
+
 # w:ins/w:del as *structural* markers: a deleted paragraph mark and a pair of
 # table-row markers. These are handled tags, so they never enter .unhandled —
 # the census's ins_del_contexts is what makes them visible (ISSUES.md #68).
@@ -939,6 +949,28 @@ class TestHandledMarksInsideChangeRecords:
         assert "live insertion" in body
         assert body.count('<w:ins w:id="7"') == 1
         assert '<w:rPrChange w:id="90"' in body
+
+    @pytest.mark.parametrize(
+        ("body", "markup"),
+        [
+            (INS_INSIDE_PARA_RPRCHANGE, "First\nSecond"),
+            (INS_INSIDE_PPRCHANGE_RPR, "First\nSecond"),
+            (INS_INSIDE_PPRCHANGE_NUMPR, "First\nSecond"),
+            (RECORDED_AND_LIVE_SHARE_ID, "Before [ins#7:Ann]live insertion[/ins]\nSecond"),
+            (RECORDED_DELETION_WITH_TEXT, "Real"),
+        ],
+        ids=["para-rPrChange", "pPrChange-rPr", "pPrChange-numPr", "shared-id", "recorded-text"],
+    )
+    def test_markup_text_does_not_render_a_recorded_mark(self, make_docx, body, markup):
+        """Every id the markup view shows is one accept/reject_revision takes."""
+        with _open(make_docx(body, "recorded_markup")) as doc:
+            assert doc.get_markup_text() == markup
+            assert doc.get_visible_text() == markup.replace("[ins#7:Ann]", "").replace("[/ins]", "")
+
+    def test_markup_text_shows_a_mark_once_rejection_made_it_live(self, make_docx):
+        with _open(make_docx(INS_INSIDE_PPRCHANGE_NUMPR, "numpr_markup")) as doc:
+            assert doc.reject_revision(90) is True
+            assert doc.get_markup_text() == "[ins#5:Bob][/ins]First\nSecond"
 
     def test_change_record_itself_is_listed_but_its_recorded_mark_is_not(self, make_docx):
         """w:pPrChange is both a handled tag and a change record."""
