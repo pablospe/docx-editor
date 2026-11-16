@@ -90,6 +90,10 @@ A producer may bind the Word 2010 namespace to any prefix. stetdoc 0.9.3 declare
 
 `_remove_from_insertion`'s whole-insertion branch (`track_changes/delete.py`) drops the entire `w:ins` when all of its text is deleted, including any `w:fldChar` / `w:instrText` it holds. A field can be left without its `end`, or an index-entry (XE) field can vanish silently. Pre-existing; found by the review of #63c. Fix: do not take the whole-removal shortcut when the insertion holds a `w:fldChar`; remove the text runs and keep the field markup.
 
+### 109. One tracked deletion per run fragment makes a redline noisier than it needs to be
+
+A replace or delete whose target spans several formatting runs writes one `w:del` per run fragment: replacing "the Republic of Singapore" produced three or four adjacent deletions where stetdoc writes one. They read as one change in Word and share a group, but a reviewer clicking through revisions one at a time gets three stops, and `list_revisions()` lists three rows. Seen in the agent comparison of 2026-11-16. Fix: emit a single `w:del` wrapping the consecutive runs when they are siblings with nothing between them (same for `w:ins` where the inserted text is one run today). Check how groups, `occurrence` counting, own-insertion amendment and reject/accept treat a multi-run `w:del` before changing the writer; Word itself writes multi-run revision elements, so the read side should already cope.
+
 ### 69. Return-leg reconciliation: which changesets survived?  [design]
 
 The product loop is agent proposes → human adjudicates in Word → document comes back; accepted revisions become plain text, rejected ones vanish, and there is no way to ask "which of my changesets survived?". A propose-time-vs-current compare keyed on changeset `w:date` + content. Design first; large.
