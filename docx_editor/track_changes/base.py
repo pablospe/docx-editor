@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from typing import Literal
 from xml.dom.minidom import Element
 
-from ..xml_editor import DocxXMLEditor, ParagraphRef, TextMap, TextMapMatch, TextPosition
+from ..xml_editor import DocxXMLEditor, FieldResultIndex, ParagraphRef, TextMap, TextMapMatch, TextPosition
 from .models import GroupSource, Revision, _GroupCapture, _LocatedMatch, _RegistrySnapshot
 
 
@@ -61,7 +61,27 @@ class _RevisionManagerBase:
     def _resolve_paragraph(self, ref: ParagraphRef, paragraphs: list[Element] | None = None):
         raise NotImplementedError
 
-    def _locate_in_paragraph(self, paragraph, paragraph_ref: str, text: str, occurrence: int | None) -> TextMapMatch:
+    def _locate_in_paragraph(
+        self,
+        paragraph,
+        paragraph_ref: str,
+        text: str,
+        occurrence: int | None,
+        *,
+        fields: FieldResultIndex | None = None,
+        ctx: str = "",
+    ) -> TextMapMatch:
+        raise NotImplementedError
+
+    def _refuse_split_op(
+        self,
+        match: TextMapMatch,
+        action: str,
+        new_text: str,
+        fields: FieldResultIndex | None,
+        paragraph_ref: str | None,
+        ctx: str,
+    ) -> None:
         raise NotImplementedError
 
     def _get_run_info(self, node) -> tuple[Element | None, str]:
@@ -107,7 +127,7 @@ class _RevisionManagerBase:
     def _apply_paragraph_splits(self, p1, split_pos: int, segments: list[str]) -> int:
         raise NotImplementedError
 
-    def _locate_document_wide(self, text: str, occurrence: int | None = None) -> _LocatedMatch:
+    def _locate_document_wide(self, text: str, occurrence: int | None = None, *, ctx: str = "") -> _LocatedMatch:
         raise NotImplementedError
 
     def _group_positions_by_ins(self, positions: list) -> list[tuple[Element | None, list[TextPosition]]]:

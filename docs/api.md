@@ -404,7 +404,7 @@ Replace every match of `find` document-wide as one atomic edit. `expected_count`
 
 **Returns:** list of [`EditResult`](#editresult), one per match in document order; matches in the same paragraph carry that paragraph's final ref.
 
-**Raises:** `ValueError` if `find` is empty or contains `\t`, `replace_with` is not a string, `note` is neither None nor a non-empty control-character-free string, `expected_count` is not a non-negative integer, matches overlap one another (`"aa"` in `"aaaa"`), or `replace_with` contains `\n` and two matches share a paragraph (a paragraph splits once per call) — replace those one at a time; [`MatchCountError`](#matchcounterror) on a count mismatch; [`BatchOperationError`](#batchoperationerror) if a replacement fails while applying, document unchanged — its `operation_index` is the failing match's position in document order.
+**Raises:** `ValueError` if `find` is empty or contains `\t`, `replace_with` is not a string, `note` is neither None nor a non-empty control-character-free string, `expected_count` is not a non-negative integer, matches overlap one another (`"aa"` in `"aaaa"`), or `replace_with` contains `\n` and two matches share a paragraph (a paragraph splits once per call) — replace those one at a time; [`MatchCountError`](#matchcounterror) on a count mismatch; [`BatchOperationError`](#batchoperationerror) if a replacement fails while applying (a match inside a field result among them: `original` is a [`FieldResultError`](#fieldresulterror)), document unchanged — its `operation_index` is the failing match's position in document order.
 
 **Example:**
 
@@ -538,6 +538,36 @@ if match := doc.find_text("Section 6"):
 > Because tabs take part in paragraph hashes, refs of tab-bearing paragraphs
 > differ from those computed before tabs were mapped (refs are session-scoped
 > anyway).
+
+> **Field results are not editable.** Text Word generates from a field — a
+> table of contents entry, a page number, a cross-reference, a document
+> property — is refused by `replace`, `delete`, `insert_after`,
+> `insert_before` (scoped or not), `split_paragraph`, `rewrite_paragraph`,
+> `replace_all` and both batch methods with a
+> [`FieldResultError`](#fieldresulterror), before anything is written
+> (`replace_all` and the batches wrap it as a `BatchOperationError`'s
+> `original`, and refuse the whole call if any one match is in a field): Word regenerates field results when fields update, so the tracked
+> change would silently disappear. Any matched character inside a result
+> refuses, so a target that merely spans a field (`"section Overview"` where
+> `Overview` is a REF) is refused too: narrow it to the text outside the
+> field, or change what the field shows at its source (the heading, bookmark
+> or property it reads). A paragraph split (`\n` in an insert, replace or
+> rewrite) right before a field result is refused too, since it would cut the
+> field in two. `rewrite_paragraph` diffs by word, so a changed word that
+> touches a field (`"5."` → `"5!"` after a page number, or an insertion
+> before a field that starts the paragraph) is refused as a whole: make that
+> change with `replace`/`insert_after` on the characters outside the field.
+> Text cannot be appended to a paragraph that ends in a field (`"Page 3"` →
+> `"Page 3 of 10"` with `3` a PAGE field): it would be written inside the
+> field's result, so it is refused. A new paragraph after it is fine:
+> `rewrite_paragraph(ref, old_text + "\nNew paragraph")`.
+> Three kinds of result stay editable because Word keeps them on update:
+> `HYPERLINK` display text, a legacy text form field's value (`FORMTEXT`) and
+> locked fields (`w:fldLock="true"`). Searching is unaffected — `find_text`/`find_all`
+> still match field results. Edits *outside* a field leave its result stale
+> until Word updates fields: inserting a page of text above a TOC does not
+> change the page numbers it shows. A comment anchored inside a field result
+> (`add_comment` does not refuse) can be lost when Word updates fields.
 
 #### Rationale notes
 
@@ -713,7 +743,7 @@ stale, the entire batch is rejected before any edits are applied.
 
 **Warns:** [`UnanchoredNoteWarning`](#unanchorednotewarning) if `note=` was given but the edit created no revision to anchor it on — the edit still applies.
 
-**Raises:** [`BatchOperationError`](#batchoperationerror) — the only exception a non-dry-run batch raises for a failing operation, whatever the underlying cause (stale hash, malformed ref, missing text, ambiguous target). `operation_index` names the failing op; `original` (also `__cause__`) holds the underlying typed exception. The batch is atomic: nothing is applied on failure.
+**Raises:** [`BatchOperationError`](#batchoperationerror) — the only exception a non-dry-run batch raises for a failing operation, whatever the underlying cause (stale hash, malformed ref, missing text, ambiguous target, a target inside a field result). `operation_index` names the failing op; `original` (also `__cause__`) holds the underlying typed exception. The batch is atomic: nothing is applied on failure.
 
 **Example:**
 
@@ -1900,6 +1930,35 @@ try:
 except AmbiguousTextError as e:
     m = next(m for m in e.matches if "term of the lease" in m.context)
     doc.replace("term", "clause", paragraph=m.paragraph_ref, occurrence=m.paragraph_occurrence)
+```
+
+### `FieldResultError`
+
+Raised when an edit target lands inside a field result — see
+[Field results are not editable](#track-changes-methods). Subclasses both
+`DocxEditError` and `ValueError`. Raised before anything is changed; inside
+`batch_edit`/`batch_rewrite`/`replace_all` it arrives as a
+`BatchOperationError`'s `original`, and a dry run reports it as an invalid
+result. Structured fields:
+
+- `text`: the edit target (search text, anchor, or the rewritten span), or
+  the new text when a `\n` edit is refused for where it would land.
+- `field_code`: the field's instruction, whitespace-normalized
+  (`PAGEREF _Toc123 \h`).
+- `field_type`: the instruction's first word (`PAGEREF`). For a field nested
+  in another's result it is the outermost regenerated one — a page number
+  inside a TOC entry reports `TOC`, whose update regenerates it.
+- `paragraph_ref`: the ref of the paragraph the refused edit is in — the
+  scoped ref, or the located match's paragraph for a document-wide edit.
+- `next`: always None — no single call resolves it.
+
+```python
+from docx_editor.exceptions import FieldResultError
+
+try:
+    doc.replace("section Overview", "section Summary", paragraph=ref)
+except FieldResultError:
+    doc.replace("section", "part", paragraph=ref)   # edit only the text outside the field
 ```
 
 ### `MatchCountError`

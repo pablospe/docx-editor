@@ -10,6 +10,7 @@ from ..xml_editor import (
     TextMapMatch,
     _escape_xml,
     build_text_map,
+    field_result_index,
     get_rPr_xml,
     rebuild_run_fragments,
     render_plain_wt,
@@ -23,6 +24,7 @@ from .dom import (
     _paragraph_mark_ins,
     _set_xml_space_preserve,
 )
+from .locate import _located_ref
 from .models import _RUN_TRACK_CHANGE_TAGS, _validate_insert_inputs
 
 
@@ -49,6 +51,9 @@ class _InsertMixin(_RevisionManagerBase):
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the search scope
+            FieldResultError: If any anchor character is inside a field result,
+                or a ``\\n`` in the new text would split the paragraph (or write its
+                first line) inside one
             HashMismatchError: If the paragraph hash doesn't match
         """
         return self._insert_text(anchor, text, position="after", occurrence=occurrence, paragraph=paragraph)
@@ -75,6 +80,9 @@ class _InsertMixin(_RevisionManagerBase):
             TextNotFoundError: If the anchor text is not found or occurrence doesn't exist
             AmbiguousTextError: If ``occurrence`` is omitted and ``anchor``
                 matches more than once in the search scope
+            FieldResultError: If any anchor character is inside a field result,
+                or a ``\\n`` in the new text would split the paragraph (or write its
+                first line) inside one
             HashMismatchError: If the paragraph hash doesn't match
         """
         return self._insert_text(anchor, text, position="before", occurrence=occurrence, paragraph=paragraph)
@@ -88,16 +96,21 @@ class _InsertMixin(_RevisionManagerBase):
         paragraph: str | None = None,
     ) -> int:
         """Insert text before or after anchor with tracked changes."""
-        _validate_insert_inputs(anchor, text, ctx=f"insert_{position}(): ")
+        ctx = f"insert_{position}(): "
+        _validate_insert_inputs(anchor, text, ctx=ctx)
         with self._changeset(), self._grouped():
             if paragraph is not None:
                 ref = ParagraphRef.parse(paragraph)
                 p = self._resolve_paragraph(ref)
-                match = self._locate_in_paragraph(p, paragraph, anchor, occurrence)
+                fields = field_result_index(self.editor.dom)
+                match = self._locate_in_paragraph(p, paragraph, anchor, occurrence, fields=fields, ctx=ctx)
+                self._refuse_split_op(match, f"insert_{position}", text, fields, paragraph, ctx)
                 return self._insert_near_match(match, text, position)
 
-            match = self._locate_document_wide(anchor, occurrence).match
-            return self._insert_near_match(match, text, position)
+            located = self._locate_document_wide(anchor, occurrence, ctx=ctx)
+            if "\n" in text:
+                self._refuse_split_op(located.match, f"insert_{position}", text, None, _located_ref(located), ctx)
+            return self._insert_near_match(located.match, text, position)
 
     def _insert_near_match(self, match: TextMapMatch, text: str, position: Literal["before", "after"]) -> int:
         """Insert text before/after a match, splitting the edge w:t at the match boundary.

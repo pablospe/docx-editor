@@ -380,3 +380,15 @@ def _occurrence_in_text_map(tm: TextMap, elem, text: str) -> int | None:
 def _set_xml_space_preserve(wt_elem) -> None:
     """Set xml:space='preserve' on a w:t element to preserve whitespace."""
     wt_elem.setAttribute("xml:space", "preserve")
+
+
+def _fld_chars_around(container, edge_node) -> tuple[bool, bool]:
+    """Whether ``container`` holds a ``w:fldChar`` before / after ``edge_node`` in document order."""
+    before = after = seen = False
+    for el in container.getElementsByTagName("*"):
+        if el is edge_node:
+            seen = True
+        elif el.tagName == "w:fldChar":
+            after = after or seen
+            before = before or not seen
+    return before, after

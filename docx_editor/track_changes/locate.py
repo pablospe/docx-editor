@@ -6,6 +6,7 @@ from xml.dom.minidom import Element
 from ..exceptions import (
     MAX_REPORTED_MATCHES,
     AmbiguousTextError,
+    FieldResultError,
     HashMismatchError,
     MatchCountError,
     MatchLocation,
@@ -15,17 +16,22 @@ from ..exceptions import (
     _truncate_preview,
 )
 from ..xml_editor import (
+    FieldResultIndex,
     ParagraphRef,
+    TextMap,
     TextMapMatch,
+    TextPosition,
     _require_valid_occurrence,
     body_paragraphs,
     build_text_map,
     compute_paragraph_hash,
     count_in_text_map,
+    field_result_index,
     find_in_text_map,
     fold_quotes,
 )
 from .base import _RevisionManagerBase
+from .dom import _ancestor_paragraph
 from .models import SearchResult, _LocatedMatch, _validate_expected_count
 
 
@@ -67,6 +73,92 @@ def _match_locations(
     return found
 
 
+def _refuse_field_result(
+    positions: Iterable[TextPosition], fields: FieldResultIndex, text: str, paragraph_ref: str | None, ctx: str
+) -> None:
+    """Raise :class:`FieldResultError` if any position sits in a field result (see ``field_result_index``).
+
+    Any matched character counts, for every verb: a target that merely spans
+    a field is refused too, and the message says to narrow it.
+    """
+    for pos in positions:
+        _raise_if_field(pos.node, fields, text, paragraph_ref, ctx)
+
+
+def _located_ref(located: _LocatedMatch) -> str:
+    """The ``P<n>#<hash>`` ref of a document-wide match's paragraph."""
+    return f"P{located.paragraph_index}#{compute_paragraph_hash(located.paragraph)}"
+
+
+def _raise_if_field(key, fields: FieldResultIndex, text: str, paragraph_ref: str | None, ctx: str) -> None:
+    instr = fields.get(key)
+    if instr is not None:
+        raise FieldResultError(text, instr, paragraph_ref=paragraph_ref, ctx=ctx)
+
+
+def _refuse_text_into_field(
+    paragraph,
+    text_map: TextMap,
+    start: int,
+    end: int,
+    fields: FieldResultIndex,
+    text: str,
+    paragraph_ref: str | None,
+    ctx: str,
+) -> None:
+    """Raise :class:`FieldResultError` if text written in place of ``[start, end)`` lands in a field result.
+
+    ``start == end`` is a plain insertion. As ``_rewrite_insert_at`` places
+    it, the text attaches before the character at ``end``; at the paragraph
+    end, after the character before ``start``; with no text left in the
+    paragraph, at its end — inside whatever field spans it (recorded under
+    the paragraph, see ``field_result_index``).
+    """
+    attach = text_map.positions[end : end + 1] or text_map.positions[:start][-1:]
+    _raise_if_field(attach[0].node if attach else paragraph, fields, text, paragraph_ref, ctx)
+
+
+def _refuse_split_into_field(
+    paragraph,
+    text_map: TextMap,
+    pos: int,
+    fields: FieldResultIndex,
+    text: str,
+    paragraph_ref: str | None,
+    ctx: str,
+) -> None:
+    """Raise :class:`FieldResultError` if a ``\\n`` split at ``pos`` would land inside a field result.
+
+    Mid-paragraph the split lands before ``positions[pos]``; at the paragraph
+    end it lands inside whatever field is still open there (a TOC opened in
+    this paragraph), which ``field_result_index`` records under the paragraph.
+    """
+    key = text_map.positions[pos].node if pos < len(text_map.positions) else paragraph
+    _raise_if_field(key, fields, text, paragraph_ref, ctx)
+
+
+def _refuse_split_edit(
+    paragraph,
+    text_map: TextMap,
+    start: int,
+    end: int,
+    new_text: str,
+    fields: FieldResultIndex,
+    paragraph_ref: str | None,
+    ctx: str,
+) -> None:
+    """Refuse a ``\\n`` edit writing ``new_text`` in place of ``[start, end)`` if any part lands in a field.
+
+    Segment 0 is written like any insertion (:func:`_refuse_text_into_field`)
+    and the split cuts at ``end`` (:func:`_refuse_split_into_field`). Shared by
+    the edit verbs, ``batch_edit`` (apply and dry run) and the rewrite
+    preflight, so the checks cannot drift apart.
+    """
+    if new_text.split("\n", 1)[0]:
+        _refuse_text_into_field(paragraph, text_map, start, end, fields, new_text, paragraph_ref, ctx)
+    _refuse_split_into_field(paragraph, text_map, end, fields, new_text, paragraph_ref, ctx)
+
+
 class _LocateMixin(_RevisionManagerBase):
     def _resolve_paragraph(self, ref: ParagraphRef, paragraphs: list[Element] | None = None):
         """Resolve a ParagraphRef to its <w:p> element, validating the hash.
@@ -96,7 +188,16 @@ class _LocateMixin(_RevisionManagerBase):
             raise HashMismatchError(ref.index, ref.hash, actual_hash, preview)
         return p
 
-    def _locate_in_paragraph(self, paragraph, paragraph_ref: str, text: str, occurrence: int | None) -> TextMapMatch:
+    def _locate_in_paragraph(
+        self,
+        paragraph,
+        paragraph_ref: str,
+        text: str,
+        occurrence: int | None,
+        *,
+        fields: FieldResultIndex | None = None,
+        ctx: str = "",
+    ) -> TextMapMatch:
         """The single scoped find-or-raise path shared by every paragraph-scoped edit.
 
         Args:
@@ -105,6 +206,9 @@ class _LocateMixin(_RevisionManagerBase):
             text: Text to locate.
             occurrence: Which occurrence (0 = first). None means the text must
                 be unique within the paragraph.
+            fields: A ``field_result_index`` snapshot, threaded in by batch
+                callers so a batch builds it once. None builds it fresh.
+            ctx: The calling verb's message prefix (``"replace(): "``).
 
         Raises:
             ValueError: If ``occurrence`` is negative or not an integer, or ``text`` is not a
@@ -113,6 +217,7 @@ class _LocateMixin(_RevisionManagerBase):
                 of range (then with ``occurrence``/``total_occurrences`` set).
             AmbiguousTextError: If ``occurrence`` is None and the text matches
                 more than once in the paragraph.
+            FieldResultError: If any matched character is inside a field result.
         """
         _require_valid_occurrence(occurrence)
         if not isinstance(text, str) or not text:
@@ -145,7 +250,38 @@ class _LocateMixin(_RevisionManagerBase):
                 total_occurrences=total,
                 matches=_match_locations([(0, paragraph)], text, scoped_ref=paragraph_ref),
             )
+        if fields is None:
+            fields = field_result_index(self.editor.dom)
+        _refuse_field_result(match.positions, fields, text, paragraph_ref, ctx)
         return match
+
+    def _refuse_split_op(
+        self,
+        match: TextMapMatch,
+        action: str,
+        new_text: str,
+        fields: FieldResultIndex | None,
+        paragraph_ref: str | None,
+        ctx: str,
+    ) -> None:
+        """Refuse a located ``replace``/``insert_*`` whose ``new_text`` holds a ``\\n`` landing in a field.
+
+        Called right after the locate by every path that applies or validates
+        one (the verbs, ``batch_edit`` and its dry run), so they refuse alike.
+        A replace writes in place of the match; an insert at its end or start.
+        None ``fields`` builds the index (only when there is a ``\\n``).
+        """
+        if "\n" not in new_text:
+            return
+        paragraph = _ancestor_paragraph(match.positions[0].node)
+        start, end = {
+            "replace": (match.start, match.end),
+            "insert_after": (match.end, match.end),
+            "insert_before": (match.start, match.start),
+        }[action]
+        if fields is None:
+            fields = field_result_index(self.editor.dom)
+        _refuse_split_edit(paragraph, build_text_map(paragraph), start, end, new_text, fields, paragraph_ref, ctx)
 
     def count_matches(self, text: str) -> int:
         """Count how many times a text string appears in the document.
@@ -163,7 +299,7 @@ class _LocateMixin(_RevisionManagerBase):
             count += count_in_text_map(build_text_map(paragraph), text)
         return count
 
-    def _locate_document_wide(self, text: str, occurrence: int | None = None) -> _LocatedMatch:
+    def _locate_document_wide(self, text: str, occurrence: int | None = None, *, ctx: str = "") -> _LocatedMatch:
         """Document-wide nth-occurrence lookup via text maps.
 
         Returns the match together with its paragraph's identity (index and
@@ -182,6 +318,7 @@ class _LocateMixin(_RevisionManagerBase):
                 exist; ``total_occurrences`` matches :meth:`count_matches`.
             AmbiguousTextError: If ``occurrence`` is None and the text matches
                 more than once in the document.
+            FieldResultError: If any matched character is inside a field result.
         """
         _require_valid_occurrence(occurrence)
         if not isinstance(text, str) or not text:
@@ -201,6 +338,10 @@ class _LocateMixin(_RevisionManagerBase):
                     total_occurrences=total,
                     matches=_match_locations(enumerate(body_paragraphs(self.editor.dom), start=1), text),
                 )
+        fields = field_result_index(self.editor.dom)
+        if any(pos.node in fields for pos in located.match.positions):
+            # Name the paragraph the refused match is in, as a scoped refusal does.
+            _refuse_field_result(located.match.positions, fields, text, _located_ref(located), ctx)
         return located
 
     def _find_across_boundaries_located(self, text: str, occurrence: int = 0) -> _LocatedMatch | None:
@@ -272,7 +413,7 @@ class _LocateMixin(_RevisionManagerBase):
             start=located.match.start,
             end=located.match.end,
             text=located.match.text,
-            paragraph_ref=f"P{located.paragraph_index}#{compute_paragraph_hash(located.paragraph)}",
+            paragraph_ref=_located_ref(located),
             paragraph_occurrence=located.paragraph_occurrence,
             spans_revision=located.match.spans_boundary,
             paragraph_index=located.paragraph_index,

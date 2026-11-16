@@ -9,9 +9,10 @@ import io
 import random
 import re
 import zlib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from pathlib import Path
@@ -1055,6 +1056,148 @@ def render_plain_wt(wt, rPr_xml: str) -> list[str]:
     if not wt_text:
         return []
     return [f"<w:r>{rPr_xml}<w:t>{_escape_xml(wt_text)}</w:t></w:r>"]
+
+
+_ON_VALUES = ("true", "1", "on")
+"""``ST_OnOff`` spellings of true (ECMA-376 §17.18.66)."""
+
+_FIELD_EXEMPT_TYPES = frozenset({"HYPERLINK", "FORMTEXT"})
+"""Field types whose result Word keeps on update: hyperlink display text and a legacy text form field's typed value."""
+
+FieldResultIndex = dict[object, str]
+"""``field_result_index`` output: result ``w:t`` / ``w:tab`` node -> its field's instruction.
+
+A ``w:p`` whose end lies inside a field result is a key too (see :func:`field_result_index`).
+
+Keyed like :attr:`TextPosition.node` (``object``) so a position's node looks up directly."""
+
+
+@dataclass
+class _FieldFrame:
+    """One open complex field during :func:`field_result_index`'s walk."""
+
+    instr: list[str]
+    locked: bool
+    in_result: bool = False
+    regenerated: bool = False
+    nodes: list[Element] = dataclass_field(default_factory=list)
+
+
+def _field_regenerated(instr: str, locked: bool) -> bool:
+    """True when Word rewrites this field's result on update (not locked, not an exempt type)."""
+    words = instr.split()
+    return not locked and bool(words) and words[0].upper() not in _FIELD_EXEMPT_TYPES
+
+
+def _regenerating(frames: Iterable[_FieldFrame]) -> _FieldFrame | None:
+    """The first frame in ``frames`` that is in its result phase and regenerated."""
+    return next((f for f in frames if f.in_result and f.regenerated), None)
+
+
+def field_result_index(dom) -> FieldResultIndex:
+    """Map each ``w:t`` / run-level ``w:tab`` inside a field result to that field's instruction.
+
+    A complex field is ``fldChar begin`` → ``instrText`` → ``separate`` →
+    result runs → ``end``; it may nest and span paragraphs, so the walk runs
+    over the whole body in document order with a stack of open fields. A
+    node inside nested results maps to the outermost regenerated field in its
+    result phase — the one whose update regenerates it (a TOC's page number
+    reports the TOC; a PAGEREF inside HYPERLINK display text reports the
+    PAGEREF). ``w:fldSimple`` results map to ``@w:instr``; the same
+    outermost rule holds across both kinds (a REF inside a simple TOC
+    reports the TOC, a simple PAGE inside a complex TOC reports the TOC). Instructions are joined across
+    ``instrText`` runs without a separator (Word splits them mid-word) and
+    whitespace-normalized.
+
+    A ``w:p`` whose end falls inside a regenerated field result (a TOC
+    opened in it and continuing into the next paragraph) is also a key, so a
+    paragraph split at its end can be refused.
+
+    Not indexed: results Word keeps on update — a locked field
+    (``@w:fldLock``), ``HYPERLINK`` display text and a ``FORMTEXT`` value —
+    tracked-deleted content (``w:del`` / ``w:moveFrom``: the accepted view,
+    as in :func:`build_text_map`) and text boxes (``w:txbxContent``). Unbalanced markup never locks the
+    rest of the document: an ``end`` with no field open is ignored, a node is
+    recorded when the innermost regenerated field holding it closes, and a
+    field still open when the walk ends drops only its own direct result
+    (it is reported as the owner of fields nested after it). An ``end`` whose
+    ``begin`` is tracked-deleted closes the innermost open field early.
+
+    One element-level walk of ``w:body``. A single edit builds it once per
+    call, twice on the document-wide route (checked before re-scoping);
+    batches build it once per batch (``batch_edit`` rebuilds it before a
+    second op on a paragraph holding a ``fldChar`` or ``fldSimple``). Callers check matched
+    positions against it.
+    """
+    # The body is a child of the root: finding it that way keeps this off the
+    # Document-level walk count the batch paths pin (count_dom_walks).
+    root = dom.documentElement
+    bodies = [c for c in root.childNodes if getattr(c, "tagName", "") == "w:body"] if root is not None else []
+    if not bodies:
+        return {}
+    result: FieldResultIndex = {}
+    stack: list[_FieldFrame] = []
+    # Tracked-deleted content is not in the accepted view, and a text box is
+    # its own story (and not editable): neither takes part in the walk.
+    skipped: set[Element] = set()
+    # Result nodes of an outermost fldSimple: a complex field nested inside it
+    # must not take them over when it closes.
+    simple_owned: set[Element] = set()
+    last_p = None
+    for node in bodies[0].getElementsByTagName("*"):
+        if node in skipped:
+            continue
+        tag = node.tagName
+        if tag in ("w:del", "w:moveFrom", "w:txbxContent"):
+            skipped.update(node.getElementsByTagName("*"))
+        elif tag == "w:p":
+            # A field still open when the next paragraph starts spans the
+            # previous paragraph's end: a split there lands inside its result.
+            # Held like a result node, so only a field that closes records it.
+            holder = _regenerating(reversed(stack))
+            if last_p is not None and holder is not None:
+                holder.nodes.append(last_p)
+            last_p = node
+        elif tag == "w:fldChar":
+            kind = node.getAttribute("w:fldCharType")
+            if kind == "begin":
+                stack.append(_FieldFrame([], node.getAttribute("w:fldLock").lower() in _ON_VALUES))
+            elif kind == "separate" and stack:
+                # instrText splits anywhere ("PAGE" + "REF _Toc1"), so join without a separator.
+                frame = stack[-1]
+                frame.instr = [" ".join("".join(frame.instr).split())]
+                frame.in_result = True
+                frame.regenerated = _field_regenerated(frame.instr[0], frame.locked)
+            elif kind == "end" and stack:
+                frame = stack.pop()
+                if frame.nodes:
+                    # Credit the outermost enclosing regenerated field, if any:
+                    # its update regenerates this whole result too — unless an
+                    # enclosing fldSimple is outermost and already owns the node.
+                    owner = _regenerating(stack) or frame
+                    result.update((n, owner.instr[0]) for n in frame.nodes if n not in simple_owned)
+        elif tag == "w:instrText":
+            if stack and not stack[-1].in_result:
+                stack[-1].instr.append(get_text_node_data(node))
+        elif tag == "w:t" or is_tab_node(node):
+            # Held by the innermost regenerated field in its result phase and
+            # recorded when that field closes, so an unterminated outer field
+            # cannot swallow a well-formed inner one.
+            holder = _regenerating(reversed(stack))
+            if holder is not None:
+                holder.nodes.append(node)
+        elif tag == "w:fldSimple":
+            instr = " ".join(node.getAttribute("w:instr").split())
+            if _field_regenerated(instr, node.getAttribute("w:fldLock").lower() in _ON_VALUES):
+                # Outermost unless a regenerated complex field is open around it
+                # (that field then claims the nodes when it closes).
+                outermost = _regenerating(stack) is None
+                for child in node.getElementsByTagName("*"):
+                    if child.tagName == "w:t" or is_tab_node(child):
+                        result.setdefault(child, instr)
+                        if outermost:
+                            simple_owned.add(child)
+    return result
 
 
 def build_text_map(paragraph, view: Literal["accepted", "original"] = "accepted") -> TextMap:
