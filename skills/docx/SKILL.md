@@ -161,13 +161,13 @@ Use the **docx_editor** Python library for all editing operations. It handles tr
 
 ### One edit, one command: `docx-edit`
 
-For a single edit, the `docx-edit` command (installed with the base package) needs no Python at all. Run `docx-edit skill` for its compact guide. Each command prints a receipt that is the whole check: the ref, the paragraph as it now reads (`[del#0:Me]old[/del][ins#1:Me]new[/ins]`), and the saved path. A refusal saves nothing and, when one command fixes it, ends in a `retry:` line holding that command (fill in `N` from the listed matches when the `note:` line says so).
+For a single edit, the `docx-edit` command (installed with the base package) needs no Python at all. Run `docx-edit skill` for its compact guide. Each command prints a receipt that is the whole check: the ref, the paragraph as it now reads (`[del#0:Me]old[/del][ins#1:Me]new[/ins]`), and the saved path. It never touches the input unless asked: an edit on `contract.docx` writes `contract.edited.docx`, and an edit on a `*.edited.docx` file updates it in place, so a chain of edits keeps one redline file (`-o OUT` / `--in-place` override). A refusal saves nothing and prints the reason with a `next:` hint (e.g. `next: add --occurrence N (0..2)`).
 
 ```bash
 docx-edit find contract.docx "30 days"                                   # every match, with refs
-docx-edit replace contract.docx "30 days" "60 days" --author Me -o out.docx
-docx-edit replace contract.docx "30 days" "60 days" --expect 3 --author Me --in-place
-docx-edit revisions out.docx --by Me
+docx-edit replace contract.docx "30 days" "60 days" --author Me          # -> contract.edited.docx
+docx-edit replace contract.edited.docx "net 30" "net 60" --expect 3 --author Me
+docx-edit revisions contract.edited.docx --by Me
 ```
 
 The verbs are the library's method names and the flags are its keywords (`--paragraph`, `--occurrence`, `--note`, `--expect` for `expected_count`). The matching and refusal rules below apply to both; batches, rewrites, groups and changesets are Python-only.

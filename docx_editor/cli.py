@@ -3,39 +3,38 @@
 Each verb is one :class:`~docx_editor.Document` method, named in kebab-case,
 with its keywords as flags: ``docx-edit replace F OLD NEW --paragraph P`` is
 ``doc.replace(OLD, NEW, paragraph=P)``. A command opens the file, makes the
-one call, saves (mutating verbs only, to ``-o OUT`` or ``--in-place``) and
-closes. Nothing is saved when the call refuses.
+one call, saves (mutating verbs only) and closes. Nothing is saved when the
+call refuses.
+
+The input is never touched unless asked: an edit writes ``<stem>.edited.docx``
+beside the input, or updates the input in place when it is itself a
+``*.edited.docx`` (so a chain of edits keeps one redline file); ``-o OUT`` and
+``--in-place`` override.
 
 Output is a receipt the caller can stop on: what changed, the paragraph ref,
 the paragraph as it now reads (tracked-change markup), and where it was saved.
-A refusal prints the library's message (with its pick-list) and, when one
-command fixes it, a ``retry:`` line holding that command. ``--json`` prints
-the same as one JSON object on stdout. Exit status: 0 success, 1 refused,
-2 usage error.
+A refusal prints the library's message (with its pick-list) and a ``next:``
+hint. ``--json`` prints the same as one JSON object on stdout. Exit status:
+0 success, 1 refused (nothing saved), 2 usage error.
 """
 
 import argparse
 import contextlib
 import json
 import os
+import re
 import shlex
 import sys
 import tempfile
 import warnings
 from collections.abc import Sequence
-from dataclasses import dataclass
+from pathlib import Path
 
 from . import Document, EditResult
 from .exceptions import (
-    AmbiguousTextError,
     DocumentProtectedError,
     DocxEditError,
-    HashMismatchError,
     MatchCountError,
-    MatchLocation,
-    ParagraphIndexError,
-    RevisionError,
-    TextNotFoundError,
     UnanchoredNoteWarning,
     UnhandledRevisionWarning,
     WorkspaceLockedError,
@@ -44,40 +43,13 @@ from .exceptions import (
     _json_default,
     _match_context,
 )
-from .xml_editor import body_paragraphs, fold_quotes
+from .xml_editor import body_paragraphs
 
 PROG = "docx-edit"
 _EDIT_VERBS = ("replace", "delete", "insert-after", "insert-before")
 _MUTATING = (*_EDIT_VERBS, "comment", "accept", "reject")
-# Positional arguments of each verb after FILE, in order (argparse dests).
-_POSITIONALS = {
-    "replace": ("old", "new"),
-    "delete": ("text",),
-    "insert-after": ("anchor", "text"),
-    "insert-before": ("anchor", "text"),
-    "comment": ("anchor", "text"),
-    "find": ("text",),
-    "accept": ("ids",),
-    "reject": ("ids",),
-}
-# Flags a retry carries over, in the order they are written (argparse dest, flag).
-_FLAGS = (
-    ("paragraph", "--paragraph"),
-    ("occurrence", "--occurrence"),
-    ("expect", "--expect"),
-    ("note", "--note"),
-    ("by", "--by"),
-    ("start", "--start"),
-    ("limit", "--limit"),
-    ("max_chars", "--max-chars"),
-    ("author", "--author"),
-    ("output", "--output"),
-)
-_SWITCHES = (
-    ("all", "--all"),
-    ("in_place", "--in-place"),
-    ("allow_protected", "--allow-protected"),
-)
+_EDITED = ".edited.docx"
+_LIBRARY_WARNINGS = (UnanchoredNoteWarning, UnhandledRevisionWarning)
 
 AGENT_GUIDE = """\
 docx-edit: tracked-change edits to a .docx, one command each. Every edit is a
@@ -88,238 +60,106 @@ Look:
   docx-edit find F.docx "30 days"            every match, with its ref
   docx-edit revisions F.docx [--by NAME]     pending tracked changes
 
-Edit (each needs --author NAME and -o OUT.docx or --in-place):
-  docx-edit replace F.docx "30 days" "60 days" --author Me -o out.docx
-  docx-edit delete F.docx "unless agreed" --author Me --in-place
-  docx-edit insert-after F.docx "Payment" " terms" --author Me --in-place
-  docx-edit insert-before F.docx "due" "now " --author Me --in-place
-  docx-edit comment F.docx "Effective Date" "Check this" --author Me --in-place
-  docx-edit replace F.docx "30 days" "60 days" --expect 3 --author Me --in-place
-  docx-edit accept F.docx 5 6 --author Me --in-place   (or --all [--by NAME])
-  docx-edit reject F.docx --all --by Bot --author Me --in-place
+Edit (each needs --author NAME):
+  docx-edit replace F.docx "30 days" "60 days" --author Me
+  docx-edit delete F.edited.docx "unless agreed" --author Me
+  docx-edit insert-after F.edited.docx "Payment" " terms" --author Me
+  docx-edit insert-before F.edited.docx "due" "now " --author Me
+  docx-edit comment F.edited.docx "Effective Date" "Check this" --author Me
+  docx-edit replace F.docx "30 days" "60 days" --expect 3 --author Me
+  docx-edit accept F.edited.docx 5 6 --author Me     (or --all [--by NAME])
+  docx-edit reject F.edited.docx --all --by Bot --author Me
+
+Output file:
+- An edit on F.docx writes F.edited.docx and never touches F.docx. An edit on
+  a file already named *.edited.docx updates it in place, so a chain of edits
+  keeps one redline file: edit F.docx once, then keep editing F.edited.docx.
+- -o OUT writes elsewhere; --in-place overwrites the input. If F.edited.docx
+  already exists, an edit on F.docx refuses rather than overwrite it.
 
 Rules:
 - Without --paragraph the text is searched in the whole document and must
-  occur once. If it occurs more often the command refuses, lists up to 10
-  matches as "occurrence=N  P3#a7b2 ..." (find lists all), and prints a
-  retry: line; run it with N replaced. --paragraph P3#a7b2 (a ref from
-  list/find) pins the edit to that paragraph as you saw it; a stale ref
-  refuses, and the retry lists the matches again so you pick afresh.
+  occur once. If it occurs more often the command refuses and lists up to 10
+  matches as "occurrence=N  P3#a7b2 ..." (find lists all); rerun with
+  --occurrence N. --paragraph P3#a7b2 (a ref from list/find) pins the edit to
+  that paragraph as you saw it; a stale ref refuses.
 - --expect N on replace replaces every match, and refuses unless there are
   exactly N. On find it checks the count without editing.
 - --note "why" attaches your rationale as a comment on the change.
 - A newline in the new text splits the paragraph (tracked), e.g. $'a\\nb'.
 - Text starting with "-": put -- before the positional arguments, as in
-  docx-edit replace --author Me --in-place -- F.docx "- item" "- entry".
+  docx-edit replace --author Me -- F.docx "- item" "- entry".
 - A moved paragraph is two revisions (move_from + move_to): accept or reject
   both ids together, or use --all.
 - The receipt shows each changed paragraph as it now reads:
   [del#5:Me]old[/del][ins#6:Me]new[/ins]. It is the check; no follow-up
   call is needed.
-- Exit 0 = done, 1 = refused (nothing saved), 2 = bad command line.
-  --json prints one JSON object instead of text.
+- A refusal prints the reason and a "next:" hint. Exit 0 = done,
+  1 = refused (nothing saved), 2 = bad command line. --json prints one JSON
+  object instead of text.
 """
-
-
-@dataclass
-class _Retry:
-    """The one command that resolves a refusal, and what to fill in or know first."""
-
-    argv: list[str]
-    note: str | None = None
 
 
 class _Refusal(Exception):
     """A CLI-level refusal that is not a library error (e.g. an unknown revision id)."""
 
-    next: str | None = None
-
-    def __init__(self, message: str, retry: _Retry | None = None):
+    def __init__(self, message: str, next: str | None = None):
         super().__init__(message)
-        self.retry = retry
+        self.next = next
 
 
-def _command(args: argparse.Namespace, *switches: str, **overrides: object) -> list[str]:
-    """The command ``args`` came from, with ``overrides`` applied, as an argv.
-
-    Rebuilt from the parsed arguments, not edited from the raw argv, so a
-    repeated flag or a ``--`` cannot make the retry differ from what argparse
-    actually ran. Valued flags are one ``--flag=value`` token, so a value
-    starting with ``-`` stays a value; positionals follow ``--``, so text
-    starting with ``-`` stays text. ``switches`` (e.g. ``--force-recreate``)
-    are added for this retry only and never carried over.
-    """
-    values = {**vars(args), **overrides}
-    argv = [PROG, args.verb]
-    for dest, flag in _FLAGS:
-        if values.get(dest) is not None:
-            argv.append(f"{flag}={values[dest]}")
-    for dest, flag in _SWITCHES:
-        if values.get(dest):
-            argv.append(flag)
-    argv += switches
-    if values.get("json"):
-        argv.append("--json")
-    argv += ["--", values["file"]]
-    for dest in _POSITIONALS.get(args.verb, ()):
-        value = values[dest]
-        argv += [str(v) for v in value] if isinstance(value, list) else [str(value)]
-    return argv
-
-
-def _other(args: argparse.Namespace, verb: str, *argv: str) -> list[str]:
-    """Another verb on the same file, keeping ``--json`` when the caller used it."""
-    return [PROG, verb, *argv, *(["--json"] if args.json else []), "--", args.file]
-
-
-_ANSI_C_ESCAPES = {"\\": "\\\\", "'": "\\'", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
-
-
-def _quote(arg: str) -> str:
-    """One shell word. An argument with a control character (a newline in a
-    split) uses bash's ``$'...'`` form, so the retry stays on one line."""
-    if arg.isprintable():
-        return shlex.quote(arg)
-    body = []
-    for c in arg:
-        if c in _ANSI_C_ESCAPES:
-            body.append(_ANSI_C_ESCAPES[c])
-        elif c.isprintable():
-            body.append(c)
-        else:
-            # \x only for ASCII: bash writes \xHH as a raw byte, so U+00A0
-            # needs \u00a0 to come out as UTF-8; above the BMP, \U.
-            code = ord(c)
-            if 0xDC80 <= code <= 0xDCFF:
-                # A filename byte that was not UTF-8 (surrogateescape): the byte itself.
-                body.append(f"\\x{code - 0xDC00:02x}")
-                continue
-            body.append(f"\\x{code:02x}" if code < 0x80 else f"\\u{code:04x}" if code <= 0xFFFF else f"\\U{code:08x}")
-    return "$'" + "".join(body) + "'"
-
-
-def _render(argv: Sequence[str]) -> str:
-    """``argv`` as one POSIX-shell command line (bash, zsh, Git Bash).
-
-    Not cmd.exe or PowerShell, whose quoting differs; ``--json`` gives the
-    exact ``retry_argv`` for any other caller.
-    """
-    return " ".join(_quote(a) for a in argv)
-
-
-def _retry_for(error: Exception, args: argparse.Namespace) -> _Retry | None:
-    """The command to run next after ``error``, or None when no single command fixes it."""
+def _next_hint(error: Exception, args: argparse.Namespace) -> str | None:
+    """The error's ``next`` hint in the CLI's own spelling, where a CLI verb does the job."""
+    file = shlex.quote(args.file)
     if isinstance(error, _Refusal):
-        return error.retry
-    if isinstance(error, AmbiguousTextError):
-        return _Retry(_command(args, occurrence="N"), "N: an occurrence= from the list above")
-    if isinstance(error, MatchCountError):
-        if args.verb == "find":
-            return None
-        if error.total_occurrences == 0:
-            return _Retry(_other(args, "list"), "nothing matches; read the paragraphs to quote the text")
-        if _split_conflict(args, error.matches):
-            return _one_at_a_time(args, error.total_occurrences, count_was_wrong=True)
-        return _Retry(_command(args, expect=error.total_occurrences), "only if every match listed above should change")
-    if isinstance(error, HashMismatchError) and getattr(args, "paragraph", None):
-        # The paragraph changed or moved, so neither its index nor an
-        # --occurrence can be trusted to name what was meant: list the
-        # matches again instead of re-issuing the edit.
-        return _Retry(
-            [*_other(args, "find"), _target(args)],
-            "the paragraph changed or moved since you read it: pick --paragraph and --occurrence from this list",
-        )
-    if isinstance(error, TextNotFoundError):
-        if error.total_occurrences:
-            return _Retry(_command(args, occurrence="N"), f"N: 0..{error.total_occurrences - 1}")
-        if getattr(args, "paragraph", None):
-            return _Retry([*_other(args, "find"), _target(args)], "not in that paragraph; find lists where it is")
-        return _Retry(_other(args, "list"))
-    if isinstance(error, ParagraphIndexError):
-        return _Retry(_other(args, "list"))
-    if isinstance(error, ValueError) and str(error).startswith("Invalid paragraph reference"):
-        return _Retry(_other(args, "list"), "--paragraph takes a ref like P3#a7b2, as list prints it")
-    if isinstance(error, ValueError) and str(error).startswith("replace_all(): replace_with contains a newline"):
-        return _one_at_a_time(args, args.expect)
-    if isinstance(error, ValueError) and str(error).startswith("replace_all(): matches of"):
-        return _Retry(
-            [*_other(args, "find"), args.old],
-            "these matches overlap, so replacing one removes its neighbours: choose which to change, "
-            "and run find again before each replace",
-        )
-    if isinstance(error, WorkspaceLockedError):
-        return _Retry(
-            _command(args), "another session holds this file: close it (doc.close() / docx-session stop), then run this"
-        )
-    if isinstance(error, RevisionError) and (error.next or "").startswith("retry with author="):
-        return _Retry(_command(args, by="NAME"), "NAME: one of the authors named above")
-    if isinstance(error, RevisionError) and error.next == "list_revisions()":
-        return _Retry(_other(args, "revisions"))
-    if isinstance(error, DocumentProtectedError):
-        return _Retry(_command(args, allow_protected=True), "the protection stays in place in the saved file")
+        return error.next
     if isinstance(error, WorkspaceSyncError):
-        return _Retry(
-            _command(args, "--force-recreate"), "discards the leftover workspace and any unsaved edits it holds"
+        return "add --force-recreate (discards the leftover workspace and any unsaved edits it holds)"
+    if isinstance(error, WorkspaceLockedError):
+        return "close the session holding this file (doc.close() or docx-session stop), then run this again"
+    if isinstance(error, DocumentProtectedError):
+        return "add --allow-protected (the protection stays in place in the saved file)"
+    hint = getattr(error, "next", None)
+    if not hint:
+        return None
+    if hint.startswith("retry with occurrence="):
+        return "add --occurrence " + hint.removeprefix("retry with occurrence=")
+    if hint.startswith("retry with author="):
+        return "add --by NAME (one of the authors named above)"
+    if hint.startswith("find_all(") and isinstance(error, MatchCountError):
+        return f"{PROG} find {file} {shlex.quote(error.search_text)}"
+    if match := re.match(r"get_paragraph\((\d+)\)", hint):
+        return f"{PROG} list {file} --start {match[1]} --limit 1"
+    if "list_paragraphs()" in hint:
+        return f"{PROG} list {file}"
+    if hint == "list_revisions()":
+        return f"{PROG} revisions {file}"
+    return f"(Python API) {hint}"
+
+
+def _destination(args: argparse.Namespace) -> Path:
+    """Where a mutating verb saves: the input is never touched unless asked.
+
+    ``--in-place`` and ``-o`` decide when given. Otherwise a ``*.edited.docx``
+    input is updated in place, and any other input writes
+    ``<stem>.edited.docx`` beside it — refused when that file already exists,
+    so a different file is never overwritten silently.
+    """
+    source = Path(args.file)
+    if args.in_place:
+        return source
+    if args.output:
+        return Path(args.output)
+    if source.name.lower().endswith(_EDITED):
+        return source
+    target = source.with_name(source.stem + _EDITED)
+    if target.exists():
+        raise _Refusal(
+            f"{target} already exists; nothing was written. To keep editing that redline, run the command "
+            f"on {target} itself; to write elsewhere pass -o OUT; to edit {source} itself pass --in-place.",
+            next=f"{PROG} {args.verb} {shlex.quote(str(target))} ...",
         )
-    return None
-
-
-def _target(args: argparse.Namespace) -> str:
-    """The text the verb searches for."""
-    return getattr(args, "old", None) or getattr(args, "anchor", None) or args.text
-
-
-def _split_conflict(args: argparse.Namespace, matches: Sequence[MatchLocation]) -> bool:
-    """Whether a ``--expect`` replace with a newline would split one paragraph twice.
-
-    Overlapping matches do not count: they need a choice, which the plain
-    ``--expect`` retry reaches through ``replace_all``'s overlap refusal.
-    """
-    if args.verb != "replace" or "\n" not in args.new:
-        return False
-    refs = [m.paragraph_ref for m in matches]
-    overlap = any(
-        cur.paragraph_ref == prev.paragraph_ref and cur.start < prev.start + len(args.old)
-        for prev, cur in zip(matches, matches[1:], strict=False)
-    )
-    return not overlap and len(set(refs)) < len(refs)
-
-
-def _rematches(old: str, new: str) -> bool:
-    """Whether replacing ``old`` with ``new`` can create a new ``old``.
-
-    True when ``new`` contains ``old``, or when an end of ``new`` could join
-    the neighbouring text to spell ``old`` (``ab`` -> ``X\na`` before ``b``).
-    Quote-folded, as matching is.
-    """
-    fo, fn = fold_quotes(old), fold_quotes(new)
-    if fo in fn:
-        return True
-    return any(fo.startswith(fn[-k:]) or fo.endswith(fn[:k]) for k in range(1, min(len(fo), len(fn) + 1)))
-
-
-def _one_at_a_time(args: argparse.Namespace, count: int, *, count_was_wrong: bool = False) -> _Retry:
-    """A newline replace that cannot run as one call: the same edit, one match per run.
-
-    ``--occurrence=0`` with no ``--paragraph`` takes the first match in the
-    document; the replaced text becomes a tracked deletion, which no search
-    matches, so the next run takes the next match. That holds only when the
-    new text cannot match again — otherwise each run must pick its match
-    from a fresh find.
-    """
-    if _rematches(args.old, args.new):
-        return _Retry(
-            [*_other(args, "find"), args.old],
-            "the new text can form the old text again, so a later run could hit text that was never a match: "
-            "run find before each replace and pick its --paragraph and --occurrence",
-        )
-    then = f"the first time with --output={args.output}, then on that file with --in-place" if args.output else ""
-    return _Retry(
-        _command(args, expect=None, paragraph=None, occurrence=0),
-        ("only if every match listed above should change: " if count_was_wrong else "")
-        + f"a paragraph can split only once per command: run this {count} times, once per match"
-        + (f" ({then})" if then else ""),
-    )
+    return target
 
 
 def _paragraphs(doc: Document, refs: Sequence[str]) -> list[dict]:
@@ -330,14 +170,6 @@ def _paragraphs(doc: Document, refs: Sequence[str]) -> list[dict]:
         index = int(ref[1:].split("#")[0])
         out.append({"ref": ref, "markup": markup[index - 1] if 0 < index <= len(markup) else ""})
     return out
-
-
-def _current_refs(doc: Document, indexes: Sequence[int]) -> list[str]:
-    """The current ref of each paragraph index (refs change when a paragraph's text does)."""
-    if not indexes:
-        return []
-    refs = {p.index: p.ref for p in doc.list_paragraphs_structured(limit=None)}
-    return [refs[i] for i in dict.fromkeys(indexes) if i in refs]
 
 
 def _run_edit(doc: Document, args: argparse.Namespace) -> dict:
@@ -351,10 +183,8 @@ def _run_edit(doc: Document, args: argparse.Namespace) -> dict:
         results = [doc.delete(args.text, note=args.note, **scope)]
     elif args.verb == "insert-after":
         results = [doc.insert_after(args.anchor, args.text, note=args.note, **scope)]
-    elif args.verb == "insert-before":
-        results = [doc.insert_before(args.anchor, args.text, note=args.note, **scope)]
     else:
-        raise AssertionError(args.verb)
+        results = [doc.insert_before(args.anchor, args.text, note=args.note, **scope)]
     return {
         "results": [
             {"ref": str(r), "refs": list(r.refs), "revision_ids": list(r.revision_ids), "comment_id": r.comment_id}
@@ -384,7 +214,7 @@ def _run_resolve(doc: Document, args: argparse.Namespace) -> dict:
     # another paragraph afterwards.
     before = body_paragraphs(doc._document_editor.dom)
     where = {r.id: r.paragraph_ref for r in doc.list_revisions(author=args.by)}
-    touched = [before[int(ref[1:].split("#")[0]) - 1] for i in args.ids if (ref := where.get(i))]
+    touched = list(dict.fromkeys(before[int(ref[1:].split("#")[0]) - 1] for i in args.ids if (ref := where.get(i))))
     one = doc.accept_revision if args.verb == "accept" else doc.reject_revision
     for rev_id in args.ids:
         if not one(rev_id, author=args.by):
@@ -392,19 +222,21 @@ def _run_resolve(doc: Document, args: argparse.Namespace) -> dict:
             raise _Refusal(
                 f"No pending revision {rev_id}{by} (it may have been resolved together with an earlier id). "
                 f"Nothing was saved.",
-                _Retry(_other(args, "revisions")),
+                next=f"{PROG} revisions {shlex.quote(args.file)}",
             )
-    # Report each touched paragraph that still exists under its current ref
+    # Each touched paragraph that still exists, under its current ref
     # (resolving changed its text); one merged away is counted, not guessed.
-    after = {id(p): i for i, p in enumerate(body_paragraphs(doc._document_editor.dom), start=1)}
-    indexes = [after[id(p)] for p in dict.fromkeys(touched) if id(p) in after]
+    after = body_paragraphs(doc._document_editor.dom)
+    position = {id(p): i for i, p in enumerate(after, start=1)}
+    refs = {p.index: p.ref for p in doc.list_paragraphs_structured(limit=None)} if touched else {}
+    current = [refs[position[id(p)]] for p in touched if id(p) in position]
     out = {
         "resolved": len(args.ids),
         "ids": list(args.ids),
         "pending": len(doc.list_revisions()),
-        "paragraphs": _paragraphs(doc, _current_refs(doc, indexes)),
+        "paragraphs": _paragraphs(doc, current),
     }
-    if gone := len(dict.fromkeys(touched)) - len(indexes):
+    if gone := len(touched) - len(current):
         out["merged_paragraphs"] = gone
     return out
 
@@ -435,13 +267,12 @@ def _run_list(doc: Document, args: argparse.Namespace) -> dict:
     if args.limit is not None:
         kwargs["limit"] = args.limit or None
     lines = doc.list_paragraphs(**kwargs)
-    # The library's truncation notice names Python keywords; say it as the
-    # next command instead. Paragraph lines start with their ref ("P3#..").
+    # The library's truncation notice names Python keywords; name the CLI
+    # flags instead. Paragraph lines start with their ref ("P3#..").
     if lines and lines[-1].startswith("... "):
         next_start = kwargs.get("start", 1) + len(lines) - 1
         remaining = doc.paragraph_count() - next_start + 1
-        page = _render(_command(args, start=next_start))
-        lines[-1] = f"... {remaining} more paragraphs; next page: {page} (--limit=0 lists all)"
+        lines[-1] = f"... {remaining} more paragraphs; next page: --start {next_start} (--limit 0 lists all)"
     elif not lines:
         lines = [f"no paragraphs from {kwargs.get('start', 1)} (the document has {doc.paragraph_count()})"]
     return {"lines": lines}
@@ -527,7 +358,6 @@ def _parser() -> argparse.ArgumentParser:
         if name != "skill":
             sub.add_argument("file", help="the .docx file")
             sub.add_argument("--json", action="store_true", help="print one JSON object instead of text")
-            sub.add_argument("--force-recreate", action="store_true", help=argparse.SUPPRESS)
         return sub
 
     def scope(sub: argparse.ArgumentParser) -> None:
@@ -536,18 +366,24 @@ def _parser() -> argparse.ArgumentParser:
 
     def output(sub: argparse.ArgumentParser, author_help: str = "name recorded on the tracked change") -> None:
         sub.add_argument("--author", required=True, help=author_help)
-        where = sub.add_mutually_exclusive_group(required=True)
-        where.add_argument("-o", "--output", metavar="OUT", help="save to OUT")
+        where = sub.add_mutually_exclusive_group()
+        where.add_argument(
+            "-o",
+            "--output",
+            metavar="OUT",
+            help="save to OUT (default: FILE's <stem>.edited.docx; an input named *.edited.docx is updated in place)",
+        )
         where.add_argument("--in-place", action="store_true", help="overwrite FILE")
-        sub.add_argument("--allow-protected", action="store_true", help=argparse.SUPPRESS)
+        sub.add_argument("--allow-protected", action="store_true", help="edit a document under Restrict Editing")
+        sub.add_argument(
+            "--force-recreate", action="store_true", help="discard a workspace a crashed session left behind"
+        )
 
     def note(sub: argparse.ArgumentParser) -> None:
         sub.add_argument("--note", help="rationale, attached as a comment on the change")
 
     sub = verb(
-        "replace",
-        "Replace text as a tracked change.",
-        'docx-edit replace F.docx "30 days" "60 days" --author Me -o out.docx',
+        "replace", "Replace text as a tracked change.", 'docx-edit replace F.docx "30 days" "60 days" --author Me'
     )
     sub.add_argument("old")
     sub.add_argument("new")
@@ -556,9 +392,7 @@ def _parser() -> argparse.ArgumentParser:
     note(sub)
     output(sub)
 
-    sub = verb(
-        "delete", "Delete text as a tracked change.", 'docx-edit delete F.docx "unless agreed" --author Me --in-place'
-    )
+    sub = verb("delete", "Delete text as a tracked change.", 'docx-edit delete F.docx "unless agreed" --author Me')
     sub.add_argument("text")
     scope(sub)
     note(sub)
@@ -568,7 +402,7 @@ def _parser() -> argparse.ArgumentParser:
         sub = verb(
             name,
             f"Insert text {where} an anchor as a tracked change.",
-            f'docx-edit {name} F.docx "Payment" " terms" --author Me --in-place',
+            f'docx-edit {name} F.docx "Payment" " terms" --author Me',
         )
         sub.add_argument("anchor")
         sub.add_argument("text")
@@ -576,9 +410,7 @@ def _parser() -> argparse.ArgumentParser:
         note(sub)
         output(sub)
 
-    sub = verb(
-        "comment", "Comment on text.", 'docx-edit comment F.docx "Effective Date" "Check this" --author Me --in-place'
-    )
+    sub = verb("comment", "Comment on text.", 'docx-edit comment F.docx "Effective Date" "Check this" --author Me')
     sub.add_argument("anchor")
     sub.add_argument("text", metavar="comment")
     scope(sub)
@@ -602,7 +434,7 @@ def _parser() -> argparse.ArgumentParser:
         sub = verb(
             name,
             f"{name.capitalize()} tracked changes by id, or all of them.",
-            f"docx-edit {name} F.docx 5 6 --author Me --in-place",
+            f"docx-edit {name} F.edited.docx 5 6 --author Me",
         )
         sub.add_argument("ids", nargs="*", type=int, metavar="ID", help="revision ids from `revisions`")
         sub.add_argument("--all", action="store_true", help="every pending revision (with --by: only that author's)")
@@ -618,32 +450,6 @@ def _check_usage(parser: argparse.ArgumentParser, args: argparse.Namespace) -> N
         parser.error("replace: --expect replaces every match in the document; drop --paragraph/--occurrence")
     if args.verb in ("accept", "reject") and bool(args.ids) == bool(args.all):
         parser.error(f"{args.verb}: give revision ids or --all, not both or neither")
-
-
-def _refusal_output(error: Exception, args: argparse.Namespace) -> None:
-    retry = _retry_for(error, args)
-    if args.json:
-        payload = (
-            {"type": "Refusal", "message": str(error), "next": None}
-            if isinstance(error, _Refusal)
-            else _error_payload(error)
-        )
-        body = {
-            "ok": False,
-            "error": payload,
-            "retry": _render(retry.argv) if retry else None,
-            "retry_argv": retry.argv if retry else None,
-            "retry_note": retry.note if retry else None,
-        }
-        print(json.dumps(body, default=_json_default))
-        return
-    print(f"error: {error}", file=sys.stderr)
-    if retry:
-        if retry.note:
-            print(f"note: {retry.note}", file=sys.stderr)
-        print(f"retry: {_render(retry.argv)}", file=sys.stderr)
-    elif (hint := getattr(error, "next", None)) and args.verb != "find":
-        print(f"next (Python API): {hint}", file=sys.stderr)
 
 
 def _open(args: argparse.Namespace, mutating: bool, scratch: str) -> Document:
@@ -667,6 +473,31 @@ def _open(args: argparse.Namespace, mutating: bool, scratch: str) -> Document:
         return Document.open(args.file, force_recreate=True, **kwargs)
 
 
+def _emit(text_or_json: str, *, stream=None) -> None:
+    """Print, surviving a reader that closed the pipe: the exit status stays the command's."""
+    stream = stream or sys.stdout
+    try:
+        print(text_or_json, file=stream)
+        stream.flush()
+    except BrokenPipeError:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.dup2(devnull, sys.stderr.fileno())
+
+
+def _refusal_output(error: Exception, args: argparse.Namespace) -> None:
+    hint = _next_hint(error, args)
+    if args.json:
+        payload = (
+            {"type": "Refusal", "message": str(error), "next": error.next}
+            if isinstance(error, _Refusal)
+            else _error_payload(error)
+        )
+        _emit(json.dumps({"ok": False, "error": payload, "next": hint}, default=_json_default))
+        return
+    _emit(f"error: {error}" + (f"\nnext: {hint}" if hint else ""), stream=sys.stderr)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one docx-edit command; returns 0 (done) or 1 (refused, nothing saved).
 
@@ -686,9 +517,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     _check_usage(parser, args)
 
     mutating = args.verb in _MUTATING
-    library_warnings = (UnanchoredNoteWarning, UnhandledRevisionWarning)
     cleanup_warnings: list[str] = []
     try:
+        destination = _destination(args) if mutating else None
         # A read-only verb's private workspace; an edit needs none. A failure
         # to remove it is ignored: it never holds anything the caller wants.
         scratch_dir = (
@@ -697,14 +528,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         with warnings.catch_warnings(record=True) as caught, scratch_dir as scratch:
             # Only the library's own warnings are the caller's business; a
             # ResourceWarning or DeprecationWarning from a dependency is not.
-            for category in library_warnings:
+            for category in _LIBRARY_WARNINGS:
                 warnings.simplefilter("always", category)
             doc = _open(args, mutating, scratch)
             out: dict = {}
             try:
                 out = _RUNNERS[args.verb](doc, args)
-                if mutating:
-                    out["saved"] = str(doc.save(args.file if args.in_place else args.output))
+                if destination is not None:
+                    out["saved"] = str(doc.save(destination))
             finally:
                 try:
                     # A read-only verb's private workspace goes with its
@@ -717,28 +548,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                         raise
                     cleanup_warnings.append(f"saved, but the workspace could not be removed: {error}")
     except (DocxEditError, ValueError, OSError, _Refusal) as error:
-        try:
-            _refusal_output(error, args)
-            sys.stdout.flush()
-            sys.stderr.flush()
-        except BrokenPipeError:
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            os.dup2(devnull, sys.stdout.fileno())
-            os.dup2(devnull, sys.stderr.fileno())
+        _refusal_output(error, args)
         return 1
 
-    found = (str(w.message) for w in caught if issubclass(w.category, library_warnings))
+    found = (str(w.message) for w in caught if issubclass(w.category, _LIBRARY_WARNINGS))
     out["warnings"] = list(dict.fromkeys([*found, *cleanup_warnings]))
-    try:
-        if args.json:
-            print(json.dumps({"ok": True, "verb": args.verb, **out}, default=_json_default))
-        else:
+    if args.json:
+        _emit(json.dumps({"ok": True, "verb": args.verb, **out}, default=_json_default))
+    else:
+        try:
             _print_text(args.verb, out)
-        sys.stdout.flush()
-    except BrokenPipeError:
-        # The reader went away; the command itself succeeded (and saved).
-        # Point stdout at devnull so the interpreter's exit flush cannot fail.
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            sys.stdout.flush()
+        except BrokenPipeError:
+            # The reader went away; the command itself succeeded (and saved).
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
     return 0
 
 
