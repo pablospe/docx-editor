@@ -241,6 +241,13 @@ class TestRefusal:
                 d.rewrite_paragraph(empty, "Injected")
             assert _xml(d) == before
 
+    def test_edit_in_a_complex_field_inside_a_simple_field_reports_the_simple_one(self, simple_docx, tmp_path):
+        body = _p('<w:fldSimple w:instr=" TOC ">', _r("Entry "), _complex("PAGEREF _Toc1", _r("4")), "</w:fldSimple>")
+        with _open(simple_docx, tmp_path, body) as d:
+            with pytest.raises(FieldResultError) as exc:
+                d.delete("4", paragraph=find_ref(d, "Entry"))
+            assert exc.value.field_type == "TOC"
+
     def test_found_then_scoped_edit_refuses(self, doc):
         # The locate-document-wide-then-scoped route: the guard lives in
         # _locate_in_paragraph, which every scoped edit passes through.
@@ -250,6 +257,37 @@ class TestRefusal:
         with pytest.raises(FieldResultError):
             doc.replace("Overview", "Summary", paragraph=hit.paragraph_ref)
         assert _xml(doc) == before
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda rm: rm.suggest_deletion("Overview"),
+            lambda rm: rm.insert_text_after("section ", "X\nY"),
+            lambda rm: rm.insert_text_before("Overview", "X"),
+            lambda rm: rm.replace_text(" for details.", ", below.\nNew"),
+        ],
+        ids=["delete", "insert_after_split", "insert_before", "replace_split"],
+    )
+    def test_revision_manager_document_wide_refuses(self, doc, call):
+        before = _xml(doc)
+        with pytest.raises(FieldResultError) as exc:
+            call(doc._revision_manager)
+        assert exc.value.paragraph_ref == find_ref(doc, "See section")
+        assert _xml(doc) == before
+
+    @pytest.mark.parametrize(
+        ("call", "expected"),
+        [
+            (lambda rm: rm.suggest_deletion(" for details"), "See section Overview."),
+            (lambda rm: rm.insert_text_after("details", " here"), "See section Overview for details here."),
+            (lambda rm: rm.replace_text("details", "context"), "See section Overview for context."),
+            (lambda rm: rm.replace_text(" for details.", "\nNew"), "See section Overview"),
+        ],
+        ids=["delete", "insert_after", "replace", "replace_split"],
+    )
+    def test_revision_manager_document_wide_outside_a_field_applies(self, doc, call, expected):
+        call(doc._revision_manager)
+        assert any(t.split("|", 1)[1].strip() == expected for t in doc.list_paragraphs(limit=None))
 
     def test_split_paragraph_inside_result_refuses(self, doc):
         ref = find_ref(doc, "See section")
@@ -311,6 +349,25 @@ class TestBatch:
         assert isinstance(exc.value.original, FieldResultError)
         assert _xml(doc) == before
 
+    def test_batch_rebuilds_the_index_for_a_fldsimple_paragraph(self, simple_docx, tmp_path):
+        # The insert splits the foreign insertion and re-creates everything
+        # after the split point, the fldSimple's result node included; the
+        # second op must still see "3" as a PAGE result.
+        foreign = (
+            '<w:ins w:id="5" w:author="Other" w:date="2024-01-01T00:00:00Z">'
+            + _r("Page one")
+            + '<w:fldSimple w:instr=" PAGE "><w:r><w:t>3</w:t></w:r></w:fldSimple></w:ins>'
+        )
+        with _open(simple_docx, tmp_path, _p(foreign)) as d:
+            ref = find_ref(d, "Page")
+            ops = [EditOperation.insert_after("Page", " X", paragraph=ref), EditOperation.delete("3", paragraph=ref)]
+            before = _xml(d)
+            with pytest.raises(BatchOperationError) as exc:
+                d.batch_edit(ops)
+            assert exc.value.operation_index == 1
+            assert isinstance(exc.value.original, FieldResultError)
+            assert _xml(d) == before
+
     def test_batch_rebuilds_the_index_after_a_run_split(self, simple_docx, tmp_path):
         # A fldChar sharing a run with text: editing " tail" re-creates the
         # run's other w:t nodes, including the result "Res".
@@ -342,10 +399,13 @@ class TestBatch:
         calls = []
         real = batch_mod.field_result_index
         monkeypatch.setattr(batch_mod, "field_result_index", lambda dom: calls.append(1) or real(dom))
-        # Rebuilt only before a second op on a paragraph holding a fldChar:
-        # PAGE is a fldSimple, and one op per fldChar paragraph needs no rebuild.
-        ops = [EditOperation.replace("table", "list", paragraph=find_ref(doc, "After the table"))]
-        ops += [EditOperation.insert_before("Page", f"{i} ", paragraph=find_ref(doc, "Page ")) for i in range(3)]
+        # Rebuilt only before a second op on a paragraph holding field markup:
+        # repeated ops on a field-free paragraph and one op per field paragraph
+        # (REF, fldSimple PAGE, HYPERLINK) need no rebuild.
+        ops = [
+            EditOperation.insert_before("After", f"{i} ", paragraph=find_ref(doc, "After the table")) for i in range(3)
+        ]
+        ops += [EditOperation.insert_before("Page", "A ", paragraph=find_ref(doc, "Page "))]
         ops += [EditOperation.replace("details", "context", paragraph=find_ref(doc, "See section"))]
         ops += [EditOperation.replace("Visit", "See", paragraph=find_ref(doc, "Visit"))]
         doc.batch_edit(ops)
@@ -385,6 +445,11 @@ class TestRewrite:
         assert exc.value.field_type == "REF"
         assert str(exc.value).startswith("rewrite_paragraph(): ")
         assert _xml(doc) == before
+
+    def test_rewrite_deleting_text_outside_the_field_applies(self, doc):
+        ref = find_ref(doc, "See section")
+        doc.rewrite_paragraph(ref, "See section Overview details.")
+        assert any(t.endswith("See section Overview details.") for t in doc.list_paragraphs(limit=None))
 
     def test_insert_hunk_at_a_leading_field_refuses(self, simple_docx, tmp_path):
         # insert at 0 attaches before the result run, inside the field.
@@ -486,6 +551,24 @@ class TestFieldResultIndex:
     def test_formtext_is_exempt(self):
         assert _index_texts(_p(_complex("FORMTEXT", _r("enter name")))) == {}
 
+    def test_complex_field_inside_a_simple_field_reports_the_simple_one(self):
+        body = _p(
+            '<w:fldSimple w:instr=" TOC \\o ">', _r("Entry "), _complex("PAGEREF _Toc1 \\h", _r("4")), "</w:fldSimple>"
+        )
+        assert _index_texts(body) == {"Entry ": "TOC \\o", "4": "TOC \\o"}
+
+    def test_simple_field_inside_a_complex_field_reports_the_complex_one(self):
+        simple = '<w:fldSimple w:instr=" PAGE "><w:r><w:t>4</w:t></w:r></w:fldSimple>'
+        body = _p(_fld("begin"), _instr("TOC \\o"), _fld("separate"), _r("Entry "), simple, _fld("end"))
+        assert _index_texts(body) == {"Entry ": "TOC \\o", "4": "TOC \\o"}
+
+    def test_complex_field_inside_a_simple_field_inside_an_unterminated_field(self):
+        # The open TOC never closes, but it is the outermost regenerating field
+        # around the fldSimple, so it is reported (and the result stays refused).
+        simple = '<w:fldSimple w:instr=" REF _Ref1 ">' + _complex("PAGE", _r("4")) + "</w:fldSimple>"
+        body = _p(_fld("begin"), _instr("TOC"), _fld("separate"), simple)
+        assert _index_texts(body) == {"4": "TOC"}
+
     def test_nested_simple_fields_report_the_outer(self):
         body = _p(
             '<w:fldSimple w:instr="TOC"><w:fldSimple w:instr="PAGE"><w:r><w:t>4</w:t></w:r></w:fldSimple></w:fldSimple>'
@@ -511,6 +594,31 @@ class TestFieldResultIndex:
         index = field_result_index(dom)
         outer = [p for p in dom.getElementsByTagName("w:p") if p.parentNode.tagName == "w:body"]
         assert index.get(outer[0]) == "TOC" and set(_index_texts(body)) == {"Entry"}
+
+    def test_stray_and_late_instruction_text_is_ignored(self):
+        # instrText with no field open, or after separate, changes nothing.
+        body = _p(_instr("REF stray"), _r("plain")) + _p(
+            _fld("begin"), _instr("REF _Ref1"), _fld("separate"), _instr("PAGE"), _r("Res"), _fld("end")
+        )
+        assert _index_texts(body) == {"Res": "REF _Ref1"}
+
+    def test_no_body_indexes_nothing(self):
+        dom = defusedxml.minidom.parseString(f"<w:document {NS}/>")
+        assert field_result_index(dom) == {}
+
+    def test_empty_result_field_indexes_nothing_and_keeps_the_rest(self):
+        assert _index_texts(_p(_r("a"), _complex("PAGE", ""), _r("b")) + REF) == {"Overview": "REF _Ref1 \\h"}
+
+    @pytest.mark.parametrize(
+        "simple",
+        [
+            "<w:fldSimple w:instr=' HYPERLINK \"x\" '><w:r><w:t>site</w:t></w:r></w:fldSimple>",
+            '<w:fldSimple w:instr=" DATE " w:fldLock="1"><w:r><w:t>site</w:t></w:r></w:fldSimple>',
+        ],
+        ids=["hyperlink", "locked"],
+    )
+    def test_exempt_simple_field_is_not_indexed(self, simple):
+        assert _index_texts(_p(_r("Visit "), simple)) == {}
 
     def test_no_fields(self):
         assert _index_texts(_p(_r("plain"))) == {}
@@ -678,6 +786,22 @@ class TestUnscopedRoutes:
             tags = [c.tagName for c in p.childNodes if c.nodeType == c.ELEMENT_NODE]
             assert tags[-2:] == ["w:r", "w:ins"]
             assert p.getElementsByTagName("w:r")[0].getElementsByTagName("w:br")
+
+    @pytest.mark.parametrize(
+        ("verb", "first"),
+        [("insert_before", True), ("insert_after", False)],
+    )
+    def test_insert_at_a_plain_foreign_insertion_edge_is_a_sibling(self, simple_docx, tmp_path, verb, first):
+        # No fldChar inside: our insertion goes right before / after theirs, unsplit.
+        foreign = f'<w:ins w:id="5" w:author="Other" w:date="2024-01-01T00:00:00Z">{_r("abc")}</w:ins>'
+        with _open(simple_docx, tmp_path, _p(_r("x "), foreign, _r(" y"))) as d:
+            getattr(d, verb)("abc", "Z", paragraph=find_ref(d, "abc"))
+            p = d._document_editor.dom.getElementsByTagName("w:p")[0]
+            inss = [c for c in p.childNodes if getattr(c, "tagName", "") == "w:ins"]
+            authors = [i.getAttribute("w:author") for i in inss]
+            assert len(inss) == 2
+            assert authors == ([AUTHOR, "Other"] if first else ["Other", AUTHOR])
+            self._assert_own_text_outside_fields(d, ["Z"])
 
     @staticmethod
     def _assert_own_text_outside_fields(d, expected):

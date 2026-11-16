@@ -1103,8 +1103,9 @@ def field_result_index(dom) -> FieldResultIndex:
     node inside nested results maps to the outermost regenerated field in its
     result phase — the one whose update regenerates it (a TOC's page number
     reports the TOC; a PAGEREF inside HYPERLINK display text reports the
-    PAGEREF). ``w:fldSimple`` results map to ``@w:instr`` (the outermost
-    ``fldSimple`` when they nest). Instructions are joined across
+    PAGEREF). ``w:fldSimple`` results map to ``@w:instr``; the same
+    outermost rule holds across both kinds (a REF inside a simple TOC
+    reports the TOC, a simple PAGE inside a complex TOC reports the TOC). Instructions are joined across
     ``instrText`` runs without a separator (Word splits them mid-word) and
     whitespace-normalized.
 
@@ -1125,7 +1126,7 @@ def field_result_index(dom) -> FieldResultIndex:
     One element-level walk of ``w:body``. A single edit builds it once per
     call, twice on the document-wide route (checked before re-scoping);
     batches build it once per batch (``batch_edit`` rebuilds it before a
-    second op on a paragraph holding a ``fldChar``). Callers check matched
+    second op on a paragraph holding a ``fldChar`` or ``fldSimple``). Callers check matched
     positions against it.
     """
     # The body is a child of the root: finding it that way keeps this off the
@@ -1139,6 +1140,9 @@ def field_result_index(dom) -> FieldResultIndex:
     # Tracked-deleted content is not in the accepted view, and a text box is
     # its own story (and not editable): neither takes part in the walk.
     skipped: set[Element] = set()
+    # Result nodes of an outermost fldSimple: a complex field nested inside it
+    # must not take them over when it closes.
+    simple_owned: set[Element] = set()
     last_p = None
     for node in bodies[0].getElementsByTagName("*"):
         if node in skipped:
@@ -1168,9 +1172,10 @@ def field_result_index(dom) -> FieldResultIndex:
                 frame = stack.pop()
                 if frame.nodes:
                     # Credit the outermost enclosing regenerated field, if any:
-                    # its update regenerates this whole result too.
+                    # its update regenerates this whole result too — unless an
+                    # enclosing fldSimple is outermost and already owns the node.
                     owner = _regenerating(stack) or frame
-                    result.update(dict.fromkeys(frame.nodes, owner.instr[0]))
+                    result.update((n, owner.instr[0]) for n in frame.nodes if n not in simple_owned)
         elif tag == "w:instrText":
             if stack and not stack[-1].in_result:
                 stack[-1].instr.append(get_text_node_data(node))
@@ -1184,9 +1189,14 @@ def field_result_index(dom) -> FieldResultIndex:
         elif tag == "w:fldSimple":
             instr = " ".join(node.getAttribute("w:instr").split())
             if _field_regenerated(instr, node.getAttribute("w:fldLock").lower() in _ON_VALUES):
+                # Outermost unless a regenerated complex field is open around it
+                # (that field then claims the nodes when it closes).
+                outermost = _regenerating(stack) is None
                 for child in node.getElementsByTagName("*"):
                     if child.tagName == "w:t" or is_tab_node(child):
                         result.setdefault(child, instr)
+                        if outermost:
+                            simple_owned.add(child)
     return result
 
 

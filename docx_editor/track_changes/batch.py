@@ -36,6 +36,11 @@ from .models import (
 )
 
 
+def _holds_field(paragraph) -> bool:
+    """Whether ``paragraph`` holds field markup (a complex field's ``w:fldChar`` or a ``w:fldSimple``)."""
+    return bool(paragraph.getElementsByTagName("w:fldChar") or paragraph.getElementsByTagName("w:fldSimple"))
+
+
 def _op_new_text(op: EditOperation) -> str | None:
     """The text an op writes (``replace_with`` / an insert's ``text``); None for a delete."""
     return {"replace": op.replace_with, "insert_after": op.text, "insert_before": op.text}.get(op.action)
@@ -79,8 +84,9 @@ class _BatchMixin(_RevisionManagerBase):
         # Field results, indexed once for the batch like the paragraph list.
         # An op landing in a result is refused before it mutates, but an op
         # that splits a run re-creates its other w:t nodes — a result node too
-        # when a fldChar shares the run — so the loop below rebuilds the index
-        # before a second op on a paragraph holding a fldChar.
+        # when a fldChar or fldSimple shares the run or insertion — so the loop
+        # below rebuilds the index before a second op on a paragraph holding
+        # field markup.
         fields = field_result_index(self.editor.dom)
 
         # Parse and validate all refs upfront
@@ -119,11 +125,9 @@ class _BatchMixin(_RevisionManagerBase):
                     # Only a later op on this same paragraph can meet a node this
                     # op re-creates (ops run in descending order; a split's tail is
                     # never targeted), and same-paragraph ops are adjacent after
-                    # the sort. Probed before the op: a split may move fldChars out.
+                    # the sort. Probed before the op: a split may move field markup out.
                     same_next = k + 1 < len(parsed) and parsed[k + 1][1].index == ref.index
-                    rebuild = (
-                        bool(fields) and same_next and bool(paragraphs[ref.index - 1].getElementsByTagName("w:fldChar"))
-                    )
+                    rebuild = bool(fields) and same_next and _holds_field(paragraphs[ref.index - 1])
                     try:
                         # Each op is its own logical edit: one group per op, so
                         # callers can accept one op and reject another.
@@ -265,7 +269,7 @@ class _BatchMixin(_RevisionManagerBase):
         return results
 
     def _validate_single(
-        self, op: EditOperation, paragraphs: list[Element] | None = None, fields: FieldResultIndex | None = None
+        self, op: EditOperation, paragraphs: list[Element] | None, fields: FieldResultIndex
     ) -> "_ValidationOutcome":
         """Return why ``op`` would fail, or an all-None outcome if it is valid.
 
@@ -274,7 +278,8 @@ class _BatchMixin(_RevisionManagerBase):
         so dry-run validation cannot drift from real application semantics
         (out-of-range and ambiguous targets produce the same error text).
         Reads only. ``paragraphs`` and ``fields`` are the dry run's shared <w:p>
-        and field-result snapshots (see validate_batch); None fetches fresh.
+        and field-result snapshots (see validate_batch); None ``paragraphs``
+        fetches fresh.
         """
         if not op.paragraph:
             return _ValidationOutcome(error="paragraph reference is required for batch mode")
@@ -304,8 +309,6 @@ class _BatchMixin(_RevisionManagerBase):
             return _ValidationOutcome(error=str(e))
 
         ctx = f"{op.action}(): "
-        if fields is None:
-            fields = field_result_index(self.editor.dom)
         try:
             match = self._locate_in_paragraph(p, op.paragraph, target, op.occurrence, fields=fields, ctx=ctx)
             # The same split check _apply_single_edit runs.
