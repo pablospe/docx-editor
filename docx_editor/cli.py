@@ -326,21 +326,23 @@ _RUNNERS = {
 }
 
 
-def _print_text(verb: str, out: dict) -> None:
+def _text(verb: str, out: dict) -> str:
+    """The text receipt for ``out``."""
+    lines: list[str] = []
     if verb == "find":
-        print(f"{len(out['matches'])} match(es):")
+        lines.append(f"{len(out['matches'])} match(es):")
         for m in out["matches"]:
-            print(
+            lines.append(
                 f'  occurrence={m["occurrence"]}  {m["paragraph_ref"]} at char {m["start"]}  "{m["context"]}"'
                 f"  (--paragraph {m['paragraph_ref']} --occurrence {m['paragraph_occurrence']})"
             )
     elif verb == "list":
-        print("\n".join(out["lines"]))
+        lines.append("\n".join(out["lines"]))
     elif verb == "revisions":
         if not out["revisions"]:
-            print("no pending revisions")
+            lines.append("no pending revisions")
         for r in out["revisions"]:
-            print(f'#{r.id} {r.type} by {r.author} in {r.paragraph_ref}: "{r.text}"')
+            lines.append(f'#{r.id} {r.type} by {r.author} in {r.paragraph_ref}: "{r.text}"')
     elif verb in ("accept", "reject"):
         line = f"{verb}ed {out['resolved']} revision(s); {out['pending']} pending"
         if out.get("merged_paragraphs"):
@@ -348,12 +350,12 @@ def _print_text(verb: str, out: dict) -> None:
         if out.get("unhandled"):
             kinds = ", ".join(f"{k}={v}" for k, v in out["unhandled_types"].items())
             line += f"; {out['unhandled']} left that this tool does not resolve ({kinds})"
-        print(line)
+        lines.append(line)
     elif verb == "comment":
-        print(f"comment {out['comment_id']} on {out['ref']}")
+        lines.append(f"comment {out['comment_id']} on {out['ref']}")
     else:
         if not out["results"]:
-            print(f"{verb}: no match, nothing changed")
+            lines.append(f"{verb}: no match, nothing changed")
         for r in out["results"]:
             details = [
                 "revisions " + ", ".join(map(str, r["revision_ids"]))
@@ -362,13 +364,14 @@ def _print_text(verb: str, out: dict) -> None:
             ]
             if r["comment_id"] is not None:
                 details.append(f"comment {r['comment_id']}")
-            print(f"{verb} {' '.join(r['refs'] or [r['ref']])}  ({'; '.join(details)})")
+            lines.append(f"{verb} {' '.join(r['refs'] or [r['ref']])}  ({'; '.join(details)})")
     for p in out.get("paragraphs", []):
-        print(f"  {p['ref']}| {p['markup']}")
+        lines.append(f"  {p['ref']}| {p['markup']}")
     for w in out.get("warnings", []):
-        print(f"warning: {w}")
+        lines.append(f"warning: {w}")
     if out.get("saved"):
-        print(f"saved {out['saved']}")
+        lines.append(f"saved {out['saved']}")
+    return "\n".join(lines)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -578,10 +581,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     # temporary directory, whose removal errors are ignored.
                     doc.close(cleanup=mutating)
                 except OSError as error:
-                    # After a save, a workspace that cannot be removed (a file
-                    # held open by a scanner) is not a refusal: the edit is done.
-                    if "saved" not in out:
-                        raise
+                    # A workspace that cannot be removed (a file held open by a
+                    # scanner) is never the reason for a refusal: after a save
+                    # the edit is done, and before one the real refusal is
+                    # already on its way out of this block.
                     cleanup_warnings.append(f"saved, but the workspace could not be removed: {error}")
     except (DocxEditError, ValueError, OSError, _Refusal) as error:
         _refusal_output(error, args)
@@ -589,17 +592,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     found = (str(w.message) for w in caught if issubclass(w.category, _LIBRARY_WARNINGS))
     out["warnings"] = list(dict.fromkeys([*found, *cleanup_warnings]))
-    if args.json:
-        _emit(json.dumps({"ok": True, "verb": args.verb, **out}, default=_json_default))
-    else:
-        try:
-            _print_text(args.verb, out)
-            sys.stdout.flush()
-        except BrokenPipeError:
-            # The reader went away; the command itself succeeded (and saved).
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    _emit(
+        json.dumps({"ok": True, "verb": args.verb, **out}, default=_json_default)
+        if args.json
+        else _text(args.verb, out)
+    )
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

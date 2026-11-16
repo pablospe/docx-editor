@@ -513,3 +513,121 @@ def test_a_closed_pipe_keeps_the_exit_status(src, tmp_path, fail):
     proc.stdout.close()
     proc.stderr.close()
     assert proc.wait() == (0 if fail == "success" else 1)
+
+
+class TestHelpers:
+    """The pieces the end-to-end tests reach only through rare documents or other processes."""
+
+    @pytest.mark.parametrize(
+        ("hint", "expected"),
+        [
+            ("retry with author=<name>", "add --by NAME (one of the authors named above)"),
+            ("list_paragraphs()", "docx-edit list f.docx"),
+            ("list_revisions()", "docx-edit revisions f.docx"),
+            ("get_paragraph(3).text or list_paragraphs()", "docx-edit list f.docx --start 3 --limit 1"),
+            ("accept_changeset(4)", "(Python API) accept_changeset(4)"),
+        ],
+    )
+    def test_library_hints_in_cli_spelling(self, hint, expected):
+        from docx_editor.cli import _next_hint, _parser
+        from docx_editor.exceptions import RevisionError
+
+        args = _parser().parse_args(["accept", "f.docx", "7", "--author", AUTHOR])
+        assert _next_hint(RevisionError("refused", next=hint), args) == expected
+
+    def test_unhandled_revisions_are_reported_after_a_sweep(self):
+        from docx_editor.cli import _text
+
+        out = {"resolved": 2, "pending": 3, "unhandled": 3, "unhandled_types": {"w:rPrChange": 3}}
+        assert _text("accept", out) == (
+            "accepted 2 revision(s); 3 pending; 3 left that this tool does not resolve (w:rPrChange=3)"
+        )
+
+    def test_emit_survives_a_closed_pipe(self, tmp_path, monkeypatch):
+        from docx_editor.cli import _emit
+
+        read_end, write_end = os.pipe()
+        os.close(read_end)
+        with os.fdopen(write_end, "w") as closed, open(tmp_path / "err", "w") as err:
+            monkeypatch.setattr(sys, "stdout", closed)
+            monkeypatch.setattr(sys, "stderr", err)
+            _emit("x" * 100_000)  # raises nothing; later writes go to /dev/null
+            print("after", file=closed, flush=True)
+
+    def test_main_runs_on_streams_without_reconfigure(self, monkeypatch):
+        import io
+
+        stdout = io.StringIO()
+        monkeypatch.setattr(sys, "stdout", stdout)
+        assert main(["skill"]) == 0
+        assert stdout.getvalue() == AGENT_GUIDE
+
+    def test_json_default_and_error_payload(self):
+        import datetime
+        from pathlib import PurePosixPath
+
+        from docx_editor.exceptions import (
+            BatchOperationError,
+            TextNotFoundError,
+            WorkspaceSyncError,
+            _error_payload,
+            _json_default,
+        )
+
+        assert _json_default(PurePosixPath("a/b.docx")) == "a/b.docx"
+        assert _json_default(datetime.date(2026, 11, 16)) == "2026-11-16"
+        with pytest.raises(TypeError, match="object is not JSON serializable"):
+            _json_default(object())
+        # A builtin error has no "next"; a library error always does.
+        assert _error_payload(ValueError("bad")) == {"type": "ValueError", "message": "bad"}
+        # A library error whose class supplies next=None still carries the key.
+        assert _error_payload(WorkspaceSyncError("stale"))["next"] is None
+
+        # An arbitrary exception (the session kernel serialises user code's)
+        # may carry its own "message" attribute: str(exc) stays authoritative.
+        class Legacy(Exception):
+            def __init__(self):
+                super().__init__("shown")
+                self.message = "attribute"
+
+        assert _error_payload(Legacy())["message"] == "shown"
+        inner = TextNotFoundError("zebra")
+        outer = BatchOperationError(0, "failed", original=inner)
+        vars(outer)["handle"] = object()  # not JSON: falls back to its repr
+        payload = _error_payload(outer)
+        assert payload["original"]["type"] == "TextNotFoundError" and payload["original"]["next"]
+        assert payload["handle"].startswith("<object object")
+        # A self-referential chain is cut off rather than recursing forever.
+        loop = BatchOperationError(0, "loop")
+        loop.original = loop
+        nested = _error_payload(loop)
+        for _ in range(3):
+            nested = nested["original"]
+        assert isinstance(nested["original"], str)
+
+
+def test_revisions_json_carries_dates_and_fields(capsys, src):
+    run(capsys, "replace", src, "quick", "swift", "--author", AUTHOR, "--in-place")
+    code, out, _ = run(capsys, "revisions", src, "--json")
+    (deletion, insertion) = json.loads(out)["revisions"]
+    assert code == 0 and (deletion["type"], deletion["text"], insertion["text"]) == ("deletion", "quick", "swift")
+    assert deletion["date"][:4].isdigit() and "T" in deletion["date"]
+
+
+def test_list_max_chars_cuts_the_preview(capsys, src):
+    code, out, _ = run(capsys, "list", src, "--start", 2, "--limit", 1, "--max-chars", 10)
+    assert code == 0 and out.splitlines()[0].endswith("| The quick ...")
+
+
+def test_a_refusal_keeps_its_reason_when_cleanup_also_fails(capsys, src, ws, monkeypatch):
+    real_rmtree = shutil.rmtree
+
+    def busy(path, *args, **kwargs):
+        if Path(path).is_relative_to(ws):
+            raise PermissionError("file in use")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", busy)
+    code, _, err = run(capsys, "replace", src, "zebra", "x", "--author", AUTHOR)
+    assert code == 1 and "Text not found: 'zebra'" in err and "file in use" not in err
+    assert not edited(src).exists()
