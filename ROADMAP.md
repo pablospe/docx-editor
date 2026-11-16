@@ -86,6 +86,10 @@ When a rejected block-level `w:ins` (or an accepted block-level `w:del`) held th
 
 A producer may bind the Word 2010 namespace to any prefix. stetdoc 0.9.3 declares it as `ns:` on `comments.xml`, and docx-editor then reads that file wrongly: a resolved comment lists as open and a reply lists as top-level, because the lookups compare attribute names such as `w14:paraId` and `w15:paraIdParent` as text. Renaming the prefix to `w14` in the same file fixes the reading, which confirms the cause. Found by running stetdoc against our hard cases (2026-11-15). Fix: resolve these attributes and elements by namespace URI in the comment read paths (`_get_comment_para_id`, the `commentsExtended` lookups, `list_comments` threading), with a fixture that uses a non-standard prefix. Check the same assumption for `w16cid` / `w16cex` and for `w16du` in `document.xml`.
 
+### 108. Deleting all of your own tracked insertion removes field marks inside it
+
+`_remove_from_insertion`'s whole-insertion branch (`track_changes/delete.py`) drops the entire `w:ins` when all of its text is deleted, including any `w:fldChar` / `w:instrText` it holds. A field can be left without its `end`, or an index-entry (XE) field can vanish silently. Pre-existing; found by the review of #63c. Fix: do not take the whole-removal shortcut when the insertion holds a `w:fldChar`; remove the text runs and keep the field markup.
+
 ### 69. Return-leg reconciliation: which changesets survived?  [design]
 
 The product loop is agent proposes → human adjudicates in Word → document comes back; accepted revisions become plain text, rejected ones vanish, and there is no way to ask "which of my changesets survived?". A propose-time-vs-current compare keyed on changeset `w:date` + content. Design first; large.
