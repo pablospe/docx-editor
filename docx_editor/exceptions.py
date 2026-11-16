@@ -1,8 +1,11 @@
 """Custom exceptions and warnings for docx_editor library."""
 
+import dataclasses
+import datetime
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 
 MAX_REPORTED_MATCHES = 10
 """Most matches an ``AmbiguousTextError`` lists; the rest are counted in ``matches_omitted``."""
@@ -624,3 +627,50 @@ class UnanchoredNoteWarning(UserWarning):
 
         warnings.filterwarnings("ignore", category=UnanchoredNoteWarning)
     """
+
+
+def _json_default(o: object) -> object:
+    """``json.dumps`` ``default=`` for library values.
+
+    Library dataclasses (SearchResult, Revision, Comment, ...) become real
+    JSON objects instead of opaque reprs; the type guard keeps a bare
+    dataclass *class* on the repr path. Shared by the docx-session eval
+    kernel and the docx-edit CLI, so both emit one JSON shape.
+    """
+    if dataclasses.is_dataclass(o) and not isinstance(o, type):
+        return dataclasses.asdict(o)
+    if isinstance(o, (datetime.datetime, datetime.date)):
+        return o.isoformat()
+    if isinstance(o, PurePath):
+        return str(o)
+    raise TypeError(f"{type(o).__name__} is not JSON serializable")
+
+
+def _error_payload(exc: BaseException, depth: int = 0) -> dict:
+    """An exception as a JSON-ready dict: ``type``, ``message`` and every structured field.
+
+    Every structured recovery field the exception carries (``actual_hash``,
+    ``total_occurrences``, ...) is included. A nested exception
+    (``BatchOperationError.original``) recurses, depth-capped so a
+    pathological self-referential chain cannot hang the caller. Shared by the
+    docx-session eval kernel and the docx-edit CLI.
+    """
+    payload: dict = {"type": type(exc).__name__, "message": str(exc)}
+    for key, val in vars(exc).items():
+        if key in payload:
+            continue
+        if isinstance(val, BaseException):
+            payload[key] = _error_payload(val, depth + 1) if depth < 3 else repr(val)
+            continue
+        try:
+            json.dumps(val, allow_nan=False, default=_json_default)
+        except Exception:
+            payload[key] = repr(val)
+        else:
+            payload[key] = val
+    # Every library error carries the "next" key (None when no single call
+    # resolves it); a builtin error, whose class has no such attribute, stays
+    # exactly {"type", "message"}.
+    if "next" not in payload and hasattr(type(exc), "next"):
+        payload["next"] = None
+    return payload

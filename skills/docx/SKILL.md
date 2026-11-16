@@ -159,6 +159,19 @@ For advanced formatting needs (precise spacing, complex table styling, detailed 
 
 Use the **docx_editor** Python library for all editing operations. It handles tracked changes, comments, and revisions with a simple API.
 
+### One edit, one command: `docx-edit`
+
+For a single edit, the `docx-edit` command (installed with the base package) needs no Python at all. Run `docx-edit skill` for its compact guide. Each command prints a receipt that is the whole check: the ref, the paragraph as it now reads (`[del#0:Me]old[/del][ins#1:Me]new[/ins]`), and the saved path. It never touches the input unless asked: an edit on `contract.docx` writes `contract.edited.docx`, and an edit on a `*.edited.docx` file updates it in place, so a chain of edits keeps one redline file (`-o OUT` / `--in-place` override). A refusal saves nothing and prints the reason with a `next:` hint (e.g. `next: add --occurrence N (0..2)`).
+
+```bash
+docx-edit find contract.docx "30 days"                                   # every match, with refs
+docx-edit replace contract.docx "30 days" "60 days" --author Me          # -> contract.edited.docx
+docx-edit replace contract.edited.docx "net 30" "net 60" --expect 3 --author Me
+docx-edit revisions contract.edited.docx --by Me
+```
+
+The verbs are the library's method names and the flags are its keywords (`--paragraph`, `--occurrence`, `--note`, `--expect` for `expected_count`). The matching and refusal rules below apply to both; batches, rewrites, groups and changesets are Python-only.
+
 ### Which call to use
 
 | You want to                          | Call                                                   | Not                           |
@@ -189,6 +202,7 @@ pip install "docx-editor[session]"  # + docx-session persistent CLI
 
 - **Editing** (track changes, comments, revisions) needs only the base `pip install docx-editor` ([PyPI](https://pypi.org/project/docx-editor/)) — python-docx is NOT bundled
 - **Creating** new documents and reading structure uses python-docx, which the `[create]` extra pulls in
+- **The `docx-edit` command** comes with the base install
 - **Session mode** (`docx-session`) needs the `[session]` extra
 
 On a modern Debian/Ubuntu (or any interpreter marked [PEP-668](https://peps.python.org/pep-0668/)

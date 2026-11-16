@@ -167,7 +167,18 @@ class _ListingMixin(_RevisionManagerBase):
         return revisions
 
     def get_markup_text(self) -> str:
-        """Render document text with inline revision markup.
+        """Render document text with inline revision markup, one line per paragraph.
+
+        The lines of :meth:`markup_lines`, joined with ``\\n``.
+        """
+        return "\n".join(self.markup_lines())
+
+    def markup_lines(self) -> list[str]:
+        """Render each body paragraph with inline revision markup.
+
+        One string per paragraph, in ``body_paragraphs`` order, so index
+        ``i - 1`` is paragraph ``P{i}`` even when a paragraph's text holds a
+        line separator (which would shift a split of the joined text).
 
         Each paragraph is one line; tracked changes wrap their content as
         ``[ins#{id}:{author}]...[/ins]`` / ``[del#{id}:{author}]...[/del]``,
@@ -218,7 +229,7 @@ class _ListingMixin(_RevisionManagerBase):
                     parts.append(render(child))
             return "".join(parts)
 
-        return "\n".join(render(p) for p in body_paragraphs(self.editor.dom))
+        return [render(p) for p in body_paragraphs(self.editor.dom)]
 
     def _parse_revision(
         self,

@@ -26,6 +26,7 @@ Pure Python library for Word document track changes and comments, without requir
 - **Word's Tracking Switch**: Saving a redline turns Track Changes on in `settings.xml`, so the recipient's own edits stay tracked too; documents protected with Word's *Restrict Editing* are refused at open rather than silently edited
 - **Rationale Notes**: `note=` on any text edit (`replace`/`delete`/`insert_*`/`rewrite_paragraph`, and per `EditOperation` inside `batch_edit`) anchors a comment explaining the redline on exactly the revisions it creates — and deletes it when they are accepted or rejected
 - **Revision Management**: List, accept, and reject tracked changes at three granularities — individual revisions, groups (one logical edit), and changesets (one whole `batch_edit`/`batch_rewrite` call); `EditResult` and `Revision` objects carry `group_id` and `changeset_id`
+- **One-Shot CLI**: `docx-edit replace contract.docx "30 days" "60 days" --author Me` makes one tracked edit per command, writes `contract.edited.docx` (the input is never touched unless asked), and prints a receipt with the paragraph as it now reads. A refusal saves nothing and prints a `next:` hint; `docx-edit skill` prints an agent guide
 - **Session Mode**: Optional persistent kernel (`docx-session start/exec/eval/status/stop`) keeps documents open across many small commands — ideal for AI agents (`pip install "docx-editor[session]"`)
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **No Dependencies**: Only requires `defusedxml` for secure XML parsing
@@ -52,7 +53,7 @@ parts (headers, footers, footnotes, endnotes) wait for a real demand.
 ## Installation
 
 ```bash
-pip install docx-editor             # editing: track changes, comments, revisions
+pip install docx-editor             # editing: track changes, comments, revisions, docx-edit CLI
 pip install "docx-editor[create]"   # + python-docx, for creating new documents
 pip install "docx-editor[session]"  # + docx-session persistent CLI
 ```

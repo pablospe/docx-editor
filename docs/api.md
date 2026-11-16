@@ -2149,3 +2149,74 @@ from docx_editor import UnanchoredNoteWarning
 
 warnings.filterwarnings("ignore", category=UnanchoredNoteWarning)
 ```
+
+---
+
+## Command line: `docx-edit`
+
+`docx-edit` makes one tracked-change edit per command: it opens the file, makes one `Document` call, saves (mutating verbs only) and closes. It installs with the base package (`pip install docx-editor`) and needs nothing else. Use it when an edit is one step; for many steps on one document, keep it open with `docx-session` instead (`pip install "docx-editor[session]"`).
+
+The verb is the `Document` method name in kebab-case and the flags are its keywords, so the three transports share one vocabulary:
+
+| `docx-edit` | Python | `docx-session` |
+| --- | --- | --- |
+| `replace F OLD NEW` | `doc.replace(OLD, NEW)` | `docx-session eval 'doc.replace(OLD, NEW)'` |
+| `replace F OLD NEW --paragraph P --occurrence N` | `doc.replace(OLD, NEW, paragraph=P, occurrence=N)` | same, through `eval` |
+| `replace F OLD NEW --expect N` | `doc.replace_all(OLD, NEW, expected_count=N)` | same, through `eval` |
+| `delete F TEXT`, `insert-after F ANCHOR TEXT`, `insert-before F ANCHOR TEXT` | `doc.delete(...)`, `doc.insert_after(...)`, `doc.insert_before(...)` | same, through `eval` |
+| `comment F ANCHOR TEXT` | `doc.add_comment(ANCHOR, TEXT)` | same, through `eval` |
+| `find F TEXT [--expect N]` | `doc.find_all(TEXT, expected_count=N)` | same, through `eval` |
+| `list F [--start S] [--limit L] [--max-chars C]` | `doc.list_paragraphs(...)` (`--limit 0` = all) | same, through `eval` |
+| `revisions F [--by NAME] [--paragraph P]` | `doc.list_revisions(author=NAME, paragraph=P)` | same, through `eval` |
+| `accept F ID...` or `accept F --all [--by NAME]`; `reject` likewise | `doc.accept_revision(ID)` per id, or `doc.accept_all(author=NAME)` | same, through `eval` |
+
+**Output file: the input is never touched unless you ask.** A mutating verb (`replace`, `delete`, `insert-*`, `comment`, `accept`, `reject`) on `F.docx` writes `F.edited.docx` beside it. On a file already named `*.edited.docx` it updates that file in place, so a chain of edits keeps one redline file: edit `F.docx` once, then keep editing `F.edited.docx`. `-o OUT` writes elsewhere and `--in-place` overwrites the input. If `F.edited.docx` already exists, an edit on `F.docx` refuses rather than overwrite it, and says to run on `F.edited.docx`, pass `-o`, or pass `--in-place`.
+
+**Flags.** Every mutating verb requires `--author NAME` (who is editing). `--by NAME` filters by a revision's author, so it never means "who is editing". `--note TEXT` is `note=`. `accept`/`reject` take revision ids only: group and changeset ids belong to one open `Document` and mean nothing to the next command. Ids are applied in order, and the whole command refuses, saving nothing, if any id is not pending. A content move is two ids (`move_from` + `move_to`): pass both, or use `--all`. `--allow-protected` edits a document under Word's *Restrict Editing* (the protection stays in the saved file). `--force-recreate` discards a workspace a crashed session left behind; it applies only to that case (`WorkspaceSyncError`) and never takes over a live session's lock. Flags cannot be abbreviated.
+
+**Receipt.** One line per result (`replace P2#a1cf  (revisions 0, 1; comment 0)`), then each touched paragraph as it now reads in `get_markup_text()` markup (`P2#a1cf| The [del#0:Me]quick[/del][ins#1:Me]swift[/ins] brown fox ...`), then any library warning (`UnanchoredNoteWarning`, `UnhandledRevisionWarning`) and `saved PATH`. That is the whole check: no follow-up call is needed. `comment` prints `comment N on REF` and the paragraph. `accept`/`reject` print `accepted 2 revision(s); 0 pending`. By ids they add each touched paragraph under its current ref (resolving changes the text, so the old ref is stale), and count any that a resolved paragraph mark or move merged into a neighbour rather than show the neighbour. With `--all` they add the count of revisions this tool does not resolve, if any.
+
+**Refusals.** A refusal saves nothing and exits 1. The library's message goes to stderr, including its pick-list (up to 10 matches; `docx-edit find` lists all), followed by a `next:` hint in the CLI's spelling where a CLI verb does the job:
+
+| Refusal | `next:` |
+| --- | --- |
+| ambiguous text, or `--occurrence` out of range | `add --occurrence N (0..K)` |
+| text not found, paragraph index out of range | `docx-edit list F` |
+| stale `--paragraph` (the message names the current ref) | `docx-edit list F --start N --limit 1` |
+| `--expect` count mismatch | `docx-edit find F TEXT` (with `--paragraph` when the search was scoped) |
+| `--expect` matches that cannot change in one command (a newline replacement hitting one paragraph twice, or overlapping matches) | `docx-edit find F OLD`, then drop `--expect` and replace each match with `--paragraph REF --occurrence N` |
+| unknown revision id | `docx-edit revisions F` |
+| revision id shared by two authors | `add --by NAME` |
+| editing-protected document | ask the user; `add --allow-protected` only if they confirm |
+| workspace left behind by a crashed session | `add --force-recreate` (discards that workspace's unsaved edits) |
+| file held by a live `docx-session` or open `Document` | close that session, then run the command again |
+| the `.edited.docx` output already exists | run on it, or pass `-o` / `--in-place` |
+| an `*.edited.docx` input that is a symbolic link | `add --in-place or -o OUT` (the in-place default never writes through a link) |
+
+Any other library hint is printed as `next: (Python API) ...`. A bad command line exits 2 (argparse). `list`, `find` and `revisions` never save: they read the file in a private workspace, so they work beside a live session or a leftover workspace, and on an editing-protected document. They read the saved file, not a live session's unsaved edits. Output that the terminal's encoding cannot show is escaped (`\u2192`) rather than crashing after the save; a workspace that cannot be removed after a save is a warning, not a refusal; a reader that closes the pipe early does not change the exit status.
+
+**`--json`.** Every verb except `skill` takes `--json` and prints one object on stdout. Success is `{"ok": true, "verb": ..., "warnings": [...]}` plus the verb's fields:
+
+| Verb | Fields |
+| --- | --- |
+| `replace`, `delete`, `insert-after`, `insert-before` | `results`: `[{"ref", "refs", "revision_ids", "comment_id"}]`; `paragraphs`: `[{"ref", "markup"}]`; `saved` |
+| `comment` | `comment_id`, `ref`, `paragraphs`, `saved` |
+| `accept`, `reject` | `resolved`, `pending`, `saved`; by ids `ids` and `paragraphs`; with `--all` `unhandled` and `unhandled_types` |
+| `find` | `matches`: `[{"occurrence", "paragraph_ref", "paragraph_occurrence", "start", "context"}]` |
+| `list` | `lines` (the text output's lines) |
+| `revisions` | `revisions`: the `Revision` records |
+
+A refusal is `{"ok": false, "error": {...}, "next": ...}`. `error` has the same shape as `docx-session eval`'s (`type`, `message`, every structured field, and the library's own `next` where the error type has one; null for the CLI's own refusals); the top-level `next` is the CLI-spelled hint, or null.
+
+**`docx-edit skill`** prints a compact agent guide to the CLI, so a skill file can be the one line "run `docx-edit skill` first". Each verb's `--help` is short and shows one example.
+
+```bash
+docx-edit replace contract.docx "30 days" "60 days" --author Reviewer
+# replace P2#a1cf  (revisions 0, 1)
+#   P2#a1cf| Payment is due in [del#0:Reviewer]30 days[/del][ins#1:Reviewer]60 days[/ins].
+# saved contract.edited.docx
+docx-edit comment contract.edited.docx "60 days" "Agreed in call" --author Reviewer
+# ... saved contract.edited.docx
+```
+
+An open `docx-session` (or any open `Document`) on the same file holds its workspace lock, so an editing verb on that file refuses with `WorkspaceLockedError` rather than take it over (`list`, `find` and `revisions` read around it).
