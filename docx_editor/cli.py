@@ -86,6 +86,8 @@ Rules:
 - --expect N on replace replaces every match, and refuses unless there are
   exactly N. On find it checks the count without editing.
 - --note "why" attaches your rationale as a comment on the change.
+- A document under Word's Restrict Editing refuses edits: ask the user, and
+  add --allow-protected only if they confirm.
 - A newline in the new text splits the paragraph (tracked), e.g. $'a\\nb'.
 - Text starting with "-": put -- before the positional arguments, as in
   docx-edit replace --author Me -- F.docx "- item" "- entry".
@@ -118,7 +120,15 @@ def _next_hint(error: Exception, args: argparse.Namespace) -> str | None:
     if isinstance(error, WorkspaceLockedError):
         return "close the session holding this file (doc.close() or docx-session stop), then run this again"
     if isinstance(error, DocumentProtectedError):
-        return "add --allow-protected (the protection stays in place in the saved file)"
+        return (
+            "the document is protected against editing: ask the user, and add --allow-protected only if they "
+            "confirm (the protection stays in place in the saved file)"
+        )
+    if isinstance(error, ValueError) and "one at a time with replace(" in str(error):
+        return (
+            f"{PROG} find {file} {shlex.quote(args.old)}, then drop --expect and replace each match with "
+            "--paragraph REF --occurrence N"
+        )
     hint = getattr(error, "next", None)
     if not hint:
         return None
@@ -127,7 +137,8 @@ def _next_hint(error: Exception, args: argparse.Namespace) -> str | None:
     if hint.startswith("retry with author="):
         return "add --by NAME (one of the authors named above)"
     if hint.startswith("find_all(") and isinstance(error, MatchCountError):
-        return f"{PROG} find {file} {shlex.quote(error.search_text)}"
+        scope = f" --paragraph {shlex.quote(error.paragraph_ref)}" if error.paragraph_ref else ""
+        return f"{PROG} find {file} {shlex.quote(error.search_text)}{scope}"
     if match := re.match(r"get_paragraph\((\d+)\)", hint):
         return f"{PROG} list {file} --start {match[1]} --limit 1"
     if "list_paragraphs()" in hint:
@@ -151,9 +162,19 @@ def _destination(args: argparse.Namespace) -> Path:
     if args.output:
         return Path(args.output)
     if source.name.lower().endswith(_EDITED):
+        if source.is_symlink():
+            # The in-place rule is about the redline file itself, not whatever
+            # a link of that name points at.
+            raise _Refusal(
+                f"{source} is a symbolic link; nothing was written. Pass --in-place to write through it, "
+                f"or -o OUT to write elsewhere.",
+                next="add --in-place or -o OUT",
+            )
         return source
     target = source.with_name(source.stem + _EDITED)
-    if target.exists():
+    # lexists: a dangling link of that name would otherwise send the save
+    # elsewhere. A missing input falls through to the library's "not found".
+    if source.exists() and os.path.lexists(target):
         raise _Refusal(
             f"{target} already exists; nothing was written. To keep editing that redline, run the command "
             f"on {target} itself; to write elsewhere pass -o OUT; to edit {source} itself pass --in-place.",
@@ -371,7 +392,10 @@ def _parser() -> argparse.ArgumentParser:
             "-o",
             "--output",
             metavar="OUT",
-            help="save to OUT (default: FILE's <stem>.edited.docx; an input named *.edited.docx is updated in place)",
+            help=(
+                "save to OUT (default: FILE's <stem>.edited.docx, refused if that file already exists; "
+                "an input named *.edited.docx is updated in place)"
+            ),
         )
         where.add_argument("--in-place", action="store_true", help="overwrite FILE")
         sub.add_argument("--allow-protected", action="store_true", help="edit a document under Restrict Editing")
@@ -489,7 +513,7 @@ def _refusal_output(error: Exception, args: argparse.Namespace) -> None:
     hint = _next_hint(error, args)
     if args.json:
         payload = (
-            {"type": "Refusal", "message": str(error), "next": error.next}
+            {"type": "Refusal", "message": str(error), "next": None}
             if isinstance(error, _Refusal)
             else _error_payload(error)
         )
@@ -512,7 +536,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     if args.verb == "skill":
-        print(AGENT_GUIDE, end="")
+        _emit(AGENT_GUIDE.rstrip("\n"))
         return 0
     _check_usage(parser, args)
 

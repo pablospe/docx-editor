@@ -2183,13 +2183,15 @@ The verb is the `Document` method name in kebab-case and the flags are its keywo
 | ambiguous text, or `--occurrence` out of range | `add --occurrence N (0..K)` |
 | text not found, paragraph index out of range | `docx-edit list F` |
 | stale `--paragraph` (the message names the current ref) | `docx-edit list F --start N --limit 1` |
-| `--expect` count mismatch | `docx-edit find F TEXT` |
+| `--expect` count mismatch | `docx-edit find F TEXT` (with `--paragraph` when the search was scoped) |
+| `--expect` matches that cannot change in one command (a newline replacement hitting one paragraph twice, or overlapping matches) | `docx-edit find F OLD`, then drop `--expect` and replace each match with `--paragraph REF --occurrence N` |
 | unknown revision id | `docx-edit revisions F` |
 | revision id shared by two authors | `add --by NAME` |
-| editing-protected document | `add --allow-protected` |
+| editing-protected document | ask the user; `add --allow-protected` only if they confirm |
 | workspace left behind by a crashed session | `add --force-recreate` (discards that workspace's unsaved edits) |
 | file held by a live `docx-session` or open `Document` | close that session, then run the command again |
 | the `.edited.docx` output already exists | run on it, or pass `-o` / `--in-place` |
+| an `*.edited.docx` input that is a symbolic link | `add --in-place or -o OUT` (the in-place default never writes through a link) |
 
 Any other library hint is printed as `next: (Python API) ...`. A bad command line exits 2 (argparse). `list`, `find` and `revisions` never save: they read the file in a private workspace, so they work beside a live session or a leftover workspace, and on an editing-protected document. They read the saved file, not a live session's unsaved edits. Output that the terminal's encoding cannot show is escaped (`\u2192`) rather than crashing after the save; a workspace that cannot be removed after a save is a warning, not a refusal; a reader that closes the pipe early does not change the exit status.
 
@@ -2204,7 +2206,7 @@ Any other library hint is printed as `next: (Python API) ...`. A bad command lin
 | `list` | `lines` (the text output's lines) |
 | `revisions` | `revisions`: the `Revision` records |
 
-A refusal is `{"ok": false, "error": {...}, "next": ...}`. `error` has the same shape as `docx-session eval`'s (`type`, `message`, every structured field, and the library's own `next`); the top-level `next` is the CLI-spelled hint, or null.
+A refusal is `{"ok": false, "error": {...}, "next": ...}`. `error` has the same shape as `docx-session eval`'s (`type`, `message`, every structured field, and the library's own `next` where the error type has one; null for the CLI's own refusals); the top-level `next` is the CLI-spelled hint, or null.
 
 **`docx-edit skill`** prints a compact agent guide to the CLI, so a skill file can be the one line "run `docx-edit skill` first". Each verb's `--help` is short and shows one example.
 

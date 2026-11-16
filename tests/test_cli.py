@@ -90,6 +90,25 @@ class TestDefaultOutput:
         assert "already exists" in err and "-o OUT" in err and "--in-place" in err
         assert edited(src).read_bytes() == redline_before and src.read_bytes() == source_before
 
+    def test_a_symlinked_edited_input_is_not_written_through_by_default(self, capsys, src, tmp_path):
+        link = tmp_path / "g.edited.docx"
+        link.symlink_to(src)
+        before = src.read_bytes()
+        code, _, err = run(capsys, "replace", link, "quick", "swift", "--author", AUTHOR)
+        assert code == 1 and "symbolic link" in err and src.read_bytes() == before
+
+    def test_a_dangling_edited_link_counts_as_existing(self, capsys, src, tmp_path):
+        elsewhere = tmp_path / "elsewhere" / "x.docx"
+        edited(src).symlink_to(elsewhere)
+        code, _, err = run(capsys, "replace", src, "quick", "swift", "--author", AUTHOR)
+        assert code == 1 and "already exists" in err and not elsewhere.exists()
+
+    def test_a_missing_input_is_reported_as_missing(self, capsys, src, tmp_path):
+        missing = tmp_path / "missing.docx"
+        shutil.copy(src, edited(missing))
+        code, _, err = run(capsys, "replace", missing, "quick", "swift", "--author", AUTHOR)
+        assert code == 1 and "already exists" not in err and "not found" in err.lower()
+
     def test_output_and_in_place_override(self, capsys, src, tmp_path):
         out_path = tmp_path / "elsewhere.docx"
         code, out, _ = run(capsys, "replace", src, "quick", "swift", "--author", AUTHOR, "-o", out_path)
@@ -204,6 +223,17 @@ class TestRefusals:
         assert "matches 2 times in the document, expected 3" in err
         assert err.splitlines()[-1] == f"next: docx-edit find {src} the"
 
+    def test_scoped_count_mismatch_hint_keeps_the_paragraph(self, capsys, src):
+        ref = ref_of(src, 3)
+        code, _, err = run(capsys, "find", src, "e", "--paragraph", ref, "--expect", 1)
+        assert code == 1 and err.splitlines()[-1] == f"next: docx-edit find {src} e --paragraph '{ref}'"
+
+    def test_newline_expect_refusal_points_at_find(self, capsys, src):
+        # "ing" twice in P3 ("testing", "editing"): one command cannot split P3 twice.
+        code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 2, "--author", AUTHOR)
+        assert code == 1 and not edited(src).exists()
+        assert err.splitlines()[-1].startswith(f"next: docx-edit find {src} ing, then drop --expect")
+
     def test_unknown_revision_id_saves_nothing(self, capsys, src):
         run(capsys, "replace", src, "quick", "swift", "--author", AUTHOR, "--in-place")
         before = src.read_bytes()
@@ -228,7 +258,9 @@ class TestRefusals:
         code, out, _ = run(capsys, "list", protected)
         assert code == 0 and out.startswith("P1#")
         code, _, err = run(capsys, "replace", protected, "quick", "swift", "--author", AUTHOR)
-        assert code == 1 and err.splitlines()[-1].startswith("next: add --allow-protected")
+        assert code == 1 and err.splitlines()[-1].startswith(
+            "next: the document is protected against editing: ask the user"
+        )
         code, _, _ = run(capsys, "replace", protected, "quick", "swift", "--author", AUTHOR, "--allow-protected")
         assert code == 0
         with Document.open(edited(protected), allow_protected=True) as doc:
@@ -267,7 +299,8 @@ class TestRefusals:
         run(capsys, "replace", src, "quick", "swift", "--author", AUTHOR, "--in-place")
         code, out, _ = run(capsys, "accept", src, 99, "--author", AUTHOR, "--in-place", "--json")
         error = json.loads(out)["error"]
-        assert code == 1 and set(error) == {"type", "message", "next"} and error["type"] == "Refusal"
+        assert code == 1 and error == {"type": "Refusal", "message": error["message"], "next": None}
+        assert json.loads(out)["next"].startswith("docx-edit revisions ")
 
 
 class TestUsage:
