@@ -101,7 +101,8 @@ class TestDefaultOutput:
         elsewhere = tmp_path / "elsewhere" / "x.docx"
         edited(src).symlink_to(elsewhere)
         code, _, err = run(capsys, "replace", src, "quick", "swift", "--author", AUTHOR)
-        assert code == 1 and "already exists" in err and not elsewhere.exists()
+        assert code == 1 and "dangling symbolic link" in err and not elsewhere.exists()
+        assert err.splitlines()[-1] == "next: add -o OUT"
 
     def test_a_missing_input_is_reported_as_missing(self, capsys, src, tmp_path):
         missing = tmp_path / "missing.docx"
@@ -226,13 +227,21 @@ class TestRefusals:
     def test_scoped_count_mismatch_hint_keeps_the_paragraph(self, capsys, src):
         ref = ref_of(src, 3)
         code, _, err = run(capsys, "find", src, "e", "--paragraph", ref, "--expect", 1)
-        assert code == 1 and err.splitlines()[-1] == f"next: docx-edit find {src} e --paragraph '{ref}'"
+        assert code == 1 and err.splitlines()[-1] == f"next: docx-edit find --paragraph '{ref}' {src} e"
 
     def test_newline_expect_refusal_points_at_find(self, capsys, src):
         # "ing" twice in P3 ("testing", "editing"): one command cannot split P3 twice.
         code, _, err = run(capsys, "replace", src, "ing", "ING\nZ", "--expect", 2, "--author", AUTHOR)
         assert code == 1 and not edited(src).exists()
         assert err.splitlines()[-1].startswith(f"next: docx-edit find {src} ing, then drop --expect")
+
+    def test_find_hint_keeps_dash_leading_text_a_positional(self, capsys, src):
+        code, _, err = run(capsys, "replace", "--author", AUTHOR, "--expect", 2, "--", src, "-fox", "y")
+        assert code == 1
+        hint = err.splitlines()[-1].removeprefix("next: ")
+        assert hint == f"docx-edit find -- {src} -fox"
+        code, out, _ = run(capsys, *hint.split()[1:])
+        assert code == 0 and out.startswith("0 match(es)")
 
     def test_unknown_revision_id_saves_nothing(self, capsys, src):
         run(capsys, "replace", src, "quick", "swift", "--author", AUTHOR, "--in-place")

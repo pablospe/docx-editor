@@ -126,7 +126,7 @@ def _next_hint(error: Exception, args: argparse.Namespace) -> str | None:
         )
     if isinstance(error, ValueError) and "one at a time with replace(" in str(error):
         return (
-            f"{PROG} find {file} {shlex.quote(args.old)}, then drop --expect and replace each match with "
+            f"{_find_hint(args.file, args.old)}, then drop --expect and replace each match with "
             "--paragraph REF --occurrence N"
         )
     hint = getattr(error, "next", None)
@@ -137,8 +137,7 @@ def _next_hint(error: Exception, args: argparse.Namespace) -> str | None:
     if hint.startswith("retry with author="):
         return "add --by NAME (one of the authors named above)"
     if hint.startswith("find_all(") and isinstance(error, MatchCountError):
-        scope = f" --paragraph {shlex.quote(error.paragraph_ref)}" if error.paragraph_ref else ""
-        return f"{PROG} find {file} {shlex.quote(error.search_text)}{scope}"
+        return _find_hint(args.file, error.search_text, error.paragraph_ref)
     if match := re.match(r"get_paragraph\((\d+)\)", hint):
         return f"{PROG} list {file} --start {match[1]} --limit 1"
     if "list_paragraphs()" in hint:
@@ -146,6 +145,13 @@ def _next_hint(error: Exception, args: argparse.Namespace) -> str | None:
     if hint == "list_revisions()":
         return f"{PROG} revisions {file}"
     return f"(Python API) {hint}"
+
+
+def _find_hint(file: str, text: str, paragraph: str | None = None) -> str:
+    """``docx-edit find`` for ``text``; ``--`` keeps text starting with ``-`` a positional."""
+    scope = f" --paragraph {shlex.quote(paragraph)}" if paragraph else ""
+    dashes = " --" if text.startswith("-") or file.startswith("-") else ""
+    return f"{PROG} find{scope}{dashes} {shlex.quote(file)} {shlex.quote(text)}"
 
 
 def _destination(args: argparse.Namespace) -> Path:
@@ -174,6 +180,12 @@ def _destination(args: argparse.Namespace) -> Path:
     target = source.with_name(source.stem + _EDITED)
     # lexists: a dangling link of that name would otherwise send the save
     # elsewhere. A missing input falls through to the library's "not found".
+    if source.exists() and target.is_symlink() and not target.exists():
+        raise _Refusal(
+            f"{target} is a dangling symbolic link; nothing was written. Pass -o OUT to write elsewhere, "
+            f"or remove the link.",
+            next="add -o OUT",
+        )
     if source.exists() and os.path.lexists(target):
         raise _Refusal(
             f"{target} already exists; nothing was written. To keep editing that redline, run the command "
